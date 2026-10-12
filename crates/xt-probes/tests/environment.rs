@@ -1368,3 +1368,176 @@ fn environment_plugin_installation_proof_must_be_nonempty_and_schema_valid() {
         incomplete(9, 8)
     );
 }
+
+#[test]
+fn environment_plugin_map_distinguishes_absent_empty_and_nonobject_values() {
+    let (_guard, root) = temp();
+    fs::create_dir_all(root.join(".claude/plugins")).unwrap();
+    let mut mismatches = Vec::new();
+    for (config, expected) in [
+        (serde_json::json!({"version": 2}), SourceStatus::Empty),
+        (
+            serde_json::json!({"version": 2, "plugins": {}}),
+            SourceStatus::Empty,
+        ),
+        (
+            serde_json::json!({"version": 2, "plugins": null}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"version": 2, "plugins": 42}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"version": 2, "plugins": []}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"version": 2, "plugins": "x"}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"version": 2, "plugins": true}),
+            SourceStatus::Malformed,
+        ),
+    ] {
+        fs::write(
+            root.join(".claude/plugins/installed_plugins.json"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+        let probe = environment::probe(&ProbeRoots::new().with_home(&root).unwrap());
+        assert!(
+            names(&probe, ConfigSource::ClaudePluginRegistry).is_empty(),
+            "{config}"
+        );
+        let observed = status(
+            &probe,
+            ConfigSource::ClaudePluginRegistry,
+            RootScope::Home,
+            0,
+        );
+        if observed != expected {
+            mismatches.push(format!("{config}: expected {expected:?}, got {observed:?}"));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+#[test]
+fn environment_enabled_plugin_map_distinguishes_absent_empty_and_nonobject_values() {
+    let (_guard, root) = temp();
+    fs::create_dir_all(root.join(".claude")).unwrap();
+    let mut mismatches = Vec::new();
+    for (config, expected) in [
+        (serde_json::json!({"hooks":null}), SourceStatus::Empty),
+        (
+            serde_json::json!({"enabledPlugins":{},"hooks":null}),
+            SourceStatus::Empty,
+        ),
+        (
+            serde_json::json!({"enabledPlugins":null,"hooks":null}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"enabledPlugins":42,"hooks":null}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"enabledPlugins":[],"hooks":null}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"enabledPlugins":"x","hooks":null}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"enabledPlugins":true,"hooks":null}),
+            SourceStatus::Malformed,
+        ),
+    ] {
+        fs::write(
+            root.join(".claude/settings.json"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+        let probe = environment::probe(&ProbeRoots::new().with_home(&root).unwrap());
+        assert!(probe.components.is_empty(), "{config}");
+        // These sources share one Settings deserializer, so an invalid map
+        // keeps the existing whole-file parse failure for both sources.
+        for source in [
+            ConfigSource::ClaudeEnabledPlugins,
+            ConfigSource::ClaudeHookConfig,
+        ] {
+            let observed = status(&probe, source, RootScope::Home, 0);
+            if observed != expected {
+                mismatches.push(format!(
+                    "{source:?} {config}: expected {expected:?}, got {observed:?}"
+                ));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+#[test]
+fn environment_plugin_map_values_and_null_hooks_keep_their_existing_rules() {
+    let (_guard, root) = temp();
+    fs::create_dir_all(root.join(".claude/plugins")).unwrap();
+    fs::write(
+        root.join(".claude/plugins/installed_plugins.json"),
+        serde_json::to_vec(&serde_json::json!({"version":2,"plugins":{
+            "ok@m": [{"scope":"user","installPath":"/synthetic/plugin",
+                "installedAt":"2026-09-01T00:00:00Z"}],
+            "null@m": null,
+            "scalar@m": 42,
+            "invalid-list@m": [null],
+            "empty-list@m": []
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join(".claude/settings.json"),
+        serde_json::to_vec(&serde_json::json!({"enabledPlugins":{
+            "enabled@m":true,"disabled@m":false,"null@m":null,
+            "number@m":42,"text@m":"x","list@m":[],"object@m":{}
+        },"hooks":null}))
+        .unwrap(),
+    )
+    .unwrap();
+    let probe = environment::probe(&ProbeRoots::new().with_home(&root).unwrap());
+    assert_eq!(names(&probe, ConfigSource::ClaudePluginRegistry), ["ok@m"]);
+    assert_eq!(
+        status(
+            &probe,
+            ConfigSource::ClaudePluginRegistry,
+            RootScope::Home,
+            0
+        ),
+        incomplete(5, 4)
+    );
+    assert_eq!(
+        probe
+            .components
+            .iter()
+            .filter(|component| component.source == ConfigSource::ClaudeEnabledPlugins)
+            .map(|component| (component.name.as_str(), component.enabled))
+            .collect::<Vec<_>>(),
+        [("disabled@m", Some(false)), ("enabled@m", Some(true))]
+    );
+    assert_eq!(
+        status(
+            &probe,
+            ConfigSource::ClaudeEnabledPlugins,
+            RootScope::Home,
+            0
+        ),
+        incomplete(7, 5)
+    );
+    assert_eq!(
+        status(&probe, ConfigSource::ClaudeHookConfig, RootScope::Home, 0),
+        SourceStatus::Empty
+    );
+    assert!(names(&probe, ConfigSource::ClaudeHookConfig).is_empty());
+}
