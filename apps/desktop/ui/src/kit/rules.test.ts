@@ -39,3 +39,24 @@ it('retains amended coverage and privacy rules', () => {
   expect(rules['P-02']).toContain('Original host files are never modified');
   expect(rules['C-08']).toContain('it must never inherit backfill-only fields');
 });
+
+it('keeps Environment counting rules while explaining the current alpha inventory', () => {
+  const text = ruleText('M-17');
+  expect(text).toContain(
+    'Ingest derives structural name/kind (builtin, MCP server/tool, skill, hook, slash command, subagent) before content discard',
+  );
+  expect(text).toContain('metrics read those columns, never text_head or stored tool input');
+  expect(text).toContain('Slash commands come from command-name records');
+  expect(text).toContain(
+    'hook count means stop_hook_summary records, not individual hook invocations',
+  );
+  expect(text).toContain('Calls per day are grouped by host/surface');
+  expect(text).toContain('In the current alpha, installed inventory is always unknown');
+  expect(text).toContain('verified configured components and source statuses in a separate list');
+  expect(text).toContain('cache observations in a separate section');
+  expect(text).toContain('does not prove that a component is installed, callable or called');
+  expect(text).toContain('A cached download is not an installed or configured component');
+  expect(text).toContain('no not-installed label, never-called claim or used/installed ratio');
+  expect(text).not.toContain('installed inventory comes from host registries');
+  expect(text).not.toContain('The panel lists installed-but-never-called items');
+});
