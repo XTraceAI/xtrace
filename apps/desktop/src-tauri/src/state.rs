@@ -137,7 +137,6 @@ struct MetricInputs<'a> {
     zone: jiff::tz::TimeZone,
     clock: crate::dto::MetricClock,
     catalog: Option<&'a xt_metrics::PriceCatalog>,
-    store: &'a Store,
     fixture_probe: Option<&'a xt_probes::EnvironmentProbe>,
 }
 
@@ -317,7 +316,6 @@ impl AppState {
                 zone: jiff::tz::TimeZone::try_system().map_err(|_| StateError::MetricTimezone)?,
                 clock: crate::dto::MetricClock::System,
                 catalog: None,
-                store: &database.store,
                 fixture_probe: None,
             },
             #[cfg(all(debug_assertions, feature = "fixtures"))]
@@ -330,7 +328,6 @@ impl AppState {
                 zone: jiff::tz::TimeZone::UTC,
                 clock: crate::dto::MetricClock::Fixture,
                 catalog: Some(catalog),
-                store: &database.store,
                 fixture_probe: Some(probe),
             },
         };
@@ -382,24 +379,46 @@ impl AppState {
         &self,
         window_days: u32,
     ) -> Result<crate::dto::EnvironmentMetrics, StateError> {
-        self.with_metrics(window_days, |metrics, inputs| {
-            let native;
-            let probe = match inputs.fixture_probe {
-                Some(probe) => probe,
-                None => {
+        self.metrics_environment_with_probe(window_days, xt_probes::probe)
+    }
+
+    fn metrics_environment_with_probe(
+        &self,
+        window_days: u32,
+        read_native: impl FnOnce(&xt_probes::ProbeRoots) -> xt_probes::EnvironmentProbe,
+    ) -> Result<crate::dto::EnvironmentMetrics, StateError> {
+        crate::dashboard::validate_window(window_days)?;
+        let roots = {
+            let guard = self.database.lock().map_err(|_| StateError::Poisoned)?;
+            let database = guard.as_ref().ok_or(StateError::Closed)?;
+            match &database.metric_context {
+                MetricContext::System => {
                     let stored: Vec<Option<String>> =
-                        crate::dto::session_page(inputs.store, "", None, None)?
+                        crate::dto::session_page(&database.store, "", None, None)?
                             .rows
                             .into_iter()
                             .map(|session| session.repo)
                             .collect();
-                    native = xt_probes::probe(&crate::environment::native_roots(
+                    Some(crate::environment::native_roots(
                         self.native_home.as_deref(),
                         &stored,
-                    ));
-                    &native
+                    ))
                 }
-            };
+                #[cfg(all(debug_assertions, feature = "fixtures"))]
+                MetricContext::Fixture { .. } => None,
+            }
+        };
+        // Only owned roots cross the lock boundary; native configuration IO
+        // must not hold up other state reads or shutdown.
+        let native = roots.as_ref().map(read_native);
+        self.with_metrics(window_days, |metrics, inputs| {
+            // Fixture mode keeps its cached probe and temporary database
+            // alive under the existing metrics lock. Native mode is rechecked
+            // here, so shutdown during the probe returns Closed.
+            let probe = inputs
+                .fixture_probe
+                .or(native.as_ref())
+                .ok_or(StateError::MetricEncoding)?;
             crate::environment::assemble(
                 metrics,
                 window_days,
@@ -418,5 +437,134 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{sync::mpsc, thread};
+
+    fn native_state() -> (tempfile::TempDir, AppState) {
+        let guard = tempfile::TempDir::new().unwrap();
+        let root = guard.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("home")).unwrap();
+        let state = AppState::build(
+            StartupOptions {
+                data_dir: Some(root.join("data")),
+                native_home: Some(root.join("home")),
+                ..Default::default()
+            },
+            || panic!("explicit synthetic data directory"),
+            || panic!("explicit synthetic home"),
+        )
+        .unwrap();
+        (guard, state)
+    }
+
+    fn while_native_probe_paused(
+        state: &AppState,
+        action: impl FnOnce(),
+    ) -> (bool, Result<crate::dto::EnvironmentMetrics, StateError>) {
+        thread::scope(|scope| {
+            let (entered, paused) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let request = scope.spawn(move || {
+                state.metrics_environment_with_probe(7, |roots| {
+                    // Inspect the actual lock while the injected probe owns
+                    // the call. Channels hold it here without timing sleeps.
+                    entered.send(state.database.try_lock().is_ok()).unwrap();
+                    released.recv().unwrap();
+                    xt_probes::probe(roots)
+                })
+            });
+            let unlocked = paused.recv().unwrap();
+            // Skip the action on the old locked implementation, then release
+            // and join normally so the regression fails instead of deadlocking.
+            if unlocked {
+                action();
+            }
+            release.send(()).unwrap();
+            (unlocked, request.join().unwrap())
+        })
+    }
+
+    #[test]
+    fn paused_native_environment_probe_allows_other_state_reads() {
+        let (_guard, state) = native_state();
+        let (unlocked, report) = while_native_probe_paused(&state, || {
+            assert_eq!(
+                serde_json::to_value(state.db_counts().unwrap()).unwrap(),
+                serde_json::json!({"sessions":0,"records":0,"usage":0})
+            );
+            assert!(state.sessions_list("", None, None).unwrap().rows.is_empty());
+            assert_eq!(state.metrics_dashboard(7).unwrap().window.days, 7);
+        });
+        assert!(
+            unlocked,
+            "native probe held the database mutex and blocked state reads"
+        );
+        let report = report.unwrap();
+        assert_eq!(report.window.end_ms, report.strip_window.end_ms);
+        assert_eq!(report.window.clock, report.strip_window.clock);
+    }
+
+    #[test]
+    fn shutdown_completes_during_native_probe_and_request_returns_closed() {
+        let (_guard, state) = native_state();
+        let (unlocked, report) = while_native_probe_paused(&state, || {
+            state.shutdown();
+            assert!(matches!(state.db_counts(), Err(StateError::Closed)));
+        });
+        assert!(
+            unlocked,
+            "native probe held the database mutex and blocked shutdown"
+        );
+        assert!(matches!(report, Err(StateError::Closed)));
+    }
+
+    #[test]
+    fn invalid_window_and_closed_state_do_not_probe_native_files() {
+        let (_guard, state) = native_state();
+        assert!(matches!(
+            state.metrics_environment_with_probe(15, |_| panic!("invalid window must not probe")),
+            Err(StateError::InvalidMetricWindow)
+        ));
+        state.shutdown();
+        assert!(matches!(
+            state.metrics_environment_with_probe(7, |_| panic!("closed state must not probe")),
+            Err(StateError::Closed)
+        ));
+        assert!(matches!(
+            state.metrics_environment_with_probe(15, |_| panic!(
+                "invalid closed request must not probe"
+            )),
+            Err(StateError::InvalidMetricWindow)
+        ));
+    }
+
+    #[cfg(all(debug_assertions, feature = "fixtures"))]
+    #[test]
+    fn cached_fixture_environment_never_invokes_native_probe_or_host_defaults() {
+        let guard = tempfile::TempDir::new().unwrap();
+        let state = AppState::build(
+            StartupOptions {
+                fixture: Some("F1".into()),
+                data_dir: Some(guard.path().to_owned()),
+                ..Default::default()
+            },
+            || panic!("fixture must not resolve host data"),
+            || panic!("fixture must not resolve host home"),
+        )
+        .unwrap();
+        let report = state
+            .metrics_environment_with_probe(7, |_| panic!("fixture must use its cached probe"))
+            .unwrap();
+        assert_eq!(report.window.clock, crate::dto::MetricClock::Fixture);
+        assert_eq!(report.totals.configured_components, 14);
+        let path = state.app_info().data_dir;
+        assert!(std::path::Path::new(&path).exists());
+        state.shutdown();
+        assert!(!std::path::Path::new(&path).exists());
     }
 }
