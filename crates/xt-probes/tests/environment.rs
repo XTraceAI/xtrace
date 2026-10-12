@@ -1177,6 +1177,160 @@ fn environment_hook_groups_and_entries_must_have_their_documented_shape() {
     );
 }
 
+#[test]
+fn environment_mcp_map_distinguishes_absent_empty_and_nonobject_values() {
+    let (_guard, root) = temp();
+    fs::create_dir_all(root.join(".cursor")).unwrap();
+    let sources = [
+        (
+            ".claude.json",
+            ConfigSource::ClaudeUserMcpConfig,
+            RootScope::Home,
+        ),
+        (
+            ".mcp.json",
+            ConfigSource::ClaudeProjectMcpConfig,
+            RootScope::Repository,
+        ),
+        (
+            ".cursor/mcp.json",
+            ConfigSource::CursorMcpConfig,
+            RootScope::Home,
+        ),
+        (
+            ".cursor/mcp.json",
+            ConfigSource::CursorMcpConfig,
+            RootScope::Repository,
+        ),
+    ];
+    let roots = ProbeRoots::new()
+        .with_home(&root)
+        .unwrap()
+        .with_repository(root.to_str().unwrap())
+        .unwrap();
+    let mut mismatches = Vec::new();
+    for (config, expected) in [
+        (serde_json::json!({}), SourceStatus::Empty),
+        (serde_json::json!({"mcpServers": {}}), SourceStatus::Empty),
+        (
+            serde_json::json!({"mcpServers": null}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"mcpServers": 42}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"mcpServers": "x"}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"mcpServers": []}),
+            SourceStatus::Malformed,
+        ),
+        (
+            serde_json::json!({"mcpServers": true}),
+            SourceStatus::Malformed,
+        ),
+    ] {
+        for (path, _, _) in sources {
+            fs::write(root.join(path), serde_json::to_vec(&config).unwrap()).unwrap();
+        }
+        let probe = environment::probe(&roots);
+        assert!(probe.components.is_empty(), "{config}");
+        for (_, source, scope) in sources {
+            let observed = status(&probe, source, scope, 0);
+            if observed != expected {
+                mismatches.push(format!(
+                    "{source:?} {scope:?}: {config}: expected {expected:?}, got {observed:?}"
+                ));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+fn assert_hook_stated_prefix(events: serde_json::Value, valid_count: usize) {
+    let (_guard, root) = temp();
+    fs::create_dir_all(root.join(".claude")).unwrap();
+    fs::write(
+        root.join(".claude/settings.json"),
+        serde_json::to_vec(&serde_json::json!({"hooks": events})).unwrap(),
+    )
+    .unwrap();
+    let probe = environment::probe(&ProbeRoots::new().with_home(&root).unwrap());
+    // The first stated entry is invalid, leaving 255 valid entries inside the
+    // prefix. Neither the 256th valid group nor any later group may be emitted.
+    let expected_names: Vec<_> = (0..MAX_SOURCE_ENTRIES - 1)
+        .map(|index| format!("Stop:group-{index:04}"))
+        .collect();
+    assert_eq!(
+        names(&probe, ConfigSource::ClaudeHookConfig),
+        expected_names
+    );
+    assert_eq!(
+        status(&probe, ConfigSource::ClaudeHookConfig, RootScope::Home, 0),
+        SourceStatus::Incomplete {
+            stated: u32::try_from(valid_count + 1).unwrap(),
+            skipped: u32::try_from(valid_count + 1 - expected_names.len()).unwrap(),
+            reason: if valid_count + 1 > MAX_SOURCE_ENTRIES {
+                IncompleteReason::EntryLimit
+            } else {
+                IncompleteReason::UnprovenEntry
+            },
+        }
+    );
+}
+
+fn valid_hook_groups(count: usize) -> Vec<serde_json::Value> {
+    (0..count)
+        .map(|index| serde_json::json!({"matcher": format!("group-{index:04}"), "hooks": [{}]}))
+        .collect()
+}
+
+#[test]
+fn environment_hook_prefix_counts_invalid_groups_before_filtering() {
+    for invalid in [
+        serde_json::json!(null),
+        serde_json::json!(42),
+        serde_json::json!({"matcher": 42, "hooks": [{}]}),
+        serde_json::json!({"hooks": []}),
+    ] {
+        for count in [
+            MAX_SOURCE_ENTRIES - 1,
+            MAX_SOURCE_ENTRIES,
+            MAX_SOURCE_ENTRIES + 1,
+        ] {
+            let mut groups = vec![invalid.clone()];
+            groups.extend(valid_hook_groups(count));
+            assert_hook_stated_prefix(serde_json::json!({"Stop": groups}), count);
+        }
+    }
+}
+
+#[test]
+fn environment_hook_prefix_counts_nonlist_events_before_filtering() {
+    for invalid in [
+        serde_json::json!(null),
+        serde_json::json!(42),
+        serde_json::json!({}),
+        serde_json::json!("x"),
+    ] {
+        for count in [
+            MAX_SOURCE_ENTRIES - 1,
+            MAX_SOURCE_ENTRIES,
+            MAX_SOURCE_ENTRIES + 1,
+        ] {
+            // BTreeMap ordering places PreToolUse before Stop regardless of
+            // the order in which the JSON object was written.
+            assert_hook_stated_prefix(
+                serde_json::json!({"Stop": valid_hook_groups(count), "PreToolUse": invalid}),
+                count,
+            );
+        }
+    }
+}
+
 /// An installation is proven only by a documented scope, a nonempty install
 /// path and an RFC 3339 install time, all strings, in an object entry.
 #[test]
