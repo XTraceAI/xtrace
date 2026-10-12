@@ -126,6 +126,94 @@ fn native_state(root: &Path) -> AppState {
     .unwrap()
 }
 
+#[test]
+fn environment_repository_roots_stop_at_the_first_visible_session_page() {
+    let guard = tempfile::TempDir::new().unwrap();
+    let root = guard.path().canonicalize().unwrap();
+    let home = root.join("home");
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+    std::fs::write(
+        home.join(".cursor/mcp.json"),
+        r#"{"mcpServers":{"home-retained":{}}}"#,
+    )
+    .unwrap();
+    let repositories = [
+        root.join("shared-repository"),
+        root.join("visible-boundary-repository"),
+        root.join("lookahead-repository"),
+    ];
+    for (repository, name) in repositories.iter().zip([
+        "shared-repository-server",
+        "visible-boundary-server",
+        "lookahead-server",
+    ]) {
+        std::fs::create_dir_all(repository).unwrap();
+        std::fs::write(
+            repository.join(".mcp.json"),
+            serde_json::to_vec(&json!({"mcpServers": {name: {}}})).unwrap(),
+        )
+        .unwrap();
+    }
+    let state = native_state(&root);
+    let mut writer = Store::open(root.join("data/xtrace.db")).unwrap();
+    for position in 0..51 {
+        let repository = match position {
+            49 => &repositories[1],
+            50 => &repositories[2],
+            _ => &repositories[0],
+        };
+        let mut metadata = SessionMeta::new(
+            format!("synthetic-page-{position:02}"),
+            "claude",
+            SessionSource::Fixture,
+        );
+        // Explicit descending times determine positions independently of IDs.
+        // Cwd supplies the same repo fallback the visible Sessions page uses.
+        metadata.started_at_ms = Some(1000 - i64::from(position));
+        metadata.cwd = Some(repository.to_str().unwrap().to_owned());
+        writer.upsert_session(&metadata, false).unwrap();
+    }
+    let raw = writer.sessions_page("", None, None).unwrap();
+    assert_eq!(raw.len(), 51);
+    assert_eq!(raw[49].id, "synthetic-page-49");
+    assert_eq!(raw[50].id, "synthetic-page-50");
+    assert_eq!(raw[49].repo.as_deref(), repositories[1].to_str());
+    assert_eq!(raw[50].repo.as_deref(), repositories[2].to_str());
+
+    let page = state.sessions_list("", None, None).unwrap();
+    assert_eq!(page.rows.len(), 50);
+    assert!(page.next.is_some());
+    assert_eq!(page.rows.last().unwrap().id, "synthetic-page-49");
+    assert!(page.rows.iter().all(|row| row.id != "synthetic-page-50"));
+
+    let report = state.metrics_environment(7).unwrap();
+    assert_eq!(
+        report
+            .configured
+            .iter()
+            .map(|component| (component.host.as_str(), component.name.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("claude", "shared-repository-server"),
+            ("claude", "visible-boundary-server"),
+            ("cursor", "home-retained"),
+        ]
+    );
+    assert_eq!(
+        report
+            .roots
+            .iter()
+            .map(|row| (row.scope, row.index, row.state))
+            .collect::<Vec<_>>(),
+        [
+            (EnvRootScope::Home, 0, EnvRootState::Read),
+            (EnvRootScope::Repository, 0, EnvRootState::Read),
+            (EnvRootScope::Repository, 1, EnvRootState::Read),
+        ]
+    );
+    assert_eq!(report.totals.configured_components, 3);
+}
+
 /// The native command probes the native home option and the local repository
 /// paths stored sessions state, keeps inventory unknown for every host, keeps
 /// hook summaries unresolved, preserves raw surfaces, rereads on every call
