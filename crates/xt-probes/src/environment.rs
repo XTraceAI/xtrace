@@ -643,7 +643,8 @@ impl Reading {
         }
         #[derive(Deserialize)]
         struct Registry {
-            plugins: Option<BTreeMap<String, Field>>,
+            #[serde(default)]
+            plugins: BTreeMap<String, Field>,
         }
         let stated = match bounded_text(known) {
             Err(status) => Stated::status(status),
@@ -657,7 +658,7 @@ impl Reading {
                 Ok(_) => match serde_json::from_str::<Registry>(&text) {
                     Err(_) => Stated::status(SourceStatus::Malformed),
                     Ok(registry) => {
-                        let plugins = registry.plugins.unwrap_or_default();
+                        let plugins = registry.plugins;
                         let stated = plugins.len();
                         let accepted = plugins
                             .into_iter()
@@ -688,8 +689,8 @@ impl Reading {
     fn claude_settings(&mut self, scope: RootScope, root_index: u32, known: Known<'_>) {
         #[derive(Deserialize)]
         struct Settings {
-            #[serde(rename = "enabledPlugins")]
-            enabled_plugins: Option<BTreeMap<String, Flag>>,
+            #[serde(default, rename = "enabledPlugins")]
+            enabled_plugins: BTreeMap<String, Flag>,
             hooks: Option<BTreeMap<String, Field>>,
         }
         #[derive(Deserialize)]
@@ -706,7 +707,7 @@ impl Reading {
                     Stated::status(SourceStatus::Malformed),
                 ),
                 Ok(settings) => {
-                    let plugins = settings.enabled_plugins.unwrap_or_default();
+                    let plugins = settings.enabled_plugins;
                     let stated = plugins.len();
                     let accepted = plugins
                         .into_iter()
