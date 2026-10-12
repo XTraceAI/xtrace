@@ -138,6 +138,72 @@ fn shell_export_rejects_present_invalid_environment_indexes_without_output() {
     }
 }
 
+#[test]
+fn shell_export_rejects_empty_supplied_matrix_roots_without_output_or_fallback() {
+    let mut mismatches = Vec::new();
+    for invalid_home in [true, false] {
+        let (_directory, catalog) = alternate_catalog();
+        let base = catalog.join("F16/input/probes");
+        fs::create_dir_all(base.join("env/home")).unwrap();
+        for (file, name) in [
+            (".claude.json", "index-parent-home-server"),
+            (".mcp.json", "index-parent-repo-server"),
+        ] {
+            fs::write(
+                base.join(file),
+                serde_json::to_vec(&serde_json::json!({"mcpServers":{name:{}}})).unwrap(),
+            )
+            .unwrap();
+        }
+        let home = if invalid_home { "" } else { "env/home" };
+        let repositories = if invalid_home { vec![] } else { vec![""] };
+        fs::write(
+            base.join("env.json"),
+            serde_json::to_vec(
+                &serde_json::json!({"roots":{"home":home,"repositories":repositories}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let output_path = catalog.join("export.json");
+        let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["fixture-export", "F1", "--shell", "--catalog"])
+            .arg(&catalog)
+            .arg("--out")
+            .arg(&output_path)
+            .output()
+            .unwrap();
+        if output.status.success() {
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&output_path).unwrap()).unwrap();
+            let sentinel = if invalid_home {
+                "index-parent-home-server"
+            } else {
+                "index-parent-repo-server"
+            };
+            for environment in value["environments"].as_array().unwrap() {
+                assert!(
+                    environment["configured"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|component| component["name"] == sentinel)
+                );
+            }
+            mismatches.push(format!(
+                "empty {} succeeded, wrote output, and read {sentinel}",
+                if invalid_home { "home" } else { "repository" }
+            ));
+        } else {
+            assert_eq!(output.status.code(), Some(2));
+            assert!(output.stdout.is_empty());
+            assert!(!output.stderr.is_empty());
+            assert!(!output_path.exists());
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 fn assert_rejected_shell_output(catalog: &std::path::Path) {
     let output_path = catalog.join("export.json");
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))

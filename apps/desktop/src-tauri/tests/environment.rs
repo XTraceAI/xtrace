@@ -11,7 +11,7 @@ use xt_store::{
 };
 use xtrace_desktop::{
     dto::*,
-    environment::{STRIP_DAYS, strip_window},
+    environment::{STRIP_DAYS, fixture_probe, strip_window},
     state::{AppState, StartupOptions, StateError},
 };
 
@@ -416,6 +416,97 @@ fn environment_native_state_composes_counts_unknown_inventory_and_configured_fac
         state.metrics_environment(7),
         Err(StateError::Closed)
     ));
+}
+
+#[test]
+fn environment_fixture_probe_rejects_empty_root_paths_and_preserves_relative_rules() {
+    let guard = tempfile::TempDir::new().unwrap();
+    let catalog = guard.path().canonicalize().unwrap();
+    let base = catalog.join("F16/input/probes");
+    std::fs::create_dir_all(base.join("env/home")).unwrap();
+    std::fs::create_dir_all(base.join("env/repo")).unwrap();
+    for (file, name) in [
+        (".claude.json", "index-parent-home-server"),
+        (".mcp.json", "index-parent-repo-server"),
+        ("env/home/.claude.json", "nested-home-server"),
+        ("env/repo/.mcp.json", "nested-repo-server"),
+    ] {
+        std::fs::write(
+            base.join(file),
+            serde_json::to_vec(&json!({"mcpServers":{name:{}}})).unwrap(),
+        )
+        .unwrap();
+    }
+    let write_index = |home: &str, repositories: &[&str]| {
+        std::fs::write(
+            base.join("env.json"),
+            serde_json::to_vec(&json!({"roots":{"home":home,"repositories":repositories}}))
+                .unwrap(),
+        )
+        .unwrap();
+    };
+    for (home, repositories, expected_names) in [
+        (
+            "env/home",
+            vec!["env/repo"],
+            vec!["nested-home-server", "nested-repo-server"],
+        ),
+        (
+            "env/./home",
+            vec!["env/./repo"],
+            vec!["nested-home-server", "nested-repo-server"],
+        ),
+        ("env/home", vec![], vec!["nested-home-server"]),
+    ] {
+        write_index(home, &repositories);
+        let probe = fixture_probe(&catalog).unwrap();
+        assert_eq!(
+            probe
+                .components
+                .iter()
+                .map(|component| component.name.as_str())
+                .collect::<Vec<_>>(),
+            expected_names
+        );
+        assert_eq!(probe.roots.len(), repositories.len() + 1);
+    }
+
+    let absolute = base.join("env/home");
+    let mut mismatches = Vec::new();
+    for invalid in ["", absolute.to_str().unwrap(), "..", ".", "./env/home"] {
+        for invalid_home in [true, false] {
+            let home = if invalid_home { invalid } else { "env/home" };
+            let repositories = if invalid_home {
+                vec!["env/repo"]
+            } else {
+                vec![invalid]
+            };
+            write_index(home, &repositories);
+            match fixture_probe(&catalog) {
+                Err(StateError::FixtureInvalid) => {}
+                Err(error) => panic!("unexpected fixture error: {error}"),
+                Ok(probe) => {
+                    let sentinel = if invalid_home {
+                        "index-parent-home-server"
+                    } else {
+                        "index-parent-repo-server"
+                    };
+                    assert!(
+                        probe
+                            .components
+                            .iter()
+                            .any(|component| component.name == sentinel),
+                        "accepted invalid root did not read its index-parent sentinel"
+                    );
+                    mismatches.push(format!(
+                        "{} {invalid:?} succeeded and read {sentinel}",
+                        if invalid_home { "home" } else { "repository" }
+                    ));
+                }
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
 #[cfg(all(debug_assertions, feature = "fixtures"))]
