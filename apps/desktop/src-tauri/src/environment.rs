@@ -203,9 +203,10 @@ pub fn fixture_probe(catalog: &Path) -> Result<EnvironmentProbe, StateError> {
         value
             .as_str()
             .filter(|path| {
-                Path::new(path)
-                    .components()
-                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+                !path.is_empty()
+                    && Path::new(path)
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_)))
             })
             .map(|path| base.join(path))
             .ok_or(StateError::FixtureInvalid)
