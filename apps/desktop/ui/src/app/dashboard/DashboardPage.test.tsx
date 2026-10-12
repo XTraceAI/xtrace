@@ -9,6 +9,7 @@ import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { MetricTile } from '../../data/generated/MetricTile';
 import type { MetricTokenSummary } from '../../data/generated/MetricTokenSummary';
 import { events, type DataEvent } from '../../data/ipc-names';
+import { ruleText } from '../../kit/rules';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
 
@@ -105,6 +106,18 @@ const card = (title: string) =>
 const tileNamed = (label: string) =>
   screen.getAllByRole('button').find((button) => button.textContent?.startsWith(label))!;
 
+it('opens the shared current-alpha Environment definition from the Dashboard', async () => {
+  mount(nativeSource((days) => f1(days)));
+  await loaded();
+  const trigger = within(card('Environment')).getByRole('button', { name: 'Definition M-17' });
+  fireEvent.focus(trigger);
+  const tip = await screen.findByRole('tooltip');
+  expect(tip.textContent).toBe(`M-17 · ${ruleText('M-17')}`);
+  expect(trigger.getAttribute('aria-describedby')).toBe(tip.id);
+  expect(tip.textContent).toContain('In the current alpha, installed inventory is always unknown');
+  expect(tip.textContent).not.toContain('The panel lists installed-but-never-called items');
+});
+
 it('renders the generated F1 report with honest unknowns and the shared sidebar totals', async () => {
   const source = nativeSource((days) => f1(days));
   mount(source);
@@ -150,9 +163,13 @@ it('renders the generated F1 report with honest unknowns and the shared sidebar 
   for (const [title, reason] of [
     ['Caught by your rules', 'Rule-fire data is unavailable'],
     ['Effort by type', 'Work-type data is unavailable'],
-    ['Environment', 'Environment data is unavailable'],
   ])
     expect(within(card(title)).getAllByText(new RegExp(reason)).length).toBeGreaterThan(0);
+  // Environment reads its own observed usage instead of the report's unavailable entry.
+  expect(
+    (await within(card('Environment')).findByTestId('environment-summary')).textContent,
+  ).toContain('5 observed calls · last 7d · 1 identity in either window');
+  expect(card('Environment').textContent).not.toContain('Environment data is unavailable');
   // F1 is legitimately unpriced: no total, no subtotal masquerading as one.
   const cost = within(card('API-equivalent cost'));
   expect(screen.getByTestId('cost-total').textContent).toContain('Unmeasured');
