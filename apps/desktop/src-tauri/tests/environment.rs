@@ -17,6 +17,168 @@ use xtrace_desktop::{
 
 const DAY_MS: i64 = 86_400_000;
 
+#[test]
+fn environment_native_home_spellings_share_startup_and_probe_rules() {
+    let guard = tempfile::TempDir::new().unwrap();
+    let root = guard.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    std::fs::create_dir_all(root.join("child-cwd")).unwrap();
+    std::fs::write(
+        root.join("home/.claude.json"),
+        r#"{"mcpServers":{"native-home-server":{}}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("home"), root.join("home-link")).unwrap();
+    let mut cases = vec![
+        "relative",
+        "dot",
+        "absolute",
+        "default-relative",
+        "default-absolute",
+        "empty",
+        "default-empty",
+        "missing",
+        "parent",
+        "destination",
+        "parent-destination",
+    ];
+    #[cfg(unix)]
+    cases.push("symlink");
+    let mut failures = Vec::new();
+    for case in cases {
+        let cwd = if case.starts_with("parent") {
+            root.join("child-cwd")
+        } else {
+            root.clone()
+        };
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "environment_native_home_spelling_child",
+                "--nocapture",
+            ])
+            .current_dir(cwd)
+            .env("XTRACE_TEST_NATIVE_HOME_CASE", case)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            failures.push(format!(
+                "{case}:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[ignore = "run only by the parent spelling test in a controlled child cwd"]
+fn environment_native_home_spelling_child() {
+    let case = std::env::var("XTRACE_TEST_NATIVE_HOME_CASE").unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let selected = match case.as_str() {
+        "relative" | "destination" => Some(std::path::PathBuf::from("home")),
+        "dot" => Some(std::path::PathBuf::from("./home")),
+        "absolute" => Some(cwd.join("./home")),
+        "default-relative" | "default-absolute" | "default-empty" => None,
+        "empty" => Some(std::path::PathBuf::new()),
+        "missing" => Some(std::path::PathBuf::from("missing-home")),
+        "parent" | "parent-destination" => Some(std::path::PathBuf::from("../home")),
+        "symlink" => Some(cwd.join("home-link")),
+        _ => panic!("unknown child case"),
+    };
+    let data = match case.as_str() {
+        "destination" => cwd.join("home/.claude/index-data"),
+        "parent-destination" => cwd.join("../home/.claude/index-data"),
+        _ => cwd.join(format!("data-{case}")),
+    };
+    assert!(!data.exists());
+    let default_calls = std::cell::Cell::new(0);
+    let result = AppState::build(
+        StartupOptions {
+            data_dir: Some(data.clone()),
+            native_home: selected.clone(),
+            ..Default::default()
+        },
+        || panic!("explicit synthetic data directory"),
+        || {
+            default_calls.set(default_calls.get() + 1);
+            match case.as_str() {
+                "default-relative" => Ok(std::path::PathBuf::from("home")),
+                "default-absolute" => Ok(cwd.join("home")),
+                "default-empty" => Ok(std::path::PathBuf::new()),
+                _ => panic!("explicit home must avoid defaults"),
+            }
+        },
+    );
+    assert_eq!(
+        default_calls.get(),
+        usize::from(case.starts_with("default"))
+    );
+    if matches!(case.as_str(), "empty" | "default-empty" | "missing") {
+        assert!(matches!(result, Err(StateError::NativeHome)));
+        assert!(!data.exists(), "invalid home must not create storage");
+        return;
+    }
+    if case.ends_with("destination") {
+        assert!(matches!(result, Err(StateError::IndexDestination(_))));
+        assert!(!data.exists(), "unsafe destination must not create storage");
+        return;
+    }
+    let state = result.unwrap();
+    assert!(
+        state.native_home().unwrap().is_dir(),
+        "startup accepted an existing synthetic home"
+    );
+    let report = state.metrics_environment(7).unwrap();
+    match case.as_str() {
+        "parent" => {
+            assert!(report.roots.is_empty());
+            assert!(
+                report.configured.is_empty(),
+                "parent-containing homes remain refused by the probe"
+            );
+        }
+        "symlink" => {
+            assert_eq!(report.roots.len(), 1);
+            assert_eq!(report.roots[0].state, EnvRootState::Symlink);
+            assert!(
+                report.configured.is_empty(),
+                "symlink homes remain refused by the probe"
+            );
+        }
+        _ => {
+            assert_eq!(
+                report
+                    .configured
+                    .iter()
+                    .map(|component| component.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["native-home-server"],
+                "startup accepted {case} home but Environment omitted its configuration; roots={:?}",
+                report.roots
+            );
+            assert_eq!(report.roots.len(), 1);
+            assert_eq!(report.roots[0].state, EnvRootState::Read);
+        }
+    }
+    let expected = match case.as_str() {
+        "absolute" | "symlink" => selected.unwrap(),
+        "parent" => cwd.join("../home"),
+        _ => cwd.join("home"),
+    };
+    // The native index receives this same state field; compare raw spelling
+    // rather than canonicalizing links or collapsing parent components.
+    assert_eq!(
+        state.native_home().unwrap().as_os_str(),
+        expected.as_os_str()
+    );
+    state.shutdown();
+}
+
 fn ms(text: &str) -> i64 {
     text.parse::<Timestamp>().unwrap().as_millisecond()
 }

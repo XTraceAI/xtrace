@@ -40,7 +40,7 @@ Each source under each root reports one status: `missing` (absent), `empty` (pre
 
 ## Roots
 
-- **Native:** the app's native home option (`XTRACE_NATIVE_HOME`, or the user's home) plus local repository paths stored session metadata states (`repo`, else `cwd`) on the first session page, most recent first. Remote identifiers (`https://…`, `git@…`, `ssh://…`), relative values and `..` are refused. No Git command runs and no parent directory is walked.
+- **Native:** startup anchors the app's native home option (`XTRACE_NATIVE_HOME`, or the user's home) to its working directory once, using the importer's existing rule without following links or collapsing parent components. Normal relative homes, including `./home`, therefore share one absolute spelling between indexing and Environment. The probe still refuses anchored homes containing `..` or links. Local repository paths come from stored session metadata (`repo`, else `cwd`) on the first session page, most recent first; stored remote identifiers (`https://…`, `git@…`, `ssh://…`), relative values and `..` remain refused. No Git command runs, and the probe does not search parent directories for repositories.
 - **Fixture:** the same probe over F16's small synthetic matrix under `fixtures/F16/input/probes/env/`, with roots declared in F16's `env` snapshot. F16 remains a skeleton; its matrix is input, not a golden expectation, and it is not the planned 58-item inventory.
 
 ## Bridge
