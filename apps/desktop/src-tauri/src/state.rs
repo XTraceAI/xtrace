@@ -170,6 +170,10 @@ impl AppState {
             Some(path) => path,
             None => default_home()?,
         };
+        if native_home.as_os_str().is_empty() {
+            return Err(StateError::NativeHome);
+        }
+        let native_home = xt_ingest::native::anchor_home(&native_home)?;
         if !native_home.is_dir() {
             return Err(StateError::NativeHome);
         }
