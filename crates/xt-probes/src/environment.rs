@@ -588,14 +588,14 @@ impl Reading {
     ) {
         #[derive(Deserialize)]
         struct McpConfig {
-            #[serde(rename = "mcpServers")]
-            mcp_servers: Option<BTreeMap<String, Shape>>,
+            #[serde(default, rename = "mcpServers")]
+            mcp_servers: BTreeMap<String, Shape>,
         }
         let stated = match bounded_text(known) {
             Err(status) => Stated::status(status),
             Ok(text) => match serde_json::from_str::<McpConfig>(&text) {
                 Err(_) => Stated::status(SourceStatus::Malformed),
-                Ok(config) => servers(config.mcp_servers.unwrap_or_default()),
+                Ok(config) => servers(config.mcp_servers),
             },
         };
         self.record(
@@ -842,7 +842,7 @@ fn hook_entries(events: BTreeMap<String, Field>) -> Stated {
         };
         for group in groups {
             stated += 1;
-            if accepted.len() >= MAX_SOURCE_ENTRIES {
+            if stated > MAX_SOURCE_ENTRIES {
                 continue;
             }
             let Member::Object(group) = group else {
