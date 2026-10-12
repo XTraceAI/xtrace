@@ -35,6 +35,11 @@ failed assertion returns a nonzero exit. `fixture-db` refuses skeletons.
 `fixture-export` permits structural skeleton exports and preserves their status
 and empty expectations.
 
+Shell exports use the alternate catalog's F16 Environment matrix when its
+`F16/input/probes/env.json` index is present. When that optional index is absent,
+they use the bundled synthetic matrix. Invalid supplied matrices fail the export;
+the selected fixture's database, prices and clock still come from its catalog.
+
 Exports contain the same canonical Rust records used by the loader and database
 builder. Generated IPC DTO parity is a later IPC-boundary responsibility; this
 command does not claim that transport contract exists yet.
