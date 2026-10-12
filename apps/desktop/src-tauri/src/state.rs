@@ -387,12 +387,12 @@ impl AppState {
             let probe = match inputs.fixture_probe {
                 Some(probe) => probe,
                 None => {
-                    let stored: Vec<Option<String>> = inputs
-                        .store
-                        .sessions_page("", None, None)?
-                        .into_iter()
-                        .map(|session| session.repo)
-                        .collect();
+                    let stored: Vec<Option<String>> =
+                        crate::dto::session_page(inputs.store, "", None, None)?
+                            .rows
+                            .into_iter()
+                            .map(|session| session.repo)
+                            .collect();
                     native = xt_probes::probe(&crate::environment::native_roots(
                         self.native_home.as_deref(),
                         &stored,
