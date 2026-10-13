@@ -8,6 +8,7 @@ import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { MetricTile } from '../../data/generated/MetricTile';
 import type { MetricTokenSummary } from '../../data/generated/MetricTokenSummary';
+import type { NativeIndexStatus } from '../../data/generated/NativeIndexStatus';
 import { events, type DataEvent } from '../../data/ipc-names';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
@@ -513,12 +514,15 @@ it('refreshes on insertion and on enrichment that adds no session', async () => 
 
 it('does not read metrics in a browser preview', async () => {
   const source = { ...nativeSource((days) => f1(days)), kind: 'preview' as const };
+  const index = vi.fn(async () => exported.native_index);
+  source.nativeIndexStatus = index;
   mount(source);
   expect(
     await screen.findByText('Open the desktop app to read local Dashboard metrics.'),
   ).toBeTruthy();
   expect(source.dashboard).not.toHaveBeenCalled();
   expect(source.tokensByHost).not.toHaveBeenCalled();
+  expect(index).not.toHaveBeenCalled();
 });
 
 it('keeps one lane row per returned span, including several spans of one session', async () => {
@@ -669,4 +673,82 @@ it('hides the TopBar period off the Dashboard and while a range is loading', asy
   );
   fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
   expect(screen.queryByTestId('report-period')).toBeNull();
+});
+
+/** Allow actual React/query notifications to settle without changing timer behavior. */
+const settleReads = () => act(async () => void (await new Promise((done) => setTimeout(done, 80))));
+const rangeReads = (source: ReturnType<typeof nativeSource>, days: number) => ({
+  dashboard: source.dashboard.mock.calls.filter(([range]) => range === days).length,
+  tokens: source.tokensByHost.mock.calls.filter(([range]) => range === days).length,
+});
+
+for (const phase of ['ready', 'disabled'] as const)
+  it(`keeps settled ${phase} index recovery mounted across uncached range changes`, async () => {
+    const status: NativeIndexStatus =
+      phase === 'disabled'
+        ? exported.native_index
+        : { ...exported.native_index, phase: { phase: 'ready' }, freshness: { freshness: 'live' } };
+    const source = nativeSource((days) => f1(days));
+    const index = vi.fn(async () => status);
+    source.nativeIndexStatus = index;
+    mount(source);
+    await loaded();
+    await waitFor(() =>
+      expect(screen.getByTestId('dashboard-index').textContent).toContain(
+        phase === 'ready' ? 'Ready' : 'Disabled',
+      ),
+    );
+    await settleReads();
+    const initial = rangeReads(source, 7);
+    const completedRanges = new Map([[7, initial]]);
+    const indexReads = index.mock.calls.length;
+    await settleReads();
+    expect(rangeReads(source, 7)).toEqual(initial);
+    for (const days of [14, 30]) {
+      const before = rangeReads(source, days);
+      fireEvent.click(screen.getByRole('radio', { name: `${days}d` }));
+      await waitFor(() => expect(source.dashboard).toHaveBeenCalledWith(days));
+      await loaded();
+      await settleReads();
+      expect
+        .soft(rangeReads(source, days))
+        .toEqual({ dashboard: before.dashboard + 1, tokens: before.tokens + 1 });
+      for (const [previousDays, previousReads] of completedRanges)
+        expect.soft(rangeReads(source, previousDays)).toEqual(previousReads);
+      expect.soft(index).toHaveBeenCalledTimes(indexReads);
+      completedRanges.set(days, rangeReads(source, days));
+      if (days === 14) {
+        const previous = rangeReads(source, 14);
+        await settleReads();
+        expect(rangeReads(source, 14)).toEqual(previous);
+      }
+    }
+    // No data event was emitted: changing the range alone must not repeat recovery.
+    expect(index).toHaveBeenCalledTimes(1);
+  });
+
+it('still refreshes current metrics when the first settled index status arrives after the report', async () => {
+  let release!: (status: NativeIndexStatus) => void;
+  const status = new Promise<NativeIndexStatus>((done) => (release = done));
+  const source = nativeSource((days) => f1(days));
+  const index = vi.fn(() => status);
+  source.nativeIndexStatus = index;
+  mount(source);
+  await loaded();
+  await settleReads();
+  const before = rangeReads(source, 7);
+  expect(screen.getByTestId('dashboard-index').textContent).toContain('reading status');
+  await act(async () => release(exported.native_index));
+  await waitFor(() =>
+    expect(rangeReads(source, 7)).toEqual({
+      dashboard: before.dashboard + 1,
+      tokens: before.tokens + 1,
+    }),
+  );
+  await settleReads();
+  expect(rangeReads(source, 7)).toEqual({
+    dashboard: before.dashboard + 1,
+    tokens: before.tokens + 1,
+  });
+  expect(index).toHaveBeenCalledTimes(1);
 });

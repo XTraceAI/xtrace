@@ -55,6 +55,8 @@ export function DashboardPage() {
   const { source } = useData();
   const range = useSelectedRange();
   const report = useDashboardReport(range);
+  // Keep index recovery mounted while uncached ranges replace the report with loading UI.
+  const index = useNativeIndexStatus();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const toggle = (title: string, open: boolean) =>
     setExpanded((current) => {
@@ -87,7 +89,7 @@ export function DashboardPage() {
         </Button>
       </p>
     );
-  else body = <DashboardReport report={report.data} />;
+  else body = <DashboardReport report={report.data} index={index} />;
   return (
     <section className="xt-dashboard" aria-busy={report.isFetching || undefined}>
       <h1>{TITLE}</h1>
@@ -109,7 +111,9 @@ function tileTip(tile: MetricTile, ...extra: (string | null | undefined)[]) {
   return parts.filter(Boolean).join(' ');
 }
 
-function DashboardReport({ report }: { report: DashboardMetrics }) {
+type IndexQuery = ReturnType<typeof useNativeIndexStatus>;
+
+function DashboardReport({ report, index }: { report: DashboardMetrics; index: IndexQuery }) {
   const { tiles, favorite } = report;
   const favoriteModel = favorite.current.model;
   return (
@@ -273,7 +277,7 @@ function DashboardReport({ report }: { report: DashboardMetrics }) {
         </ExtraSection>
         <CostSection report={report} />
         <CoverageSection report={report} />
-        <IndexLine />
+        <IndexLine index={index} />
       </div>
     </>
   );
@@ -606,8 +610,7 @@ function CoverageSection({ report }: { report: DashboardMetrics }) {
   );
 }
 
-function IndexLine() {
-  const index = useNativeIndexStatus();
+function IndexLine({ index }: { index: IndexQuery }) {
   return (
     <p className="xt-dash-note xt-dash-index" data-testid="dashboard-index">
       Native index:{' '}
