@@ -5,7 +5,7 @@ coverage and receipt acknowledgement through one storage transaction. The tests 
 
 ## Setup, action and expected result
 
-`cargo test -p xt-ingest --test writer --locked --offline` runs eighteen tests using
+`cargo test -p xt-ingest --test writer --locked --offline` runs twenty-two tests using
 synthetic records and shared disposable fixture databases.
 
 | Case                    | Setup and action                                                                                                                              | Expected result                                                                                                                                                                                                                                                  |
@@ -18,8 +18,8 @@ synthetic records and shared disposable fixture databases.
 | Identity/chunk boundary | Resolve a native ID, preserve an unknown host/surface, reject conflicting identities and more than 2,000 records.                             | Known canonical prefix is applied once; unknowns stay unknown; successful native cursor progress is durable and has no plugin ack.                                                                                                                               |
 | Concurrent retry        | Two independent stores start the same receipt concurrently.                                                                                   | One canonical insert and one immutable receipt; both successful calls acknowledge the same durable UUID.                                                                                                                                                         |
 | Empty/rejected input    | Submit empty, foreign/type-rejected, contradictory duplicate and missing-UUID rows.                                                           | No empty/rejected coverage or ack; contradictory duplicate measurements fail; missing UUID is counted before invalid row metadata.                                                                                                                               |
-| Shared F1/chunks        | Replay all 25 shared F1 rows, then submit 2,501 native rows in two bounded chunks.                                                            | Replay inserts zero; role-sensitive human classification stays unset; raw platform remains absent independently of declared host; final cursor is 2,501.                                                                                                         |
-| Hygiene                 | Import human, command, interrupted, reminder, empty and unknown-content inputs with retention disabled.                                       | Structural flags match their inputs; transcript content stays absent and human classification stays unset even with absent or mismatched roles.                                                                                                                  |
+| Shared F1/chunks        | Replay all 25 shared F1 rows, then submit 2,501 native rows in two bounded chunks.                                                            | Replay inserts zero; five F1 rows are classified as human; raw platform remains absent independently of declared host; final cursor is 2,501.                                                                                                                    |
+| Hygiene                 | Import human, command, interrupted, reminder, empty and unknown-content inputs with retention disabled.                                       | Structural flags match their inputs; transcript content stays absent. Explicit user role plus eligible text is human; known exclusions are false, and missing role or content remains unknown unless another known fact excludes the message.                    |
 
 The additional session-conflict regression replays the same native measurement
 with a different known working directory. The stored directory remains unchanged,
@@ -32,7 +32,7 @@ schema uses `[version, fixed-order-values]`, with null for absent values and a
 normalized `[UTC second, leap-second flag, decimal fraction]` timestamp. The sparse
 28-field golden is `0c299a8f1b8c32e9d61ebc26bedf0da9ac99dad88e889cce513f15698afcc795`.
 All strings in tests are newly synthetic; no native transcript or live user store
-is read. F1 remains the only populated product fixture.
+is read. F1, F3 and F8 have populated reference assertions; the remaining 18 entries stay skeletons. F8 checks one genuine multiblock Unicode human message and twelve exclusions. Classification enrichment leaves old receipt coverage unchanged; only a later matching full receipt covers the newly measured facts.
 
 ## Commit and replay boundaries
 
