@@ -38,7 +38,8 @@ percentage for their surface.
 
 A captured session requires a sealed receipt for its known canonical conversation,
 matching the discovery host and the same known raw surface on both canonical
-session and receipt. Unknown surfaces do not match each other. A receipt on CLI
+session and receipt; known native session IDs must also agree. Unknown surfaces
+do not match each other. A receipt on CLI
 cannot establish Desktop capture; a source label or installation state cannot
 substitute for a receipt. A valid partial receipt can establish session health.
 This API does **not** establish complete measurement verification or export a

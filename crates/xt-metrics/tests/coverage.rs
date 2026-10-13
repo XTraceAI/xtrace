@@ -594,6 +594,8 @@ fn coverage_open_checks_new_discovery_and_receipt_columns_without_repair() {
     for (table, column) in [
         ("discovered_sessions", "discovery_complete"),
         ("capture_receipts", "coverage_sealed"),
+        ("discovered_sessions", "native_session_id"),
+        ("sessions", "native_session_id"),
     ] {
         let db = TempDb::empty().unwrap();
         let c = Connection::open(db.path()).unwrap();
@@ -623,4 +625,109 @@ fn coverage_open_checks_new_discovery_and_receipt_columns_without_repair() {
         .unwrap();
         assert!(MetricsDb::open(db.path()).is_ok());
     }
+}
+
+#[test]
+fn coverage_native_identity_binding_preserves_controls_in_both_arrival_orders() {
+    for discovery_first in [false, true] {
+        for (label, canonical_native) in [
+            ("matching", Some("canonical-native")),
+            ("mismatched", Some("canonical-native")),
+            ("unknown", None),
+        ] {
+            let mut db = TempDb::empty().unwrap();
+            let mut metadata =
+                SessionMeta::new("canonical-native", "claude", SessionSource::Plugin);
+            metadata.surface = Some("cli".into());
+            metadata.native_session_id = canonical_native.map(str::to_owned);
+            let discovery = DiscoveredSession {
+                host: Host::Claude,
+                native_session_id: if label == "mismatched" {
+                    "different-native"
+                } else {
+                    "canonical-native"
+                }
+                .into(),
+                conversation_id: Some("canonical-native".into()),
+                surface: Some("cli".into()),
+                started_at_ms: Some(ms("2026-09-07T12:00:00Z")),
+                last_observed_at: window().end_ms(),
+                discovery_complete: true,
+            };
+            if discovery_first {
+                db.store_mut()
+                    .observe_discovered_session(&discovery)
+                    .unwrap();
+            }
+            db.store_mut().upsert_session(&metadata, false).unwrap();
+            db.store_mut()
+                .upsert_records("canonical-native", &[record("submitted", true)], false)
+                .unwrap();
+            receipt(
+                &mut db,
+                "sealed",
+                "canonical-native",
+                Some("cli"),
+                "submitted",
+            );
+            if !discovery_first {
+                db.store_mut()
+                    .observe_discovered_session(&discovery)
+                    .unwrap();
+            }
+            let report = query(
+                &db,
+                &[health("claude", Some("cli"), InventoryState::FreshComplete)],
+            );
+            let saved = db.store().session("canonical-native").unwrap().unwrap();
+            let capture = &report.capture[0];
+            assert!(!saved.has_conflict);
+            assert!(!db.store().records("canonical-native").unwrap()[0].has_conflict);
+            assert_eq!(
+                db.store()
+                    .capture_receipts("canonical-native")
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(report.usage.total.measured, 1);
+            assert_eq!(capture.observed_sessions, 1);
+            if label == "mismatched" {
+                assert_eq!((capture.captured_sessions, capture.pct), (0, None));
+                assert_eq!(
+                    capture.incomplete_reasons,
+                    vec![CaptureGap::IdentityMismatch]
+                );
+            } else {
+                assert_eq!((capture.captured_sessions, capture.pct), (1, Some(100.0)));
+                assert!(capture.incomplete_reasons.is_empty());
+            }
+        }
+    }
+    let mut joint = TempDb::empty().unwrap();
+    let mut metadata = SessionMeta::new("canonical-native", "claude", SessionSource::Plugin);
+    metadata.surface = Some("cli".into());
+    metadata.native_session_id = Some("canonical-native".into());
+    let discovery = DiscoveredSession {
+        host: Host::Claude,
+        native_session_id: "different-native".into(),
+        conversation_id: Some("canonical-native".into()),
+        surface: Some("cli".into()),
+        started_at_ms: Some(ms("2026-09-07T12:00:00Z")),
+        last_observed_at: window().end_ms(),
+        discovery_complete: true,
+    };
+    let rows = [record("joint-row", true)];
+    let mut batch = xt_store::batch::IngestBatch::new(&metadata, &rows, false);
+    batch.discovery = Some(&discovery);
+    let outcome = joint.store_mut().apply_ingest_batch(&batch);
+    assert!(outcome.is_err());
+    assert!(joint.store().session("canonical-native").unwrap().is_none());
+    assert!(
+        joint
+            .store()
+            .discovered_sessions(Host::Claude)
+            .unwrap()
+            .is_empty()
+    );
 }
