@@ -7,7 +7,7 @@ pub(crate) const EVENTS_QUERY: &str =
     "SELECT session_id,host,surface,ts FROM v_session_events WHERE ts_ms>=?1 AND ts_ms<?2";
 pub(crate) const USAGE_QUERY: &str = "SELECT session_id,ts,model,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens FROM v_response_usage WHERE ts_ms>=?1 AND ts_ms<?2";
 pub(crate) const CAPTURE_QUERY: &str = "SELECT d.host,d.surface,d.started_at_ms,d.conversation_id,d.discovery_complete,s.host,s.surface,
-    EXISTS(SELECT 1 FROM capture_receipts r WHERE r.session_id=d.conversation_id AND r.surface=d.surface AND r.coverage_sealed=1)
+    EXISTS(SELECT 1 FROM capture_receipts r WHERE r.session_id=d.conversation_id AND r.surface=d.surface AND r.coverage_sealed=1),d.native_session_id,s.native_session_id
     FROM discovered_sessions d LEFT JOIN sessions s ON s.session_id=d.conversation_id
     WHERE (d.started_at_ms>=?1 AND d.started_at_ms<?2) OR d.started_at_ms IS NULL";
 
@@ -328,7 +328,12 @@ impl MetricsDb {
             }
             let stored_host: Option<String> = row.get(5)?;
             let stored_surface: Option<String> = row.get(6)?;
-            if stored_host.as_deref().is_some_and(|h| h != group.host) {
+            let discovered_native: String = row.get(8)?;
+            let stored_native: Option<String> = row.get(9)?;
+            let native_mismatch = known(Some(&discovered_native))
+                && known(stored_native.as_deref())
+                && stored_native.as_deref() != Some(discovered_native.as_str());
+            if native_mismatch || stored_host.as_deref().is_some_and(|h| h != group.host) {
                 group.incomplete_reasons.push(CaptureGap::IdentityMismatch);
             }
             if stored_host.is_some() && stored_surface != group.surface {
@@ -339,6 +344,7 @@ impl MetricsDb {
                 && known(group.surface.as_deref())
                 && stored_host.as_deref() == Some(group.host.as_str())
                 && stored_surface == group.surface
+                && !native_mismatch
                 && row.get::<_, bool>(7)?
             {
                 group.captured_sessions += 1;
