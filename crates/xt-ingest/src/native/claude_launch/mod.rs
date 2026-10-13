@@ -50,7 +50,14 @@
 //!    The launches found are staged and published at once with the member
 //!    set and verdict, only if nothing changed meanwhile. A file whose last
 //!    line is still being written holds the thread pending: it is not read
-//!    again until one of its files changes.
+//!    again until one of its files changes, or until the file has stopped
+//!    changing ([`source::Sightings::quiet`]), when its complete lines are
+//!    read without that line. A file with no row adds nothing to its
+//!    history. A history that cannot be read — malformed, over its limits,
+//!    refused by its header, or a file this user may not read — is
+//!    published invalid and skipped: it holds no other session's check
+//!    ([`LaunchBacklog::discovered_since`]) and is counted for Settings
+//!    ([`LaunchBacklog::search_gaps`]). Any other read error is tried again.
 //! 4. Its launches not yet linked are matched with their children
 //!    ([`resolve`]). Right before a link, the whole history is checked again
 //!    against the census and every member's generation, and the store writes
@@ -92,7 +99,7 @@ use group::{Census, CensusFile, Plan, Planner, Refusal, Segment};
 pub(in crate::native) use resolve::fresh_exec_opened;
 use resolve::{Outcome, Resolve};
 use scan::{Counts, MemberFacts, ScanBounds, ScanError, SegmentScan, Step};
-use source::{Allowance, Budget, Reserved, Unread};
+use source::{Allowance, Budget, Hold, Reserved, Sightings, Unread};
 use std::{
     collections::{HashMap, HashSet, VecDeque, hash_map::RandomState},
     path::{Path, PathBuf},
@@ -111,7 +118,14 @@ use xt_store::{
 /// Version of this scan's history validation, kept with each published
 /// validation. A thread validated by another version is read again once;
 /// it moves apart from the creation evidence version its proofs carry.
-/// Version 10 also keeps the launches a history started with no first
+/// Reading a Codex `/review` subagent's header ([`group::review_subagent`]),
+/// files with no row, a quiet file's complete lines without its unfinished
+/// last line, and skipping a file this user may not read changed no version:
+/// they only let validations finish that this version published invalid or
+/// left pending, both of which every run reads again, and no finished
+/// display check rests on them. A bump would only send every finished check
+/// back to checking, and one whose own transcript is gone could never finish
+/// again. Version 10 also keeps the launches a history started with no first
 /// result yet ([`scan::Unfinished`]), which hold a session they may have
 /// created unchecked, and reads a spawned helper whose inherited context
 /// starts with the header it copied, so every thread is read again once. Version 9 also
@@ -365,14 +379,22 @@ pub struct LaunchBacklog {
     /// The pass's read chunk and store pages.
     pass_memory: Option<Allowance>,
     /// Threads with a file whose last line was still being written, as the
-    /// files were then: not read again until one changes.
-    held: HashMap<String, Vec<MemberRecord>>,
+    /// files were then, and that file: not read again until one changes or
+    /// that file is quiet ([`Sightings::quiet`]).
+    held: HashMap<String, (Vec<MemberRecord>, SegmentGeneration)>,
+    /// What this run first saw holding display checks, and since when:
+    /// unfinished last lines, histories whose reads keep failing, census
+    /// failures ([`Sightings::expired`], the one rule for all of them).
+    sightings: Sightings,
+    /// The census failures last recorded, so a path that works again is
+    /// forgotten.
+    census_failures: Vec<PathBuf>,
     /// Child transcripts whose last line was still being written, as they
     /// were then.
     unfinished: HashMap<PathBuf, SegmentGeneration>,
     /// Threads whose validation this run published or found current, with
     /// the member files it covers and how it ended: what the display check
-    /// compares the census with, and why an invalid one is invalid.
+    /// compares the census with, and what Settings counts.
     confirmed: HashMap<String, Confirmed>,
     /// The launches each valid validation found started with no first result
     /// yet, by thread, kept while a newer validation of it is read.
@@ -403,6 +425,8 @@ impl Default for LaunchBacklog {
             cache: None,
             pass_memory: None,
             held: HashMap::new(),
+            sightings: Sightings::default(),
+            census_failures: Vec::new(),
             unfinished: HashMap::new(),
             confirmed: HashMap::new(),
             starts: HashMap::new(),
@@ -481,21 +505,29 @@ impl LaunchBacklog {
 
     /// Whether every Codex history the current census finds has been read
     /// for launches since census `epoch` — the census in use when a display
-    /// check began — and is still exactly what that read covered: a valid or
-    /// explicitly unsupported validation of this run, its files unchanged,
-    /// with no planning, reading, staging or held read of it in progress. A
-    /// thread whose launches are being resolved counts: its launches are
-    /// known, and another child's resolution does not bear on this one. A
-    /// thread not yet so is queued to be read; one whose read failed is not
-    /// queued again until it changes.
-    pub(crate) fn discovered_since(&mut self, epoch: u64) -> Discovery {
+    /// check began — and is still exactly what that read covered: a
+    /// validation of this run, its files unchanged, with no planning,
+    /// reading, staging or held read of it in progress. A thread whose
+    /// launches are being resolved counts: its launches are known, and
+    /// another child's resolution does not bear on this one. A history
+    /// published invalid (it could not be read, or its layout is not read)
+    /// counts as read with nothing found: it is skipped, and holds no
+    /// session it might have launched; a session it did launch is then shown
+    /// as a main session. So does a thread whose reads have kept failing
+    /// with its files unchanged for the quiet period ([`Self::skipped`]),
+    /// whatever is in progress for it: it is still read again in the
+    /// background, holding nothing. A thread not yet so is queued to be
+    /// read; one published invalid is not queued again until it changes.
+    pub(crate) fn discovered_since(&mut self, epoch: u64) -> bool {
         if !self.census_current() || self.census_epoch <= epoch {
-            return Discovery::Pending;
+            return false;
         }
         let census = self.census.as_ref().expect("current");
         let mut behind = Vec::new();
-        let mut failed = false;
         for thread in census.threads() {
+            if self.skipped(thread) {
+                continue;
+            }
             let reading = self.held.contains_key(thread)
                 || self
                     .work
@@ -507,47 +539,262 @@ impl LaunchBacklog {
                         .group(thread)
                         .is_some_and(|files| same_files(files, &confirmed.members))
             });
-            match current {
-                Some(confirmed) if !reading => {
-                    failed |= confirmed.outcome == ReadOutcome::Failed;
+            if current.is_none() || reading {
+                behind.push(thread.to_owned());
+            }
+        }
+        for thread in &behind {
+            self.queue(thread);
+        }
+        behind.is_empty()
+    }
+
+    /// The Codex histories the current census finds that this run's launch
+    /// search skipped: ones that could not be read (published invalid, or
+    /// [`Self::skipped`]), forks whose copied rows cannot be told apart (a
+    /// layout this version does not read), valid ones with a file whose
+    /// unfinished last line was left out (searched without that line), the
+    /// folders the census could not read or the entries past its limit, and
+    /// the `codex exec` launches with no first result that hold nothing any
+    /// more. The one count Settings shows. `None` until the census is
+    /// current; a history not read yet this run is not counted.
+    pub fn search_gaps(&self) -> Option<SearchGaps> {
+        if !self.census_current() {
+            return None;
+        }
+        let census = self.census.as_ref().expect("current");
+        let (failures, more, saturated) = census.gaps();
+        let mut gaps = SearchGaps {
+            folders_not_read: failures.len() + more,
+            too_many_files: saturated,
+            ..SearchGaps::default()
+        };
+        for (thread, starts) in &self.starts {
+            // A skipped history is counted once, as not searched.
+            if census.group(thread).is_some()
+                && !self.skipped(thread)
+                && self.writer_stopped(thread)
+            {
+                gaps.exec_launches_without_result += starts
+                    .iter()
+                    .filter(|start| start.host == Host::Codex)
+                    .count();
+            }
+        }
+        for thread in census.threads() {
+            if self.skipped(thread) {
+                gaps.unsearched += 1;
+                continue;
+            }
+            let (Some(confirmed), Some(files)) = (self.confirmed.get(thread), census.group(thread))
+            else {
+                continue;
+            };
+            // Only what the census still finds, by name.
+            if files.len() != confirmed.members.len()
+                || !confirmed
+                    .members
+                    .iter()
+                    .all(|member| files.iter().any(|file| file.rollout == member.rollout_id))
+            {
+                continue;
+            }
+            match confirmed.outcome {
+                ReadOutcome::Failed => gaps.unsearched += 1,
+                ReadOutcome::Unsupported => gaps.forks_not_searched += 1,
+                ReadOutcome::Valid => {
+                    if confirmed
+                        .members
+                        .iter()
+                        .any(|member| member.scanned_length < member.generation.length)
+                    {
+                        gaps.unfinished_line_skipped += 1;
+                    }
                 }
-                _ => behind.push(thread.to_owned()),
             }
         }
-        if !behind.is_empty() {
-            for thread in &behind {
-                self.queue(thread);
-            }
-            return Discovery::Pending;
-        }
-        if failed {
-            Discovery::Failed
-        } else {
-            Discovery::Complete
-        }
+        Some(gaps)
     }
 
     /// Whether a launch some current history started with no first result
     /// yet may have created the session `child` of `host`: a Claude launch
     /// naming exactly it, or a Codex launch made strictly before a fresh
     /// `exec` thread was opened at `opened_ms`. A launch naming another
-    /// session, or made at or after the thread opened, holds nothing here.
-    pub(crate) fn unfinished_for(&self, host: Host, child: &str, opened_ms: i64) -> bool {
+    /// session, or made at or after the thread opened, holds nothing here;
+    /// nor does a Codex launch whose history's writer has stopped
+    /// ([`Self::writer_stopped`]): its run never reported back. It is kept,
+    /// so a later change to its history is read and can still link.
+    pub(crate) fn unfinished_for(&mut self, host: Host, child: &str, opened_ms: i64) -> bool {
         let census = self.census.as_ref();
-        self.starts
+        let threads: Vec<String> = self
+            .starts
             .iter()
             .filter(|(thread, _)| {
                 thread.as_str() != child
                     && census.is_some_and(|census| census.group(thread).is_some())
             })
-            .flat_map(|(_, starts)| starts)
-            .any(|start| {
-                start.host == host
-                    && match host {
-                        Host::Claude => start.child == child,
-                        _ => start.launch_ms < opened_ms,
-                    }
+            .filter(|(_, starts)| {
+                starts.iter().any(|start| {
+                    start.host == host
+                        && match host {
+                            Host::Claude => start.child == child,
+                            _ => start.launch_ms < opened_ms,
+                        }
+                })
             })
+            .map(|(thread, _)| thread.clone())
+            .collect();
+        if host == Host::Claude {
+            return !threads.is_empty();
+        }
+        threads.iter().any(|thread| {
+            // Each file's clock starts the first time it is asked about,
+            // unless its age already says its writer stopped.
+            if let Some(confirmed) = self.confirmed.get(thread) {
+                for member in &confirmed.members {
+                    if !Sightings::aged(&member.generation) {
+                        self.sightings.note_file(&member.generation);
+                    }
+                }
+            }
+            !self.writer_stopped(thread)
+        })
+    }
+
+    /// Whether every file of `thread`'s confirmed history has stopped being
+    /// written ([`Sightings::quiet`]).
+    fn writer_stopped(&self, thread: &str) -> bool {
+        self.confirmed.get(thread).is_some_and(|confirmed| {
+            confirmed
+                .members
+                .iter()
+                .all(|member| self.sightings.quiet(&member.generation))
+        })
+    }
+
+    /// The state of `thread`'s files for its hold: the census's files and
+    /// each one's stat, an error counted as a state of its own.
+    fn thread_state(&self, thread: &str) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let files = self.census.as_ref()?.group(thread)?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for file in files {
+            file.path.hash(&mut hasher);
+            match source::stat(&file.path) {
+                Ok(generation) => (
+                    0_u8,
+                    generation.device,
+                    generation.inode,
+                    generation.length,
+                    generation.mtime_ns,
+                )
+                    .hash(&mut hasher),
+                Err(error) => (1_u8, std::mem::discriminant(&error)).hash(&mut hasher),
+            }
+        }
+        Some(hasher.finish())
+    }
+
+    /// Whether `thread`'s reads have kept failing (an IO error, or a file
+    /// that cannot be stat'ed) with its files unchanged for the quiet
+    /// period ([`Sightings::expired`]): it is skipped, and holds nothing.
+    /// Its clock starts at its first such failure, and starts again only
+    /// when its files change or a read of it ends.
+    fn skipped(&self, thread: &str) -> bool {
+        let key = Hold::Thread(thread.to_owned());
+        self.sightings.has(&key)
+            && self
+                .thread_state(thread)
+                .is_some_and(|state| self.sightings.expired(&key, state))
+    }
+
+    /// How a visit of `thread` ended, for its failure clock: a failure
+    /// notes it (a clock already running in the same state keeps running),
+    /// a finished read ends it, anything else leaves it as it is. A pass
+    /// that pauses part-way does not end it, or a bad spot in the middle of
+    /// a file longer than one pass would never be skipped. Known cost, which
+    /// corrects itself: one early error that passes, then a long read that
+    /// keeps progressing, is skipped once the quiet period is over; a launch
+    /// in it still links when the read finishes, and a known sub-session
+    /// always wins, so a conversation is only shown as main for a while.
+    fn note_visit(&mut self, thread: &str, visit: &Visit) {
+        match visit {
+            Visit::Failing => {
+                if let Some(state) = self.thread_state(thread) {
+                    self.sightings.note(Hold::Thread(thread.to_owned()), state);
+                }
+            }
+            Visit::Done => self.sightings.forget(&Hold::Thread(thread.to_owned())),
+            Visit::Paused | Visit::Waiting | Visit::Busy | Visit::Held => {}
+        }
+    }
+
+    /// A complete census that could not look at everything is used as it is
+    /// once each folder, entry or limit it met has held for the quiet period
+    /// ([`Sightings::expired`]); the same failure met again by a later
+    /// census keeps its clock. A path that works again is forgotten, and the
+    /// histories it hid are queued to be read.
+    fn settle_census(&mut self) {
+        let Some(census) = self.census.as_ref().filter(|census| census.complete()) else {
+            return;
+        };
+        let (failures, more, saturated) = census.gaps();
+        let failures = failures.to_vec();
+        // What a gap hid is found now: its histories are read.
+        let recovered = self
+            .census_failures
+            .iter()
+            .any(|old| !failures.contains(old))
+            || (more == 0 && self.sightings.has(&Hold::MoreFailures))
+            || (!saturated && self.sightings.has(&Hold::TooManyEntries));
+        let unread: Vec<String> = if recovered {
+            census
+                .threads()
+                .filter(|thread| !self.confirmed.contains_key(*thread))
+                .map(str::to_owned)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let broken = census.broken();
+        for thread in &unread {
+            self.queue(thread);
+        }
+        for old in &self.census_failures {
+            if !failures.contains(old) {
+                self.sightings.forget(&Hold::Folder(old.clone()));
+            }
+        }
+        if more == 0 {
+            self.sightings.forget(&Hold::MoreFailures);
+        }
+        if !saturated {
+            self.sightings.forget(&Hold::TooManyEntries);
+        }
+        if !broken {
+            self.census_failures = failures;
+            return;
+        }
+        let mut holds: Vec<(Hold, u64)> = failures
+            .iter()
+            .map(|path| (Hold::Folder(path.clone()), 0))
+            .collect();
+        if more > 0 {
+            holds.push((Hold::MoreFailures, u64::try_from(more).unwrap_or(u64::MAX)));
+        }
+        if saturated {
+            holds.push((Hold::TooManyEntries, 0));
+        }
+        for (hold, state) in &holds {
+            self.sightings.note(hold.clone(), *state);
+        }
+        self.census_failures = failures;
+        if holds
+            .iter()
+            .all(|(hold, state)| self.sightings.expired(hold, *state))
+        {
+            self.census.as_mut().expect("complete").accept();
+        }
     }
 
     /// Whether a history this display check read since it began changed in
@@ -557,8 +804,9 @@ impl LaunchBacklog {
         std::mem::take(&mut self.captured_changed)
     }
 
-    /// Keep what a published or confirmed validation covers, its outcome and
-    /// the launches it found with no result yet, for the display check. A
+    /// Keep what a published or confirmed validation covers, how it ended
+    /// and the launches it found with no result yet, for the display check;
+    /// its files' unfinished-line sightings are done with. A
     /// Claude launch naming a session that the thread's previous launches
     /// with no result did not name moves that session's check on.
     fn note_confirmed(
@@ -569,6 +817,9 @@ impl LaunchBacklog {
         outcome: ReadOutcome,
         starts: Vec<scan::Unfinished>,
     ) -> xt_store::Result<usize> {
+        for member in members {
+            self.sightings.forget_file(&member.generation);
+        }
         if let Some(before) = self.confirmed.get(thread)
             && !grown(&before.members, members)
         {
@@ -618,30 +869,43 @@ fn grown(before: &[MemberRecord], after: &[MemberRecord]) -> bool {
         })
 }
 
-/// How a thread's history read for launches ended, as the display check
-/// needs it.
+/// How a thread's history read for launches ended, as the display check and
+/// Settings need it. Kept in memory only: the store keeps valid or invalid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadOutcome {
-    /// Every file read and checked: its launches are known.
+    /// Every file read and checked (a file with no row adds nothing): its
+    /// launches are known.
     Valid,
     /// A layout this version does not read for launches, by an explicit
     /// guard: a fork whose header marks no copied rows.
     Unsupported,
-    /// Malformed, over its limits, or not readable as one history: whether
-    /// it launched anything is not known.
+    /// Malformed, over its limits, or not readable: whether it launched
+    /// anything is not known, and it is skipped.
     Failed,
 }
 
-/// What a display check knows of the Codex histories that might have
-/// launched its session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Discovery {
-    /// Some are still to be read, or the census to be taken.
-    Pending,
-    /// Every one was read; one or more could not be checked.
-    Failed,
-    /// Every one was read and checked, or is explicitly unsupported.
-    Complete,
+/// Codex histories the launch search skipped, among those the census finds
+/// ([`LaunchBacklog::search_gaps`]). A session one of them launched is shown
+/// as a main session. Counts only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchGaps {
+    /// Could not be read: malformed, over its limits, refused by its header,
+    /// a file this user may not read, or one whose reads kept failing.
+    pub unsearched: usize,
+    /// Folders the census could not list, or entries whose type it could
+    /// not read, once accepted: histories in them are not searched.
+    pub folders_not_read: usize,
+    /// The census stopped at its entry limit and only part of the folder
+    /// was read.
+    pub too_many_files: bool,
+    /// `codex exec` launches with no first result whose history stopped
+    /// being written: they hold no session any more.
+    pub exec_launches_without_result: usize,
+    /// Forks whose copied rows cannot be told apart from their own: not
+    /// read, by design.
+    pub forks_not_searched: usize,
+    /// Searched without an unfinished last line that stopped changing.
+    pub unfinished_line_skipped: usize,
 }
 
 /// A thread's validation as this run confirmed it.
@@ -709,6 +973,9 @@ enum Visit {
     Paused,
     Waiting,
     Busy,
+    /// Busy because a read failed (an IO error, or a file that cannot be
+    /// stat'ed): its failure clock runs ([`LaunchBacklog::skipped`]).
+    Failing,
     /// A file's last line is still being written.
     Held,
 }
@@ -805,7 +1072,8 @@ fn pass(
             return Ok(());
         }
     }
-    if !census.usable() {
+    backlog.settle_census();
+    if !backlog.census.as_ref().is_some_and(Census::usable) {
         progress.census_pending = true;
     }
 
@@ -929,6 +1197,9 @@ fn pass(
             recorded_at,
             progress,
         );
+        if let Ok(visit) = &visited {
+            backlog.note_visit(&thread, visit);
+        }
         match visited {
             Ok(Visit::Done) => {
                 backlog.queued.remove(&thread);
@@ -942,7 +1213,7 @@ fn pass(
                 backlog.threads.push_back(thread);
                 progress.threads_waiting += 1;
             }
-            Ok(Visit::Busy) => {
+            Ok(Visit::Busy | Visit::Failing) => {
                 backlog.threads.push_back(thread);
                 progress.threads_busy += 1;
             }
@@ -1028,7 +1299,7 @@ fn visit(
         }
         // Dropped work keeps what it read, idle, for the next attempt: only
         // a file that changed is read again.
-        Ok(Visit::Busy | Visit::Held) => stash(backlog, thread, work),
+        Ok(Visit::Busy | Visit::Failing | Visit::Held) => stash(backlog, thread, work),
         Ok(Visit::Done) => {}
     }
     visited
@@ -1065,11 +1336,7 @@ impl Phase {
                 facts: read,
                 scan,
                 ..
-            } => {
-                group::segments_bytes(&plan.segments)
-                    + facts(read)
-                    + scan.as_ref().map_or(0, |scan| scan.actual())
-            }
+            } => plan.bytes() + facts(read) + scan.as_ref().map_or(0, |scan| scan.actual()),
             Self::Staging {
                 plan,
                 facts: read,
@@ -1077,7 +1344,7 @@ impl Phase {
                 candidates,
                 ..
             } => {
-                group::segments_bytes(&plan.segments)
+                plan.bytes()
                     + facts(read)
                     + resolve::members_bytes(members)
                     + candidates.capacity() * std::mem::size_of::<LaunchCandidate>()
@@ -1168,9 +1435,10 @@ fn begin(
         return Ok(Err(Visit::Done));
     };
     // A file whose last line was being written: nothing to do until one
-    // of the files changes.
-    if let Some(held) = backlog.held.get(thread) {
-        if same_files(&files, held) {
+    // of the files changes, or every one has stopped changing, when the
+    // history is read again without that line.
+    if let Some((held, unfinished)) = backlog.held.get(thread) {
+        if same_files(&files, held) && !backlog.sightings.quiet(unfinished) {
             return Ok(Err(Visit::Held));
         }
         backlog.held.remove(thread);
@@ -1263,9 +1531,7 @@ fn begin(
             allocation,
             planner: Box::new(planner),
         }))),
-        Err(Refusal::Source(Unread::Changed | Unread::Unreadable | Unread::Missing)) => {
-            Ok(Err(Visit::Busy))
-        }
+        Err(why) if retried(why) => Ok(Err(retry(why))),
         // Refused from names and stats alone: nothing was read.
         Err(why) => Ok(Err(refuse(
             store,
@@ -1279,22 +1545,37 @@ fn begin(
     }
 }
 
-/// The generations a plan was made from, by rollout.
-fn planned(segments: &[Segment]) -> Vec<(String, SegmentGeneration)> {
-    segments
-        .iter()
-        .map(|segment| (segment.rollout.clone(), segment.generation))
-        .collect()
+/// Whether a refusal is retried on a later pass rather than published: a
+/// file that changed or went away while it was read (taken again with the
+/// next census), whose only line is still being written, or whose read met
+/// an error that may pass. A file this user may not read is not retried: it
+/// is published invalid and skipped until it changes.
+fn retried(why: Refusal) -> bool {
+    matches!(
+        why,
+        Refusal::Source(Unread::Changed | Unread::Missing | Unread::Unfinished | Unread::Io)
+    )
 }
 
-/// Publish a history that could not be validated as invalid, so it is not
-/// read again until a file changes: `Done`. Only against a current, complete
-/// census in which every file whose content the refusal rests on
-/// (`observed`) is still present as the generation it was read as; else
-/// nothing is published and the history is planned again: `Busy`. Files not
-/// read are recorded as they are now. `outcome` says, for the display check,
-/// whether an explicit guard refused a layout this version does not read or
-/// the history could not be checked.
+/// How a retried refusal ends a visit: a read error runs the thread's
+/// failure clock; a change or an unfinished line does not.
+fn retry(why: Refusal) -> Visit {
+    if why == Refusal::Source(Unread::Io) {
+        Visit::Failing
+    } else {
+        Visit::Busy
+    }
+}
+
+/// Publish a history that was not read for launches, so it is not read again
+/// until a file changes: `Done`. `outcome` is how it ended: `Valid` for one
+/// with no row ([`Refusal::Blank`]), read with nothing found, published
+/// valid; otherwise published invalid. Only against a current, complete
+/// census in which
+/// every file whose content the decision rests on (`observed`) is still
+/// present as the generation it was read as; else nothing is published and
+/// the history is planned again: `Busy`. Files not read are recorded as they
+/// are now, with no line read.
 #[allow(clippy::too_many_arguments)]
 fn refuse(
     store: &mut Store,
@@ -1305,6 +1586,11 @@ fn refuse(
     outcome: ReadOutcome,
     progress: &mut LaunchProgress,
 ) -> xt_store::Result<Visit> {
+    let status = if outcome == ReadOutcome::Valid {
+        GroupStatus::Valid
+    } else {
+        GroupStatus::Invalid
+    };
     let files = census_files(backlog, thread);
     if !backlog.census_current()
         || files.is_empty()
@@ -1316,8 +1602,17 @@ fn refuse(
     }
     let mut members = Vec::new();
     for file in &files {
-        let Ok(generation) = source::stat(&file.path) else {
-            return Ok(Visit::Busy);
+        let generation = match source::stat(&file.path) {
+            Ok(generation) => generation,
+            Err(error) => {
+                // Gone: taken again with the next census. Any other error
+                // (permission, the system, an alias): its thread's failure
+                // clock runs.
+                return Ok(match group::refusal(error, None) {
+                    Refusal::Source(Unread::Missing) => Visit::Busy,
+                    _ => Visit::Failing,
+                });
+            }
         };
         if observed
             .iter()
@@ -1329,17 +1624,16 @@ fn refuse(
             rollout_id: file.rollout.clone(),
             generation,
             scanned_length: 0,
-            valid: false,
+            valid: status == GroupStatus::Valid,
         });
     }
-    let published = store.publish_claude_launch_validation(
-        thread,
-        allocation,
-        GroupStatus::Invalid,
-        &members,
-        0,
-    )?;
-    progress.published_invalid += usize::from(published);
+    let published =
+        store.publish_claude_launch_validation(thread, allocation, status, &members, 0)?;
+    if status == GroupStatus::Valid {
+        progress.published_valid += usize::from(published);
+    } else {
+        progress.published_invalid += usize::from(published);
+    }
     if published {
         progress.reopened +=
             backlog.note_confirmed(store, thread, &members, outcome, Vec::new())?;
@@ -1374,7 +1668,7 @@ fn drive(
                 planner,
             } => {
                 let allocation = *allocation;
-                match planner.advance(budget) {
+                match planner.advance(budget, &mut backlog.sightings) {
                     Ok(None) => return Ok(Visit::Paused),
                     Ok(Some(plan)) => {
                         // Members' facts of exactly the planned generation are
@@ -1389,7 +1683,7 @@ fn drive(
                                 backlog,
                                 thread,
                                 allocation,
-                                &planned(&plan.segments),
+                                &plan.planned(),
                                 ReadOutcome::Failed,
                                 progress,
                             );
@@ -1416,11 +1710,7 @@ fn drive(
                             scan: None,
                         };
                     }
-                    Err(Refusal::Source(
-                        Unread::Changed | Unread::Unreadable | Unread::Missing,
-                    )) => {
-                        return Ok(Visit::Busy);
-                    }
+                    Err(why) if retried(why) => return Ok(retry(why)),
                     Err(why) => {
                         return refuse(
                             store,
@@ -1445,6 +1735,8 @@ fn drive(
                 if let Some(active) = scan.as_mut() {
                     let before = budget.spent;
                     let step = active.advance(budget, programs, &bounds);
+                    let reading = active.generation();
+                    let reading_path = active.segment().path.clone();
                     progress.advanced |= budget.spent > before;
                     match step {
                         Ok(Step::Paused) => return Ok(Visit::Paused),
@@ -1462,7 +1754,7 @@ fn drive(
                                     backlog,
                                     thread,
                                     allocation,
-                                    &planned(&plan.segments),
+                                    &plan.planned(),
                                     ReadOutcome::Failed,
                                     progress,
                                 );
@@ -1472,25 +1764,40 @@ fn drive(
                             *scan = None;
                         }
                         Ok(Step::Unfinished) => {
-                            // Held as planned until one of its files changes.
+                            // Held as planned until one of its files changes,
+                            // or the unfinished one stops changing.
                             progress.files_read += 1;
                             let held = plan
-                                .segments
-                                .iter()
-                                .map(|segment| MemberRecord {
-                                    rollout_id: segment.rollout.clone(),
-                                    generation: segment.generation,
+                                .planned()
+                                .into_iter()
+                                .map(|(rollout_id, generation)| MemberRecord {
+                                    rollout_id,
+                                    generation,
                                     scanned_length: 0,
                                     valid: true,
                                 })
                                 .collect();
-                            backlog.held.insert(thread.to_owned(), held);
+                            backlog.sightings.note_file(&reading);
+                            backlog.held.insert(thread.to_owned(), (held, reading));
                             *scan = None;
                             return Ok(Visit::Held);
                         }
-                        Err(ScanError::Source(_)) => {
+                        Err(ScanError::Source(error)) => {
                             *scan = None;
-                            return Ok(Visit::Busy);
+                            let why = group::refusal(error, Some((&reading_path, &reading)));
+                            if retried(why) {
+                                return Ok(retry(why));
+                            }
+                            // Not readable: skipped, not retried.
+                            return refuse(
+                                store,
+                                backlog,
+                                thread,
+                                allocation,
+                                &plan.planned(),
+                                why.outcome(),
+                                progress,
+                            );
                         }
                         Err(ScanError::OverLimit) => {
                             return refuse(
@@ -1498,7 +1805,7 @@ fn drive(
                                 backlog,
                                 thread,
                                 allocation,
-                                &planned(&plan.segments),
+                                &plan.planned(),
                                 ReadOutcome::Failed,
                                 progress,
                             );
@@ -1521,16 +1828,32 @@ fn drive(
                         &work.memory,
                         &work.entries,
                         limits.max_line,
+                        backlog.sightings.quiet(&segment.generation),
                     ) {
                         Ok(started) => *scan = Some(Box::new(started)),
-                        Err(ScanError::Source(_)) => return Ok(Visit::Busy),
+                        Err(ScanError::Source(error)) => {
+                            let why =
+                                group::refusal(error, Some((&segment.path, &segment.generation)));
+                            if retried(why) {
+                                return Ok(retry(why));
+                            }
+                            return refuse(
+                                store,
+                                backlog,
+                                thread,
+                                allocation,
+                                &plan.planned(),
+                                why.outcome(),
+                                progress,
+                            );
+                        }
                         Err(ScanError::OverLimit) => {
                             return refuse(
                                 store,
                                 backlog,
                                 thread,
                                 allocation,
-                                &planned(&plan.segments),
+                                &plan.planned(),
                                 ReadOutcome::Failed,
                                 progress,
                             );
@@ -1551,40 +1874,53 @@ fn drive(
                         backlog,
                         thread,
                         allocation,
-                        &planned(&plan.segments),
+                        &plan.planned(),
                         ReadOutcome::Failed,
                         progress,
                     );
                 };
                 progress.launches_broken += broken;
                 progress.launches_found += candidates.len();
-                let member_bytes = facts.len() * std::mem::size_of::<MemberRecord>()
-                    + facts.iter().map(|read| read.rollout.len()).sum::<usize>();
+                let member_bytes = (facts.len() + plan.rowless.len())
+                    * std::mem::size_of::<MemberRecord>()
+                    + facts.iter().map(|read| read.rollout.len()).sum::<usize>()
+                    + plan
+                        .rowless
+                        .iter()
+                        .map(|file| file.rollout.len())
+                        .sum::<usize>();
                 if copies.grow(member_bytes).is_err() {
                     return refuse(
                         store,
                         backlog,
                         thread,
                         allocation,
-                        &planned(&plan.segments),
+                        &plan.planned(),
                         ReadOutcome::Failed,
                         progress,
                     );
                 }
-                let members = facts
-                    .iter()
-                    .map(|read| MemberRecord {
-                        rollout_id: read.rollout.clone(),
-                        generation: read.generation,
-                        scanned_length: i64::try_from(read.complete).unwrap_or(i64::MAX),
-                        valid: read.valid,
-                    })
-                    .collect();
+                // A file with no row is a member too, with nothing read of it.
+                let mut members: Vec<MemberRecord> =
+                    Vec::with_capacity(facts.len() + plan.rowless.len());
+                members.extend(facts.iter().map(|read| MemberRecord {
+                    rollout_id: read.rollout.clone(),
+                    generation: read.generation,
+                    scanned_length: i64::try_from(read.complete).unwrap_or(i64::MAX),
+                    valid: read.valid,
+                }));
+                members.extend(plan.rowless.iter().map(|file| MemberRecord {
+                    rollout_id: file.rollout.clone(),
+                    generation: file.generation,
+                    scanned_length: 0,
+                    valid: true,
+                }));
                 let Ok(empty) = work.memory.reserve(0) else {
                     return Ok(Visit::Busy);
                 };
                 let plan = Plan {
                     segments: std::mem::take(&mut plan.segments),
+                    rowless: std::mem::take(&mut plan.rowless),
                     held: std::mem::replace(&mut plan.held, empty),
                 };
                 let facts = std::mem::take(facts);
@@ -1648,10 +1984,15 @@ fn drive(
                         return Ok(Visit::Busy);
                     }
                 }
-                let still = plan.segments.iter().all(|segment| {
+                let paths = plan
+                    .segments
+                    .iter()
+                    .map(|segment| (&segment.rollout, &segment.path))
+                    .chain(plan.rowless.iter().map(|file| (&file.rollout, &file.path)));
+                let still = paths.into_iter().all(|(rollout, path)| {
                     members.iter().any(|member| {
-                        member.rollout_id == segment.rollout
-                            && source::stat(&segment.path).ok() == Some(member.generation)
+                        member.rollout_id == *rollout
+                            && source::stat(path).ok() == Some(member.generation)
                     })
                 });
                 if !still {

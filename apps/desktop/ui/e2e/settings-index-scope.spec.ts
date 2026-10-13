@@ -9,7 +9,8 @@ import type { NativeIndexStatus } from '../src/data/generated/NativeIndexStatus'
  * the F1 export's (not real history): the note that says what a host's scan
  * state covers sits under the host rows inside the card at 1120×720 in both
  * schemes, in the card's meta ink, adds no tab stop, and leaves every reported
- * row as it was.
+ * row as it was. So does the note naming the Codex histories the sub-session
+ * launch search skipped, after it.
  */
 const scan = (host: string, state: NativeHostState, imported: number) => ({
   host,
@@ -38,6 +39,14 @@ const status: NativeIndexStatus = {
   needs_attention: true,
   reconciles: 2,
   files_scanned: 3,
+  codex_history_gaps: {
+    unsearched: 1,
+    forks_not_searched: 11,
+    unfinished_line_skipped: 0,
+    folders_not_read: 1,
+    too_many_files: false,
+    exec_launches_without_result: 0,
+  },
 };
 
 async function open(page: Page, indexStatus = status) {
@@ -114,6 +123,10 @@ for (const scheme of ['dark', 'light'] as const)
       'Read with gaps · 1 imported, 0 partial, 0 skipped, 3 new records, 0 enriched',
       'Read · 4 imported, 0 partial, 0 skipped, 3 new records, 0 enriched',
     ]);
+    const gaps = page.getByTestId('native-index-codex-gaps');
+    await expect(gaps).toHaveText(
+      '1 Codex history could not be searched for sub-session launches. Conversations it may have started are shown as main conversations, not sub-sessions. 1 folder in the Codex history folder could not be read. Conversations started from histories in it may be shown as main conversations. 11 forked Codex conversations are not searched for sub-session launches, because their copied part cannot be told apart from their own. Sub-sessions started from them show as main conversations.',
+    );
     await note.scrollIntoViewIfNeeded();
     await expect(note).toBeInViewport();
     const card = page.locator('.xt-section-card').filter({ has: list });
@@ -126,6 +139,17 @@ for (const scheme of ['dark', 'light'] as const)
     expect(noteBox.x + noteBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
     expect(noteBox.y + noteBox.height).toBeLessThanOrEqual(cardBox.y + cardBox.height);
     expect(await note.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    // The skipped-histories note follows it, inside the card, in the same ink.
+    await gaps.scrollIntoViewIfNeeded();
+    const [cardNow, noteNow, gapsBox] = await Promise.all(
+      [card, note, gaps].map(async (locator) => (await locator.boundingBox())!),
+    );
+    expect(gapsBox.y).toBeGreaterThanOrEqual(noteNow.y + noteNow.height);
+    expect(gapsBox.x).toBeGreaterThanOrEqual(cardNow.x);
+    expect(gapsBox.x + gapsBox.width).toBeLessThanOrEqual(cardNow.x + cardNow.width);
+    expect(gapsBox.y + gapsBox.height).toBeLessThanOrEqual(cardNow.y + cardNow.height);
+    expect(await gaps.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await gaps.locator('a, button, input, select, [tabindex]').count()).toBe(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1120);
     // The same quiet ink as the page's other notes.
     const meta = await page.evaluate(() => {
@@ -138,6 +162,7 @@ for (const scheme of ['dark', 'light'] as const)
     });
     await expect(note).toHaveCSS('color', meta);
     await expect(note).toHaveCSS('font-size', '12px');
+    await expect(gaps).toHaveCSS('color', meta);
     // Keyboard: the note is plain text and adds no tab stop.
     expect(await note.locator('a, button, input, select, [tabindex]').count()).toBe(0);
     await page.screenshot({ path: info.outputPath(`settings-index-scope-${scheme}.png`) });

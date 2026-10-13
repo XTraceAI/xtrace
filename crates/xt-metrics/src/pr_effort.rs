@@ -16,9 +16,10 @@
 //! `confirmed_only` is on. Only cached refresh facts are read: no GitHub call,
 //! SHA lookup, discovery or refresh happens here, and no age cutoff is applied
 //! to cached facts. A failed refresh after an earlier success keeps that
-//! success's facts; its status is reported alongside them. A link to a number
-//! GitHub said is not a pull request (in a repository it could see, and never
-//! confirmed before) is left out of everything here, as if it were not stored.
+//! success's facts; its status is reported alongside them. A link GitHub
+//! never confirmed and last answered as not found (no such pull request in a
+//! repository it could see, or no repository it could find) is left out of
+//! everything here, as if it were not stored.
 use crate::{
     CostSummary, Error, MetricsDb, PriceCatalog, Result, Window,
     cost::{self, Totals},

@@ -21,8 +21,10 @@
 //!
 //! - every Codex history the census finds has been read for launches since
 //!   the check began and is still exactly what that read covered
-//!   ([`super::LaunchBacklog::discovered_since`]); one that could not be
-//!   checked keeps the session checking;
+//!   ([`super::LaunchBacklog::discovered_since`]). One that could not be
+//!   read is skipped: it holds no session, and a session it launched is
+//!   shown as a main session; Settings counts such histories
+//!   ([`super::LaunchBacklog::search_gaps`]);
 //! - no published launch naming exactly this session is still to be looked
 //!   at, and no launch naming it, or (for a fresh `exec` thread) made before
 //!   it opened, is still waiting for its first result
@@ -39,7 +41,7 @@
 //! Nothing is kept but identities, attempts, generations and digests.
 
 use super::{
-    Discovery, LaunchBacklog, LaunchLimits,
+    LaunchBacklog, LaunchLimits,
     bash::{self, BashBacklog, OwnFirst, OwnOpening, OwnRead},
     source::{Allowance, Budget},
 };
@@ -360,8 +362,9 @@ fn pass(
 }
 
 /// Whether the launches this version finds leave no doubt that no agent's
-/// launch created this session: discovery since its check began is complete
-/// and no published launch naming exactly it is still to be looked at.
+/// launch created this session: every history was read since its check
+/// began (one that could not be read is skipped) and no published launch
+/// naming exactly it is still to be looked at.
 fn launched_clear(
     checks: &mut CheckBacklog,
     launches: &mut LaunchBacklog,
@@ -374,7 +377,7 @@ fn launched_clear(
     let Some(begun) = checks.begun(launches, bash, row) else {
         return Ok(false);
     };
-    if launches.discovered_since(begun.epoch) != Discovery::Complete {
+    if !launches.discovered_since(begun.epoch) {
         return Ok(false);
     }
     Ok(!store.claude_launch_child_open(native, host)?)

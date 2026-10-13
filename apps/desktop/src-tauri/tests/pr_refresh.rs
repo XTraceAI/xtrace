@@ -2016,7 +2016,7 @@ fn ms(duration: Duration) -> i64 {
 }
 
 /// Store one result as if an earlier check had answered it. `None` is a
-/// failure gh could not explain (another account's repository, an outage).
+/// failure gh could not explain (an outage, an unrecognised gh error).
 fn answered(app: &App, url: &str, at: i64, state: Option<PrState>) {
     answered_with(app, url, at, state, PrRefreshError::ExecutionFailed);
 }
@@ -2578,8 +2578,8 @@ fn a_single_failing_pull_request_never_pauses() {
     assert_eq!(service.auto_status().paused, None);
 }
 
-/// A pull request gh cannot open (another account's repository, a deleted
-/// one) fails every time. When it is the only one due, its failing again
+/// A pull request gh keeps failing for, in a way the client cannot explain,
+/// fails every time. When it is the only one due, its failing again
 /// never pauses automatic checks, so the others are still checked later.
 #[test]
 fn a_pull_request_that_failed_before_failing_again_never_pauses() {
@@ -2900,10 +2900,9 @@ fn a_future_dated_mention_is_checked_at_most_once_an_hour() {
 }
 
 /// Through the real client: never-checked pull requests whose repository
-/// resolves but whose number does not are stored as not found, three of them
-/// do not stop the run as a cost cap, they are marked so, and later runs do
-/// not ask gh about them again. A repository gh cannot see stays a failure
-/// and is retried.
+/// resolves but whose number does not, and one whose repository GitHub cannot
+/// find, are stored as not found, four of them do not stop the run as a cost
+/// cap, they are marked so, and later runs do not ask gh about them again.
 #[test]
 fn missing_pull_requests_in_a_visible_repository_through_the_real_client() {
     let app = app(&[ALPHA, BETA, GAMMA, DELTA, EPSILON]);
@@ -2921,7 +2920,7 @@ fn missing_pull_requests_in_a_visible_repository_through_the_real_client() {
         "headRefName": "feature/answers",
     })
     .to_string();
-    // Newest stored first: #5 (repository gh cannot see), then #4 answers,
+    // Newest stored first: #5 (repository GitHub cannot find), then #4 answers,
     // then #3, #2, #1 are missing pull requests in visible repositories.
     let gh = fake_gh(
         &base,
@@ -2940,7 +2939,7 @@ fn missing_pull_requests_in_a_visible_repository_through_the_real_client() {
     assert_eq!((report.attempted, report.paused), (5, None));
     assert_eq!(runs(&log), 5);
     let stored = app.stored();
-    for url in [ALPHA, BETA, GAMMA] {
+    for url in [ALPHA, BETA, GAMMA, EPSILON] {
         assert_eq!(
             stored[&identity(url).url()].refresh_error,
             Some(PrRefreshError::NotFound),
@@ -2948,10 +2947,6 @@ fn missing_pull_requests_in_a_visible_repository_through_the_real_client() {
         );
         assert!(stored[&identity(url).url()].not_found_on_github());
     }
-    assert_eq!(
-        stored[&identity(EPSILON).url()].refresh_error,
-        Some(PrRefreshError::ExecutionFailed)
-    );
     let not_found: Vec<String> = app
         .state
         .pr_list()
@@ -2961,16 +2956,89 @@ fn missing_pull_requests_in_a_visible_repository_through_the_real_client() {
         .filter(|row| row.status == PrRefreshStatusReport::NotFoundOnGithub)
         .map(|row| row.pull_request.url.clone())
         .collect();
+    // The list is in URL order.
     assert_eq!(
         not_found,
-        [ALPHA, BETA, GAMMA].map(|url| identity(url).url())
+        [ALPHA, BETA, EPSILON, GAMMA].map(|url| identity(url).url())
     );
 
-    // An hour later only the open one and the unseen repository are asked.
+    // An hour later only the open one is asked.
     clock.advance(ms(AUTO_RECHECK_AFTER) + MINUTE);
     let again = ran(service.auto_check(&app.state));
-    assert_eq!(again.attempted, 2);
-    assert_eq!(runs(&log), 7);
+    assert_eq!(again.attempted, 1);
+    assert_eq!(runs(&log), 6);
+}
+
+/// Through the real client, GitHub's "cannot find the repository" answer for
+/// the requested repository: a link stored as a failure before this answer
+/// was recognised is asked again and becomes not found on GitHub; a pull
+/// request GitHub confirmed earlier keeps its facts, counted as stale; the
+/// same answer naming another repository stays a failure.
+#[test]
+fn a_repository_github_cannot_find_through_the_real_client() {
+    let app = app(&[ALPHA, BETA, GAMMA]);
+    let root = TempDir::new().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let log = base.join("runs");
+    let start = BASE_ATTEMPT;
+    // ALPHA failed before and was never confirmed; BETA was confirmed open.
+    answered(&app, ALPHA, start, None);
+    answered(&app, BETA, start, Some(PrState::Open));
+    let gh = fake_gh(
+        &base,
+        &log,
+        "case \"$*\" in\n  *\"/pull/1 \"*) echo \"GraphQL: Could not resolve to a Repository with the name 'octo-org/alpha'. (repository)\" >&2; exit 1 ;;\n  *\"/pull/2 \"*) echo \"GraphQL: Could not resolve to a Repository with the name 'octo-org/beta'. (repository)\" >&2; exit 1 ;;\n  *\"/pull/3 \"*) echo \"GraphQL: Could not resolve to a Repository with the name 'x/r'. (repository)\" >&2; exit 1 ;;\nesac",
+    );
+    let clock = HandClock::at(start + ms(AUTO_RECHECK_AFTER));
+    let service = PrRefreshService::production(Some(gh), silent()).with_clock(clock.clone());
+
+    // All three are due: GAMMA never checked, BETA open, ALPHA failed before.
+    let report = ran(service.auto_check(&app.state));
+    assert_eq!((report.attempted, report.paused), (3, None));
+    assert_eq!(runs(&log), 3);
+    let stored = app.stored();
+    let alpha = &stored[&identity(ALPHA).url()];
+    assert_eq!(alpha.refresh_error, Some(PrRefreshError::NotFound));
+    assert!(alpha.not_found_on_github());
+    let beta = &stored[&identity(BETA).url()];
+    assert_eq!(beta.refresh_error, Some(PrRefreshError::NotFound));
+    assert!(!beta.not_found_on_github());
+    assert_eq!(beta.title.as_deref(), Some("Earlier answer"));
+    assert_eq!(beta.state, Some(PrState::Open));
+    assert_eq!(
+        stored[&identity(GAMMA).url()].refresh_error,
+        Some(PrRefreshError::ExecutionFailed)
+    );
+    let status = |url: &str| {
+        let wanted = identity(url).url();
+        app.state
+            .pr_list()
+            .unwrap()
+            .rows
+            .into_iter()
+            .find(|row| row.pull_request.url == wanted)
+            .unwrap()
+            .status
+    };
+    assert_eq!(status(ALPHA), PrRefreshStatusReport::NotFoundOnGithub);
+    assert_eq!(
+        status(BETA),
+        PrRefreshStatusReport::FailedAfterRefresh {
+            error: PrRefreshErrorCode::NotFound
+        }
+    );
+
+    // Without a new mention ALPHA is never asked again; BETA (last seen open)
+    // and GAMMA (a failure) are.
+    clock.advance(ms(AUTO_RECHECK_AFTER) + MINUTE);
+    let selection = app
+        .state
+        .pr_auto_selection(clock.attempted_at(), &HashSet::new())
+        .unwrap();
+    assert_eq!(
+        selection.ids.iter().copied().collect::<HashSet<_>>(),
+        HashSet::from([app.id(BETA), app.id(GAMMA)])
+    );
 }
 
 /// Three missing pull requests before any success do not stop the run: gh

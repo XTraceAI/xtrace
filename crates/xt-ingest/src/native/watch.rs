@@ -34,7 +34,9 @@
 
 use super::{
     CancelToken, HostReport, HostStatus, ImportReport, ImportRequest, ProducerSource, ScanMode,
-    SessionOutcome, all_imported, scan_native_continued,
+    SessionOutcome, all_imported,
+    claude_launch::SearchGaps,
+    scan_native_continued,
     session_creation::{SpawnBacklog, SpawnProgress, continue_codex_spawns_into},
     session_titles::TitleLimits,
 };
@@ -76,8 +78,9 @@ pub struct WatchConfig {
     /// The bounds of one pass of sub-session work
     /// ([`super::session_creation::spawn_limits`] outside tests).
     pub spawn_limits: TitleLimits,
-    /// Instrumentation: called at the named points on the worker (tests, and
-    /// progress reporting during the initial scan).
+    /// Instrumentation: called at the named points on the worker (tests,
+    /// progress reporting during the initial scan, and the Codex histories
+    /// the launch search skipped).
     pub probe: Option<Probe>,
 }
 
@@ -99,6 +102,11 @@ pub enum ProbePoint<'a> {
     /// A pass of left-over sub-session work between reconciliations ended,
     /// after any event it sent; `pending` says whether work is left.
     SpawnsContinued { pending: bool },
+    /// At the end of such a pass, just before `SpawnsContinued`, the Codex
+    /// histories the launch search skipped, as far as this run has read them
+    /// ([`super::claude_launch::LaunchBacklog::search_gaps`]). Sent by every
+    /// pass whose Codex history census is current.
+    LaunchSearchGaps(SearchGaps),
 }
 
 /// Whether live changes reach the index.
@@ -1063,6 +1071,9 @@ impl Worker {
             (self.sink)(TailEvent::SessionCreationsChanged {
                 changed: progress.shown_changes(),
             });
+        }
+        if let Some(gaps) = self.spawns.launches.search_gaps() {
+            self.probe(ProbePoint::LaunchSearchGaps(gaps));
         }
         self.probe(ProbePoint::SpawnsContinued {
             pending: self.spawns.pending(),

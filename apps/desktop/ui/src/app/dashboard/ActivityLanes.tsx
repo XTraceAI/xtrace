@@ -521,7 +521,7 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
     {
       key: 'started',
       header: <span title="When the session began, even if before this range.">started</span>,
-      width: '98px',
+      width: '120px',
       render: onLane((lane) => {
         const session = found(lane);
         if (!session || session.started_at_ms === null)

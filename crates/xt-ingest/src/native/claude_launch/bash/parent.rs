@@ -523,7 +523,7 @@ impl ParentScan {
 
 fn refusal(error: Unread) -> ScanError {
     match error {
-        Unread::Missing | Unread::Unreadable | Unread::Changed => ScanError::Changed,
+        Unread::Missing | Unread::Unreadable | Unread::Io | Unread::Changed => ScanError::Changed,
         Unread::Unfinished => ScanError::Unfinished,
         Unread::Memory => ScanError::Memory,
         Unread::Alias | Unread::TooLarge => ScanError::Refused,

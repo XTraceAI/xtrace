@@ -25,7 +25,7 @@
 //!   block on a full pipe. Stdout past [`Limits::max_stdout_bytes`] ends the
 //!   attempt as `output_too_large`; stderr past [`Limits::max_stderr_bytes`]
 //!   is discarded. Stderr is never reported or stored; it is only compared,
-//!   whole, with the one "pull request does not exist" line below.
+//!   whole, with the two "not found" lines below.
 //! * A deadline, a cancellation and an oversized stdout all terminate the
 //!   child's whole process group and reap it, so a descendant that inherited
 //!   the pipes cannot keep the attempt alive. The child's exit is observed
@@ -38,17 +38,22 @@
 //!   - exit code 4, which `gh help exit-codes` documents as "authentication
 //!     required", is `unauthorized`. That code is read from the exit status
 //!     alone.
-//!   - exit code 1 whose whole stderr is exactly the GraphQL answer that the
-//!     repository resolved but has no pull request with the requested number
-//!     is `not_found` ([`pull_request_missing_line`]). gh 2.90.0 prints, for
-//!     a visible repository without that pull request:
+//!   - exit code 1 whose whole stderr is exactly one of gh's two GraphQL
+//!     "could not resolve" answers for the requested pull request is
+//!     `not_found`. gh 2.90.0 prints, for a visible repository without that
+//!     pull request ([`pull_request_missing_line`]):
 //!     `GraphQL: Could not resolve to a PullRequest with the number of 999. (repository.pullRequest)`
-//!     The `(repository.pullRequest)` path says the `repository` field
-//!     resolved and only `pullRequest` did not. A repository gh cannot see —
-//!     missing, or private to another account — fails one level up instead,
-//!     `GraphQL: Could not resolve to a Repository with the name 'x/r'. (repository)`,
-//!     and stays `execution_failed`, as does any other wording, extra line or
-//!     truncated stderr.
+//!     and, for a repository GitHub cannot find for the signed-in account
+//!     ([`repository_missing_line`]):
+//!     `GraphQL: Could not resolve to a Repository with the name 'x/r'. (repository)`
+//!     GitHub gives that second answer both for a repository that does not
+//!     exist and for one private to another account; the two cannot be told
+//!     apart here. Storage keeps the facts of a pull request GitHub confirmed
+//!     earlier whatever a later check answers, so a `not_found` only hides a
+//!     link GitHub never confirmed (`StoredPullRequest::not_found_on_github`).
+//!     Either line must name the requested number or repository exactly; any
+//!     other wording, another name, an extra line or a truncated stderr stays
+//!     `execution_failed`.
 //!
 //!   This client never produces "rate limited"; that code exists in storage
 //!   for an owner that can establish it.
@@ -328,27 +333,45 @@ const GH_EXIT_ERROR: i32 = 1;
 ///
 /// `GraphQL: Could not resolve to a PullRequest with the number of 999. (repository.pullRequest)`
 ///
-/// A repository that does not resolve — missing, or private to an account
-/// other than the signed-in one — is reported at `(repository)` instead and
-/// never matches.
+/// A repository that does not resolve is reported one level up instead, by
+/// [`repository_missing_line`].
 pub fn pull_request_missing_line(number: u64) -> String {
     format!(
         "GraphQL: Could not resolve to a PullRequest with the number of {number}. (repository.pullRequest)"
     )
 }
 
-/// Whether a failed run's stderr is exactly gh's "this repository has no such
-/// pull request" answer for the requested number, and nothing else. A
-/// truncated stderr is never judged.
-fn says_pull_request_missing(identity: &PrIdentity, stderr: &Stderr) -> bool {
+/// The exact stderr line gh writes when GitHub cannot find the repository
+/// for the signed-in account (observed with gh 2.90.0 for
+/// `https://github.com/x/r/pull/19`):
+///
+/// `GraphQL: Could not resolve to a Repository with the name 'x/r'. (repository)`
+///
+/// `repository` is the canonical lowercase `owner/repo` of the requested
+/// identity ([`PrIdentity::repository`]), which is also how the requested URL
+/// spells it. GitHub answers the same for a repository that does not exist
+/// and for one private to another account.
+pub fn repository_missing_line(repository: &str) -> String {
+    format!("GraphQL: Could not resolve to a Repository with the name '{repository}'. (repository)")
+}
+
+/// Whether a failed run's stderr is exactly gh's "not found" answer for the
+/// requested pull request, and nothing else: either its repository has no
+/// pull request with that number ([`pull_request_missing_line`]) or GitHub
+/// cannot find its repository ([`repository_missing_line`]). A truncated or
+/// non-UTF-8 stderr is never judged.
+fn says_not_found(identity: &PrIdentity, stderr: &Stderr) -> bool {
     !stderr.overflowed
         && std::str::from_utf8(&stderr.kept).is_ok_and(|text| {
-            text.trim_end_matches(['\n', '\r']) == pull_request_missing_line(identity.number())
+            let line = text.trim_end_matches(['\n', '\r']);
+            line == pull_request_missing_line(identity.number())
+                || line == repository_missing_line(identity.repository())
         })
 }
 
 /// What a run wrote to stderr, kept only to compare with
-/// [`pull_request_missing_line`]; never reported or stored.
+/// [`pull_request_missing_line`] and [`repository_missing_line`]; never
+/// reported or stored.
 #[derive(Default)]
 struct Stderr {
     kept: Vec<u8>,
@@ -372,9 +395,10 @@ fn interpret(
         Exited::NeedsAuthentication => {
             return failure(identity, attempted_at, PrRefreshError::Unauthorized);
         }
-        // The repository resolved and GitHub says it has no pull request
-        // with this number.
-        Exited::Error if says_pull_request_missing(identity, stderr) => {
+        // GitHub says this pull request is not there: its repository has no
+        // pull request with this number, or GitHub cannot find the
+        // repository for the signed-in account.
+        Exited::Error if says_not_found(identity, stderr) => {
             return failure(identity, attempted_at, PrRefreshError::NotFound);
         }
         // The process ran and refused. Which refusal it was is not decidable

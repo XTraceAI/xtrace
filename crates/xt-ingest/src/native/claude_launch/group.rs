@@ -24,14 +24,18 @@
 //! no history reference and no inherited-context marker, whose saved file may
 //! hold copied history, is refused. Rows below an explicit
 //! `subagent_history_start_ordinal` are inherited context; a spawned thread
-//! or approval reviewer without one inherited nothing, as the reader's
-//! `codex_history.context_boundary` has it.
+//! or reviewer without one inherited nothing, as the reader's
+//! `codex_history.context_boundary` has it. A file that is empty, or holds
+//! only a first line with no newline that stopped changing, has no row and so
+//! no launch: it adds nothing to its history, which is validated from its
+//! other files; a history with no other file is read with nothing found
+//! ([`Refusal::Blank`]).
 //! Rewinds and abandoned tails are not refused: every file's rows are the
 //! thread's own. Every indexed locator of the thread, if the index holds it,
 //! must be one of the census's files.
 
 use super::rows;
-use super::source::{self, Allowance, BackRead, Budget, LineRead, Reserved, Unread};
+use super::source::{self, Allowance, BackRead, Budget, LineRead, Reserved, Sightings, Unread};
 use crate::native::session_titles::{
     SpawnCheck, TypedSpawn, codex_contained, codex_segment, full_thread_id, spawn_check,
     typed_spawn,
@@ -60,6 +64,16 @@ pub(super) struct CensusFile {
     pub original_name: bool,
 }
 
+/// Census failures recorded by path at most; more are only counted.
+pub(super) const MAX_CENSUS_FAILURES: usize = 64;
+
+#[cfg(test)]
+thread_local! {
+    /// A lower entry limit, for tests.
+    pub(super) static CENSUS_LIMIT: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// A name-only census of the Codex history roots, taken over as many passes
 /// as it needs, one directory entry at a time.
 #[derive(Debug)]
@@ -67,12 +81,18 @@ pub(super) struct Census {
     roots: Vec<PathBuf>,
     pending: Vec<(PathBuf, usize)>,
     /// The directory being listed, at its depth, where its listing is.
-    listing: Option<(std::fs::ReadDir, usize)>,
+    listing: Option<(std::fs::ReadDir, PathBuf, usize)>,
     groups: BTreeMap<String, Vec<CensusFile>>,
     entries: usize,
     saturated: bool,
-    /// A directory or entry could not be read: nothing it covers is known.
-    failed: bool,
+    /// Folders it could not list and entries whose type it could not read:
+    /// nothing they cover is known. At most [`MAX_CENSUS_FAILURES`] by path.
+    failures: Vec<PathBuf>,
+    /// Failures past that list.
+    more_failures: usize,
+    /// Its failures and entry limit have held for long enough: it is used
+    /// as it is ([`Self::accept`]).
+    accepted: bool,
 }
 
 /// The thread, rollout identity and whether it is the original, that a
@@ -114,7 +134,17 @@ impl Census {
             groups: BTreeMap::new(),
             entries: 0,
             saturated: false,
-            failed: false,
+            failures: Vec::new(),
+            more_failures: 0,
+            accepted: false,
+        }
+    }
+
+    fn fail(&mut self, path: PathBuf) {
+        if self.failures.len() < MAX_CENSUS_FAILURES {
+            self.failures.push(path);
+        } else {
+            self.more_failures += 1;
         }
     }
 
@@ -128,11 +158,11 @@ impl Census {
                     return true;
                 };
                 match std::fs::read_dir(&directory) {
-                    Ok(listing) => self.listing = Some((listing, depth)),
+                    Ok(listing) => self.listing = Some((listing, directory, depth)),
                     Err(_) => {
                         // An unreadable directory could hold a file of any
                         // group.
-                        self.failed = true;
+                        self.fail(directory);
                         continue;
                     }
                 }
@@ -140,28 +170,35 @@ impl Census {
             if stop() {
                 return false;
             }
-            let (listing, depth) = self.listing.as_mut().expect("listing");
+            let (listing, directory, depth) = self.listing.as_mut().expect("listing");
             let depth = *depth;
             let Some(entry) = listing.next() else {
                 self.listing = None;
                 continue;
             };
             let Ok(entry) = entry else {
-                self.failed = true;
+                let directory = directory.clone();
+                self.fail(directory);
                 continue;
             };
             self.entries += 1;
-            if self.entries > MAX_CENSUS_ENTRIES {
+            #[cfg(test)]
+            let limit = CENSUS_LIMIT
+                .with(std::cell::Cell::get)
+                .unwrap_or(MAX_CENSUS_ENTRIES);
+            #[cfg(not(test))]
+            let limit = MAX_CENSUS_ENTRIES;
+            if self.entries > limit {
                 self.saturated = true;
                 self.pending.clear();
                 self.listing = None;
                 return true;
             }
+            let path = entry.path();
             let Ok(kind) = entry.file_type() else {
-                self.failed = true;
+                self.fail(path);
                 continue;
             };
-            let path = entry.path();
             if kind.is_dir() {
                 if depth + 1 < MAX_DEPTH {
                     self.pending.push((path, depth + 1));
@@ -192,15 +229,34 @@ impl Census {
         self.entries
     }
 
-    /// Complete, and it looked at everything: only then is a group whole.
+    /// Complete, and it looked at everything, or what it could not look at
+    /// was accepted: only then are its groups used.
     pub fn usable(&self) -> bool {
-        self.complete() && !self.failed && !self.saturated
+        self.complete() && (self.whole() || self.accepted)
     }
 
-    /// Complete but not whole: an unreadable entry or too many entries. It
-    /// is taken again later.
+    /// Nothing failed and no entry limit was met.
+    fn whole(&self) -> bool {
+        self.failures.is_empty() && self.more_failures == 0 && !self.saturated
+    }
+
+    /// Complete but not whole, and not accepted: it is taken again later.
     pub fn broken(&self) -> bool {
-        self.complete() && (self.failed || self.saturated)
+        self.complete() && !self.whole() && !self.accepted
+    }
+
+    /// What it could not look at: folders and entries by path, how many
+    /// more, and whether it stopped at its entry limit.
+    pub fn gaps(&self) -> (&[PathBuf], usize, bool) {
+        (&self.failures, self.more_failures, self.saturated)
+    }
+
+    /// Use it as it is: its failures and limit held long enough
+    /// ([`super::source::Sightings::expired`]). A history in what it could
+    /// not read is not found; one split across it is validated from the
+    /// files it found.
+    pub fn accept(&mut self) {
+        self.accepted = true;
     }
 
     /// The roots it walked, as anchored.
@@ -240,18 +296,73 @@ pub(super) enum Refusal {
     /// hold the history it was forked from, so this version reads no launch
     /// of it. Explicitly unsupported, not a failed read.
     Copied,
+    /// Not a refusal: every file is empty, or holds only a first line with
+    /// no newline that stopped changing ([`source::Sightings::quiet`]). It
+    /// holds no row, so no launch: read, with nothing found.
+    Blank,
 }
 
 impl Refusal {
-    /// What the refusal means for a display check waiting on this history.
+    /// What the refusal means for the display check and Settings: read with
+    /// nothing found, a layout this version does not read, or a history
+    /// that could not be read.
     pub fn outcome(self) -> super::ReadOutcome {
         match self {
+            Self::Blank => super::ReadOutcome::Valid,
             Self::Copied => super::ReadOutcome::Unsupported,
             Self::Membership | Self::Source(_) | Self::OverLimit | Self::Structure => {
                 super::ReadOutcome::Failed
             }
         }
     }
+}
+
+/// The one rule for what a failed read of a Codex history file means for
+/// its validation, used wherever a history is planned or read for launches:
+///
+/// - this user may not read it (permission denied): `Source(Unreadable)`,
+///   skipped until it changes;
+/// - any other error from the system: `Source(Io)`, read again, its
+///   thread's failure clock running ([`super::LaunchBacklog::skipped`]);
+/// - gone: `Source(Missing)`, read again with the next census;
+/// - "changed": when `file` is given and is still exactly `generation`, the
+///   file did not change, so what was read is wrong where it stands (a
+///   cutoff whose byte before is not a newline, a file shorter than its own
+///   length): `Structure`, never a retry that could hold for good; else
+///   `Source(Changed)`, planned again;
+/// - a line over its bound: `Structure`; more memory than the allowance:
+///   `OverLimit`; an alias or a line still being written: as they are.
+pub(super) fn refusal(error: Unread, file: Option<(&Path, &SegmentGeneration)>) -> Refusal {
+    match error {
+        Unread::Memory => Refusal::OverLimit,
+        Unread::TooLarge => Refusal::Structure,
+        Unread::Changed => match file {
+            Some((path, generation)) if source::stat(path).ok() == Some(*generation) => {
+                Refusal::Structure
+            }
+            _ => Refusal::Source(Unread::Changed),
+        },
+        other => Refusal::Source(other),
+    }
+}
+
+/// A member file with no row: empty, or only a first line with no newline
+/// that stopped changing. It adds nothing to its history but is one of its
+/// files, as the generation it was seen as.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RowlessFile {
+    pub path: PathBuf,
+    pub rollout: String,
+    pub generation: SegmentGeneration,
+}
+
+/// Bytes a list of rowless files holds, at its capacity.
+pub(super) fn rowless_bytes(files: &Vec<RowlessFile>) -> usize {
+    files.capacity() * std::mem::size_of::<RowlessFile>()
+        + files
+            .iter()
+            .map(|file| file.path.capacity() + file.rollout.capacity())
+            .sum::<usize>()
 }
 
 /// One file of a validated history, as the generation its header was read
@@ -312,7 +423,9 @@ pub(in crate::native) enum Role {
     Own,
     /// A helper thread spawned by its typed parent.
     Spawned,
-    /// An approval reviewer (`guardian`) of the thread it names.
+    /// An approval reviewer (`guardian`, [`reviewer`]) or a code-review
+    /// subagent (`/review`, [`review_subagent`]) of the thread it names.
+    /// Its file holds its own rows; it names no spawn.
     Reviewer,
 }
 
@@ -341,6 +454,42 @@ fn reviewer(payload: &serde_json::Map<String, Value>, thread: &str) -> Option<bo
     )
 }
 
+/// A code-review subagent's header, as Codex 0.146 writes one for `/review`:
+/// `source` exactly `{"subagent": "review"}`, a `session_id` naming another
+/// full thread (the reviewed one), and an inherited-context marker
+/// (`subagent_history_start_ordinal`), so the reviewed thread's copied rows
+/// are never read as this one's. Only such a header is read as one; it fits
+/// when `thread_source` is `subagent` and `parent_thread_id` also names a
+/// full thread other than this one. It is not a typed spawn and is never read
+/// as a parent link ([`super::super::session_creation`] reads it as a thread
+/// no spawn created). `None` when the header is not one, which leaves it to
+/// the rules for any other header, as before this was read; `Some(false)`
+/// when it is one but does not fit, which those rules refused too.
+pub(in crate::native) fn review_subagent(
+    payload: &serde_json::Map<String, Value>,
+    thread: &str,
+) -> Option<bool> {
+    if *payload.get("source")? != serde_json::json!({"subagent": "review"}) {
+        return None;
+    }
+    let other = |key: &str| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|id| full_thread_id(id) && id != thread)
+    };
+    let marked = payload
+        .get("subagent_history_start_ordinal")
+        .is_some_and(|marker| !marker.is_null());
+    if !other("session_id") || !marked {
+        return None;
+    }
+    Some(
+        payload.get("thread_source").and_then(Value::as_str) == Some("subagent")
+            && other("parent_thread_id"),
+    )
+}
+
 fn integer(value: Option<&Value>) -> Result<Option<i64>, ()> {
     match value {
         None | Some(Value::Null) => Ok(None),
@@ -362,7 +511,7 @@ pub(in crate::native) fn header(line: &[u8], thread: &str) -> Result<Header, ()>
         return Err(());
     }
     let role = match typed_spawn(payload, thread) {
-        TypedSpawn::None => match reviewer(payload, thread) {
+        TypedSpawn::None => match reviewer(payload, thread).or(review_subagent(payload, thread)) {
             Some(true) => Role::Reviewer,
             Some(false) => return Err(()),
             None => {
@@ -460,7 +609,11 @@ pub(super) struct Planner {
     files: Vec<CensusFile>,
     allowance: Allowance,
     max_line: usize,
-    headers: Vec<(Header, SegmentGeneration)>,
+    /// Each file's header as read, `None` for a file with no row: empty, or
+    /// only a first line with no newline that stopped changing.
+    headers: Vec<(Option<Header>, SegmentGeneration)>,
+    /// The files with no row, apart from the segments.
+    rowless: Vec<RowlessFile>,
     reading: Option<(std::fs::File, SegmentGeneration, LineRead)>,
     segments: Vec<Segment>,
     /// The next segment whose base cutoff is checked, and its read.
@@ -470,11 +623,34 @@ pub(super) struct Planner {
     held: Reserved,
 }
 
-/// A validated plan: the files in name order, and their reservation.
+/// A validated plan: the files with rows in name order, the files with
+/// none, and their reservation.
 #[derive(Debug)]
 pub(super) struct Plan {
     pub segments: Vec<Segment>,
+    pub rowless: Vec<RowlessFile>,
     pub held: Reserved,
+}
+
+impl Plan {
+    /// Bytes its lists hold, at their capacity.
+    #[cfg(test)]
+    pub fn bytes(&self) -> usize {
+        segments_bytes(&self.segments) + rowless_bytes(&self.rowless)
+    }
+
+    /// The generation every file was planned from, by rollout.
+    pub fn planned(&self) -> Vec<(String, SegmentGeneration)> {
+        self.segments
+            .iter()
+            .map(|segment| (segment.rollout.clone(), segment.generation))
+            .chain(
+                self.rowless
+                    .iter()
+                    .map(|file| (file.rollout.clone(), file.generation)),
+            )
+            .collect()
+    }
 }
 
 fn census_bytes(files: &Vec<CensusFile>) -> usize {
@@ -526,12 +702,16 @@ impl Planner {
             if !rollouts.insert(file.rollout.clone()) {
                 return Err(Refusal::Structure);
             }
-            let now = source::stat(&file.path).map_err(Refusal::Source)?;
+            let now = source::stat(&file.path).map_err(|error| refusal(error, None))?;
             identities.push((now.device, now.inode));
         }
-        // Every recorded locator is one of the census's files.
+        // Every recorded locator is one of the census's files: one that is
+        // gone, or not a regular file, is not; a read error is only that.
         for path in indexed {
-            let now = source::stat(path).map_err(|_| Refusal::Membership)?;
+            let now = source::stat(path).map_err(|error| match error {
+                Unread::Unreadable | Unread::Io => refusal(error, None),
+                _ => Refusal::Membership,
+            })?;
             if !identities.contains(&(now.device, now.inode)) {
                 return Err(Refusal::Membership);
             }
@@ -542,6 +722,7 @@ impl Planner {
             allowance: allowance.clone(),
             max_line,
             headers: Vec::new(),
+            rowless: Vec::new(),
             reading: None,
             segments: Vec::new(),
             lookback: 0,
@@ -554,18 +735,19 @@ impl Planner {
     #[cfg(test)]
     pub fn actual(&self) -> usize {
         census_bytes(&self.files)
-            + self.headers.capacity() * std::mem::size_of::<(Header, SegmentGeneration)>()
+            + self.headers.capacity() * std::mem::size_of::<(Option<Header>, SegmentGeneration)>()
             + self
                 .headers
                 .iter()
                 .map(|(header, _)| {
                     header
-                        .base
                         .as_ref()
+                        .and_then(|header| header.base.as_ref())
                         .map_or(0, |(base, _, _)| base.capacity())
                 })
                 .sum::<usize>()
             + segments_bytes(&self.segments)
+            + rowless_bytes(&self.rowless)
             + self
                 .reading
                 .as_ref()
@@ -589,29 +771,72 @@ impl Planner {
     }
 
     fn unread(error: Unread) -> Refusal {
-        match error {
-            Unread::Memory => Refusal::OverLimit,
-            Unread::TooLarge => Refusal::Structure,
-            other => Refusal::Source(other),
-        }
+        refusal(error, None)
+    }
+
+    /// Keep one file's header, or `None` for a file with no row.
+    fn keep(
+        &mut self,
+        header: Option<Header>,
+        generation: SegmentGeneration,
+    ) -> Result<(), Refusal> {
+        let base = header
+            .as_ref()
+            .and_then(|header| header.base.as_ref())
+            .map_or(0, |(base, _, _)| base.len());
+        self.held.grow(base).map_err(|_| Refusal::OverLimit)?;
+        source::grow_items(&mut self.headers, &mut self.held).map_err(|_| Refusal::OverLimit)?;
+        self.headers.push((header, generation));
+        Ok(())
     }
 
     /// Read on within `budget`: `None` when paused, else the validated files
     /// in name order, each with the generation its header was read from.
-    pub fn advance(&mut self, budget: &mut Budget<'_>) -> Result<Option<Plan>, Refusal> {
+    /// A file with no row adds nothing; a history none of whose files has a
+    /// row is [`Refusal::Blank`]. A first line with no newline is waited for
+    /// until the file stops changing, as `sightings` decides; each such wait
+    /// is noted there.
+    pub fn advance(
+        &mut self,
+        budget: &mut Budget<'_>,
+        sightings: &mut Sightings,
+    ) -> Result<Option<Plan>, Refusal> {
         // Every file's opening line.
         while self.headers.len() < self.files.len() {
             let file = &self.files[self.headers.len()];
             if self.reading.is_none() {
-                let (handle, generation) = source::open(&file.path).map_err(Refusal::Source)?;
+                let (handle, generation) =
+                    source::open(&file.path).map_err(|error| refusal(error, None))?;
+                // An empty file has no row.
+                if generation.length == 0 {
+                    self.keep(None, generation)?;
+                    continue;
+                }
                 let read =
                     LineRead::new(0, self.max_line, &self.allowance).map_err(Self::unread)?;
                 self.reading = Some((handle, generation, read));
             }
             let (handle, generation, read) = self.reading.as_mut().expect("reading");
             let generation = *generation;
-            let Some(line) = read.advance(handle, budget).map_err(Self::unread)? else {
-                return Ok(None);
+            let line = match read.advance(handle, budget) {
+                Ok(Some(line)) => line,
+                Ok(None) => return Ok(None),
+                // Read to its end, still exactly what was opened, with no
+                // newline: its only line is unfinished. It holds the history
+                // while it changes; once quiet, the file has no row.
+                Err(Unread::Changed)
+                    if source::generation_of(handle).ok() == Some(generation)
+                        && source::stat(&file.path).ok() == Some(generation) =>
+                {
+                    if !sightings.quiet(&generation) {
+                        sightings.note_file(&generation);
+                        return Err(Refusal::Source(Unread::Unfinished));
+                    }
+                    self.reading = None;
+                    self.keep(None, generation)?;
+                    continue;
+                }
+                Err(error) => return Err(Self::unread(error)),
             };
             let parsed = {
                 let _decoding = self
@@ -626,13 +851,17 @@ impl Planner {
             }
             drop(line);
             self.reading = None;
-            let base = parsed.base.as_ref().map_or(0, |(base, _, _)| base.len());
-            self.held.grow(base).map_err(|_| Refusal::OverLimit)?;
-            source::grow_items(&mut self.headers, &mut self.held)
-                .map_err(|_| Refusal::OverLimit)?;
-            self.headers.push((parsed, generation));
+            self.keep(Some(parsed), generation)?;
         }
         if self.segments.is_empty() {
+            let rowless = self
+                .headers
+                .iter()
+                .filter(|(header, _)| header.is_none())
+                .count();
+            if rowless == self.headers.len() {
+                return Err(Refusal::Blank);
+            }
             self.segments = self.structure()?;
         }
         // Each base cutoff is a line boundary after the row with the ordinal
@@ -662,7 +891,8 @@ impl Planner {
                     .iter()
                     .find(|segment| segment.rollout == base)
                     .ok_or(Refusal::Structure)?;
-                let (handle, generation) = source::open(&base.path).map_err(Refusal::Source)?;
+                let (handle, generation) =
+                    source::open(&base.path).map_err(|error| refusal(error, None))?;
                 // The base as its header was read, or the plan starts again.
                 if generation != base.generation {
                     return Err(Refusal::Source(Unread::Changed));
@@ -678,8 +908,16 @@ impl Planner {
             let line = match read.advance(handle, budget) {
                 Ok(Some(line)) => line,
                 Ok(None) => return Ok(None),
-                Err(Unread::Memory) => return Err(Refusal::OverLimit),
-                Err(_) => return Err(Refusal::Structure),
+                // A cutoff after no newline is wrong where it stands; a read
+                // that failed is only that.
+                Err(error) => {
+                    let base = self
+                        .segments
+                        .iter()
+                        .find(|segment| segment.rollout == base)
+                        .ok_or(Refusal::Structure)?;
+                    return Err(refusal(error, Some((&base.path, &base.generation))));
+                }
             };
             let row = {
                 let _decoding = self
@@ -695,20 +933,26 @@ impl Planner {
             }
             self.lookback += 1;
         }
-        // Only the segments are kept from here on.
+        // Only the segments and rowless files are kept from here on.
         let segments = std::mem::take(&mut self.segments);
+        let rowless = std::mem::take(&mut self.rowless);
         self.files = Vec::new();
         self.headers = Vec::new();
         let mut held = std::mem::replace(
             &mut self.held,
             self.allowance.reserve(0).map_err(|_| Refusal::OverLimit)?,
         );
-        held.resize(segments_bytes(&segments))
+        held.resize(segments_bytes(&segments) + rowless_bytes(&rowless))
             .map_err(|_| Refusal::OverLimit)?;
-        Ok(Some(Plan { segments, held }))
+        Ok(Some(Plan {
+            segments,
+            rowless,
+            held,
+        }))
     }
 
-    /// The history's structure from its headers alone.
+    /// The history's structure from its headers alone; files with no row
+    /// are kept apart and take no part in it.
     fn structure(&mut self) -> Result<Vec<Segment>, Refusal> {
         let thread = self.thread.as_str();
         // The segments copy the files and headers: reserved first.
@@ -720,21 +964,43 @@ impl Planner {
                 .map(|(file, (header, _))| {
                     file.path.as_os_str().len()
                         + file.rollout.len()
-                        + header.base.as_ref().map_or(0, |(base, _, _)| base.len())
+                        + header
+                            .as_ref()
+                            .and_then(|header| header.base.as_ref())
+                            .map_or(0, |(base, _, _)| base.len())
                 })
                 .sum::<usize>();
         self.held.grow(copies).map_err(|_| Refusal::OverLimit)?;
-        let segments: Vec<Segment> = self
-            .files
+        // Exactly as many slots as files of each kind, within what was
+        // reserved above.
+        let rowless = self
+            .headers
             .iter()
-            .zip(&self.headers)
-            .map(|(file, (header, generation))| Segment {
-                path: file.path.clone(),
-                rollout: file.rollout.clone(),
-                header: header.clone(),
-                generation: *generation,
-            })
-            .collect();
+            .filter(|(header, _)| header.is_none())
+            .count();
+        let mut segments: Vec<Segment> = Vec::with_capacity(self.files.len() - rowless);
+        let mut blank: Vec<RowlessFile> = Vec::with_capacity(rowless);
+        // The original file of a flat history, by its name.
+        let mut original = Vec::with_capacity(self.files.len() - rowless);
+        for (file, (header, generation)) in self.files.iter().zip(&self.headers) {
+            match header {
+                Some(header) => {
+                    original.push(file.original_name);
+                    segments.push(Segment {
+                        path: file.path.clone(),
+                        rollout: file.rollout.clone(),
+                        header: header.clone(),
+                        generation: *generation,
+                    });
+                }
+                None => blank.push(RowlessFile {
+                    path: file.path.clone(),
+                    rollout: file.rollout.clone(),
+                    generation: *generation,
+                }),
+            }
+        }
+        self.rowless = blank;
         let paginated = segments[0].header.paginated;
         if segments.iter().any(|s| s.header.paginated != paginated) {
             return Err(Refusal::Structure);
@@ -744,7 +1010,7 @@ impl Planner {
             let [only] = segments.as_slice() else {
                 return Err(Refusal::Structure);
             };
-            if !self.files[0].original_name || only.rollout != thread {
+            if !original[0] || only.rollout != thread {
                 return Err(Refusal::Structure);
             }
             return Ok(segments);
@@ -974,6 +1240,317 @@ mod tests {
         }
     }
 
+    /// A Codex 0.146 `/review` subagent's header, as Codex writes it:
+    /// `session_id` and `parent_thread_id` both name the reviewed thread,
+    /// every row is below its inherited-context marker, and it names no fork
+    /// or history base. It is this thread's own history, read like an
+    /// approval reviewer's. A header with the same source but no other
+    /// thread in `session_id`, or no marker, is read exactly as before (as
+    /// the same header with another source is), so nothing the earlier rule
+    /// accepted is refused; one that is a review header but does not fit is
+    /// refused, as the earlier rule refused it too.
+    #[test]
+    fn a_review_subagent_header_is_the_threads_own() {
+        const PARENT: &str = "01a00000-0000-7000-8000-0000000000c1";
+        let line = |edit: &dyn Fn(&mut Value)| {
+            let mut value = serde_json::json!({"type": "session_meta", "ordinal": 0,
+                "payload": {"id": THREAD, "session_id": PARENT, "parent_thread_id": PARENT,
+                            "originator": "codex_exec", "cli_version": "0.146.0",
+                            "source": {"subagent": "review"}, "thread_source": "subagent",
+                            "history_mode": "paginated", "multi_agent_version": "disabled",
+                            "subagent_history_start_ordinal": 42}});
+            edit(&mut value);
+            value
+        };
+        let read = |value: &Value| {
+            header(&value.to_string().into_bytes(), THREAD)
+                .map(|header| (header.role, header.inherited_below, header.copied))
+        };
+        // The same header under a source the earlier rule read the same way.
+        let before = |value: &Value| {
+            let mut value = value.clone();
+            value["payload"]["source"] = "cli".into();
+            read(&value)
+        };
+        assert_eq!(read(&line(&|_| {})), Ok((Role::Reviewer, Some(42), false)));
+        let set = |at: &'static str, to: Value| {
+            move |v: &mut Value| {
+                let (parent, key) = at.rsplit_once('/').unwrap();
+                v.pointer_mut(parent).unwrap()[key] = to.clone();
+            }
+        };
+        let drop = |key: &'static str| {
+            move |v: &mut Value| {
+                v["payload"].as_object_mut().unwrap().remove(key);
+            }
+        };
+        // Not a review header: read as before.
+        type Edit<'a> = Box<dyn Fn(&mut Value) + 'a>;
+        let earlier: Vec<(&str, Edit<'_>, Result<Role, ()>)> = vec![
+            (
+                "own session",
+                Box::new(set("/payload/session_id", THREAD.into())),
+                Ok(Role::Own),
+            ),
+            ("no session", Box::new(drop("session_id")), Ok(Role::Own)),
+            (
+                "no session or marker",
+                Box::new(|v: &mut Value| {
+                    drop("session_id")(v);
+                    drop("subagent_history_start_ordinal")(v);
+                }),
+                Ok(Role::Own),
+            ),
+            (
+                "no marker",
+                Box::new(drop("subagent_history_start_ordinal")),
+                Err(()),
+            ),
+            (
+                "null marker",
+                Box::new(set("/payload/subagent_history_start_ordinal", Value::Null)),
+                Err(()),
+            ),
+            (
+                "session not a thread",
+                Box::new(set("/payload/session_id", "not-a-thread".into())),
+                Err(()),
+            ),
+            (
+                "another source",
+                Box::new(set("/payload/source/subagent", "other".into())),
+                Err(()),
+            ),
+        ];
+        for (case, edit, role) in earlier {
+            let value = line(&*edit);
+            assert_eq!(read(&value), before(&value), "{case}");
+            assert_eq!(read(&value).map(|(role, _, _)| role), role, "{case}");
+        }
+        // A review header that does not fit: refused, as before.
+        let unfit: [(&str, Value); 3] = [
+            ("/payload/parent_thread_id", THREAD.into()),
+            ("/payload/parent_thread_id", Value::Null),
+            ("/payload/thread_source", "user".into()),
+        ];
+        for (at, to) in unfit {
+            let value = line(&set(at, to.clone()));
+            assert_eq!(read(&value), Err(()), "{at} {to}");
+            assert_eq!(before(&value), Err(()), "{at} {to}");
+        }
+    }
+
+    /// A history whose every file is empty, or holds only a first line with
+    /// no newline that has stopped changing, has no row: [`Refusal::Blank`].
+    /// One such line still changing is retried; such a file among other
+    /// files is not one history.
+    #[test]
+    fn a_history_with_no_row_is_blank() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("sessions");
+        let day = root.join("2026/09/07");
+        std::fs::create_dir_all(&day).unwrap();
+        let path = day.join(format!("rollout-2026-09-07T00-00-00-{THREAD}.jsonl"));
+        let plan = |files: &[CensusFile]| {
+            let allowance = Allowance::new(1 << 20);
+            let mut planner = Planner::start(
+                THREAD,
+                files,
+                &[],
+                false,
+                std::slice::from_ref(&root),
+                &allowance,
+                1 << 16,
+            )?;
+            let mut budget = Budget::new(1 << 20, std::time::Duration::from_secs(10), None);
+            planner
+                .advance(&mut budget, &mut Sightings::default())
+                .map(|plan| plan.is_some())
+        };
+        let original = CensusFile {
+            path: path.clone(),
+            rollout: THREAD.to_owned(),
+            original_name: true,
+        };
+        let age = |path: &Path, seconds: u64| {
+            let file = std::fs::File::options().write(true).open(path).unwrap();
+            file.set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(seconds),
+            )
+            .unwrap();
+        };
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(plan(std::slice::from_ref(&original)), Err(Refusal::Blank));
+        let torn = serde_json::json!({"type": "session_meta", "ordinal": 0,
+            "payload": {"id": THREAD, "history_mode": "paginated"}})
+        .to_string();
+        std::fs::write(&path, &torn).unwrap();
+        assert_eq!(
+            plan(std::slice::from_ref(&original)),
+            Err(Refusal::Source(Unread::Unfinished))
+        );
+        age(&path, 3600);
+        assert_eq!(plan(std::slice::from_ref(&original)), Err(Refusal::Blank));
+        // Beside a file with a header, a file with no row adds nothing: the
+        // history is planned from the other file, and the empty one is kept
+        // apart as a member with no row.
+        let next = day.join(format!("rollout-2026-09-08T00-00-00-{THREAD}_{NEXT}.jsonl"));
+        std::fs::write(&path, format!("{torn}\n")).unwrap();
+        std::fs::write(&next, b"").unwrap();
+        let continued = CensusFile {
+            path: next,
+            rollout: NEXT.to_owned(),
+            original_name: false,
+        };
+        let allowance = Allowance::new(1 << 20);
+        let mut planner = Planner::start(
+            THREAD,
+            &[original.clone(), continued.clone()],
+            &[],
+            false,
+            std::slice::from_ref(&root),
+            &allowance,
+            1 << 16,
+        )
+        .unwrap();
+        let mut budget = Budget::new(1 << 20, std::time::Duration::from_secs(10), None);
+        let planned = planner
+            .advance(&mut budget, &mut Sightings::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                planned
+                    .segments
+                    .iter()
+                    .map(|segment| segment.rollout.as_str())
+                    .collect::<Vec<_>>(),
+                planned
+                    .rowless
+                    .iter()
+                    .map(|file| file.rollout.as_str())
+                    .collect::<Vec<_>>()
+            ),
+            (vec![THREAD], vec![NEXT])
+        );
+        assert_eq!(planned.held.bytes(), planned.bytes());
+        drop(planned);
+        // The original with no row, beside a continuation, is no history.
+        std::fs::write(&path, b"").unwrap();
+        std::fs::write(
+            &continued.path,
+            format!(
+                "{}\n",
+                serde_json::json!({"type": "session_meta", "ordinal": 0,
+                    "payload": {"id": THREAD, "history_mode": "paginated",
+                        "history_base": {"thread_id": THREAD, "end_byte_offset": 0,
+                            "end_ordinal_exclusive": 0}}})
+            ),
+        )
+        .unwrap();
+        assert_eq!(plan(&[original, continued]), Err(Refusal::Structure));
+    }
+
+    /// A continuation whose base cutoff does not follow a newline, in files
+    /// that did not change, is refused as no history: what was read is wrong
+    /// where it stands, and reading again would find the same.
+    #[test]
+    fn a_cutoff_after_no_newline_is_no_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("sessions");
+        let day = root.join("2026/09/07");
+        std::fs::create_dir_all(&day).unwrap();
+        let original = day.join(format!("rollout-2026-09-07T00-00-00-{THREAD}.jsonl"));
+        let body = format!(
+            "{}\n{}\n",
+            serde_json::json!({"type": "session_meta", "ordinal": 0,
+                "payload": {"id": THREAD, "history_mode": "paginated"}}),
+            serde_json::json!({"type": "event_msg", "ordinal": 1, "payload": {"type": "note"}})
+        );
+        std::fs::write(&original, &body).unwrap();
+        let next = day.join(format!("rollout-2026-09-08T00-00-00-{THREAD}_{NEXT}.jsonl"));
+        // Two bytes short of the newline that ends the base.
+        std::fs::write(
+            &next,
+            format!(
+                "{}\n",
+                serde_json::json!({"type": "session_meta", "ordinal": 2,
+                    "payload": {"id": THREAD, "history_mode": "paginated",
+                        "history_base": {"thread_id": THREAD,
+                            "end_byte_offset": body.len() - 2, "end_ordinal_exclusive": 2}}})
+            ),
+        )
+        .unwrap();
+        let files = [
+            CensusFile {
+                path: original,
+                rollout: THREAD.to_owned(),
+                original_name: true,
+            },
+            CensusFile {
+                path: next,
+                rollout: NEXT.to_owned(),
+                original_name: false,
+            },
+        ];
+        let allowance = Allowance::new(1 << 20);
+        let mut planner = Planner::start(
+            THREAD,
+            &files,
+            &[],
+            false,
+            std::slice::from_ref(&root),
+            &allowance,
+            1 << 16,
+        )
+        .unwrap();
+        let mut budget = Budget::new(1 << 20, std::time::Duration::from_secs(10), None);
+        assert_eq!(
+            planner
+                .advance(&mut budget, &mut Sightings::default())
+                .map(|plan| plan.is_some()),
+            Err(Refusal::Structure)
+        );
+    }
+
+    /// An indexed locator that cannot be stat'ed because of a read error is
+    /// read again (with its thread's failure clock), not refused as a file
+    /// outside the history; one that is gone still is.
+    #[test]
+    fn an_indexed_locator_read_error_is_retried_not_refused() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("sessions");
+        let day = root.join("2026/09/07");
+        std::fs::create_dir_all(&day).unwrap();
+        let path = day.join(format!("rollout-2026-09-07T00-00-00-{THREAD}.jsonl"));
+        std::fs::write(&path, b"{}\n").unwrap();
+        let files = [CensusFile {
+            path: path.clone(),
+            rollout: THREAD.to_owned(),
+            original_name: true,
+        }];
+        // The same file, as the index spelled it.
+        let indexed = day.join(".").join(path.file_name().unwrap());
+        let start = |indexed: &Path| {
+            Planner::start(
+                THREAD,
+                &files,
+                &[indexed.to_owned()],
+                true,
+                std::slice::from_ref(&root),
+                &Allowance::new(1 << 20),
+                1 << 16,
+            )
+            .map(|_| ())
+        };
+        assert_eq!(start(&indexed), Ok(()));
+        source::fail_stats_of(Some((&indexed, libc::EIO)));
+        let failing = start(&indexed);
+        source::fail_stats_of(None);
+        assert_eq!(failing, Err(Refusal::Source(Unread::Io)));
+        assert_eq!(start(&day.join("gone.jsonl")), Err(Refusal::Membership));
+    }
+
     /// The first rollout of a paginated history carries the thread's own
     /// name, as the compaction reader requires; a continuation-named file
     /// that starts the history is not one history.
@@ -1004,7 +1581,7 @@ mod tests {
                 1 << 16,
             )?;
             let mut budget = Budget::new(1 << 20, std::time::Duration::from_secs(10), None);
-            let planned = planner.advance(&mut budget);
+            let planned = planner.advance(&mut budget, &mut Sightings::default());
             std::fs::remove_file(path).unwrap();
             planned.map(|plan| plan.is_some())
         };

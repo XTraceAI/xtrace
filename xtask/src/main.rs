@@ -295,6 +295,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
                     needs_attention: false,
                     reconciles: 0,
                     files_scanned: 0,
+                    codex_history_gaps: None,
                 },
                 pull_requests: pull_requests.listed,
                 pr_refresh: pull_requests.refresh,

@@ -864,8 +864,8 @@ fn pr_effort_failed_refresh_keeps_cached_success_with_its_status() {
     );
 }
 
-/// A link GitHub said is not a pull request (the repository resolved, the
-/// number did not) is left out entirely: not merged, not unknown, not in any
+/// A link GitHub said is not a pull request (no such pull request, or no
+/// such repository) is left out entirely: not merged, not unknown, not in any
 /// freshness count, and its session is assigned as if it had no link. Every
 /// other failure still makes the tile incomplete. A later success counts it.
 #[test]

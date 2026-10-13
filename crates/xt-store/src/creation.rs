@@ -88,7 +88,9 @@ text_enum!(CreationWitness {
 /// Relations version 1 stored stay as stored: both versions read the parent
 /// from the same typed field, so a version 2 proof replays them. Its own
 /// bootstrap pass reads every indexed Codex root again once, reaching the
-/// threads version 1 refused.
+/// threads version 1 refused. Reading a Codex `/review` subagent's header as
+/// the thread's own changed no version: it proves no spawn, and the display
+/// check asks for the header of every thread still checking again each run.
 pub const CODEX_THREAD_SPAWN_VERSION: u32 = 2;
 
 /// Version of the foreground Claude CLI artifact validator. It is the only one

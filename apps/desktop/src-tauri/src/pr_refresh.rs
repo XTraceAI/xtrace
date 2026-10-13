@@ -284,17 +284,24 @@ pub struct AutoSelection {
 /// Choose what an automatic run checks, from one storage snapshot.
 ///
 /// Only pull requests a session still links are considered. Merged and closed
-/// ones are final and never chosen. A number GitHub said is not a pull request
-/// in a repository it could see is chosen once more only when a conversation
-/// mentioned it after that answer (a link's `last_seen_at` is later than the
-/// answer) and its last check is [`AUTO_RECHECK_AFTER`] old: the pull
-/// request may have been opened since. Otherwise it is
-/// never chosen, since checking again could only find an unrelated pull
-/// request that later took that number. One with no attempt at all is due now;
+/// ones are final and never chosen. A link GitHub never confirmed and last
+/// answered as not found (`StoredPullRequest::not_found_on_github`: no pull
+/// request with that number in a repository it could see, or no repository
+/// it could find) is chosen once more only when a conversation mentioned it
+/// after that answer (a link's `last_seen_at` is later than the answer) and
+/// its last check is [`AUTO_RECHECK_AFTER`] old: the pull request may have
+/// been opened, or access to its repository granted, since. Otherwise it is
+/// never chosen. For a missing number, checking again could only find an
+/// unrelated pull request that later took that number. For a missing
+/// repository, access can change (another gh account, a token that gains
+/// access), but GitHub answers the same for a repository that does not exist,
+/// so it is deliberately not rechecked on a timer: once access arrives it is
+/// checked again when a conversation mentions it again, or by hand from the
+/// refresh dialog. One with no attempt at all is due now;
 /// one whose last success said open, or whose last attempt failed, is due
 /// once its last attempt is [`AUTO_RECHECK_AFTER`] old. Ones whose last
-/// attempt failed come last, so a few pull requests gh cannot open (another
-/// account's repository, an outage) never crowd out the rest. `tried` excludes the
+/// attempt failed come last, so a few pull requests gh keeps failing for (an
+/// unexplained gh error, an outage) never crowd out the rest. `tried` excludes the
 /// IDs this run already attempted, so a result storage did not apply cannot
 /// make a run pick the same pull request twice.
 pub fn auto_selection(
@@ -971,7 +978,7 @@ type RunTrack = Arc<Mutex<RunState>>;
 /// * Before anything in the run has succeeded, [`AUTO_GIVE_UP_AFTER`] other
 ///   failures stop the run without pausing: a cost cap for an offline host
 ///   or a broken gh. Once one attempt has succeeded, a failure is that pull
-///   request's own (another account's repository, an outage) and never stops
+///   request's own (a gh failure it cannot explain, an outage) and never stops
 ///   the others.
 /// * A failure the run's own cancellation caused counts for nothing.
 fn automatic_attempt(inner: Attempt, run: RunTrack) -> Attempt {

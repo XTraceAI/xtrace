@@ -69,9 +69,24 @@ fn rollout_at(home: &Path, time: &str, native: &str) -> PathBuf {
 
 /// A `session_meta` for `native` with this `source`, and its long
 /// instructions, as Codex writes a first-level spawn: its `payload.session_id`
-/// is the root of its spawn tree, which is the parent itself here; any other
-/// header carries none.
+/// is the root of its spawn tree, which is the parent itself here. A
+/// `/review` subagent's header is the one Codex 0.146 writes: its
+/// `payload.session_id` and `payload.parent_thread_id` name [`PARENT`], the
+/// thread it reviews, and every row is below its inherited-context marker.
+/// Any other header carries none.
 fn header(native: &str, source: Value) -> String {
+    if source == json!({"subagent": "review"}) {
+        let mut value: Value =
+            serde_json::from_str(&header_with(native, source, Some(PARENT.into()))).unwrap();
+        let payload = &mut value["payload"];
+        payload["parent_thread_id"] = PARENT.into();
+        payload["thread_source"] = "subagent".into();
+        payload["originator"] = "codex_exec".into();
+        payload["history_mode"] = "paginated".into();
+        payload["multi_agent_version"] = "disabled".into();
+        payload["subagent_history_start_ordinal"] = 42.into();
+        return value.to_string();
+    }
     let session = source
         .pointer("/subagent/thread_spawn/parent_thread_id")
         .cloned();
@@ -274,7 +289,9 @@ fn guardian_exec_history_base_and_role_lookalikes_are_not_spawns() {
     let parent = rollout_path(&home, PARENT);
     write(&parent, &rollout(&header(PARENT, json!("cli"))));
     let cases: Vec<(&str, String)> = vec![
-        // A guardian or review subagent names no parent.
+        // A guardian or review subagent is no spawn: the review subagent's
+        // header names the reviewed thread as its session, and is still this
+        // thread's own.
         (
             "019a0000-0000-7000-8000-000000000001",
             header(
@@ -287,6 +304,16 @@ fn guardian_exec_history_base_and_role_lookalikes_are_not_spawns() {
             header(
                 "019a0000-0000-7000-8000-000000000002",
                 json!({"subagent": "review"}),
+            ),
+        ),
+        // A review subagent header naming no other session, as earlier
+        // Codex versions may write it: the thread's own, as before.
+        (
+            "019a0000-0000-7000-8000-000000000006",
+            header_with(
+                "019a0000-0000-7000-8000-000000000006",
+                json!({"subagent": "review"}),
+                None,
             ),
         ),
         (
@@ -328,6 +355,27 @@ fn guardian_exec_history_base_and_role_lookalikes_are_not_spawns() {
             .all(|outcome| *outcome == SpawnOutcome::NotSpawned)
     );
     assert!(shown(db.store()).is_empty());
+    // The review subagent's own header is observed for its display check,
+    // as no `codex exec` launch's child, and no child fact is read from it.
+    let review = record_codex_spawns(
+        db.store_mut(),
+        &home,
+        &["019a0000-0000-7000-8000-000000000002"],
+        spawn_limits(),
+        None,
+        T,
+    )
+    .unwrap()
+    .probes
+    .remove(0);
+    assert_eq!(
+        (
+            review.outcome,
+            review.child,
+            review.opening.map(|opening| opening.fresh_exec)
+        ),
+        (SpawnOutcome::NotSpawned, None, Some(None))
+    );
 }
 
 #[test]
@@ -396,6 +444,22 @@ fn foreign_malformed_torn_or_late_headers_abstain() {
             n(19),
             rollout(&header(&n(19), spawned_by(&n(19)))),
             refused(SpawnRefusal::SelfSpawn),
+        ),
+        // A review subagent header naming another session but with no
+        // inherited-context marker: not read as one, so refused as any
+        // header naming another session, as before.
+        (
+            n(21),
+            rollout(&{
+                let mut value: Value =
+                    serde_json::from_str(&header(&n(21), json!({"subagent": "review"}))).unwrap();
+                value["payload"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("subagent_history_start_ordinal");
+                value.to_string()
+            }),
+            refused(SpawnRefusal::IdentityMismatch),
         ),
     ];
     let mut sessions: Vec<(String, PathBuf)> = vec![(PARENT.into(), parent)];

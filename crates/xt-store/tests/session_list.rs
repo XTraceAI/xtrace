@@ -660,8 +660,8 @@ mod exact_pull_request {
     }
 }
 
-/// A number GitHub said is not a pull request (its repository resolved, the
-/// number did not, and GitHub never confirmed it) is no pull-request link on
+/// A number GitHub said is not a pull request (no such pull request or no
+/// such repository, and GitHub never confirmed it) is no pull-request link on
 /// the Sessions page: not a chip, not a match for "with PRs", and it has no
 /// members. A later successful check brings it back.
 mod not_found_on_github {

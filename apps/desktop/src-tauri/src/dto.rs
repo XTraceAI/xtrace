@@ -104,6 +104,35 @@ pub struct NativeIndexStatus {
     pub reconciles: u32,
     /// Claude transcripts read so far by the initial scan (progress while scanning).
     pub files_scanned: u32,
+    /// Codex histories the sub-session launch search skipped, as far as this
+    /// run has read them; `None` until it has looked at every Codex history
+    /// file name once.
+    pub codex_history_gaps: Option<CodexHistoryGaps>,
+}
+
+/// Codex histories the search for sub-session launches skipped
+/// (`claude_launch::LaunchBacklog::search_gaps`, the one rule). A session
+/// one of them launched is shown as a main conversation, not a sub-session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, TS)]
+pub struct CodexHistoryGaps {
+    /// Histories that could not be searched at all: a file this user may
+    /// not read, one whose reads kept failing, malformed, or over a limit.
+    pub unsearched: u32,
+    /// Folders in the Codex history folder that could not be read: the
+    /// histories in them were not searched.
+    pub folders_not_read: u32,
+    /// The Codex history folder has more files than are looked at: only
+    /// part of it was read.
+    pub too_many_files: bool,
+    /// `codex exec` runs started from Codex that never reported back: they
+    /// no longer keep the conversations they may have opened from showing.
+    pub exec_launches_without_result: u32,
+    /// Forked conversations not searched by design: their copied part cannot
+    /// be told apart from their own. Not a problem to fix.
+    pub forks_not_searched: u32,
+    /// Histories searched without an unfinished last line that stopped
+    /// changing.
+    pub unfinished_line_skipped: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]

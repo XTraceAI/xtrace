@@ -2170,6 +2170,67 @@ fn codex_reviewer_counts_its_own_rows_and_refuses_a_snapshot() {
     }
 }
 
+/// A Codex 0.146 `/review` subagent's header: `session_id` and
+/// `parent_thread_id` name the reviewed thread, with an inherited-context
+/// marker.
+fn review_meta(native: &str, reviewed: &str, boundary: Option<u64>) -> Value {
+    let mut header = ordinary_meta(native, 0);
+    header["payload"]["session_id"] = json!(reviewed);
+    header["payload"]["parent_thread_id"] = json!(reviewed);
+    header["payload"]["thread_source"] = json!("subagent");
+    header["payload"]["source"] = json!({"subagent": "review"});
+    if let Some(boundary) = boundary {
+        header["payload"]["subagent_history_start_ordinal"] = json!(boundary);
+    }
+    header
+}
+
+/// A `/review` subagent is read like an approval reviewer: rows below its
+/// marker are the reviewed conversation's, the rest its own; a file whose
+/// only compaction is a copied one is refused as a snapshot. Without a
+/// marker its header is not read as one, and is refused as before.
+#[test]
+fn codex_review_subagent_is_read_like_a_reviewer() {
+    let home = tempfile::Builder::new().tempdir_in("/private/tmp").unwrap();
+    let (native, reviewed) = (id(1), id(2));
+    let path = rollout(home.path(), &native, "", &[]);
+    let t = target(Host::Codex, &native, std::slice::from_ref(&path));
+    let cases: Vec<(&str, Vec<Value>, Outcome)> = vec![
+        (
+            "no compactions",
+            vec![review_meta(&native, &reviewed, Some(2)), note(1)],
+            Outcome::Count { count: 0 },
+        ),
+        (
+            "only the reviewed conversation's compaction",
+            vec![
+                review_meta(&native, &reviewed, Some(3)),
+                note(1),
+                compact(2, "reviewed-window-4"),
+            ],
+            Outcome::unknown(Reason::Snapshot),
+        ),
+        (
+            "its own compaction after the marker",
+            vec![
+                review_meta(&native, &reviewed, Some(2)),
+                compact(1, "reviewed"),
+                compact(2, "own"),
+            ],
+            Outcome::Count { count: 1 },
+        ),
+        (
+            "no marker",
+            vec![review_meta(&native, &reviewed, None), note(1)],
+            Outcome::unknown(Reason::Ownership),
+        ),
+    ];
+    for (name, rows, outcome) in cases {
+        write(&path, &rows);
+        assert_eq!(read(home.path(), &t), outcome, "{name}");
+    }
+}
+
 /// A spawned helper forked from its parent with no history reference, but
 /// with a marker: rows below it are the copied ones, and a helper whose only
 /// compactions are copied has none of its own.

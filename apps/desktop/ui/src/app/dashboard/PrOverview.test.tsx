@@ -563,6 +563,12 @@ it('lists a not-found number for a check by hand and words its result apart from
   ).toBeTruthy();
   // Only never-confirmed numbers are said to be left out.
   expect(dialog().textContent).toContain('never confirmed before, is marked not found on GitHub');
+  // A repository GitHub cannot find is covered too, with its tradeoff said.
+  expect(dialog().textContent).toContain('a repository GitHub cannot find for your sign-in');
+  expect(dialog().textContent).toContain('GitHub answers the same for a private repository');
+  expect(dialog().textContent).toContain(
+    'If you get access later, it is checked again only when a conversation mentions it again, or when you choose it here.',
+  );
   expect(dialog().textContent).toContain('A pull request GitHub confirmed before keeps its facts');
   for (const box of boxes) fireEvent.click(box);
   fireEvent.click(start());

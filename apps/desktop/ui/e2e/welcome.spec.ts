@@ -30,6 +30,7 @@ const base = {
   readers: { state: 'verified', commit: 'b'.repeat(40), plugin_version: '0.1.0' },
   reconciles: 1,
   files_scanned: 212,
+  codex_history_gaps: null,
 } as const;
 const states: Record<string, NativeIndexStatus> = {
   scanning: {

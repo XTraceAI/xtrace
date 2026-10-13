@@ -21,7 +21,7 @@ import { SectionCard } from '../kit/SectionCard';
 import { Toggle } from '../kit/Toggle';
 import { useTheme, type ThemePreference } from '../theme/ThemeProvider';
 import { hostScanText } from './index-host-state';
-import { freshnessText, phaseText } from './native-index-text';
+import { codexHistoryGapsText, freshnessText, phaseText } from './native-index-text';
 import { useAppInfo, useDbCounts, useNativeIndexStatus } from './useAppInfo';
 import '../styles/settings.css';
 
@@ -613,6 +613,7 @@ function NativeIndex() {
     <>
       <NativeIndexSummary status={index.data} />
       <HostScanScope hosts={index.data.hosts} />
+      <CodexHistoryGaps status={index.data} />
     </>
   ) : index.isError ? (
     <p role="alert">Native index status could not be loaded.</p>
@@ -645,6 +646,20 @@ function HostScanScope({ hosts }: { hosts: NativeIndexStatus['hosts'] }) {
       sources this index reads, not all of that host&apos;s history.
       {hosts.some((host) => host.host === 'cursor') &&
         " Conversations kept only in the Cursor IDE's database are not read, so they are not in Cursor's counts."}
+    </p>
+  );
+}
+
+/**
+ * Codex histories the search for sub-session launches skipped, so a missing
+ * sub-session can be explained from Settings. Shown only when there are some.
+ */
+function CodexHistoryGaps({ status }: { status: NativeIndexStatus }) {
+  const text = codexHistoryGapsText(status);
+  if (!text) return null;
+  return (
+    <p className="xt-settings-note" data-testid="native-index-codex-gaps">
+      {text}
     </p>
   );
 }

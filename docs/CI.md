@@ -131,7 +131,7 @@ waiver of macOS 14 QA, final-byte acceptance or publication checks. Changes to
 source or packaging invalidate the relevant release evidence.
 
 Final signed launch from `/Applications` on a Mac that has never run the app
-requires separate acceptance. The 0.1.4 testing release does not yet claim that
+requires separate acceptance. The 0.1.5 testing release does not yet claim that
 check.
 
 `macos-14` is scheduled for retirement on November 2, 2026. Before retirement,
@@ -326,7 +326,7 @@ and supplies its plugin root to the mandatory native conformance hook. Before th
 first workspace test, native validation builds the bundle verifier and checks the
 bundled producer's identity and file modes against `.plugin-pin`. The workflow
 tests enforce bundle mode and bootstrap order. This adds no PR job.
-The 0.1.3 release completed native validation for its exact source on macOS 14
+The 0.1.4 release completed native validation for its exact source on macOS 14
 arm64. Each later release needs a new exact-source result. Live queue evidence
 is required before queue activation.
 

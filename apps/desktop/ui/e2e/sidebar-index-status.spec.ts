@@ -41,6 +41,7 @@ const ready: NativeIndexStatus = {
   needs_attention: false,
   reconciles: 2,
   files_scanned: 3,
+  codex_history_gaps: null,
 };
 const partial: NativeIndexStatus = {
   ...ready,

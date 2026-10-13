@@ -16,7 +16,7 @@ use super::super::readers_cli::CancelToken;
 use std::{
     fs::{File, Metadata, OpenOptions},
     os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -42,7 +42,12 @@ pub(super) enum Unread {
     Missing,
     /// An alias, not a regular file, more than one link or another owner.
     Alias,
+    /// This user may not read it (permission denied): it stays so until the
+    /// file or its permissions change.
     Unreadable,
+    /// Any other error while it was read (too many open files, an IO error,
+    /// no memory): it may pass, so the read is tried again.
+    Io,
     /// It changed, was replaced or shrank while it was read.
     Changed,
     /// A line or the file is longer than its bound.
@@ -50,7 +55,7 @@ pub(super) enum Unread {
     /// Keeping it would pass the thread's memory allowance.
     Memory,
     /// Its last line is still being written: nothing of it is used until it
-    /// is complete.
+    /// is complete, or until it stops changing ([`Sightings::quiet`]).
     Unfinished,
 }
 
@@ -133,6 +138,46 @@ thread_local! {
     /// Every byte any read here returned, for tests that compare it with
     /// what the budget was charged.
     pub(super) static READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// An OS error reads here fail with, for tests: of the file with this
+    /// inode (any file when `None`), for reads starting at or past this
+    /// offset.
+    pub(super) static READ_FAULT: std::cell::Cell<Option<(i32, Option<u64>, u64)>> =
+        const { std::cell::Cell::new(None) };
+    /// An OS error a stat of exactly this path fails with, for tests.
+    pub(super) static STAT_FAULT: std::cell::RefCell<Option<(PathBuf, i32)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Fail stats of exactly `path` with `code`, or none, for tests.
+#[cfg(test)]
+pub(super) fn fail_stats_of(fault: Option<(&Path, i32)>) {
+    STAT_FAULT.with(|stat| {
+        *stat.borrow_mut() = fault.map(|(path, code)| (path.to_owned(), code));
+    });
+}
+
+/// Fail every read of every file with `code`, for tests.
+#[cfg(test)]
+pub(super) fn fail_reads(code: Option<i32>) {
+    READ_FAULT.with(|fault| fault.set(code.map(|code| (code, None, 0))));
+}
+
+/// Fail reads of the file at `path` starting at or past `offset` with
+/// `code`, for tests.
+#[cfg(test)]
+pub(super) fn fail_reads_of(path: &Path, offset: u64, code: i32) {
+    let inode = std::fs::metadata(path).unwrap().ino();
+    READ_FAULT.with(|fault| fault.set(Some((code, Some(inode), offset))));
+}
+
+/// What an error reading a file means: only "permission denied" (`EACCES`,
+/// `EPERM`) lasts until the file changes; any other is tried again.
+fn io(error: &std::io::Error) -> Unread {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        Unread::Unreadable
+    } else {
+        Unread::Io
+    }
 }
 
 /// Read exactly the granted part of `want` bytes at `offset`, charged to the
@@ -147,12 +192,19 @@ pub(super) fn read_chunk(
     if granted == 0 {
         return Ok(None);
     }
+    #[cfg(test)]
+    if let Some((code, inode, from)) = READ_FAULT.with(std::cell::Cell::get)
+        && offset >= from
+        && inode.is_none_or(|inode| file.metadata().is_ok_and(|meta| meta.ino() == inode))
+    {
+        return Err(io(&std::io::Error::from_raw_os_error(code)));
+    }
     let mut chunk = vec![0_u8; usize::try_from(granted).map_err(|_| Unread::TooLarge)?];
     let read = loop {
         match file.read_at(&mut chunk, offset) {
             Ok(read) => break read,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return Err(Unread::Unreadable),
+            Err(error) => return Err(io(&error)),
         }
     };
     #[cfg(test)]
@@ -629,11 +681,154 @@ pub(super) fn generation(meta: &Metadata) -> SegmentGeneration {
     }
 }
 
+/// How long a Codex history file whose last line has no newline must stay
+/// unchanged before its complete lines are read without that line. Codex
+/// writes each row with its newline at once, so a line still open after this
+/// long is one whose writer stopped (a crash, say), not one being written.
+/// It is the watcher's longest wait between passes
+/// ([`SPAWN_RETRY_MAX`](crate::native::watch::SPAWN_RETRY_MAX), five minutes),
+/// so such a file is released at most twice that after its last change.
+pub(super) const UNFINISHED_QUIET: Duration = crate::native::watch::SPAWN_RETRY_MAX;
+
+/// Holds remembered at most; more forget them all (each only waits again).
+const MAX_SIGHTINGS: usize = 4096;
+
+/// Something that may hold display checks while it stays as it is.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum Hold {
+    /// A file, by device and inode: its last line had no newline.
+    File(i64, i64),
+    /// A thread whose history keeps failing to be read (an IO error, or a
+    /// file that cannot be stat'ed).
+    Thread(String),
+    /// A folder the Codex history census could not list, or an entry whose
+    /// type it could not read.
+    Folder(PathBuf),
+    /// Census failures past its recorded list.
+    MoreFailures,
+    /// The census stopped at its entry limit.
+    TooManyEntries,
+}
+
+/// What this run first saw stuck, in which state and when: in memory only.
+/// One rule ([`Sightings::expired`]) decides when any hold stops holding:
+/// after [`UNFINISHED_QUIET`] in the same state; a new state starts again.
+#[derive(Debug, Default)]
+pub(super) struct Sightings {
+    seen: std::collections::HashMap<Hold, (u64, Instant)>,
+}
+
+/// A file's state for its hold: the same file, length and modification
+/// time. A change time alone (a permission change, say) does not make it
+/// written again.
+fn file_state(generation: &SegmentGeneration) -> u64 {
+    std::hash::BuildHasher::hash_one(
+        &std::hash::BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default(),
+        (
+            generation.device,
+            generation.inode,
+            generation.length,
+            generation.mtime_ns,
+        ),
+    )
+}
+
+fn file_hold(generation: &SegmentGeneration) -> Hold {
+    Hold::File(generation.device, generation.inode)
+}
+
+impl Sightings {
+    /// `key` was seen holding in `state`: its clock starts now, unless it
+    /// was seen in exactly this state before.
+    pub fn note(&mut self, key: Hold, state: u64) {
+        if self.seen.get(&key).is_some_and(|(seen, _)| *seen == state) {
+            return;
+        }
+        if self.seen.len() >= MAX_SIGHTINGS {
+            self.seen.clear();
+        }
+        self.seen.insert(key, (state, Instant::now()));
+    }
+
+    /// The one rule: whether this run first saw `key` in `state` at least
+    /// [`UNFINISHED_QUIET`] ago, so it holds no longer.
+    pub fn expired(&self, key: &Hold, state: u64) -> bool {
+        self.seen
+            .get(key)
+            .is_some_and(|(seen, at)| *seen == state && at.elapsed() >= UNFINISHED_QUIET)
+    }
+
+    /// Whether `key` has a clock running.
+    pub fn has(&self, key: &Hold) -> bool {
+        self.seen.contains_key(key)
+    }
+
+    /// `key` no longer holds: it was read, or works again.
+    pub fn forget(&mut self, key: &Hold) {
+        self.seen.remove(key);
+    }
+
+    /// Whether the file at `generation` has stopped being written: its
+    /// modification time is at least [`UNFINISHED_QUIET`] in the past, or its
+    /// hold has expired (a modification time in the future, from another
+    /// machine's clock, then holds no longer). For "has its writer stopped?"
+    /// only; a read error is never decided by a file's age.
+    pub fn quiet(&self, generation: &SegmentGeneration) -> bool {
+        Self::aged(generation) || self.expired(&file_hold(generation), file_state(generation))
+    }
+
+    /// Whether the file at `generation` was last modified at least
+    /// [`UNFINISHED_QUIET`] ago: quiet whatever this run saw, so it needs no
+    /// clock.
+    pub fn aged(generation: &SegmentGeneration) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| {
+                i64::try_from(since.as_nanos()).unwrap_or(i64::MAX)
+            });
+        let period = i64::try_from(UNFINISHED_QUIET.as_nanos()).unwrap_or(i64::MAX);
+        now.saturating_sub(generation.mtime_ns) >= period
+    }
+
+    /// The file at `generation` is waited for (an unfinished last line).
+    pub fn note_file(&mut self, generation: &SegmentGeneration) {
+        self.note(file_hold(generation), file_state(generation));
+    }
+
+    /// The file at `generation` was read to an end.
+    pub fn forget_file(&mut self, generation: &SegmentGeneration) {
+        self.forget(&file_hold(generation));
+    }
+
+    /// Holds remembered.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.seen.len()
+    }
+
+    /// Move every clock `by` into the past, as if that much time passed.
+    #[cfg(test)]
+    pub fn age(&mut self, by: Duration) {
+        for (_, at) in self.seen.values_mut() {
+            *at = at.checked_sub(by).unwrap_or(*at);
+        }
+    }
+}
+
 /// The generation the name holds now, without following an alias.
 pub(super) fn stat(path: &Path) -> Result<SegmentGeneration, Unread> {
+    #[cfg(test)]
+    if let Some(code) = STAT_FAULT.with(|stat| {
+        stat.borrow()
+            .as_ref()
+            .filter(|(at, _)| at == path)
+            .map(|(_, code)| *code)
+    }) {
+        return Err(io(&std::io::Error::from_raw_os_error(code)));
+    }
     let meta = std::fs::symlink_metadata(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => Unread::Missing,
-        _ => Unread::Unreadable,
+        _ => io(&error),
     })?;
     if !meta.file_type().is_file() {
         return Err(Unread::Alias);
@@ -646,7 +841,7 @@ pub(super) fn stat(path: &Path) -> Result<SegmentGeneration, Unread> {
 pub(super) fn open(path: &Path) -> Result<(File, SegmentGeneration), Unread> {
     let named = std::fs::symlink_metadata(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => Unread::Missing,
-        _ => Unread::Unreadable,
+        _ => io(&error),
     })?;
     if !named.file_type().is_file() {
         return Err(Unread::Alias);
@@ -655,8 +850,8 @@ pub(super) fn open(path: &Path) -> Result<(File, SegmentGeneration), Unread> {
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .map_err(|_| Unread::Unreadable)?;
-    let opened = file.metadata().map_err(|_| Unread::Unreadable)?;
+        .map_err(|error| io(&error))?;
+    let opened = file.metadata().map_err(|error| io(&error))?;
     // SAFETY: getuid has no preconditions and cannot fail.
     let uid = unsafe { libc::getuid() };
     if !opened.is_file() || opened.nlink() != 1 || opened.uid() != uid {
@@ -670,9 +865,7 @@ pub(super) fn open(path: &Path) -> Result<(File, SegmentGeneration), Unread> {
 
 /// The generation an open descriptor describes now.
 pub(super) fn generation_of(file: &File) -> Result<SegmentGeneration, Unread> {
-    Ok(generation(
-        &file.metadata().map_err(|_| Unread::Unreadable)?,
-    ))
+    Ok(generation(&file.metadata().map_err(|error| io(&error))?))
 }
 
 #[cfg(test)]

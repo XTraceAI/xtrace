@@ -51,7 +51,7 @@ use super::claude_launch::{
     LaunchBacklog, LaunchLimits, LaunchProgress,
     bash::{BashBacklog, BashProgress, continue_claude_bash_into},
     check::{CheckBacklog, CheckProgress, continue_checks_into},
-    continue_claude_launches_into,
+    continue_claude_launches_into, group,
 };
 use super::readers_cli::CancelToken;
 use super::session_source::{IndexedSource, host_roots};
@@ -969,8 +969,11 @@ fn probe_one(
 /// is never read as the parent; an explicit `payload.parent_thread_id`, when
 /// present, must be exactly the typed parent, or nothing is related. In a
 /// header that is not a spawn `session_id` must name the thread itself, when
-/// present. No other field — `history_base`, depth, role, nickname or task
-/// path — is consulted.
+/// present, except in a `/review` subagent's header
+/// ([`group::review_subagent`]), which names the reviewed thread there: it
+/// is this thread's own header and records no spawn, and nothing is read
+/// from it as a parent. No other field — `history_base`, depth, role,
+/// nickname or task path — is consulted.
 ///
 /// Beside that, what the header says the thread is: a well-formed typed
 /// spawn naming a distinct full parent, or exactly a Guardian subagent, is an
@@ -1016,9 +1019,12 @@ fn spawn_header(
     }
     match typed_spawn(payload, native) {
         TypedSpawn::None => {
-            if payload
-                .get("session_id")
-                .is_some_and(|session| session.as_str() != Some(native))
+            let review = group::review_subagent(payload, native);
+            if review == Some(false)
+                || (review.is_none()
+                    && payload
+                        .get("session_id")
+                        .is_some_and(|session| session.as_str() != Some(native)))
             {
                 refuse(SpawnRefusal::IdentityMismatch)
             } else {

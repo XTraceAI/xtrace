@@ -2026,9 +2026,10 @@ fn a_member_changed_during_its_read_is_read_again_alone() {
     }
 }
 
-/// A parent whose history cannot be read now does not hold up the next:
-/// the valid parent queued after it is linked in the same passes, and the
-/// unreadable one is kept for a later retry.
+/// A parent whose history cannot be read does not hold up the next: the
+/// valid parent queued after it is linked in the same passes, and the
+/// unreadable one is published invalid (skipped and counted), not retried
+/// until it changes. Readable again, it is read.
 #[test]
 fn an_unreadable_first_parent_does_not_block_a_valid_one() {
     use std::os::unix::fs::PermissionsExt;
@@ -2076,8 +2077,9 @@ fn an_unreadable_first_parent_does_not_block_a_valid_one() {
     scan_claude(&home, &mut store, &mut SpawnBacklog::default());
     fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
     let mut backlog = LaunchBacklog::starting();
-    let mut linked = 0;
-    let mut busy = 0;
+    // A user who may read every file (root) reads this one too.
+    let unreadable = fs::File::open(&blocked).is_err();
+    let (mut linked, mut invalid) = (0, 0);
     for _ in 0..20 {
         let progress = continue_claude_launches(
             &mut store,
@@ -2089,15 +2091,39 @@ fn an_unreadable_first_parent_does_not_block_a_valid_one() {
         )
         .unwrap();
         linked += progress.linked;
-        busy += progress.threads_busy;
-        if linked > 0 {
+        invalid += progress.published_invalid;
+        if !backlog.pending() {
             break;
         }
     }
-    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(linked, 1);
-    assert!(busy >= 1, "the unreadable parent was met and rotated");
-    assert!(backlog.pending(), "the unreadable parent waits for a retry");
+    assert!(!backlog.pending(), "nothing waits for a retry");
+    if unreadable {
+        assert_eq!(invalid, 1);
+        assert_eq!(
+            backlog.search_gaps().map(|gaps| gaps.unsearched),
+            Some(1),
+            "skipped and counted"
+        );
+    }
+    // Readable again and imported: read, with nothing found.
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o600)).unwrap();
+    backlog.add_threads([BLOCKED]);
+    for _ in 0..20 {
+        continue_claude_launches(
+            &mut store,
+            &home.home,
+            &mut backlog,
+            &LaunchLimits::default(),
+            None,
+            T,
+        )
+        .unwrap();
+        if !backlog.pending() {
+            break;
+        }
+    }
+    assert_eq!(backlog.search_gaps().map(|gaps| gaps.unsearched), Some(0));
 }
 
 /// Several children, each transcript larger than a pass's budget, are

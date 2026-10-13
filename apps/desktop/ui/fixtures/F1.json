@@ -32,7 +32,8 @@
     "hosts": [],
     "needs_attention": false,
     "reconciles": 0,
-    "files_scanned": 0
+    "files_scanned": 0,
+    "codex_history_gaps": null
   },
   "sessions": [
     {

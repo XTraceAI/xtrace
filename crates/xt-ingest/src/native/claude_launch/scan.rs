@@ -34,7 +34,9 @@
 //! file again. The file is read only as the generation its header was
 //! planned from, and when the read ends it must still be exactly that
 //! generation, else nothing it found is used. A file whose last line has no
-//! newline yet is unfinished: nothing of it is used until it is complete.
+//! newline yet is unfinished: nothing of it is used until it is complete, or
+//! until the file stops changing, when its complete lines are used without
+//! that line.
 
 use super::ack::{Ack, Acknowledged, Broken};
 use super::cell::{self, Tool, Value as Arg};
@@ -184,8 +186,8 @@ pub(super) enum Step {
     /// The pass's budget ended; the read resumes here next pass.
     Paused,
     Done(Box<MemberFacts>),
-    /// The file's last line has no newline yet: nothing of this generation
-    /// is used.
+    /// The file's last line has no newline yet and the file is still
+    /// changing: nothing of this generation is used.
     Unfinished,
 }
 
@@ -396,6 +398,10 @@ pub(super) struct SegmentScan {
     generation: SegmentGeneration,
     lines: Lines,
     rows: Rows,
+    /// The file had stopped changing when its read began
+    /// ([`source::Sightings::quiet`]): an unfinished last line is left out
+    /// rather than holding the read.
+    quiet: bool,
     /// Its copies of the segment and thread.
     _held: Reserved,
 }
@@ -448,7 +454,9 @@ impl SegmentScan {
     }
 
     /// Start reading the file of `segment` from its first byte. `allowance`
-    /// holds its buffers and `entries` its map, both the thread's.
+    /// holds its buffers and `entries` its map, both the thread's. `quiet`:
+    /// the file has stopped changing, so an unfinished last line is left
+    /// out.
     pub fn start(
         segment: &Segment,
         thread: &str,
@@ -456,6 +464,7 @@ impl SegmentScan {
         allowance: &Allowance,
         entries: &Allowance,
         max_line: usize,
+        quiet: bool,
     ) -> Result<Self, ScanError> {
         let (file, generation) = source::open(&segment.path).map_err(ScanError::Source)?;
         // Only the generation the plan was made from: else plan again.
@@ -495,8 +504,19 @@ impl SegmentScan {
                 entries: entries.reserve(0).map_err(over)?,
                 bytes: allowance.reserve(0).map_err(over)?,
             },
+            quiet,
             _held: held,
         })
+    }
+
+    /// The generation being read.
+    pub fn generation(&self) -> SegmentGeneration {
+        self.generation
+    }
+
+    /// The file being read.
+    pub fn segment(&self) -> &Segment {
+        &self.segment
     }
 
     /// Read on within `budget`.
@@ -538,8 +558,11 @@ impl SegmentScan {
         if after != self.generation || named != self.generation {
             return Err(ScanError::Source(Unread::Changed));
         }
-        // A last line still being written: the prefix certifies nothing.
-        if self.rows.valid && !self.lines.finished() {
+        // A last line still being written: the prefix certifies nothing
+        // while the file changes. Once it has stopped changing (`quiet`),
+        // its complete lines are the file and the open line is left out:
+        // `complete` stays short of its length, which says so.
+        if self.rows.valid && !self.lines.finished() && !self.quiet {
             return Ok(Step::Unfinished);
         }
         let over = |_| ScanError::OverLimit;

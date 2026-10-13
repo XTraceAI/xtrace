@@ -302,7 +302,7 @@ const pendingFailures = (counts: PrCheckCounts) =>
  * checked. Pull requests not checked yet while automatic checks run do not:
  * XTrace checks them by itself. Nor does a failed one the user already
  * checked again by hand, with that check failing for the pull request itself
- * (it may never be checkable: another account's repository), until a later
+ * (it may never be checkable: gh keeps failing for it), until a later
  * check succeeds; Rust counts those (`manual_failed_*`), and every text still
  * lists them as failed.
  *

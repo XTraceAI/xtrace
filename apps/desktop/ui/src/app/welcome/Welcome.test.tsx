@@ -48,6 +48,7 @@ const ready: NativeIndexStatus = {
   needs_attention: false,
   reconciles: 1,
   files_scanned: 212,
+  codex_history_gaps: null,
 };
 
 function nativeSource({
@@ -263,6 +264,7 @@ it('reports a scan in progress by transcripts read, never as a percentage, and f
     hosts: ready.hosts.map((h) => host(h.host)),
     reconciles: 0,
     files_scanned: 128,
+    codex_history_gaps: null,
   };
   const { source, emit } = nativeSource({ status: async () => status });
   mount('/first-launch', source);

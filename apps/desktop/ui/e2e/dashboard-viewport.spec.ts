@@ -1167,6 +1167,7 @@ const live: NativeIndexStatus = {
   needs_attention: false,
   reconciles: 12,
   files_scanned: 1234,
+  codex_history_gaps: null,
 };
 const degraded = (reason: string): NativeIndexStatus => ({
   ...live,
@@ -1207,6 +1208,7 @@ const INDEX: Record<string, { status: NativeIndexStatus }> = {
       hosts: [],
       reconciles: 0,
       files_scanned: 0,
+      codex_history_gaps: null,
     },
   },
 };

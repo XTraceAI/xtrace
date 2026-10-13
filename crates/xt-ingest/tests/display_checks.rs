@@ -16,7 +16,9 @@ use std::{
 };
 use xt_ingest::native::{
     HostStatus, ImportRequest, ProducerSource,
-    claude_launch::{LaunchBacklog, LaunchLimits, check::CheckProgress, continue_claude_launches},
+    claude_launch::{
+        LaunchBacklog, LaunchLimits, SearchGaps, check::CheckProgress, continue_claude_launches,
+    },
     import_reader_lines,
     readers_cli::ReaderOutcome,
     session_creation::{SpawnBacklog, SpawnProgress, continue_codex_spawns, spawn_limits},
@@ -911,36 +913,103 @@ fn every_session_past_one_page_is_checked_before_the_worker_goes_quiet() {
     );
 }
 
-/// A Codex history that cannot be checked keeps a fresh `exec` session that
-/// it might have launched checking, without the worker spinning on it; once
-/// it is readable and imported again, the session is checked.
+/// A Codex history that cannot be read — a row that is not JSON, or a
+/// header naming another thread than its file — is skipped and counted: it
+/// holds no fresh `exec` session, the worker does not spin on it, and it is
+/// not read again until it changes. Readable again and imported, it is
+/// searched and the count drops.
 #[test]
-fn a_history_that_cannot_be_checked_holds_eligible_sessions_without_spinning() {
+fn a_history_that_cannot_be_read_is_skipped_and_holds_no_session() {
+    for case in ["not json", "another thread's header"] {
+        let home = Home::new();
+        let parent = parent_path(&home);
+        write_parent(&home, &[message(-2000, "Starting")]);
+        let body = fs::read_to_string(&parent).unwrap();
+        let broken = match case {
+            "not json" => format!("{body}{{\"not\": \"a row\"\n"),
+            _ => body.replacen(
+                &format!("\"id\":\"{PARENT}\""),
+                &format!("\"id\":\"{OTHER}\""),
+                1,
+            ),
+        };
+        assert_ne!(broken, body, "{case}");
+        fs::write(&parent, &broken).unwrap();
+        let main = write_thread(&home, MAIN, header(MAIN, "exec", 10_000, &[]), 11_000);
+        let mut store = home.store();
+        index_parent(&mut store, &parent);
+        index_thread(&mut store, MAIN, &main, 11_000);
+        let mut spawns = SpawnBacklog::starting();
+        let (passes, frames) = drain(
+            &home,
+            &mut store,
+            &mut spawns,
+            spawn_limits(),
+            &[&codex(MAIN)],
+        );
+        assert!(passes.len() < 40, "{case}: {} passes", passes.len());
+        assert_eq!(frames.last().unwrap()[0], ChildCheck::Checked, "{case}");
+        assert_eq!(
+            store.claude_launch_summary().unwrap().groups_invalid,
+            1,
+            "{case}"
+        );
+        assert_eq!(
+            spawns.launches.search_gaps(),
+            Some(SearchGaps {
+                unsearched: 1,
+                forks_not_searched: 0,
+                unfinished_line_skipped: 0,
+                ..SearchGaps::default()
+            }),
+            "{case}"
+        );
+        // Nothing left to do: not read again until it changes.
+        for _ in 0..3 {
+            let progress =
+                continue_codex_spawns(&mut store, &home.home, &mut spawns, spawn_limits(), None, T)
+                    .unwrap();
+            assert!(!progress.advanced(), "{case}: {progress:?}");
+        }
+        write_parent(&home, &[message(-2000, "Starting")]);
+        index_parent(&mut store, &parent);
+        imported(&mut spawns, &[PARENT]);
+        drain(
+            &home,
+            &mut store,
+            &mut spawns,
+            spawn_limits(),
+            &[&codex(MAIN)],
+        );
+        assert_eq!(home.state(&codex(MAIN)), ChildCheck::Checked, "{case}");
+        assert_eq!(
+            spawns.launches.search_gaps(),
+            Some(SearchGaps::default()),
+            "{case}"
+        );
+    }
+}
+
+/// A fork whose header marks none of its rows as copied is a layout this
+/// version does not read: it holds no session, and Settings counts it as a
+/// fork not searched, never as a history that could not be read.
+#[test]
+fn a_copied_fork_is_counted_apart_from_unreadable_histories() {
     let home = Home::new();
     let parent = parent_path(&home);
-    // A row that is not one JSON object breaks its structure.
-    write_parent(&home, &[message(-2000, "Starting")]);
-    let mut body = fs::read_to_string(&parent).unwrap();
-    body.push_str("{\"not\": \"a row\"\n");
-    fs::write(&parent, &body).unwrap();
+    write_rollout(
+        &parent,
+        json!({"timestamp": iso(-86_400_000), "type": "session_meta", "ordinal": 0,
+            "payload": {"id": PARENT, "session_id": PARENT, "timestamp": iso(-86_400_000),
+                "cwd": "/w", "originator": "Codex Desktop", "source": "vscode",
+                "history_mode": "paginated", "forked_from_id": OTHER}}),
+        &[message(-2000, "Starting")],
+    );
     let main = write_thread(&home, MAIN, header(MAIN, "exec", 10_000, &[]), 11_000);
     let mut store = home.store();
     index_parent(&mut store, &parent);
     index_thread(&mut store, MAIN, &main, 11_000);
     let mut spawns = SpawnBacklog::starting();
-    let (passes, frames) = drain(
-        &home,
-        &mut store,
-        &mut spawns,
-        spawn_limits(),
-        &[&codex(MAIN)],
-    );
-    assert!(passes.len() < 40, "{} passes", passes.len());
-    assert!(frames.iter().all(|frame| frame[0] == ChildCheck::Checking));
-    assert_eq!(store.claude_launch_summary().unwrap().groups_invalid, 1);
-    write_parent(&home, &[message(-2000, "Starting")]);
-    index_parent(&mut store, &parent);
-    imported(&mut spawns, &[PARENT]);
     let (_, frames) = drain(
         &home,
         &mut store,
@@ -949,6 +1018,117 @@ fn a_history_that_cannot_be_checked_holds_eligible_sessions_without_spinning() {
         &[&codex(MAIN)],
     );
     assert_eq!(frames.last().unwrap()[0], ChildCheck::Checked);
+    assert_eq!(
+        spawns.launches.search_gaps(),
+        Some(SearchGaps {
+            unsearched: 0,
+            forks_not_searched: 1,
+            unfinished_line_skipped: 0,
+            ..SearchGaps::default()
+        })
+    );
+}
+
+/// A launch in a readable history still makes its child a child while
+/// another history cannot be read; the unrelated fresh `exec` session is
+/// checked.
+#[test]
+fn a_launch_in_a_readable_history_marks_its_child_while_another_is_skipped() {
+    let home = Home::new();
+    let parent = write_parent(
+        &home,
+        &[
+            message(-2000, "Starting"),
+            launch("call_launch", 0),
+            output(7319, "call_launch", &[running(CHILD)]),
+        ],
+    );
+    // Another thread's history, with a row that is not JSON.
+    let broken = home
+        .day("2026/09/29")
+        .join(format!("rollout-2026-09-29T10-00-00-{LATER}.jsonl"));
+    fs::write(
+        &broken,
+        format!(
+            "{}\n{{\"not\": \"a row\"\n",
+            json!({"timestamp": iso(-80_000_000), "type": "session_meta", "ordinal": 0,
+                "payload": {"id": LATER, "session_id": LATER, "source": "vscode",
+                    "history_mode": "paginated"}})
+        ),
+    )
+    .unwrap();
+    let child = write_thread(&home, CHILD, header(CHILD, "exec", 6766, &[]), 8294);
+    let main = write_thread(&home, MAIN, header(MAIN, "exec", 10_000, &[]), 11_000);
+    let mut store = home.store();
+    index_parent(&mut store, &parent);
+    index_thread(&mut store, CHILD, &child, 8294);
+    index_thread(&mut store, MAIN, &main, 11_000);
+    let mut spawns = SpawnBacklog::starting();
+    let (_, frames) = drain(
+        &home,
+        &mut store,
+        &mut spawns,
+        spawn_limits(),
+        &[&codex(CHILD), &codex(MAIN)],
+    );
+    assert!(
+        frames.iter().all(|frame| frame[0] != ChildCheck::Checked),
+        "{frames:?}"
+    );
+    assert_eq!(
+        frames.last().unwrap(),
+        &[ChildCheck::Child, ChildCheck::Checked]
+    );
+    assert_eq!(
+        spawns.launches.search_gaps().map(|gaps| gaps.unsearched),
+        Some(1)
+    );
+}
+
+/// A Codex `/review` subagent's own history, as Codex 0.146 writes it (its
+/// `session_id` names the thread it reviews), is read: it holds no session,
+/// its own display check finishes, and it is not shown under its parent.
+#[test]
+fn a_review_subagent_history_is_read_and_its_own_check_finishes() {
+    let home = Home::new();
+    let parent = write_parent(&home, &[message(-2000, "Starting")]);
+    let review = header(
+        LATER,
+        "exec",
+        5_000,
+        &[
+            ("session_id", PARENT.into()),
+            ("parent_thread_id", PARENT.into()),
+            ("source", json!({"subagent": "review"})),
+            ("thread_source", "subagent".into()),
+            ("originator", "codex_exec".into()),
+            ("multi_agent_version", "disabled".into()),
+            ("subagent_history_start_ordinal", 3.into()),
+        ],
+    );
+    let path = write_thread(&home, LATER, review, 6_000);
+    let main = write_thread(&home, MAIN, header(MAIN, "exec", 10_000, &[]), 11_000);
+    let mut store = home.store();
+    index_parent(&mut store, &parent);
+    index_thread(&mut store, LATER, &path, 6_000);
+    index_thread(&mut store, MAIN, &main, 11_000);
+    let mut spawns = SpawnBacklog::starting();
+    let (_, frames) = drain(
+        &home,
+        &mut store,
+        &mut spawns,
+        spawn_limits(),
+        &[&codex(LATER), &codex(MAIN)],
+    );
+    assert_eq!(
+        frames.last().unwrap(),
+        &[ChildCheck::Checked, ChildCheck::Checked]
+    );
+    assert_eq!(
+        store.claude_launch_group(LATER).unwrap().unwrap().status,
+        xt_store::claude_launch::GroupStatus::Valid
+    );
+    assert_eq!(spawns.launches.search_gaps(), Some(SearchGaps::default()));
 }
 
 /// A spawned helper's inherited context starting with the header it copied,
@@ -1066,7 +1246,7 @@ mod claude {
     use xt_ingest::native::{
         ImportRequest, ProducerSource,
         claude_launch::{
-            LaunchLimits,
+            LaunchLimits, SearchGaps,
             bash::continue_claude_bash,
             check::{CheckProgress, continue_checks_into},
             continue_claude_launches,
@@ -1074,7 +1254,12 @@ mod claude {
         readers_cli::read_pin,
         session_creation::{SpawnBacklog, continue_codex_spawns, spawn_limits},
     };
-    use xt_store::{Host, Store, child_check::ChildCheck, session_list};
+    use xt_store::{
+        Host, Store,
+        child_check::{ChildCheck, LAUNCH_VALIDATION_VERSION},
+        claude_launch::{GroupStatus, MemberRecord},
+        session_list,
+    };
 
     const CALLER: &str = "0c000000-0000-4000-8000-0000000000ca";
     const ALPHA: &str = "0c000000-0000-4000-8000-0000000000a1";
@@ -1405,6 +1590,247 @@ mod claude {
             .unwrap()
             .unwrap()
             .own_check_key
+    }
+
+    const HISTORY: &str = "01a40000-0000-7000-8000-0000000000aa";
+
+    /// A Codex history file of a thread nothing indexed, holding `body`.
+    fn codex_history(home: &Home, body: &[u8]) -> PathBuf {
+        let day = home.home.join(".codex/sessions/2026/10/01");
+        fs::create_dir_all(&day).unwrap();
+        let path = day.join(format!("rollout-2026-10-01T09-00-00-{HISTORY}.jsonl"));
+        fs::write(&path, body).unwrap();
+        path
+    }
+
+    /// Its own header, and one complete row.
+    fn codex_rows() -> String {
+        let header = json!({"timestamp": iso(-90_000), "type": "session_meta", "ordinal": 0,
+            "payload": {"id": HISTORY, "session_id": HISTORY, "source": "vscode",
+                "history_mode": "paginated"}});
+        let row = json!({"timestamp": iso(-80_000), "type": "response_item", "ordinal": 1,
+            "payload": {"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Working"}]}});
+        format!("{header}\n{row}\n")
+    }
+
+    /// Set a file's modification time `seconds` ago.
+    fn age(path: &Path, seconds: u64) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    /// One Claude session beside one Codex history, through the scan and
+    /// the worker's passes: its display state, and the skipped histories.
+    fn main_beside(home: &Home) -> (Store, SpawnBacklog) {
+        write_session(
+            home,
+            "-w-main",
+            MAIN,
+            &session_rows(MAIN, "/w/main", 3_000, "Hello", "Hi"),
+        );
+        let mut store = home.store();
+        let mut spawns = SpawnBacklog::starting();
+        scan(home, &mut store, &mut spawns);
+        (store, spawns)
+    }
+
+    /// A Codex history that cannot be read — a row that is not JSON, a
+    /// header naming another thread, or a file this user may not read — is
+    /// skipped and counted, and holds no Claude session; an empty one is
+    /// read with nothing found, and is not counted.
+    #[test]
+    fn a_codex_history_that_cannot_be_read_holds_no_claude_session() {
+        use std::os::unix::fs::PermissionsExt;
+        for case in ["not json", "another thread's header", "unreadable", "empty"] {
+            let home = Home::new();
+            let body = match case {
+                "not json" => format!("{}{{\"not\": \"a row\"\n", codex_rows()),
+                "another thread's header" => codex_rows().replacen(
+                    &format!("\"id\":\"{HISTORY}\""),
+                    "\"id\":\"01a40000-0000-7000-8000-0000000000bb\"",
+                    1,
+                ),
+                "empty" => String::new(),
+                _ => codex_rows(),
+            };
+            let path = codex_history(&home, body.as_bytes());
+            if case == "unreadable" {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+            }
+            // A user who may read every file (root) reads this one too.
+            let unreadable = case == "unreadable" && fs::File::open(&path).is_err();
+            let (mut store, mut spawns) = main_beside(&home);
+            let frames = drain(&home, &mut store, &mut spawns, &[MAIN]);
+            assert!(frames.len() < 40, "{case}: {} passes", frames.len());
+            assert_eq!(frames.last().unwrap(), &[ChildCheck::Checked], "{case}");
+            let skipped = usize::from(case != "empty" && (case != "unreadable" || unreadable));
+            assert_eq!(
+                spawns.launches.search_gaps().map(|gaps| gaps.unsearched),
+                Some(skipped),
+                "{case}"
+            );
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+
+    /// A Codex history whose last line has no newline holds Claude sessions
+    /// while it is still changing, whether that line is its only one or not.
+    /// Once unmodified for the quiet period, its complete lines are read
+    /// without that line, the session is checked and the history is counted
+    /// as searched without its unfinished line.
+    #[test]
+    fn an_unfinished_codex_line_holds_claude_sessions_only_while_it_changes() {
+        for case in ["after a complete row", "as its only line"] {
+            let home = Home::new();
+            let torn = "{\"timestamp\": \"2026-10-01T09:00:00.000Z\", \"type\": \"respon";
+            let body = match case {
+                "after a complete row" => format!("{}{torn}", codex_rows()),
+                _ => codex_rows().lines().next().unwrap().to_owned(),
+            };
+            let path = codex_history(&home, body.as_bytes());
+            // Five seconds short of the five-minute quiet period
+            // (`UNFINISHED_QUIET`): still changing.
+            age(&path, 295);
+            let (mut store, mut spawns) = main_beside(&home);
+            for _ in 0..5 {
+                continue_codex_spawns(&mut store, &home.home, &mut spawns, spawn_limits(), None, T)
+                    .unwrap();
+            }
+            assert_eq!(home.states(&[MAIN]), [ChildCheck::Checking], "{case}");
+            assert!(spawns.pending(), "{case}: the hold is retried");
+            if case == "after a complete row" {
+                // Time alone ends the hold: the file is not touched again.
+                std::thread::sleep(std::time::Duration::from_secs(6));
+            } else {
+                // Unmodified for an hour.
+                age(&path, 3600);
+            }
+            let frames = drain(&home, &mut store, &mut spawns, &[MAIN]);
+            assert!(frames.len() < 40, "{case}: {} passes", frames.len());
+            assert_eq!(frames.last().unwrap(), &[ChildCheck::Checked], "{case}");
+            assert_eq!(
+                spawns.launches.search_gaps(),
+                Some(SearchGaps {
+                    unsearched: 0,
+                    forks_not_searched: 0,
+                    unfinished_line_skipped: 1,
+                    ..SearchGaps::default()
+                }),
+                "{case}"
+            );
+            // The line completed later is read again, whole.
+            fs::write(&path, codex_rows()).unwrap();
+            spawns.launches.add_threads([HISTORY]);
+            drain(&home, &mut store, &mut spawns, &[MAIN]);
+            assert_eq!(spawns.launches.search_gaps(), Some(SearchGaps::default()));
+        }
+    }
+
+    /// What an earlier version left on the coworker's Mac, with no version
+    /// change since: the real `/review` subagent's history published invalid
+    /// (its header refused), its own check observed with no key, and every
+    /// Claude session held. The next run reads the invalid history again (an
+    /// invalid validation is current only while the run that made it knows
+    /// why), the Claude session is checked, and the review thread's own
+    /// header gets its key and is checked.
+    #[test]
+    fn a_review_history_an_earlier_run_refused_is_read_again_after_a_restart() {
+        use std::os::unix::fs::MetadataExt;
+        const REVIEW: &str = "01a50000-0000-7000-8000-0000000000aa";
+        const REVIEWED: &str = "01a50000-0000-7000-8000-0000000000bb";
+        let home = Home::new();
+        let day = home.home.join(".codex/sessions/2026/09/16");
+        fs::create_dir_all(&day).unwrap();
+        let path = day.join(format!("rollout-2026-09-16T19-22-54-{REVIEW}.jsonl"));
+        let mut rows = vec![
+            json!({"timestamp": iso(-60_000), "type": "session_meta", "ordinal": 0,
+            "payload": {"id": REVIEW, "session_id": REVIEWED, "parent_thread_id": REVIEWED,
+                "timestamp": iso(-60_000), "cwd": "/w", "originator": "codex_exec",
+                "cli_version": "0.146.0", "source": {"subagent": "review"},
+                "thread_source": "subagent", "history_mode": "paginated",
+                "multi_agent_version": "disabled", "subagent_history_start_ordinal": 3}}),
+        ];
+        for ordinal in 1..3 {
+            rows.push(
+                json!({"timestamp": iso(-59_000 + ordinal), "type": "response_item",
+                "ordinal": ordinal, "payload": {"type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Reviewing"}]}}),
+            );
+        }
+        write_rows(&path, &rows);
+        write_session(
+            &home,
+            "-w-main",
+            MAIN,
+            &session_rows(MAIN, "/w/main", 3_000, "Hello", "Hi"),
+        );
+        let mut store = home.store();
+        super::index(
+            &mut store,
+            REVIEW,
+            &path,
+            ("5555cccc-5555-4555-8555-000000000000", -58_000),
+            1,
+        );
+        scan(&home, &mut store, &mut SpawnBacklog::starting());
+        // The earlier run's results, as the store kept them.
+        let meta = fs::metadata(&path).unwrap();
+        let generation = xt_store::claude_launch::SegmentGeneration {
+            device: meta.dev() as i64,
+            inode: meta.ino() as i64,
+            length: meta.len() as i64,
+            mtime_ns: meta.mtime() * 1_000_000_000 + meta.mtime_nsec(),
+            ctime_ns: meta.ctime() * 1_000_000_000 + meta.ctime_nsec(),
+        };
+        let allocation = store
+            .begin_claude_launch_validation(REVIEW, LAUNCH_VALIDATION_VERSION)
+            .unwrap();
+        assert!(
+            store
+                .publish_claude_launch_validation(
+                    REVIEW,
+                    allocation,
+                    GroupStatus::Invalid,
+                    &[MemberRecord {
+                        rollout_id: REVIEW.into(),
+                        generation,
+                        scanned_length: 0,
+                        valid: false,
+                    }],
+                    0,
+                )
+                .unwrap()
+        );
+        let review = format!("codex-{REVIEW}");
+        store.observe_own_check(&review, None).unwrap();
+        assert_eq!(
+            home.states(&[MAIN, &review]),
+            [ChildCheck::Checking, ChildCheck::Checking]
+        );
+        // The next run.
+        let mut spawns = SpawnBacklog::starting();
+        let frames = drain(&home, &mut store, &mut spawns, &[MAIN, &review]);
+        assert_eq!(
+            frames.last().unwrap(),
+            &[ChildCheck::Checked, ChildCheck::Checked]
+        );
+        assert_eq!(
+            store.claude_launch_group(REVIEW).unwrap().unwrap().status,
+            GroupStatus::Valid
+        );
+        assert!(
+            store
+                .child_check_attempt(&review)
+                .unwrap()
+                .unwrap()
+                .own_check_key
+                .is_some()
+        );
     }
 
     /// A first input past more than one pass's bytes is read over bounded

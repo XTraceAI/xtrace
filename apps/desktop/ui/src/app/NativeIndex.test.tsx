@@ -70,6 +70,7 @@ const ready: NativeIndexStatus = {
   needs_attention: true,
   reconciles: 3,
   files_scanned: 2,
+  codex_history_gaps: null,
 };
 
 function mount(source: DataSource) {
@@ -405,4 +406,107 @@ it('expands skipped details, states missing facts and truncation, and clears old
   expect(screen.queryByText(/Conversation file could not be read/)).toBeNull();
   await update({ ...ready.hosts[0], state: 'missing_source', sessions_imported: 0 });
   expect(screen.queryByText(/Skipped conversation details/)).toBeNull();
+});
+
+it('says which Codex histories the sub-session launch search skipped, and only when it skipped some', async () => {
+  let status: NativeIndexStatus = {
+    ...ready,
+    codex_history_gaps: {
+      unsearched: 2,
+      forks_not_searched: 0,
+      unfinished_line_skipped: 0,
+      folders_not_read: 0,
+      too_many_files: false,
+      exec_launches_without_result: 0,
+    },
+  };
+  let listener: (() => void) | undefined;
+  const source: DataSource = {
+    kind: 'native',
+    accountUsage: async () => {
+      throw new Error('Account usage unavailable in this test');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Claude refresh unavailable in this test');
+    },
+    appInfo: async () => exported.app_info,
+    dbCounts: async () => exported.db_counts,
+    dashboard,
+    tokensByHost,
+    today: async () => exported.today,
+    environment,
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
+    nativeIndexStatus: async () => status,
+    // These screens open no transcript; the seam is answered, never called.
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: unavailable,
+    pullRequestAnalytics: unavailable,
+    pullRequestSessions: unavailable,
+    refreshPullRequests: unavailable,
+    cancelPullRequestRefresh: unavailable,
+    subscribe: async (event, callback) => {
+      if (event === events.nativeIndexStatus) listener = callback;
+      return () => {};
+    },
+  };
+  mount(source);
+  const card = await screen.findByTestId('native-index');
+  const note = await screen.findByTestId('native-index-codex-gaps');
+  expect(note.textContent).toBe(
+    '2 Codex histories could not be searched for sub-session launches. Conversations they may have started are shown as main conversations, not sub-sessions.',
+  );
+  // A plain note after the host rows and the scope note: nothing to focus.
+  expect(card.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(note.querySelector('a, button, [tabindex]')).toBeNull();
+  // The host rows are unchanged by it.
+  expect(
+    within(card).getByText('Read · 2 imported, 0 partial, 0 skipped, 6 new records, 1 enriched'),
+  ).toBeTruthy();
+
+  // Only forks, never searched by design: said plainly, as no failure.
+  vi.useFakeTimers();
+  status = {
+    ...ready,
+    codex_history_gaps: {
+      unsearched: 0,
+      forks_not_searched: 11,
+      unfinished_line_skipped: 0,
+      folders_not_read: 0,
+      too_many_files: false,
+      exec_launches_without_result: 0,
+    },
+  };
+  await act(async () => {
+    listener?.();
+    await vi.advanceTimersByTimeAsync(600);
+  });
+  vi.useRealTimers();
+  await waitFor(() =>
+    expect(screen.getByTestId('native-index-codex-gaps').textContent).toBe(
+      '11 forked Codex conversations are not searched for sub-session launches, because their copied part cannot be told apart from their own. Sub-sessions started from them show as main conversations.',
+    ),
+  );
+
+  // Nothing skipped any more: the note goes.
+  vi.useFakeTimers();
+  status = {
+    ...ready,
+    codex_history_gaps: {
+      unsearched: 0,
+      forks_not_searched: 0,
+      unfinished_line_skipped: 0,
+      folders_not_read: 0,
+      too_many_files: false,
+      exec_launches_without_result: 0,
+    },
+  };
+  await act(async () => {
+    listener?.();
+    await vi.advanceTimersByTimeAsync(600);
+  });
+  vi.useRealTimers();
+  await waitFor(() => expect(screen.queryByTestId('native-index-codex-gaps')).toBeNull());
 });

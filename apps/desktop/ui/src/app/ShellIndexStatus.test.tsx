@@ -66,6 +66,7 @@ const updating: NativeIndexStatus = {
   needs_attention: false,
   reconciles: 1,
   files_scanned: 1,
+  codex_history_gaps: null,
 };
 const scanning: NativeIndexStatus = {
   ...updating,

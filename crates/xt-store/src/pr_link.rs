@@ -69,10 +69,10 @@ impl PrRefreshError {
     /// check that took too long (`timeout`, a slow or offline network more
     /// often than this pull request). Checking again later can succeed.
     ///
-    /// About this pull request: GitHub said it does not exist (`not_found`),
-    /// `gh pr view` failed for it (`execution_failed`, for example another
-    /// account's repository), or its answer was unusable (`invalid_response`,
-    /// `output_too_large`).
+    /// About this pull request: GitHub said it does not exist, or cannot find
+    /// its repository (`not_found`), `gh pr view` failed for it in a way the
+    /// client cannot explain (`execution_failed`), or its answer was unusable
+    /// (`invalid_response`, `output_too_large`).
     pub fn about_this_pull_request(self) -> bool {
         match self {
             Self::Unavailable
@@ -376,10 +376,15 @@ macro_rules! not_found_on_github_sql {
 
 impl StoredPullRequest {
     /// GitHub answered that this pull request does not exist in a repository
-    /// the signed-in GitHub CLI account can see, and never confirmed it
-    /// before: the link names a number that is not a pull request (for
-    /// example a made-up URL in a conversation). Such a link is not counted
-    /// or shown as a pull request. Only the Dashboard's refresh dialog lists
+    /// the signed-in GitHub CLI account can see, or that it cannot find the
+    /// repository at all, and never confirmed it before: the link names a
+    /// number that is not a pull request (for example a made-up URL in a
+    /// conversation). Such a link is not counted or shown as a pull request.
+    ///
+    /// GitHub gives the same "cannot find the repository" answer for a
+    /// repository private to another account, so a never-confirmed link into
+    /// such a repository is treated the same way; it cannot be checked from
+    /// this account anyway. Only the Dashboard's refresh dialog lists
     /// it, marked as not found, so it can be checked again by hand; automatic
     /// checks ask about it again only after a conversation mentions it again.
     ///

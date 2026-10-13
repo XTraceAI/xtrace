@@ -11,8 +11,8 @@
 //! progress, kills and reaps a reader still running, and waits a bounded time
 //! for the worker, so a reader that never returns cannot hold the exit.
 use crate::dto::{
-    NativeFreshness, NativeHostState, NativeHostStatus, NativeIndexPhase, NativeIndexStatus,
-    NativeSkipReason, NativeSkippedConversation, PythonRuntime, ReaderBundle,
+    CodexHistoryGaps, NativeFreshness, NativeHostState, NativeHostStatus, NativeIndexPhase,
+    NativeIndexStatus, NativeSkipReason, NativeSkippedConversation, PythonRuntime, ReaderBundle,
     ReaderUnavailableCause,
 };
 use std::{
@@ -24,6 +24,7 @@ use std::{
 use xt_ingest::native::{
     CancelToken, HostReport, HostStatus, ImportReport, ProducerSource, SessionOutcome,
     SessionResult,
+    claude_launch::SearchGaps,
     readers_cli::{PinnedProducer, ReaderError, discover_python, parse_pin, verify_bundle},
     validate_index_destination,
     watch::{Freshness, ProbePoint, TailEvent, Tailer, WatchConfig},
@@ -166,6 +167,7 @@ impl NativeIndex {
             needs_attention: false,
             reconciles: 0,
             files_scanned: 0,
+            codex_history_gaps: None,
         };
         publish(&status);
         Self {
@@ -221,6 +223,7 @@ impl NativeIndex {
             needs_attention: false,
             reconciles: 0,
             files_scanned: 0,
+            codex_history_gaps: None,
         }));
         {
             let mut current = lock(&status);
@@ -244,6 +247,16 @@ impl NativeIndex {
             let publish = Arc::clone(&publish);
             let last = Mutex::new(Instant::now());
             Arc::new(move |point: ProbePoint<'_>| {
+                // Published only when the counts change.
+                if let ProbePoint::LaunchSearchGaps(gaps) = point {
+                    let gaps = Some(history_gaps(gaps));
+                    let mut current = lock(&status);
+                    if current.codex_history_gaps != gaps {
+                        current.codex_history_gaps = gaps;
+                        publish(&current);
+                    }
+                    return;
+                }
                 if let ProbePoint::FileScanned(_) = point {
                     let mut current = lock(&status);
                     current.files_scanned = current.files_scanned.saturating_add(1);
@@ -433,6 +446,18 @@ fn freshness(value: &Freshness) -> NativeFreshness {
 
 fn count(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+/// The launch search's skipped Codex histories, as the status carries them.
+fn history_gaps(gaps: SearchGaps) -> CodexHistoryGaps {
+    CodexHistoryGaps {
+        unsearched: count(gaps.unsearched),
+        folders_not_read: count(gaps.folders_not_read),
+        too_many_files: gaps.too_many_files,
+        exec_launches_without_result: count(gaps.exec_launches_without_result),
+        forks_not_searched: count(gaps.forks_not_searched),
+        unfinished_line_skipped: count(gaps.unfinished_line_skipped),
+    }
 }
 
 fn host_status(report: &HostReport) -> NativeHostStatus {
@@ -863,6 +888,30 @@ mod skipped_details_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each count the launch search reports reaches its own status field:
+    /// forks are never counted as histories that could not be searched.
+    #[test]
+    fn each_skipped_history_count_keeps_its_own_field() {
+        assert_eq!(
+            history_gaps(SearchGaps {
+                unsearched: 1,
+                folders_not_read: 3,
+                too_many_files: true,
+                exec_launches_without_result: 4,
+                forks_not_searched: 11,
+                unfinished_line_skipped: 2,
+            }),
+            CodexHistoryGaps {
+                unsearched: 1,
+                folders_not_read: 3,
+                too_many_files: true,
+                exec_launches_without_result: 4,
+                forks_not_searched: 11,
+                unfinished_line_skipped: 2,
+            }
+        );
+    }
 
     const STATES: [NativeHostState; 8] = [
         NativeHostState::Pending,

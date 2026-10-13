@@ -68,6 +68,7 @@ import { LiveSessionBadge, LiveSessionHost } from './LiveSessionBadge';
 import { LaneCost, shownCost } from './dashboard/ActivityLanes';
 import { RulePopover } from '../kit/RulePopover';
 import { useNativeIndexStatus } from './useAppInfo';
+import { useFillSessionTable } from './use-fill-session-table';
 import {
   COMPACTION_MEANING,
   CompactionBadge,
@@ -693,6 +694,13 @@ export function SessionsPage() {
     enabled: supportedList,
   });
   const pages = query.data?.pages;
+  useFillSessionTable(
+    sectionRef,
+    supportedList && !!query.hasNextPage && !query.isFetching && !query.isError,
+    // Repeated layout notifications share an in-flight read rather than
+    // cancelling it. The existing query advances one matching page at a time.
+    () => void query.fetchNextPage({ cancelRefetch: false }),
+  );
   // Every loaded row, exactly as the pages returned them: the loaded count,
   // the cursors and each row's own measurements are these, whatever is drawn.
   const rows = useMemo(() => pages?.flatMap((page) => page.rows) ?? [], [pages]);

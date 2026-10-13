@@ -1284,3 +1284,646 @@ fn a_malformed_member_removed_while_it_was_read_refuses_nothing() {
         }
     }
 }
+
+/// Passes until the backlog has nothing left, at most `limit`.
+fn drain_launches(
+    fixture: &mut Fixture,
+    backlog: &mut LaunchBacklog,
+    limit: usize,
+) -> LaunchProgress {
+    let mut sum = LaunchProgress::default();
+    for _ in 0..limit {
+        let progress = continue_claude_launches(
+            &mut fixture.store,
+            &fixture.home,
+            backlog,
+            &LaunchLimits::default(),
+            None,
+            T,
+        )
+        .unwrap();
+        sum.published_invalid += progress.published_invalid;
+        sum.published_valid += progress.published_valid;
+        sum.threads_busy += progress.threads_busy;
+        sum.threads_unfinished += progress.threads_unfinished;
+        if !backlog.pending() {
+            break;
+        }
+    }
+    sum
+}
+
+/// The first parent's continuation file.
+fn continuation(fixture: &Fixture) -> PathBuf {
+    fs::read_dir(fixture.home.join(".codex/sessions/2026/09/07"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(PARENT_A) && name.contains("_01b"))
+        })
+        .unwrap()
+}
+
+fn group_status(fixture: &Fixture) -> GroupStatus {
+    fixture
+        .store
+        .claude_launch_group(PARENT_A)
+        .unwrap()
+        .unwrap()
+        .status
+}
+
+/// A read error that may pass (too many open files, an IO error) is tried
+/// again: the history is not published invalid and keeps its launches; once
+/// reads work, it is read. Only "permission denied" skips a history.
+#[test]
+fn a_read_error_that_may_pass_is_retried_and_keeps_the_launches() {
+    for code in [libc::EIO, libc::EMFILE, libc::ENFILE] {
+        let mut fixture = fixture(&[(PARENT_A, CHILD_A)]);
+        let mut backlog = LaunchBacklog::starting();
+        drain_launches(&mut fixture, &mut backlog, 100);
+        assert_eq!(relations(&fixture.store), 1);
+        // The history grows: it is read again, and every read fails.
+        let path = continuation(&fixture);
+        let mut body = fs::read_to_string(&path).unwrap();
+        body.push_str(&format!(
+            "{}\n",
+            json!({"timestamp": iso(9), "type": "event_msg", "ordinal": 5,
+                "payload": {"type": "note", "text": "later"}})
+        ));
+        fs::write(&path, body).unwrap();
+        backlog.add_threads([PARENT_A]);
+        source::fail_reads(Some(code));
+        let failing = drain_launches(&mut fixture, &mut backlog, 10);
+        source::fail_reads(None);
+        assert_eq!(failing.published_invalid, 0, "{code}");
+        assert!(failing.threads_busy > 0, "{code}: retried");
+        assert!(backlog.pending(), "{code}: still to be read");
+        assert_ne!(group_status(&fixture), GroupStatus::Invalid, "{code}");
+        assert!(
+            !fixture
+                .store
+                .claude_launch_candidates_for_child(CHILD_A, None, 10)
+                .unwrap()
+                .is_empty(),
+            "{code}: its launch is kept"
+        );
+        assert_eq!(backlog.search_gaps().unwrap().unsearched, 0, "{code}");
+        drain_launches(&mut fixture, &mut backlog, 100);
+        assert_eq!(group_status(&fixture), GroupStatus::Valid, "{code}");
+        assert_eq!(relations(&fixture.store), 1, "{code}");
+    }
+}
+
+/// A last line with no newline in a file whose modification time is a day
+/// ahead (another machine's clock) holds its history only until this run
+/// has seen that exact file unchanged for the quiet period; the history is
+/// then read without that line, its launch links, and the sighting is
+/// forgotten.
+#[test]
+fn an_unfinished_line_with_a_future_time_is_released_once_seen_unchanged() {
+    let mut fixture = fixture(&[(PARENT_A, CHILD_A)]);
+    let path = continuation(&fixture);
+    let mut body = fs::read_to_string(&path).unwrap();
+    body.push_str("{\"timestamp\": \"2026-09-07T00:00:00.000Z\", \"type\": \"respon");
+    fs::write(&path, body).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(86_400))
+        .unwrap();
+    let mut backlog = LaunchBacklog::starting();
+    let held = drain_launches(&mut fixture, &mut backlog, 20);
+    assert!(held.threads_unfinished > 0);
+    assert!(backlog.held.contains_key(PARENT_A));
+    assert_eq!(backlog.sightings.len(), 1);
+    assert_eq!(relations(&fixture.store), 0);
+    assert_ne!(group_status(&fixture), GroupStatus::Valid);
+    // As if the quiet period passed with the file unchanged.
+    backlog.sightings.age(source::UNFINISHED_QUIET);
+    drain_launches(&mut fixture, &mut backlog, 100);
+    assert!(!backlog.pending());
+    assert_eq!(group_status(&fixture), GroupStatus::Valid);
+    assert_eq!(relations(&fixture.store), 1);
+    assert_eq!(backlog.sightings.len(), 0, "forgotten once read");
+    assert_eq!(
+        backlog.search_gaps(),
+        Some(SearchGaps {
+            unsearched: 0,
+            forks_not_searched: 0,
+            unfinished_line_skipped: 1,
+            ..SearchGaps::default()
+        })
+    );
+}
+
+/// An empty file among a history's files adds nothing: the rest of the
+/// history is read, its launch links, and the empty file is one of the
+/// published members with nothing read of it.
+#[test]
+fn an_empty_file_beside_a_history_adds_nothing_and_breaks_nothing() {
+    let mut fixture = fixture(&[(PARENT_A, CHILD_A)]);
+    let empty = fixture.home.join(format!(
+        ".codex/sessions/2026/09/07/rollout-2026-09-07T00-45-00-{PARENT_A}_01c00000-0000-7000-8000-000000000000.jsonl"
+    ));
+    fs::write(&empty, b"").unwrap();
+    let mut backlog = LaunchBacklog::starting();
+    drain_launches(&mut fixture, &mut backlog, 100);
+    assert!(!backlog.pending());
+    assert_eq!(group_status(&fixture), GroupStatus::Valid);
+    assert_eq!(relations(&fixture.store), 1);
+    let members = fixture.store.claude_launch_members(PARENT_A).unwrap();
+    assert_eq!(members.len(), 3);
+    assert!(members.iter().any(|member| {
+        member.rollout_id == "01c00000-0000-7000-8000-000000000000"
+            && member.valid
+            && (member.scanned_length, member.generation.length) == (0, 0)
+    }));
+    assert_eq!(backlog.search_gaps(), Some(SearchGaps::default()));
+}
+
+/// A Claude session no launch names.
+const MAIN: &str = "0c000000-0000-4000-8000-0000000000e3";
+/// A fresh `codex exec` thread no launch names.
+const EXEC: &str = "01a60000-0000-7000-8000-0000000000e1";
+/// Another Codex history, read for launches but naming none.
+const OTHER: &str = "01a60000-0000-7000-8000-0000000000f1";
+/// A Codex history whose `codex exec` launch has no first result yet.
+const LAUNCHER: &str = "01a60000-0000-7000-8000-0000000000f2";
+
+const EXEC_COMMAND: &str = "codex exec --json --ignore-user-config --sandbox read-only \
+    --skip-git-repo-check 'Reply exactly SYNTHETIC-CONTROL.'";
+
+fn exec_call(offset: i64, ordinal: i64) -> Value {
+    let input = format!(
+        "text(await tools.exec_command({{cmd:{},workdir:\"/w\",yield_time_ms:1000}}));\n",
+        js(EXEC_COMMAND)
+    );
+    let mut call = row(
+        offset,
+        json!({"type": "custom_tool_call", "call_id": "call_exec", "name": "exec",
+            "input": input}),
+    );
+    call["ordinal"] = json!(ordinal);
+    call
+}
+
+fn exec_result(offset: i64, ordinal: i64, thread: &str) -> Value {
+    let printed = format!(
+        "Reading additional input from stdin...\n{{\"type\":\"thread.started\",\"thread_id\":\"{thread}\"}}\n"
+    );
+    let running = json!({"chunk_id": "6f9747", "wall_time_seconds": 1.0, "session_id": 69773,
+        "original_token_count": 35, "output": printed});
+    let mut output = row(
+        offset,
+        json!({"type": "custom_tool_call_output", "call_id": "call_exec", "output": [
+            {"type": "input_text", "text": "Script completed\nWall time 1.0 seconds\nOutput:\n"},
+            {"type": "input_text", "text": running.to_string()}]}),
+    );
+    output["ordinal"] = json!(ordinal);
+    output
+}
+
+fn rows_text(rows: &[Value]) -> String {
+    rows.iter().map(|row| format!("{row}\n")).collect()
+}
+
+fn codex_header(thread: &str, offset: i64, source: &str) -> Value {
+    json!({"timestamp": iso(offset), "type": "session_meta", "ordinal": 0,
+        "payload": {"id": thread, "session_id": thread, "timestamp": iso(offset), "cwd": "/w",
+            "originator": "codex_exec", "source": source, "history_mode": "paginated"}})
+}
+
+/// The fixture's parent and child, a Claude session and a fresh `codex
+/// exec` thread nothing launched, and one more Codex history.
+struct World {
+    fixture: Fixture,
+    spawns: crate::native::session_creation::SpawnBacklog,
+    other: PathBuf,
+}
+
+impl World {
+    fn new() -> Self {
+        let mut fixture = fixture(&[(PARENT_A, CHILD_A)]);
+        let home = fixture.home.clone();
+        let rows = [
+            json!({"type": "user", "uuid": format!("{MAIN}-first"), "parentUuid": null,
+                "timestamp": iso(3_000), "sessionId": MAIN, "cwd": "/w",
+                "message": {"role": "user", "content": "Hello"}}),
+            json!({"type": "assistant", "uuid": format!("{MAIN}-answer"),
+                "parentUuid": format!("{MAIN}-first"), "timestamp": iso(5_000),
+                "sessionId": MAIN, "cwd": "/w", "message": {"role": "assistant",
+                    "id": "msg_main", "model": "fixture-model",
+                    "content": [{"type": "text", "text": "Hi"}],
+                    "usage": {"input_tokens": 1, "output_tokens": 1}}}),
+        ];
+        fs::write(
+            home.join(format!(".claude/projects/-w/{MAIN}.jsonl")),
+            rows_text(&rows),
+        )
+        .unwrap();
+        let day = home.join(".codex/sessions/2026/10/01");
+        fs::create_dir_all(&day).unwrap();
+        let other = day.join(format!("rollout-2026-10-01T09-00-00-{OTHER}.jsonl"));
+        let mut note = row(-50_000, json!({"type": "event_msg", "text": "working"}));
+        note["ordinal"] = json!(1);
+        fs::write(
+            &other,
+            rows_text(&[codex_header(OTHER, -60_000, "vscode"), note]),
+        )
+        .unwrap();
+        let exec_day = home.join(".codex/sessions/2026/10/02");
+        fs::create_dir_all(&exec_day).unwrap();
+        let exec = exec_day.join(format!("rollout-2026-10-02T09-00-00-{EXEC}.jsonl"));
+        let mut prompt = row(
+            8_294,
+            json!({"type": "message", "role": "user", "id": "msg_synthetic",
+                "content": [{"type": "input_text", "text": "Reply exactly SYNTHETIC-CONTROL."}]}),
+        );
+        prompt["ordinal"] = json!(1);
+        fs::write(
+            &exec,
+            rows_text(&[codex_header(EXEC, 6_766, "exec"), prompt]),
+        )
+        .unwrap();
+        let lines = vec![
+            json!({"type": "session", "host": "codex", "native_session_id": EXEC,
+                   "conversation_id": format!("codex-{EXEC}"), "source_surface": "codex_cli",
+                   "started_at": iso(6_766), "cwd": "/w", "git_branch": null, "title": null,
+                   "path": exec.display().to_string(), "mtime": 1790668716.0})
+            .to_string(),
+            json!({"uuid": "5555eeee-5555-4555-8555-000000000000", "type": "user", "cwd": "/w",
+                   "timestamp": iso(8_294),
+                   "message": {"role": "user", "content": [{"type": "text", "text": "Reply"}]}})
+            .to_string(),
+        ];
+        import_reader_lines(
+            &mut fixture.store,
+            Host::Codex,
+            "test".into(),
+            lines.into_iter().map(Ok),
+            T,
+            || {
+                Ok(ReaderOutcome {
+                    diagnostics: vec![],
+                    complete: true,
+                })
+            },
+        );
+        let report = scan_native(
+            &mut fixture.store,
+            &ImportRequest {
+                home: &home,
+                hosts: &[Host::Claude],
+                producer: &ProducerSource::Checkout {
+                    pin: PathBuf::from(".plugin-pin"),
+                    plugin_root: None,
+                },
+                python: None,
+                observed_at: T,
+                cancel: None,
+            },
+            ScanMode::Resume,
+        );
+        assert!(report.complete(), "{report:?}");
+        Self {
+            fixture,
+            spawns: crate::native::session_creation::SpawnBacklog::starting(),
+            other,
+        }
+    }
+
+    /// The watcher's passes, `count` of them or until nothing is left.
+    fn passes(&mut self, count: usize) {
+        for _ in 0..count {
+            crate::native::session_creation::continue_codex_spawns(
+                &mut self.fixture.store,
+                &self.fixture.home,
+                &mut self.spawns,
+                crate::native::session_creation::spawn_limits(),
+                None,
+                T,
+            )
+            .unwrap();
+            if !self.spawns.pending() {
+                break;
+            }
+        }
+    }
+
+    /// Whether the Claude session and the fresh `exec` thread are checked.
+    fn checked(&self) -> (bool, bool) {
+        (
+            self.fixture.store.completed_child_check(MAIN).unwrap(),
+            self.fixture
+                .store
+                .completed_child_check(&format!("codex-{EXEC}"))
+                .unwrap(),
+        )
+    }
+
+    fn gaps(&self) -> SearchGaps {
+        self.spawns.launches.search_gaps().expect("census current")
+    }
+
+    /// As if the quiet period passed.
+    fn wait(&mut self) {
+        self.spawns.launches.sightings.age(source::UNFINISHED_QUIET);
+    }
+
+    fn other_status(&self) -> Option<GroupStatus> {
+        self.fixture
+            .store
+            .claude_launch_group(OTHER)
+            .unwrap()
+            .map(|group| group.status)
+    }
+}
+
+/// Whether this user is held to file permissions (root reads anything).
+fn permissions_apply(path: &Path) -> bool {
+    fs::File::open(path).is_err()
+}
+
+/// A: a history whose reads keep failing with an IO error holds the
+/// display checks only for the quiet period, then is skipped, counted and
+/// still read in the background; once it reads, it is read normally.
+#[test]
+fn a_history_whose_reads_keep_failing_is_skipped_after_the_quiet_period() {
+    let mut world = World::new();
+    source::fail_reads_of(&world.other, 0, libc::EIO);
+    world.passes(30);
+    assert_eq!(world.checked(), (false, false), "held while its clock runs");
+    world.wait();
+    world.passes(30);
+    assert_eq!(world.checked(), (true, true));
+    assert_eq!(world.gaps().unsearched, 1);
+    assert_ne!(
+        world.other_status(),
+        Some(GroupStatus::Invalid),
+        "nothing published"
+    );
+    source::fail_reads(None);
+    world.passes(100);
+    assert_eq!(world.other_status(), Some(GroupStatus::Valid));
+    assert_eq!(world.gaps(), SearchGaps::default());
+}
+
+/// A: a failing history whose file keeps changing starts its clock again
+/// each time, and keeps holding.
+#[test]
+fn a_failing_history_that_keeps_changing_keeps_holding() {
+    let mut world = World::new();
+    source::fail_reads_of(&world.other, 0, libc::EIO);
+    world.passes(10);
+    world.wait();
+    // Changed after the wait, in place: same file, new length.
+    let mut body = fs::read_to_string(&world.other).unwrap();
+    let mut more = row(-40_000, json!({"type": "event_msg", "text": "more"}));
+    more["ordinal"] = json!(2);
+    body.push_str(&rows_text(&[more]));
+    fs::write(&world.other, body).unwrap();
+    world.passes(10);
+    source::fail_reads(None);
+    assert_eq!(world.checked(), (false, false));
+}
+
+/// C: a history file the census lists but cannot stat (its folder may be
+/// listed but not entered) holds only for the quiet period, then is
+/// skipped and counted; entered again, it is read.
+#[test]
+fn a_history_that_cannot_be_stated_is_skipped_after_the_quiet_period() {
+    let mut world = World::new();
+    let day = world.other.parent().unwrap().to_owned();
+    fs::set_permissions(&day, fs::Permissions::from_mode(0o444)).unwrap();
+    if !permissions_apply(&world.other) {
+        fs::set_permissions(&day, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this user reads files whatever their permissions");
+        return;
+    }
+    world.passes(30);
+    let held = world.checked();
+    world.wait();
+    world.passes(30);
+    let released = world.checked();
+    let gaps = world.gaps();
+    fs::set_permissions(&day, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(held, (false, false));
+    assert_eq!(released, (true, true));
+    assert_eq!((gaps.unsearched, gaps.folders_not_read), (1, 0));
+    world.passes(100);
+    assert_eq!(world.other_status(), Some(GroupStatus::Valid));
+    assert_eq!(world.gaps(), SearchGaps::default());
+}
+
+/// B: a folder the census cannot list holds only for the quiet period;
+/// the census is then used without it, counted, and not walked again on
+/// every pass. Readable again, the next census reads it.
+#[test]
+fn a_folder_that_cannot_be_listed_is_skipped_after_the_quiet_period() {
+    let mut world = World::new();
+    let day = world.other.parent().unwrap().to_owned();
+    fs::set_permissions(&day, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&day).is_ok() {
+        fs::set_permissions(&day, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this user lists folders whatever their permissions");
+        return;
+    }
+    world.passes(30);
+    let held = world.checked();
+    world.wait();
+    world.passes(30);
+    let released = world.checked();
+    let gaps = world.gaps();
+    let epoch = world.spawns.launches.census_epoch();
+    world.passes(5);
+    let walks = world.spawns.launches.census_epoch() - epoch;
+    fs::set_permissions(&day, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(held, (false, false));
+    assert_eq!(released, (true, true));
+    assert_eq!((gaps.folders_not_read, gaps.unsearched), (1, 0));
+    assert_eq!(walks, 0, "an accepted census is not walked again each pass");
+    world.spawns.launches.renew_census();
+    world.passes(100);
+    assert_eq!(world.other_status(), Some(GroupStatus::Valid));
+    assert_eq!(world.gaps(), SearchGaps::default());
+}
+
+/// E: a census that stops at its entry limit holds only for the quiet
+/// period, then its partial list is used and counted.
+#[test]
+fn a_census_over_its_entry_limit_is_used_after_the_quiet_period() {
+    let mut world = World::new();
+    group::CENSUS_LIMIT.with(|limit| limit.set(Some(3)));
+    world.passes(30);
+    let held = world.checked();
+    world.wait();
+    world.passes(30);
+    let released = world.checked();
+    let gaps = world.gaps();
+    group::CENSUS_LIMIT.with(|limit| limit.set(None));
+    assert_eq!(held, (false, false));
+    assert_eq!(released, (true, true));
+    assert!(gaps.too_many_files);
+    world.spawns.launches.renew_census();
+    world.passes(100);
+    assert!(!world.gaps().too_many_files);
+}
+
+/// D: a `codex exec` launch with no first result holds the fresh `exec`
+/// threads opened after it only while its history is being written; the
+/// Claude session is never held by it. Released, it is counted and kept: a
+/// result saved later still makes its thread a child.
+#[test]
+fn an_exec_launch_with_no_result_holds_only_while_its_history_is_written() {
+    let mut world = World::new();
+    let day = world.fixture.home.join(".codex/sessions/2026/10/01");
+    let launcher = day.join(format!("rollout-2026-10-01T10-00-00-{LAUNCHER}.jsonl"));
+    let head = [codex_header(LAUNCHER, -10_000, "vscode"), exec_call(0, 1)];
+    fs::write(&launcher, rows_text(&head)).unwrap();
+    world.passes(30);
+    assert_eq!(
+        world.checked(),
+        (true, false),
+        "only the exec thread is held"
+    );
+    world.wait();
+    world.passes(30);
+    assert_eq!(world.checked(), (true, true));
+    assert_eq!(world.gaps().exec_launches_without_result, 1);
+    // Its result is saved: the thread it opened is its child after all.
+    let mut body = rows_text(&head);
+    body.push_str(&rows_text(&[exec_result(7_319, 2, EXEC)]));
+    fs::write(&launcher, body).unwrap();
+    world.spawns.launches.add_threads([LAUNCHER]);
+    world.spawns.launches.add_children([EXEC]);
+    world.passes(100);
+    assert!(
+        !world
+            .fixture
+            .store
+            .child_facts(&format!("codex-{EXEC}"))
+            .unwrap()
+            .is_empty(),
+        "a known sub-session wins"
+    );
+    assert_eq!(world.gaps().exec_launches_without_result, 0);
+}
+
+/// A read that progresses over many passes with no error is never skipped,
+/// however long it takes; an error past the first pass's budget starts the
+/// clock, and pauses before it do not start it again.
+#[test]
+fn only_a_failing_read_is_skipped_not_a_long_one() {
+    let limits = LaunchLimits {
+        max_pass_bytes: 3_000,
+        ..LaunchLimits::default()
+    };
+    let pass = |fixture: &mut Fixture, backlog: &mut LaunchBacklog| {
+        continue_claude_launches(&mut fixture.store, &fixture.home, backlog, &limits, None, T)
+            .unwrap()
+    };
+    // A long read, no error: paused, never skipped.
+    let mut long = fixture(&[(PARENT_A, CHILD_A)]);
+    let mut backlog = LaunchBacklog::starting();
+    for _ in 0..4 {
+        pass(&mut long, &mut backlog);
+    }
+    assert!(backlog.work.contains_key(PARENT_A), "read in progress");
+    backlog.sightings.age(source::UNFINISHED_QUIET);
+    assert!(!backlog.discovered_since(0));
+    assert_eq!(backlog.search_gaps().unwrap().unsearched, 0);
+    // An error at byte 10 000 of its first file, several passes in.
+    let mut failing_fixture = fixture(&[(PARENT_A, CHILD_A)]);
+    let first = fs::read_dir(failing_fixture.home.join(".codex/sessions/2026/09/07"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(&format!("{PARENT_A}.jsonl")))
+        })
+        .unwrap();
+    source::fail_reads_of(&first, 10_000, libc::EIO);
+    let mut backlog = LaunchBacklog::starting();
+    let mut failing = 0;
+    for _ in 0..40 {
+        failing += pass(&mut failing_fixture, &mut backlog).threads_busy;
+    }
+    assert!(failing > 1, "met the error more than once, {failing}");
+    assert!(!backlog.discovered_since(0), "held before the wait");
+    backlog.sightings.age(source::UNFINISHED_QUIET);
+    let skipped = backlog.discovered_since(0);
+    let gaps = backlog.search_gaps().unwrap();
+    source::fail_reads(None);
+    assert!(skipped, "skipped after the wait");
+    assert_eq!(gaps.unsearched, 1);
+}
+
+/// The first parent's original file.
+fn original(fixture: &Fixture) -> PathBuf {
+    fs::read_dir(fixture.home.join(".codex/sessions/2026/09/07"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(&format!("{PARENT_A}.jsonl")))
+        })
+        .unwrap()
+}
+
+/// A read error while the base cutoff is checked is only that: the history
+/// is read again, not refused, and once reads work it is valid and its
+/// launch links.
+#[test]
+fn a_read_error_while_a_cutoff_is_checked_is_retried() {
+    let mut fixture = fixture(&[(PARENT_A, CHILD_A)]);
+    let base = original(&fixture);
+    let cutoff = fs::metadata(&base).unwrap().len();
+    // Only the read of the byte before the cutoff fails.
+    source::fail_reads_of(&base, cutoff - 1, libc::EIO);
+    let mut backlog = LaunchBacklog::starting();
+    let failing = drain_launches(&mut fixture, &mut backlog, 10);
+    source::fail_reads(None);
+    assert_eq!(failing.published_invalid, 0);
+    assert!(failing.threads_busy > 0, "retried");
+    assert_eq!(relations(&fixture.store), 0);
+    drain_launches(&mut fixture, &mut backlog, 100);
+    assert_eq!(group_status(&fixture), GroupStatus::Valid);
+    assert_eq!(relations(&fixture.store), 1);
+}
+
+/// A skipped history is counted once, as not searched, even when it holds
+/// a `codex exec` launch with no first result.
+#[test]
+fn a_skipped_history_is_not_also_counted_as_a_launch_without_result() {
+    let mut world = World::new();
+    let day = world.fixture.home.join(".codex/sessions/2026/10/01");
+    let launcher = day.join(format!("rollout-2026-10-01T10-00-00-{LAUNCHER}.jsonl"));
+    let mut note = row(50, json!({"type": "event_msg", "text": "later"}));
+    note["ordinal"] = json!(2);
+    let head = [codex_header(LAUNCHER, -10_000, "vscode"), exec_call(0, 1)];
+    fs::write(&launcher, rows_text(&head)).unwrap();
+    world.passes(30);
+    world.wait();
+    world.passes(30);
+    assert_eq!(world.gaps().exec_launches_without_result, 1);
+    // It grows, and every read of it now fails.
+    fs::write(
+        &launcher,
+        rows_text(&[head[0].clone(), head[1].clone(), note]),
+    )
+    .unwrap();
+    source::fail_reads_of(&launcher, 0, libc::EIO);
+    world.spawns.launches.add_threads([LAUNCHER]);
+    world.passes(30);
+    world.wait();
+    world.passes(30);
+    let gaps = world.gaps();
+    source::fail_reads(None);
+    assert_eq!((gaps.unsearched, gaps.exec_launches_without_result), (1, 0));
+}

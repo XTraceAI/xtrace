@@ -438,6 +438,7 @@ it('narrows a full status to the facts the sidebar shows', () => {
     needs_attention: false,
     reconciles: 7,
     files_scanned: 41,
+    codex_history_gaps: null,
   };
   expect(sidebarIndexFacts(status)).toEqual({
     phase: { phase: 'scanning' },

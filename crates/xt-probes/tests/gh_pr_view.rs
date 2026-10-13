@@ -705,15 +705,73 @@ fn a_missing_pull_request_in_a_visible_repository_is_not_found() {
     );
 }
 
+/// gh's own answer when GitHub cannot find the repository for the signed-in
+/// account, copied from gh 2.90.0 run as
+/// `gh pr view https://github.com/x/r/pull/19 --json ...`, with the requested
+/// repository's name: it exits 1 and writes exactly this line to stderr.
+/// GitHub answers the same for a repository that does not exist and for one
+/// private to another account.
+const MISSING_REPOSITORY: &str =
+    "GraphQL: Could not resolve to a Repository with the name 'octo-org/hello.world'. (repository)";
+
 #[test]
-fn anything_but_the_exact_missing_pull_request_answer_stays_an_execution_failure() {
+fn a_repository_github_cannot_find_is_not_found() {
+    let directory = TempDir::new().unwrap();
+    let missing = fixture(
+        directory.path(),
+        "gh-missing-repository",
+        &format!("printf '%s\\n' \"{MISSING_REPOSITORY}\" 1>&2\nexit 1"),
+    );
+    let outcome = run(&missing, short(10_000));
+    assert_eq!(code(&outcome), PrRefreshError::NotFound);
+    // The stderr text is compared, never carried.
+    assert!(!format!("{outcome:?}").contains("GraphQL"));
+    assert_eq!(
+        xt_probes::gh::repository_missing_line(identity().repository()),
+        MISSING_REPOSITORY,
+        "the parsed line is the one gh prints",
+    );
+    // The line gh 2.90.0 printed for the placeholder link that prompted this.
+    assert_eq!(
+        xt_probes::gh::repository_missing_line("x/r"),
+        "GraphQL: Could not resolve to a Repository with the name 'x/r'. (repository)",
+    );
+}
+
+#[test]
+fn anything_but_an_exact_not_found_answer_stays_an_execution_failure() {
     let directory = TempDir::new().unwrap();
     let cases = [
-        // The repository itself did not resolve: missing, or private to an
-        // account other than the signed-in one. gh 2.90.0, verbatim.
+        // Another repository's name: not an answer about this pull request.
         (
-            "repository-missing",
+            "other-repository",
             "printf '%s\\n' \"GraphQL: Could not resolve to a Repository with the name 'x/r'. (repository)\" 1>&2\nexit 1".to_owned(),
+        ),
+        // This repository spelled in another case than the requested URL:
+        // not what gh echoes for it, so it is not judged.
+        (
+            "repository-other-case",
+            "printf '%s\\n' \"GraphQL: Could not resolve to a Repository with the name 'Octo-Org/hello.world'. (repository)\" 1>&2\nexit 1".to_owned(),
+        ),
+        // The repository line plus anything else.
+        (
+            "repository-extra-line",
+            format!("printf '%s\\nsomething else\\n' \"{MISSING_REPOSITORY}\" 1>&2\nexit 1"),
+        ),
+        // The repository line with another exit status.
+        (
+            "repository-exit-2",
+            format!("printf '%s\\n' \"{MISSING_REPOSITORY}\" 1>&2\nexit 2"),
+        ),
+        // The repository line on stdout rather than stderr.
+        (
+            "repository-on-stdout",
+            format!("printf '%s\\n' \"{MISSING_REPOSITORY}\"\nexit 1"),
+        ),
+        // Another wording for the same repository.
+        (
+            "repository-other-wording",
+            "printf '%s\\n' \"GraphQL: Could not resolve to a Repository with the name 'octo-org/hello.world'.\" 1>&2\nexit 1".to_owned(),
         ),
         // Another pull request's number.
         (
@@ -754,6 +812,21 @@ fn anything_but_the_exact_missing_pull_request_answer_stays_an_execution_failure
     let limits = Limits {
         deadline: Duration::from_secs(10),
         max_stderr_bytes: MISSING_PR_42.len() + 1,
+        ..Limits::default()
+    };
+    assert_eq!(
+        code(&run(&truncated, limits)),
+        PrRefreshError::ExecutionFailed
+    );
+    // The same for the repository line.
+    let truncated = fixture(
+        directory.path(),
+        "repository-truncated",
+        &format!("printf '%s\\n%s\\n' \"{MISSING_REPOSITORY}\" 'xxxxxxxxxxxxxxxx' 1>&2\nexit 1"),
+    );
+    let limits = Limits {
+        deadline: Duration::from_secs(10),
+        max_stderr_bytes: MISSING_REPOSITORY.len() + 1,
         ..Limits::default()
     };
     assert_eq!(

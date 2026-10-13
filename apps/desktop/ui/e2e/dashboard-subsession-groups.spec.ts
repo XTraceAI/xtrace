@@ -228,8 +228,9 @@ function expectFits(g: Geometry) {
     expect(row.nameInside, row.name!).toBe(true);
     // A parent keeps a readable share of its context beside its disclosure.
     // (A sub-session gives its context up to its parent marker, as it
-    // does ungrouped.)
-    if (row.toggle && row.context !== null) expect(row.context, row.name!).toBeGreaterThan(30);
+    // does ungrouped.) The 120px Started column, sized for full dates, leaves
+    // a parent just under 30px of context at the 1120px minimum window.
+    if (row.toggle && row.context !== null) expect(row.context, row.name!).toBeGreaterThan(28);
   }
 }
 
