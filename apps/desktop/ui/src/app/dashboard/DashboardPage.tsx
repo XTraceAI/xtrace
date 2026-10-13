@@ -55,8 +55,7 @@ export function DashboardPage() {
   const { source } = useData();
   const range = useSelectedRange();
   const report = useDashboardReport(range);
-  // Keep index recovery mounted while uncached ranges replace the report with loading UI.
-  const index = useNativeIndexStatus();
+  const [indexActive, setIndexActive] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const toggle = (title: string, open: boolean) =>
     setExpanded((current) => {
@@ -66,34 +65,45 @@ export function DashboardPage() {
       else next.delete(title);
       return next;
     });
-  let body: ReactNode;
-  if (source.kind === 'preview')
-    body = <p className="xt-dash-status">Open the desktop app to read local Dashboard metrics.</p>;
-  else if (report.isPending)
-    body = (
-      <p role="status" className="xt-dash-status">
-        Reading Dashboard metrics for the last {range}…
-      </p>
-    );
-  else if (report.isError)
-    body = (
-      <p role="alert" className="xt-dash-status">
-        Dashboard metrics could not be loaded.{' '}
-        <Button
-          variant="outline"
-          height={28}
-          disabled={report.isFetching}
-          onClick={() => void report.refetch()}
-        >
-          Retry
-        </Button>
-      </p>
-    );
-  else body = <DashboardReport report={report.data} index={index} />;
+  // First-settled recovery must follow a successful report. Once activated, its owner
+  // stays mounted through later range loading/errors so the recovery is not repeated.
+  if (report.isSuccess && !indexActive) {
+    setIndexActive(true);
+    return null;
+  }
+  const body = (index?: IndexQuery) => {
+    if (source.kind === 'preview')
+      return (
+        <p className="xt-dash-status">Open the desktop app to read local Dashboard metrics.</p>
+      );
+    if (report.isPending)
+      return (
+        <p role="status" className="xt-dash-status">
+          Reading Dashboard metrics for the last {range}…
+        </p>
+      );
+    if (report.isError)
+      return (
+        <p role="alert" className="xt-dash-status">
+          Dashboard metrics could not be loaded.{' '}
+          <Button
+            variant="outline"
+            height={28}
+            disabled={report.isFetching}
+            onClick={() => void report.refetch()}
+          >
+            Retry
+          </Button>
+        </p>
+      );
+    return index ? <DashboardReport report={report.data} index={index} /> : null;
+  };
   return (
     <section className="xt-dashboard" aria-busy={report.isFetching || undefined}>
       <h1>{TITLE}</h1>
-      <ExpandedContext.Provider value={{ expanded, toggle }}>{body}</ExpandedContext.Provider>
+      <ExpandedContext.Provider value={{ expanded, toggle }}>
+        {indexActive ? <DashboardIndexOwner>{body}</DashboardIndexOwner> : body()}
+      </ExpandedContext.Provider>
     </section>
   );
 }
@@ -112,6 +122,11 @@ function tileTip(tile: MetricTile, ...extra: (string | null | undefined)[]) {
 }
 
 type IndexQuery = ReturnType<typeof useNativeIndexStatus>;
+
+function DashboardIndexOwner({ children }: { children: (index: IndexQuery) => ReactNode }) {
+  const index = useNativeIndexStatus();
+  return children(index);
+}
 
 function DashboardReport({ report, index }: { report: DashboardMetrics; index: IndexQuery }) {
   const { tiles, favorite } = report;

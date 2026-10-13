@@ -472,15 +472,20 @@ it('shows loading, then a safe error with retry', async () => {
     if (reject) throw new Error('backend-specific detail');
     return f1(days);
   });
+  const index = vi.fn(async () => exported.native_index);
+  source.nativeIndexStatus = index;
   mount(source);
   expect(await screen.findByText(/Reading Dashboard metrics for the last 7d/)).toBeTruthy();
   expect(
     await screen.findByText('Dashboard metrics could not be loaded.', { exact: false }),
   ).toBeTruthy();
   expect(screen.queryByText(/backend-specific detail/)).toBeNull();
+  expect.soft(index).not.toHaveBeenCalled();
   reject = false;
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await loaded()).toBeTruthy();
+  await settleReads();
+  expect(index).toHaveBeenCalledTimes(1);
 });
 
 it('refreshes on insertion and on enrichment that adds no session', async () => {
@@ -750,5 +755,87 @@ it('still refreshes current metrics when the first settled index status arrives 
     dashboard: before.dashboard + 1,
     tokens: before.tokens + 1,
   });
+  expect(index).toHaveBeenCalledTimes(1);
+});
+
+for (const phase of ['ready', 'disabled'] as const)
+  it(`recovers old first metric snapshots when the backend index is already ${phase}`, async () => {
+    const old = f1();
+    old.tiles.sessions.value = 11;
+    old.tokens_by_host[0].tokens.counters.total_tokens = 111;
+    const fresh = f1();
+    fresh.tiles.sessions.value = 22;
+    fresh.tokens_by_host[0].tokens.counters.total_tokens = 222;
+    let releaseReport!: (report: DashboardMetrics) => void;
+    let releaseTokens!: (tokens: {
+      window: DashboardMetrics['window'];
+      hosts: DashboardMetrics['tokens_by_host'];
+    }) => void;
+    const firstReport = new Promise<DashboardMetrics>((done) => (releaseReport = done));
+    const firstTokens = new Promise<{
+      window: DashboardMetrics['window'];
+      hosts: DashboardMetrics['tokens_by_host'];
+    }>((done) => (releaseTokens = done));
+    const source = nativeSource(() => fresh);
+    let reportReads = 0;
+    let tokenReads = 0;
+    source.dashboard = vi.fn(async () => (++reportReads === 1 ? firstReport : fresh));
+    source.tokensByHost = vi.fn(async () =>
+      ++tokenReads === 1 ? firstTokens : { window: fresh.window, hosts: fresh.tokens_by_host },
+    );
+    const index = vi.fn(async (): Promise<NativeIndexStatus> =>
+      phase === 'disabled'
+        ? exported.native_index
+        : { ...exported.native_index, phase: { phase: 'ready' }, freshness: { freshness: 'live' } },
+    );
+    source.nativeIndexStatus = index;
+    mount(source);
+    await settleReads();
+    expect(source.dashboard).toHaveBeenCalledTimes(1);
+    expect(source.tokensByHost).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('dashboard-summary')).toBeNull();
+    expect.soft(index).not.toHaveBeenCalled();
+    // Both first requests captured the old snapshot. Status returns settled whenever read.
+    await act(async () => {
+      releaseReport(old);
+      releaseTokens({ window: old.window, hosts: old.tokens_by_host });
+    });
+    await loaded();
+    await settleReads();
+    expect.soft(screen.getByTestId('dashboard-summary').textContent).toContain('22 sessions');
+    expect.soft(screen.queryByLabelText('Claude Code tokens: 222')).toBeTruthy();
+    expect.soft(source.dashboard).toHaveBeenCalledTimes(2);
+    expect.soft(source.tokensByHost).toHaveBeenCalledTimes(2);
+    expect(index).toHaveBeenCalledTimes(1);
+    await settleReads();
+    expect.soft(screen.getByTestId('dashboard-summary').textContent).toContain('22 sessions');
+    expect.soft(source.dashboard).toHaveBeenCalledTimes(2);
+    expect.soft(source.tokensByHost).toHaveBeenCalledTimes(2);
+    // No event was emitted and the real timer mode is unchanged.
+  });
+
+it('keeps activated index recovery mounted through a later report error and retry', async () => {
+  let reject = true;
+  const source = nativeSource((days) => {
+    if (days === 14 && reject) throw new Error('synthetic later range failure');
+    return f1(days);
+  });
+  const index = vi.fn(async () => exported.native_index);
+  source.nativeIndexStatus = index;
+  mount(source);
+  await loaded();
+  await settleReads();
+  expect(index).toHaveBeenCalledTimes(1);
+  const initial = rangeReads(source, 7);
+  fireEvent.click(screen.getByRole('radio', { name: '14d' }));
+  await screen.findByText('Dashboard metrics could not be loaded.', { exact: false });
+  expect(screen.queryByTestId('dashboard-summary')).toBeNull();
+  expect(index).toHaveBeenCalledTimes(1);
+  reject = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await loaded();
+  await settleReads();
+  expect(rangeReads(source, 14).dashboard).toBe(2);
+  expect(rangeReads(source, 7)).toEqual(initial);
   expect(index).toHaveBeenCalledTimes(1);
 });
