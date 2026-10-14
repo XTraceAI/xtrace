@@ -290,6 +290,122 @@ it('keeps F7 unmeasured tokens, cost, coverage and favorite model explicit', asy
   expect(await screen.findByLabelText('Cursor tokens: unmeasured')).toBeTruthy();
 });
 
+it.each<{
+  name: string;
+  previousModel: string | null;
+  previousReason: DashboardMetrics['favorite']['previous']['unknown_reason'];
+  currentModel: string | null;
+  currentReason: DashboardMetrics['favorite']['current']['unknown_reason'];
+  currentText: string;
+  previousText: string;
+}>([
+  {
+    name: 'previous output has an unknown model',
+    previousModel: null,
+    previousReason: 'unknown_model_output',
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'Measured output has an unknown model',
+  },
+  {
+    name: 'previous tie has unknown turn attribution',
+    previousModel: null,
+    previousReason: 'unknown_turn_attribution',
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'A tie could not be resolved from turn attribution',
+  },
+  {
+    name: 'previous period has no measured output',
+    previousModel: null,
+    previousReason: 'no_measured_output',
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'No measured output tokens in this range',
+  },
+  {
+    name: 'current output has an unknown model with a known previous favorite',
+    previousModel: 'previous-model',
+    previousReason: null,
+    currentModel: null,
+    currentReason: 'unknown_model_output',
+    currentText: 'Unmeasured: Measured output has an unknown model',
+    previousText: 'previous-model',
+  },
+  {
+    name: 'current tie has unknown turn attribution with a known previous favorite',
+    previousModel: 'previous-model',
+    previousReason: null,
+    currentModel: null,
+    currentReason: 'unknown_turn_attribution',
+    currentText: 'Unmeasured: A tie could not be resolved from turn attribution',
+    previousText: 'previous-model',
+  },
+  {
+    name: 'current and previous periods have different known favorites',
+    previousModel: 'previous-model',
+    previousReason: null,
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'previous-model',
+  },
+  {
+    name: 'missing previous reason keeps the defensive fallback',
+    previousModel: null,
+    previousReason: null,
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'no favorite model',
+  },
+])(
+  'keeps favorite explanations separate in the rendered popover: $name',
+  async ({
+    previousModel,
+    previousReason,
+    currentModel,
+    currentReason,
+    currentText,
+    previousText,
+  }) => {
+    const report = synthetic((report) => {
+      report.favorite.previous = {
+        model: previousModel,
+        output_tokens: previousModel === null ? null : 100,
+        unknown_reason: previousReason,
+      };
+      report.favorite.current = {
+        model: currentModel,
+        output_tokens: currentModel === null ? null : 200,
+        unknown_reason: currentReason,
+      };
+    });
+    mount(nativeSource(() => report));
+    const summary = await loaded();
+    const trigger = within(summary).getByRole('button', { name: currentText });
+    expect(trigger.textContent).toBe(currentReason ? `—${currentText}` : currentText);
+    if (currentReason)
+      expect(trigger.querySelector('[title]')?.getAttribute('title')).toBe(
+        currentText.replace('Unmeasured: ', ''),
+      );
+    fireEvent.focus(trigger);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(trigger.getAttribute('aria-describedby')).toBe(tooltip.id);
+    const context = tooltip.querySelector('.xt-rule-context')!;
+    expect(context.textContent).toBe(`Previous period: ${previousText}.`);
+    if (previousReason) {
+      expect(context.textContent).not.toContain('no favorite model');
+      if (previousReason !== 'no_measured_output')
+        expect(context.textContent).not.toContain('No measured output tokens');
+    }
+    expect(context.textContent).not.toContain(currentText);
+  },
+);
+
 it('converts F11 percentage-point deltas exactly once and hides suppressed ones', async () => {
   mount(
     nativeSource(() =>

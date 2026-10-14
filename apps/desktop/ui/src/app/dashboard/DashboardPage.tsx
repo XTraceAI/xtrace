@@ -156,7 +156,7 @@ function DashboardReport({ report, index }: { report: DashboardMetrics; index: I
             context={
               favorite.previous.model
                 ? `Previous period: ${favorite.previous.model}.`
-                : 'Previous period: no favorite model.'
+                : `Previous period: ${favorite.previous.unknown_reason ? favoriteUnknownText[favorite.previous.unknown_reason] : 'no favorite model'}.`
             }
           >
             <button type="button" className="xt-dash-inline-metric">
