@@ -39,8 +39,28 @@ export function Shell() {
         leaderboardEnabled
         hosts={hosts}
         tokensCaption={
-          tokens.isError ? 'Recorded tokens unavailable' : `Recorded tokens · ${range}`
+          source.kind === 'preview'
+            ? 'Recorded tokens unavailable'
+            : tokens.isError
+              ? tokens.data === undefined
+                ? 'Recorded tokens unavailable'
+                : `Recorded tokens refresh failed · ${range}`
+              : `Recorded tokens · ${range}`
         }
+        tokensEmptyMessage={
+          source.kind === 'preview' || tokens.isError
+            ? null
+            : tokens.data === undefined
+              ? 'Reading recorded tokens…'
+              : 'No host measurements'
+        }
+        onRetryTokens={
+          source.kind !== 'preview' &&
+          (tokens.isError || (tokens.data === undefined && tokens.isFetching))
+            ? () => void tokens.refetch()
+            : undefined
+        }
+        tokensRetryBusy={tokens.isFetching}
         surfaces={[]}
         listener={{ status: info.data?.listening === false ? 'off' : 'unknown' }}
         version={info.data?.version ?? '…'}
