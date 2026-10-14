@@ -661,6 +661,231 @@ it('follows the design composition and keeps supplementary measurements in colla
   );
 });
 
+type DeltaContextCase = {
+  name: string;
+  target?: 'human' | 'stat';
+  value?: number | null;
+  previous?: number | null;
+  current_n?: number | null;
+  previous_n?: number | null;
+  cause?: string;
+  suppressed?: boolean;
+  pct?: number;
+  visibleDelta?: string;
+};
+
+it.each<DeltaContextCase>([
+  {
+    name: 'unknown current human hours',
+    target: 'human',
+    value: null,
+    previous: 8,
+    cause: 'the current value is unmeasured',
+  },
+  {
+    name: 'unknown previous stat value',
+    previous: null,
+    cause: 'the previous value is unmeasured',
+  },
+  {
+    name: 'both values unknown',
+    target: 'human',
+    value: null,
+    previous: null,
+    cause: 'the current and previous values are unmeasured',
+  },
+  {
+    name: 'current count unavailable',
+    current_n: null,
+    cause: 'the current sample count is unavailable',
+  },
+  {
+    name: 'previous count unavailable',
+    target: 'human',
+    previous_n: null,
+    cause: 'the previous sample count is unavailable',
+  },
+  {
+    name: 'both counts unavailable',
+    current_n: null,
+    previous_n: null,
+    cause: 'the current and previous sample counts are unavailable',
+  },
+  {
+    name: 'four current samples',
+    current_n: 4,
+    previous_n: 5,
+    cause: 'a window has fewer than 5 samples',
+  },
+  {
+    name: 'four previous samples',
+    target: 'human',
+    current_n: 5,
+    previous_n: 4,
+    cause: 'a window has fewer than 5 samples',
+  },
+  {
+    name: 'zero baseline with exactly five samples',
+    previous: 0,
+    current_n: 5,
+    previous_n: 5,
+    cause: 'the previous value is zero',
+  },
+  {
+    name: 'exactly five samples without a reported percentage',
+    current_n: 5,
+    previous_n: 5,
+    cause: 'the report did not provide a percentage change',
+  },
+  {
+    name: 'measured current zero is not a zero baseline',
+    target: 'human',
+    value: 0,
+    previous: 8,
+    cause: 'the report did not provide a percentage change',
+  },
+  {
+    name: 'finite extreme inputs with an unavailable percentage',
+    value: Number.MAX_VALUE,
+    previous: Number.MIN_VALUE,
+    cause: 'the report did not provide a percentage change',
+  },
+  {
+    name: 'unknown value precedes missing counts and zero baseline',
+    target: 'human',
+    value: null,
+    previous: 0,
+    current_n: null,
+    previous_n: null,
+    cause: 'the current value is unmeasured',
+  },
+  {
+    name: 'unknown previous value precedes low samples',
+    previous: null,
+    current_n: 4,
+    cause: 'the previous value is unmeasured',
+  },
+  {
+    name: 'missing count precedes low samples and zero baseline',
+    previous: 0,
+    current_n: null,
+    previous_n: 4,
+    cause: 'the current sample count is unavailable',
+  },
+  {
+    name: 'low samples precede zero baseline',
+    previous: 0,
+    current_n: 4,
+    previous_n: 5,
+    cause: 'a window has fewer than 5 samples',
+  },
+  {
+    name: 'unsuppressed measured zero and minus 100 percentage points',
+    value: 0,
+    previous: 8,
+    current_n: 5,
+    previous_n: 5,
+    suppressed: false,
+    pct: -100,
+    visibleDelta: '▼100%',
+  },
+  {
+    name: 'unsuppressed 50 percentage points at exactly five samples',
+    value: 3,
+    previous: 2,
+    current_n: 5,
+    previous_n: 5,
+    suppressed: false,
+    pct: 50,
+    visibleDelta: '▲50%',
+  },
+  {
+    name: 'unsuppressed zero percentage points',
+    value: 8,
+    previous: 8,
+    suppressed: false,
+    pct: 0,
+    visibleDelta: '0%',
+  },
+  // Deliberately inconsistent synthetic fields prove that the report flag remains authoritative.
+  {
+    name: 'unsuppressed report does not acquire a hidden reason from its fields',
+    target: 'human',
+    value: null,
+    previous: null,
+    current_n: null,
+    previous_n: 4,
+    suppressed: false,
+    pct: 50,
+  },
+])(
+  'explains reported suppression in the rendered definition: $name',
+  async ({
+    target = 'stat',
+    value = 8,
+    previous = 6,
+    current_n = 10,
+    previous_n = 10,
+    cause,
+    suppressed = true,
+    pct = null,
+    visibleDelta,
+  }) => {
+    const report = synthetic((report) => {
+      const metric = tile(value, {
+        rule_id: target === 'human' ? 'M-07' : 'M-09',
+        reason: 'Retained report reason.',
+        note: 'Retained report note.',
+        current_n,
+        previous_n,
+        delta: { previous, pct, suppressed },
+      });
+      if (target === 'human') report.tiles.human_hours_est = metric;
+      else report.tiles.hands_off_median = metric;
+    });
+    mount(nativeSource(() => report));
+    await loaded();
+    const trigger =
+      target === 'human'
+        ? screen.getByRole('button', { name: /^Human-in-the-loop hours, estimated/ })
+        : tileNamed('Hands-off median');
+    if (value === null)
+      expect(trigger.textContent).toContain('Unmeasured: Retained report reason.');
+    if (value === 0) {
+      expect(trigger.textContent).toContain('0');
+      expect(trigger.textContent).not.toContain('Unmeasured');
+    }
+    if (target === 'stat') {
+      const delta = trigger.querySelector('.xt-stat-delta');
+      if (visibleDelta) expect(delta?.textContent).toBe(visibleDelta);
+      else expect(delta).toBeNull();
+    }
+    fireEvent.focus(trigger);
+    const context = (await screen.findByRole('tooltip')).querySelector(
+      '.xt-rule-context',
+    )!.textContent!;
+    expect(context).toContain('Retained report reason. Retained report note.');
+    expect(context).toContain(
+      target === 'human'
+        ? 'Human-in-the-loop time is estimated from message timing and typing length, unioned on the wall clock.'
+        : 'How long your agents run before they need you.',
+    );
+    if (target === 'stat')
+      expect(context).toContain('No surface is excluded for timestamp health.');
+    if (current_n !== null)
+      expect(context).toContain(`n = ${current_n} sessions; previous period ${previous_n ?? '—'}.`);
+    else expect(context).not.toContain('n =');
+    if (cause) {
+      expect(context).toContain(`Change vs the previous period is hidden: ${cause}.`);
+      expect(context).not.toContain('samples or the previous value is zero');
+      if (cause !== 'a window has fewer than 5 samples')
+        expect(context).not.toContain('fewer than 5 samples');
+      if (cause !== 'the previous value is zero')
+        expect(context).not.toContain('previous value is zero');
+    } else expect(context).not.toContain('Change vs the previous period is hidden:');
+  },
+);
+
 it('hides the TopBar period off the Dashboard and while a range is loading', async () => {
   let release!: () => void;
   const gate = new Promise<void>((done) => (release = done));

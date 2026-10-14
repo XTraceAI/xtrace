@@ -114,11 +114,23 @@ const sampleText = (tile: MetricTile) =>
     : `n = ${tile.current_n.toLocaleString('en-US')} ${tile.sample_unit}; previous period ${tile.previous_n?.toLocaleString('en-US') ?? '—'}.`;
 function tileTip(tile: MetricTile, ...extra: (string | null | undefined)[]) {
   const parts = [tile.reason, tile.note, ...extra, sampleText(tile)];
-  if (tile.current_n !== null && tile.delta.suppressed)
-    parts.push(
-      'Change vs the previous period is hidden: a window has fewer than 5 samples or the previous value is zero.',
-    );
+  if (tile.delta.suppressed)
+    parts.push(`Change vs the previous period is hidden: ${hiddenChangeReason(tile)}.`);
   return parts.filter(Boolean).join(' ');
+}
+
+function hiddenChangeReason(tile: MetricTile) {
+  if (tile.value === null && tile.delta.previous === null)
+    return 'the current and previous values are unmeasured';
+  if (tile.value === null) return 'the current value is unmeasured';
+  if (tile.delta.previous === null) return 'the previous value is unmeasured';
+  if (tile.current_n === null && tile.previous_n === null)
+    return 'the current and previous sample counts are unavailable';
+  if (tile.current_n === null) return 'the current sample count is unavailable';
+  if (tile.previous_n === null) return 'the previous sample count is unavailable';
+  if (tile.current_n < 5 || tile.previous_n < 5) return 'a window has fewer than 5 samples';
+  if (tile.delta.previous === 0) return 'the previous value is zero';
+  return 'the report did not provide a percentage change';
 }
 
 type IndexQuery = ReturnType<typeof useNativeIndexStatus>;
