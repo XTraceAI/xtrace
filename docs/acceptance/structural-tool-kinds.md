@@ -1,0 +1,186 @@
+# Structural tool kinds
+
+Ingestion classifies every tool call before content retention decides whether
+the block that carried it survives, so a metadata-only index still knows what
+was called. `tool_uses` keeps `name`, `kind`, `server`, `tool` and `skill`
+beside the existing `uuid`/`block_index` identity; `input_json` stays a content
+column and is still dropped under the default policy.
+
+## Kinds
+
+`xt_store::tool_use` is the single owner of the mapping, and its kind strings
+are the ones the schema already accepts:
+
+| Name shape                      | Kind       | Details                                     |
+| ------------------------------- | ---------- | ------------------------------------------- |
+| `mcp__<server>__<tool>`         | `mcp`      | `server`, and the whole remainder as `tool` |
+| `Skill`                         | `skill`    | `skill`, from the explicit input field only |
+| `Agent`, `Task`                 | `subagent` | none                                        |
+| any other name (`Bash`, `Edit`) | `builtin`  | none                                        |
+| a `<command-name>` user record  | `command`  | the slash command's own name (user role)    |
+| a `stop_hook_summary` record    | `hook`     | none                                        |
+
+The tool part of an MCP name may itself contain `__` and is not split again. A
+malformed detail stays unknown rather than being guessed: `mcp__server` is still
+an MCP call, with no server or tool. Nothing is read from a shell command, an
+argument list, a prompt or any other free text, and a `Skill` call whose input
+names no skill simply has no skill name.
+
+## Structural events
+
+A slash command and a hook summary are not assistant tool calls. They are
+stored as structural rows with no record foreign key, so they never enter a
+record's `tool_use_count` or its tool-call rows, and the command record itself
+remains an ordinary record. One `stop_hook_summary` is one `hook` event whatever
+`hookCount` it reports: M-17 counts summaries, not the invocations a summary
+describes. Claude's native scan now consumes these summaries; the shared reader
+stream's contract is unchanged and still rejects them.
+
+A slash command is stated by a user record, and only by one: the record's type
+and its message role must both say `user`. An assistant record quoting the
+marker, and a record whose role is unstated, state no command. A hook summary is
+reconciled through the same identity-agreement rules an ordinary record is,
+before anything it implies is persisted: its native session, conversation,
+platform, surface, start instant and source must agree with the file and the
+records around it, and a summary that disagrees commits neither its event nor
+the checkpoint covering it.
+
+An event's identity is the native record or event UUID it came from. A summary
+carrying no UUID is unsupported and is never given an arrival-ordered identity
+instead. A newly ingested event is stored under one session: the
+canonical record holding the UUID owns it, otherwise an agreed existing event
+keeps its session, otherwise the identity is new and this
+batch's session holds it. A native fork repeating the same line in several files
+therefore counts one event, stored once, exactly as its copied work record is
+one record with an additional session context.
+
+Only the first step is provenance. A hook summary is no record, so nothing
+establishes which session originally produced it; the second step is a stable
+storage convention, and which context happens to be scanned first is the one
+that holds it. For newly ingested identities, this keeps one home and
+that a later context does not move it, not that the home is the summary's
+origin.
+
+The search is globally by the exact raw `source_event_id`, regardless of session
+or delivery source, under the batch's immediate transaction. Whitespace is used
+only to reject a blank ID; nonblank IDs retain their original bytes. The same native event
+newly delivered by the plugin and by the native scan, in either order, is one row, a
+plain retry adds nothing, and the same identity replayed with different facts
+or a different resolved owner fails the whole batch. Event times compare by their
+precise instant, including fractional digits beyond nanoseconds; equivalent UTC
+offsets and trailing fractional zeroes replay without changing the first stored
+spelling. Missing and present event times remain different facts.
+
+Events commit inside the batch that covers them, beside its records, cursor and
+checkpoint. Canonical records plus hook summaries share the existing 2,000-input
+batch limit. A command record that also produces an event counts once. A failure
+after a full batch preserves that batch's rows and checkpoint.
+
+A record this batch could not store contributes no event at all, whoever else
+owns the UUID. A rejected occurrence is not a trustworthy account of the record
+it claims to be, so it may not write a command onto the session that does own
+it, any more than onto the session that rejected it. An accepted native copy is
+not rejected and still resolves to the canonical record's owner, which is why a
+fork still counts one event rather than none.
+
+A new command event also requires agreement with the record's known retained
+content, content measurements, role and classification. Unrelated timestamp,
+model or usage conflicts do not block it, and unknown facts can still fill.
+Leading-whitespace commands remain valid even though historical raw-prefix
+classification may say false. If repeated occurrences of one UUID contradict
+those facts, no new command event is acquired for that UUID. An already stored
+event still checks every replay for conflicting facts and rolls back the batch;
+this acquisition rule does not bypass event identity checks or affect hooks.
+
+## Preserved historical observations
+
+The older public event API permitted several saved observations of one raw ID.
+They remain unchanged. `Store::tool_events(session)` is the raw observation
+reader and is not a logical call-count API. `Store::resolved_tool_events()` and
+`xt_store::ingest::resolved_tool_events(&connection)` use the same full-group
+resolver as writes. The connection helper runs on the caller's existing snapshot
+without opening a store or applying migrations; its exported query also supplies
+the required columns for a reader's schema probe.
+
+A group resolves only when every saved owner and event fact agrees, including
+the optional precise instant. A canonical record owner must agree with every
+saved owner too. Different delivery sources and equivalent timestamp spellings
+are allowed. After agreement is proven, the smallest existing row ID is a stable
+representative handle; it does not choose an authoritative origin or remove
+another observation. A matching retry inserts nothing. Any conflicting saved
+group rejects a write even when the incoming event matches one member, rolling
+back its companions, pending receipts and checkpoint.
+
+The resolved read returns conflicting facts or uncertain ownership explicitly,
+with every saved observation and canonical-owner candidate. Historical tab or
+Unicode-whitespace-only IDs are preserved as separate missing-identity entries;
+equal blank spellings cannot establish a shared event. Empty and ASCII-space-only
+IDs were already refused by the old schema. Nonblank padded IDs remain distinct.
+Consumers must resolve complete groups before time, session or work filtering,
+count resolved groups once, and use the unresolved owner/time candidates to mark
+affected totals incomplete. Unresolved saved-row counts are not measured calls.
+This storage API supplies that decision; Environment aggregation and display
+consume it separately. Migration 6 still changes only transcript checkpoints.
+
+## Lookup access path
+
+Exact-ID write arbitration uses a separate equality predicate over the shared
+observation projection and decoder. Store open maintains one named nonunique
+partial `source_event_id` index in the same post-history transaction as its
+managed views. This explicitly adds a rebuildable index without changing any
+numbered migration, stored observation or uniqueness policy. It is not maintained
+by reads or per-event writes. Full resolved reads remain one complete pass on the
+supplied snapshot. Exact lookup seeks the native ID and still examines all K
+matching observations; fixed work for arbitrary K is not claimed.
+
+The focused store tests cover fresh/repeated/concurrent opens, missing and wrong
+owned definitions, maintenance rollback on a schema-object collision, row/history
+preservation, read-only non-repair and exact indexed lookup with several matches.
+Native surface tests cover summaries before/after records and batch boundaries,
+unsupported identity boundaries, discovery/report agreement and unchanged scans.
+
+## Replay
+
+An index written by an earlier build holds tool rows with names and positions
+but no classification. A replay of the same call fills the missing columns only
+when it agrees with retained content, checked before incoming content is discarded.
+This also applies when acquiring tool rows whose text length was unknown. Unrelated
+timestamp or usage conflicts do not prevent compatible structural enrichment.
+Identity is the record UUID plus the block index: a differing name or position
+is a different call, and known structural metadata that disagrees is recorded as
+a conflict instead of overwriting the stored value or duplicating the row.
+
+Store migration 6 deletes existing `transcript` checkpoints once so the next
+scan replays unchanged Claude files through the new extraction. It adds no
+table, column, dependency or manual action, and writes no classification itself.
+Reader-host checkpoints, sessions, records, usage, receipts, coverage, retained
+content and migration 5's human classification are left as they are, and a
+checkpoint recreated after the upgrade is never reset again. Codex and Cursor
+retain whole scans.
+
+## Verification
+
+| Area                | Action                                                                                                                                                                                                                  | Expected result                                                                                                                                                                                                                                                                                       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mapping             | `cargo test -p xt-store tool_use`, `cargo test -p xt-ingest --test tool_use`                                                                                                                                            | Each name shape maps to its documented kind and details. Malformed MCP detail and an unnamed skill stay unknown. No input field other than an explicit skill name is read.                                                                                                                            |
+| Counts              | `cargo test -p xt-ingest --test tool_use f1_keeps_its_exact`                                                                                                                                                            | F1's stored tool-call total equals its `M-03` golden, every call is classified, and adding a structural event to the same session leaves that total alone.                                                                                                                                            |
+| Retention parity    | `cargo test -p xt-ingest --test tool_use metadata_and_content_modes_agree`                                                                                                                                              | Kinds, details and row counts are identical in metadata-only and full-content mode, and replay adds no row. Only `input_json` and `content_json` differ. Structural-event columns store no command arguments or hook command text in either mode; full-content messages may retain command arguments. |
+| Replay identity     | `cargo test -p xt-ingest --test tool_use duplicate_replay`, `copied_native_contexts`, `a_record_this_session_rejected`, `missing_identity_and_conflicting`; `--test claude_fs claude_fs_counts_one_event_for_a_summary` | Repeated delivery and reversed plugin/native arrival give one event. A UUID repeated across copied native contexts is one event, owned where its record is, in either scan order. A missing UUID and a conflicting replay both fail with the batch's records rolled back.                             |
+| Rejected occurrence | `cargo test -p xt-ingest --test tool_use a_rejected_occurrence_writes_no_command`                                                                                                                                       | A session storing a UUID as an ordinary record gains no command when another session's rejected occurrence of that UUID carries the marker; neither session holds an event.                                                                                                                           |
+| Command role        | `cargo test -p xt-ingest --test tool_use only_an_explicit_user_role`                                                                                                                                                    | An assistant record quoting the marker, a record with no stated role, and a record whose type and role disagree state no command; the genuine user record still does.                                                                                                                                 |
+| Summary identity    | `cargo test -p xt-ingest --test tool_use a_disagreeing_hook_summary`, `--test claude_fs claude_fs_reconciles_hook_summary_identity`                                                                                     | A summary disagreeing on native session, surface, platform or conversation fails its batch, stores no event or record, and records no checkpoint. An agreeing summary commits.                                                                                                                        |
+| Legacy rows         | `cargo test -p xt-ingest --test tool_use a_legacy_row_acquires`                                                                                                                                                         | Unclassified rows acquire their classification from a compatible replay; a replay whose block identity disagrees is a conflict and the stored call is retained.                                                                                                                                       |
+| Native consumption  | `cargo test -p xt-ingest --test claude_fs claude_fs_consumes_hook_summaries`                                                                                                                                            | A Claude transcript's slash command and stop-hook summary become exactly one structural event each across two scans, its assistant calls are classified, and the source bytes are unchanged.                                                                                                          |
+| Migration           | `cargo test -p xt-store --test native_checkpoints migration_6`                                                                                                                                                          | Version 6 is recorded. Only transcript checkpoints are removed; reader checkpoints, sessions, records, tool rows, cursors, receipts, coverage and `is_human` are unchanged. A checkpoint recreated afterwards survives.                                                                               |
+| Version literals    | `cargo test --workspace`, `scripts/fixtures/export.sh`                                                                                                                                                                  | Migration history, the desktop app info and the generated F1 shell export report version 6.                                                                                                                                                                                                           |
+
+The `structural_` cases in `--test tool_use` cover raw padded IDs, rejected
+occurrences, exact timestamp replay across sources, owner changes, retained-input
+agreement and the combined batch limit. The `structural_` cases in `--test claude_fs`
+check that a later invalid summary preserves the preceding full batch/checkpoint
+and that a colliding command cannot duplicate a prior hook event. Companion rows
+and pending checkpoints roll back with conflicting event replays.
+
+The receipt digest schema and its historical coverage are unchanged: these
+columns are not part of a measurement projection, so a receipt sealed before
+this work keeps its mask and revision.

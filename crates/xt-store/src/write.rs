@@ -141,6 +141,7 @@ pub(crate) fn upsert_records(
                 uuid: None,
                 disposition: RecordDisposition::DroppedMissingUuid,
                 conflict_fields: 0,
+                command_compatible: false,
                 stored_has_conflict: None,
             });
             continue;
@@ -329,6 +330,31 @@ pub(crate) fn upsert_records(
             })
             .transpose()?
             .unwrap_or(0);
+        // Reuse this occurrence's pre-retention comparison and measurement
+        // conflicts. Time, model, usage and sticky conflict state say nothing
+        // about whether its command marker agrees with known record content.
+        let command_compatible = retained_content_compatible
+            && crate::measurement::FIELDS
+                .iter()
+                .enumerate()
+                .all(|(bit, field)| {
+                    conflict_fields & (1_i64 << bit) == 0
+                        || !matches!(
+                            *field,
+                            "type"
+                                | "is_meta"
+                                | "is_sidechain"
+                                | "role"
+                                | "tool_result_carrier"
+                                | "text_len"
+                                | "tool_use_count"
+                                | "tools"
+                                | "is_human"
+                                | "is_command"
+                                | "is_interrupted"
+                                | "is_system_reminder"
+                        )
+                });
         if native_history
             && !incoming.has_conflict
             && native_owner
@@ -395,6 +421,7 @@ pub(crate) fn upsert_records(
                         RecordDisposition::Duplicate
                     },
                     conflict_fields: 0,
+                    command_compatible,
                     stored_has_conflict: Some(stored.has_conflict),
                 });
                 continue;
@@ -431,6 +458,7 @@ pub(crate) fn upsert_records(
                 },
                 stored_has_conflict: Some(true),
                 conflict_fields,
+                command_compatible: false,
             });
             continue;
         }
@@ -469,6 +497,7 @@ pub(crate) fn upsert_records(
             uuid: Some(uuid.to_owned()),
             disposition,
             conflict_fields,
+            command_compatible,
             stored_has_conflict: Some(stored_has_conflict),
         });
     }
@@ -656,15 +685,20 @@ pub(crate) fn prepare(
                         .and_then(Value::as_str)
                         .filter(|name| !name.trim().is_empty())
                         .ok_or(Error::InvalidInput("tool use requires a name"))?;
+                    // Classify before retention decides about the block: the
+                    // structural columns are derived here so a metadata-only row
+                    // still carries them once the input is discarded.
+                    let input = block.get("input");
+                    let structure = crate::tool_use::classify(name, input);
                     tools.push(StoredToolUse {
                         id: 0,
                         block_index: index as i64,
                         name: name.to_owned(),
-                        input_json: if keep_content {
-                            block.get("input").cloned()
-                        } else {
-                            None
-                        },
+                        input_json: if keep_content { input.cloned() } else { None },
+                        kind: Some(structure.kind),
+                        server: structure.server,
+                        tool: structure.tool,
+                        skill: structure.skill,
                     });
                 }
                 Some(_) => {}
@@ -777,7 +811,7 @@ fn merge_record(
     change.fill(&mut old.request_id, &incoming.request_id);
     change.fill(&mut old.role, &incoming.role);
     change.fill(&mut old.model, &incoming.model);
-    let content_change = merge_content(old, incoming);
+    let content_change = merge_content(old, incoming, retained_content_compatible);
     if !content_change.conflict {
         if human_compatible {
             change.fill(
@@ -811,17 +845,28 @@ fn merge_record(
     change.enriched || content_change.enriched
 }
 
-fn merge_content(old: &mut StoredRecord, incoming: &StoredRecord) -> Change {
+fn merge_content(
+    old: &mut StoredRecord,
+    incoming: &StoredRecord,
+    retained_content_compatible: bool,
+) -> Change {
     fn differs<T: PartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
         a.as_ref().zip(b.as_ref()).is_some_and(|(a, b)| a != b)
     }
     let both_measured = old.text_len.is_some() && incoming.text_len.is_some();
+    // Tool identity is the record UUID plus the block index; a differing name or
+    // position is a different call, and known structural metadata that disagrees
+    // is a conflict rather than something to overwrite.
     let tool_conflict = both_measured
         && (old.tool_uses.len() != incoming.tool_uses.len()
             || old.tool_uses.iter().zip(&incoming.tool_uses).any(|(a, b)| {
                 a.name != b.name
                     || a.block_index != b.block_index
                     || differs(&a.input_json, &b.input_json)
+                    || differs(&a.kind, &b.kind)
+                    || differs(&a.server, &b.server)
+                    || differs(&a.tool, &b.tool)
+                    || differs(&a.skill, &b.skill)
             }));
     // Retained content and its tool-input projection are one observation. Check
     // every known part before acquiring any missing part from a conflicting array.
@@ -849,10 +894,40 @@ fn merge_content(old: &mut StoredRecord, incoming: &StoredRecord) -> Change {
     );
     if incoming.text_len.is_some() {
         if content_was_unknown {
-            old.tool_uses = incoming.tool_uses.clone();
+            old.tool_uses = incoming
+                .tool_uses
+                .iter()
+                .map(|tool| {
+                    let mut acquired = tool.clone();
+                    if !retained_content_compatible {
+                        // Keep the existing content projection behavior, but do not
+                        // acquire structural facts from contradicted retained input.
+                        let saved = old.tool_uses.iter().find(|saved| {
+                            saved.name == tool.name && saved.block_index == tool.block_index
+                        });
+                        acquired.kind = saved.and_then(|saved| saved.kind);
+                        acquired.server = saved.and_then(|saved| saved.server.clone());
+                        acquired.tool = saved.and_then(|saved| saved.tool.clone());
+                        acquired.skill = saved.and_then(|saved| saved.skill.clone());
+                    }
+                    acquired
+                })
+                .collect();
         }
         for (old_tool, new_tool) in old.tool_uses.iter_mut().zip(&incoming.tool_uses) {
+            // A row an older build stored has no classification yet. Fill it only
+            // from an observation of the same call, never across a renamed or
+            // moved block.
+            if old_tool.name != new_tool.name || old_tool.block_index != new_tool.block_index {
+                continue;
+            }
             change.fill(&mut old_tool.input_json, &new_tool.input_json);
+            if retained_content_compatible {
+                change.fill(&mut old_tool.kind, &new_tool.kind);
+                change.fill(&mut old_tool.server, &new_tool.server);
+                change.fill(&mut old_tool.tool, &new_tool.tool);
+                change.fill(&mut old_tool.skill, &new_tool.skill);
+            }
         }
         change.fill(&mut old.content_json, &incoming.content_json);
     }
@@ -955,9 +1030,12 @@ fn save_record(connection: &Connection, record: &StoredRecord) -> Result<()> {
             .map(serde_json::to_string)
             .transpose()?;
         connection.execute(
-            "INSERT INTO tool_uses(uuid,session_id,block_index,name,input_json) VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(uuid,block_index) DO UPDATE SET input_json=excluded.input_json",
-            params![r.uuid, r.session_id, tool.block_index, tool.name, input],
+            "INSERT INTO tool_uses(uuid,session_id,block_index,name,input_json,kind,server,tool,skill)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(uuid,block_index) DO UPDATE SET input_json=excluded.input_json,
+                 kind=excluded.kind,server=excluded.server,tool=excluded.tool,skill=excluded.skill",
+            params![r.uuid, r.session_id, tool.block_index, tool.name, input,
+                tool.kind, tool.server, tool.tool, tool.skill],
         )?;
     }
     Ok(())

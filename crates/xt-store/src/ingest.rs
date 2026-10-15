@@ -82,6 +82,158 @@ pub struct ToolEvent {
     pub skill: Option<String>,
 }
 
+/// One unchanged stored observation and its current canonical owner, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolEventObservation {
+    pub id: i64,
+    pub event: ToolEvent,
+    pub canonical_owner: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolEventUncertainty {
+    MissingIdentity,
+    ConflictingOwnership,
+    ConflictingFacts,
+}
+
+/// A logical event only when every saved observation agrees. The representative
+/// is a stable handle, not an authoritative choice among conflicting facts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolEventResolution {
+    Resolved(ToolEventObservation),
+    Unresolved {
+        reason: ToolEventUncertainty,
+        observations: Vec<ToolEventObservation>,
+    },
+}
+
+/// Shared read requirements, also available for a consumer's connection-time
+/// schema probe. Exact-ID writes add a separate seek predicate to this projection.
+/// No window/session filter may hide a disagreeing member before resolution.
+pub const TOOL_EVENT_OBSERVATIONS_QUERY: &str =
+    "SELECT t.id,t.session_id,t.source,t.source_event_id,t.name,t.kind,t.server,t.tool,t.skill,t.event_ts,r.session_id
+     FROM tool_uses t LEFT JOIN records r ON r.uuid=t.source_event_id
+     WHERE t.uuid IS NULL";
+
+/// Resolve structural events on the caller's existing connection/snapshot.
+/// This reads only; it opens no Store, runs no migration and changes no row.
+/// Unresolved entries preserve candidate owners/times for downstream completeness
+/// reporting and must not be interpreted as measured calls.
+pub fn resolved_tool_events(connection: &Connection) -> Result<Vec<ToolEventResolution>> {
+    let mut groups = std::collections::BTreeMap::<String, Vec<ToolEventObservation>>::new();
+    let mut result = Vec::new();
+    for observation in tool_event_observations(connection, None)? {
+        if observation.event.source_event_id.trim().is_empty() {
+            // Equal blank spellings do not establish a shared native identity.
+            result.push(ToolEventResolution::Unresolved {
+                reason: ToolEventUncertainty::MissingIdentity,
+                observations: vec![observation],
+            });
+        } else {
+            groups
+                .entry(observation.event.source_event_id.clone())
+                .or_default()
+                .push(observation);
+        }
+    }
+    for observations in groups.into_values() {
+        result.push(resolve_tool_event_group(observations)?);
+    }
+    Ok(result)
+}
+
+fn tool_event_query(exact: bool) -> String {
+    format!(
+        "{TOOL_EVENT_OBSERVATIONS_QUERY} {} ORDER BY t.id",
+        if exact {
+            "AND t.source_event_id=?1"
+        } else {
+            ""
+        }
+    )
+}
+
+fn tool_event_observations(
+    connection: &Connection,
+    id: Option<&str>,
+) -> Result<Vec<ToolEventObservation>> {
+    Ok(connection
+        .prepare(&tool_event_query(id.is_some()))?
+        .query_map(rusqlite::params_from_iter(id), |row| {
+            Ok(ToolEventObservation {
+                id: row.get(0)?,
+                event: tool_event_from_row(row, 1)?,
+                canonical_owner: row.get(10)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+fn resolve_tool_event_group(
+    observations: Vec<ToolEventObservation>,
+) -> Result<ToolEventResolution> {
+    let first = observations
+        .first()
+        .expect("a stored event group is nonempty");
+    if observations.iter().any(|row| {
+        row.event.session_id != first.event.session_id
+            || row
+                .canonical_owner
+                .as_ref()
+                .is_some_and(|owner| owner != &row.event.session_id)
+    }) {
+        return Ok(ToolEventResolution::Unresolved {
+            reason: ToolEventUncertainty::ConflictingOwnership,
+            observations,
+        });
+    }
+    for row in &observations {
+        if !same_tool_event(&first.event, &row.event)? {
+            return Ok(ToolEventResolution::Unresolved {
+                reason: ToolEventUncertainty::ConflictingFacts,
+                observations,
+            });
+        }
+    }
+    // The shared query orders by ID; select a handle only after all facts agree.
+    Ok(ToolEventResolution::Resolved(first.clone()))
+}
+
+fn same_tool_event(saved: &ToolEvent, incoming: &ToolEvent) -> Result<bool> {
+    let saved_instant = saved
+        .timestamp
+        .as_deref()
+        .map(timestamp::parse)
+        .transpose()?
+        .map(|(key, _)| key);
+    let incoming_instant = incoming
+        .timestamp
+        .as_deref()
+        .map(timestamp::parse)
+        .transpose()?
+        .map(|(key, _)| key);
+    Ok((
+        &saved.session_id,
+        &saved.source_event_id,
+        &saved.name,
+        saved.kind,
+        &saved.server,
+        &saved.tool,
+        &saved.skill,
+        saved_instant,
+    ) == (
+        &incoming.session_id,
+        &incoming.source_event_id,
+        &incoming.name,
+        incoming.kind,
+        &incoming.server,
+        &incoming.tool,
+        &incoming.skill,
+        incoming_instant,
+    ))
+}
+
 impl Store {
     /// Monotonic observation interval; this is not a delivery receipt.
     pub fn observe_session_source(&mut self, observation: &SessionSourceObservation) -> Result<()> {
@@ -165,43 +317,158 @@ impl Store {
         }))?.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Store only the classified event identity and names, with no record FK
-    /// when the native event is not a canonical user/assistant record.
-    pub fn insert_tool_event(&mut self, event: &ToolEvent) -> Result<i64> {
-        if event.name.trim().is_empty() {
-            return Err(Error::InvalidInput("tool event name must be nonempty"));
-        }
-        if let Some(value) = &event.timestamp {
-            timestamp::parse(value)?;
-        }
-        self.connection.execute(
-            "INSERT INTO tool_uses(session_id,source,source_event_id,name,kind,server,tool,skill,event_ts)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![
-                event.session_id,
-                event.source,
-                event.source_event_id,
-                event.name,
-                event.kind,
-                event.server,
-                event.tool,
-                event.skill,
-                event.timestamp
-            ],
-        )?;
-        Ok(self.connection.last_insert_rowid())
+    /// One discovery identity by its primary key; no host-wide scan.
+    pub fn discovered_session(
+        &self,
+        host: Host,
+        native_session_id: &str,
+    ) -> Result<Option<DiscoveredSession>> {
+        discovered_session(&self.connection, host, native_session_id)
     }
 
+    /// Recover only a missing Claude discovery surface from identity-consistent
+    /// committed session metadata. Healthy/unknown cases do no DML. A candidate
+    /// repair is re-read under the write lock, retaining all other current fields.
+    pub fn repair_claude_discovery_surface(
+        &mut self,
+        native_session_id: &str,
+        conversation_id: &str,
+    ) -> Result<Option<String>> {
+        let (surface, candidate) =
+            discovery_surface_candidate(&self.connection, native_session_id, conversation_id)?;
+        if candidate.is_none() {
+            return Ok(surface);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (surface, candidate) =
+            discovery_surface_candidate(&transaction, native_session_id, conversation_id)?;
+        if let Some(mut current) = candidate {
+            current.surface = surface.clone();
+            observe_discovered_session(&transaction, &current)?;
+        }
+        transaction.commit()?;
+        Ok(surface)
+    }
+
+    /// Store only the classified event identity and names, with no record FK
+    /// when the native event is not a canonical user/assistant record.
+    /// Idempotent for the event's own stable identity, and bound to the session
+    /// that owns that identity rather than the supplied one. All saved
+    /// observations must agree; unresolved historical groups fail explicitly.
+    pub fn insert_tool_event(&mut self, event: &ToolEvent) -> Result<i64> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = insert_tool_event(&transaction, event, true)?
+            .expect("the public event API permits new event insertion");
+        transaction.commit()?;
+        Ok(id)
+    }
+
+    /// Raw historical observations, including duplicates. For logical events
+    /// and explicit uncertainty, use the resolved reader instead of row counts.
     pub fn tool_events(&self, session_id: &str) -> Result<Vec<ToolEvent>> {
         Ok(self.connection.prepare(
             "SELECT session_id,source,source_event_id,name,kind,server,tool,skill,event_ts FROM tool_uses
              WHERE session_id=?1 AND uuid IS NULL ORDER BY source,source_event_id"
-        )?.query_map([session_id], |row| Ok(ToolEvent {
-            session_id:row.get(0)?,source:row.get(1)?,source_event_id:row.get(2)?,name:row.get(3)?,
-            kind:row.get(4)?,server:row.get(5)?,tool:row.get(6)?,skill:row.get(7)?,
-            timestamp:row.get(8)?,
-        }))?.collect::<rusqlite::Result<_>>()?)
+        )?
+        .query_map([session_id], |row| tool_event_from_row(row, 0))?
+        .collect::<rusqlite::Result<_>>()?)
     }
+
+    pub fn resolved_tool_events(&self) -> Result<Vec<ToolEventResolution>> {
+        resolved_tool_events(&self.connection)
+    }
+}
+
+/// Match a complete stored group under the caller's immediate transaction.
+/// Canonical ownership takes priority for new identities; saved groups must
+/// already agree with it. Matching copies bind to the group's unanimous owner.
+/// Acquisition permission never bypasses existing-group arbitration.
+pub(crate) fn insert_tool_event(
+    connection: &Connection,
+    event: &ToolEvent,
+    acquire: bool,
+) -> Result<Option<i64>> {
+    if event.name.trim().is_empty() {
+        return Err(Error::InvalidInput("tool event name must be nonempty"));
+    }
+    // An arrival-ordered identity would make retries look like new events.
+    if event.source_event_id.trim().is_empty() {
+        return Err(Error::InvalidInput(
+            "structural tool event requires a stable source event ID",
+        ));
+    }
+    if let Some(value) = &event.timestamp {
+        timestamp::parse(value)?;
+    }
+    let observations = tool_event_observations(connection, Some(&event.source_event_id))?;
+    if !observations.is_empty() {
+        let ToolEventResolution::Resolved(saved) = resolve_tool_event_group(observations)? else {
+            return Err(Error::InvalidInput(
+                "structural tool event identity has unresolved saved observations",
+            ));
+        };
+        let owned = ToolEvent {
+            session_id: saved.event.session_id.clone(),
+            ..event.clone()
+        };
+        if !same_tool_event(&saved.event, &owned)? {
+            return Err(Error::InvalidInput(
+                "structural tool event identity replays with conflicting facts",
+            ));
+        }
+        return Ok(Some(saved.id));
+    }
+    // A contradicted command occurrence can establish no new event. Existing
+    // identities above still compare all facts and fail on a conflicting replay.
+    if !acquire {
+        return Ok(None);
+    }
+    let owner = connection
+        .query_row(
+            "SELECT session_id FROM records WHERE uuid=?1",
+            [&event.source_event_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| event.session_id.clone());
+    let event = &ToolEvent {
+        session_id: owner,
+        ..event.clone()
+    };
+    connection.execute(
+        "INSERT INTO tool_uses(session_id,source,source_event_id,name,kind,server,tool,skill,event_ts)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            event.session_id,
+            event.source,
+            event.source_event_id,
+            event.name,
+            event.kind,
+            event.server,
+            event.tool,
+            event.skill,
+            event.timestamp
+        ],
+    )?;
+    Ok(Some(connection.last_insert_rowid()))
+}
+
+fn tool_event_from_row(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<ToolEvent> {
+    Ok(ToolEvent {
+        session_id: row.get(start)?,
+        source: row.get(start + 1)?,
+        source_event_id: row.get(start + 2)?,
+        name: row.get(start + 3)?,
+        kind: row.get(start + 4)?,
+        server: row.get(start + 5)?,
+        tool: row.get(start + 6)?,
+        skill: row.get(start + 7)?,
+        timestamp: row.get(start + 8)?,
+    })
 }
 
 pub(crate) fn observe_session_source(
@@ -306,6 +573,71 @@ pub(crate) fn insert_or_match_receipt(
     Ok(true)
 }
 
+fn discovered_session(
+    connection: &Connection,
+    host: Host,
+    native_session_id: &str,
+) -> Result<Option<DiscoveredSession>> {
+    Ok(connection.query_row(
+        "SELECT host,native_session_id,conversation_id,surface,started_at_ms,last_observed_at,discovery_complete
+         FROM discovered_sessions WHERE host=?1 AND native_session_id=?2",
+        params![host, native_session_id], |row| Ok(DiscoveredSession {
+            host: row.get(0)?, native_session_id: row.get(1)?, conversation_id: row.get(2)?,
+            surface: row.get(3)?, started_at_ms: row.get(4)?, last_observed_at: row.get(5)?, discovery_complete: row.get(6)?,
+        }),
+    ).optional()?)
+}
+
+fn discovery_surface_candidate(
+    connection: &Connection,
+    native_session_id: &str,
+    conversation_id: &str,
+) -> Result<(Option<String>, Option<DiscoveredSession>)> {
+    let Some(session) = crate::read::session(connection, conversation_id)? else {
+        return Ok((None, None));
+    };
+    let canonical = session.meta;
+    if canonical.host != Host::Claude
+        || canonical
+            .native_session_id
+            .as_deref()
+            .is_some_and(|id| id != native_session_id)
+    {
+        return Err(Error::InvalidInput(
+            "committed and discovered session identities disagree",
+        ));
+    }
+    let Some(discovery) = discovered_session(connection, Host::Claude, native_session_id)? else {
+        return Ok((canonical.surface, None));
+    };
+    if discovery
+        .conversation_id
+        .as_deref()
+        .is_some_and(|id| id != conversation_id)
+        || discovery
+            .surface
+            .as_ref()
+            .zip(canonical.surface.as_ref())
+            .is_some_and(|(a, b)| a != b)
+        || discovery
+            .started_at_ms
+            .zip(canonical.started_at_ms)
+            .is_some_and(|(a, b)| a != b)
+    {
+        return Err(Error::InvalidInput(
+            "committed and discovered session identities disagree",
+        ));
+    }
+    let eligible = canonical.native_session_id.as_deref() == Some(native_session_id)
+        && discovery.conversation_id.as_deref() == Some(conversation_id)
+        && canonical
+            .surface
+            .as_deref()
+            .is_some_and(|surface| !surface.trim().is_empty())
+        && discovery.surface.is_none();
+    Ok((canonical.surface, eligible.then_some(discovery)))
+}
+
 /// The discovered-session upsert shared by direct observation and the batch
 /// transaction, so a batch can fill an identity atomically with its rows.
 pub(crate) fn observe_discovered_session(
@@ -332,3 +664,7 @@ pub(crate) fn observe_discovered_session(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "ingest_tests.rs"]
+mod tests;
