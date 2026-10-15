@@ -55,6 +55,7 @@ export function DashboardPage() {
   const { source } = useData();
   const range = useSelectedRange();
   const report = useDashboardReport(range);
+  const [indexActive, setIndexActive] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const toggle = (title: string, open: boolean) =>
     setExpanded((current) => {
@@ -64,34 +65,45 @@ export function DashboardPage() {
       else next.delete(title);
       return next;
     });
-  let body: ReactNode;
-  if (source.kind === 'preview')
-    body = <p className="xt-dash-status">Open the desktop app to read local Dashboard metrics.</p>;
-  else if (report.isPending)
-    body = (
-      <p role="status" className="xt-dash-status">
-        Reading Dashboard metrics for the last {range}…
-      </p>
-    );
-  else if (report.isError)
-    body = (
-      <p role="alert" className="xt-dash-status">
-        Dashboard metrics could not be loaded.{' '}
-        <Button
-          variant="outline"
-          height={28}
-          disabled={report.isFetching}
-          onClick={() => void report.refetch()}
-        >
-          Retry
-        </Button>
-      </p>
-    );
-  else body = <DashboardReport report={report.data} />;
+  // First-settled recovery must follow a successful report. Once activated, its owner
+  // stays mounted through later range loading/errors so the recovery is not repeated.
+  if (report.isSuccess && !indexActive) {
+    setIndexActive(true);
+    return null;
+  }
+  const body = (index?: IndexQuery) => {
+    if (source.kind === 'preview')
+      return (
+        <p className="xt-dash-status">Open the desktop app to read local Dashboard metrics.</p>
+      );
+    if (report.isPending)
+      return (
+        <p role="status" className="xt-dash-status">
+          Reading Dashboard metrics for the last {range}…
+        </p>
+      );
+    if (report.isError)
+      return (
+        <p role="alert" className="xt-dash-status">
+          Dashboard metrics could not be loaded.{' '}
+          <Button
+            variant="outline"
+            height={28}
+            disabled={report.isFetching}
+            onClick={() => void report.refetch()}
+          >
+            Retry
+          </Button>
+        </p>
+      );
+    return index ? <DashboardReport report={report.data} index={index} /> : null;
+  };
   return (
     <section className="xt-dashboard" aria-busy={report.isFetching || undefined}>
       <h1>{TITLE}</h1>
-      <ExpandedContext.Provider value={{ expanded, toggle }}>{body}</ExpandedContext.Provider>
+      <ExpandedContext.Provider value={{ expanded, toggle }}>
+        {indexActive ? <DashboardIndexOwner>{body}</DashboardIndexOwner> : body()}
+      </ExpandedContext.Provider>
     </section>
   );
 }
@@ -102,14 +114,33 @@ const sampleText = (tile: MetricTile) =>
     : `n = ${tile.current_n.toLocaleString('en-US')} ${tile.sample_unit}; previous period ${tile.previous_n?.toLocaleString('en-US') ?? '—'}.`;
 function tileTip(tile: MetricTile, ...extra: (string | null | undefined)[]) {
   const parts = [tile.reason, tile.note, ...extra, sampleText(tile)];
-  if (tile.current_n !== null && tile.delta.suppressed)
-    parts.push(
-      'Change vs the previous period is hidden: a window has fewer than 5 samples or the previous value is zero.',
-    );
+  if (tile.delta.suppressed)
+    parts.push(`Change vs the previous period is hidden: ${hiddenChangeReason(tile)}.`);
   return parts.filter(Boolean).join(' ');
 }
 
-function DashboardReport({ report }: { report: DashboardMetrics }) {
+function hiddenChangeReason(tile: MetricTile) {
+  if (tile.value === null && tile.delta.previous === null)
+    return 'the current and previous values are unmeasured';
+  if (tile.value === null) return 'the current value is unmeasured';
+  if (tile.delta.previous === null) return 'the previous value is unmeasured';
+  if (tile.current_n === null && tile.previous_n === null)
+    return 'the current and previous sample counts are unavailable';
+  if (tile.current_n === null) return 'the current sample count is unavailable';
+  if (tile.previous_n === null) return 'the previous sample count is unavailable';
+  if (tile.current_n < 5 || tile.previous_n < 5) return 'a window has fewer than 5 samples';
+  if (tile.delta.previous === 0) return 'the previous value is zero';
+  return 'the report did not provide a percentage change';
+}
+
+type IndexQuery = ReturnType<typeof useNativeIndexStatus>;
+
+function DashboardIndexOwner({ children }: { children: (index: IndexQuery) => ReactNode }) {
+  const index = useNativeIndexStatus();
+  return children(index);
+}
+
+function DashboardReport({ report, index }: { report: DashboardMetrics; index: IndexQuery }) {
   const { tiles, favorite } = report;
   const favoriteModel = favorite.current.model;
   return (
@@ -125,7 +156,7 @@ function DashboardReport({ report }: { report: DashboardMetrics }) {
             context={
               favorite.previous.model
                 ? `Previous period: ${favorite.previous.model}.`
-                : 'Previous period: no favorite model.'
+                : `Previous period: ${favorite.previous.unknown_reason ? favoriteUnknownText[favorite.previous.unknown_reason] : 'no favorite model'}.`
             }
           >
             <button type="button" className="xt-dash-inline-metric">
@@ -273,7 +304,7 @@ function DashboardReport({ report }: { report: DashboardMetrics }) {
         </ExtraSection>
         <CostSection report={report} />
         <CoverageSection report={report} />
-        <IndexLine />
+        <IndexLine index={index} />
       </div>
     </>
   );
@@ -306,7 +337,7 @@ function DashCard({
     <section className={`xt-dash-card ${className}`} aria-labelledby={id}>
       <header className="xt-dash-card-header">
         <h2 id={id}>{title}</h2>
-        <RuleChip ruleId={rule} size="sm" />
+        <RuleChip ruleId={rule} subject={title} size="sm" />
       </header>
       {children}
     </section>
@@ -413,7 +444,7 @@ function ExtraSection({
     <section className="xt-dash-extra" aria-labelledby={id}>
       <header className="xt-dash-card-header">
         <h2 id={id}>{title}</h2>
-        <RuleChip ruleId={rule} size="sm" />
+        <RuleChip ruleId={rule} subject={title} size="sm" />
         {meta && (
           <span className="xt-dash-extra-meta" title={meta}>
             {meta}
@@ -606,8 +637,7 @@ function CoverageSection({ report }: { report: DashboardMetrics }) {
   );
 }
 
-function IndexLine() {
-  const index = useNativeIndexStatus();
+function IndexLine({ index }: { index: IndexQuery }) {
   return (
     <p className="xt-dash-note xt-dash-index" data-testid="dashboard-index">
       Native index:{' '}

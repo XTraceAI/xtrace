@@ -475,3 +475,67 @@ fn hygiene_compatible_classification_enriches_despite_unrelated_conflicts() {
     assert_eq!(saved.model.as_deref(), Some("original"));
     assert_eq!(saved.usage.unwrap().input_tokens, Some(10));
 }
+
+#[test]
+fn hygiene_legacy_null_rejects_native_retained_text_conflict_before_discard() {
+    retained_text_conflict_before_discard(true);
+}
+
+#[test]
+fn hygiene_legacy_null_rejects_generic_retained_text_conflict_before_discard() {
+    retained_text_conflict_before_discard(false);
+}
+
+fn retained_text_conflict_before_discard(native: bool) {
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .set_retention_mode(crate::retention::RetentionMode::FullContent)
+        .unwrap();
+    let mut metadata = SessionMeta::new("retained-hygiene", "claude", SessionSource::Transcript);
+    metadata.native_session_id = Some("synthetic-native".into());
+    let discovery = crate::ingest::DiscoveredSession {
+        host: crate::Host::Claude,
+        native_session_id: "synthetic-native".into(),
+        conversation_id: Some(metadata.session_id.clone()),
+        surface: None,
+        started_at_ms: None,
+        last_observed_at: 0,
+        discovery_complete: true,
+    };
+    let original: CanonicalRecord = serde_json::from_value(json!({
+        "uuid":"row", "type":"user", "message":{"role":"user",
+        "content":[{"type":"text","text":" <command-name>/x"}]}
+    }))
+    .unwrap();
+    let mut batch = IngestBatch::new(&metadata, std::slice::from_ref(&original), true);
+    batch.native_history = native;
+    batch.discovery = Some(&discovery);
+    store.apply_ingest_batch(&batch).unwrap();
+    store
+        .connection
+        .execute("UPDATE records SET is_human=NULL", [])
+        .unwrap();
+    let before = store.records("retained-hygiene").unwrap().remove(0);
+    let mut conflicting = original.clone();
+    conflicting.message.content = Some(vec![json!({
+        "type":"text", "text":"x".repeat(before.text_len.unwrap() as usize)
+    })]);
+    let mut batch = IngestBatch::new(&metadata, std::slice::from_ref(&conflicting), false);
+    batch.native_history = native;
+    batch.discovery = Some(&discovery);
+    store.apply_ingest_batch(&batch).unwrap();
+    let saved = store.records("retained-hygiene").unwrap().remove(0);
+    assert_eq!(saved.has_conflict, native);
+    assert_eq!(saved.content_json, before.content_json);
+    assert_eq!(saved.text_len, before.text_len);
+    assert_eq!(saved.classification.is_command, Some(false));
+    assert_eq!(saved.classification.is_human, None);
+    let mut batch = IngestBatch::new(&metadata, std::slice::from_ref(&original), false);
+    batch.native_history = native;
+    batch.discovery = Some(&discovery);
+    store.apply_ingest_batch(&batch).unwrap();
+    let saved = store.records("retained-hygiene").unwrap().remove(0);
+    assert_eq!(saved.content_json, before.content_json);
+    assert_eq!(saved.classification.is_human, Some(false));
+    assert_eq!(saved.has_conflict, native);
+}

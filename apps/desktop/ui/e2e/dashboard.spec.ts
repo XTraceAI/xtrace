@@ -190,7 +190,8 @@ test('keyboard focus opens tile definitions and reaches the Sessions link', asyn
   const tile = page.locator('.xt-stat-tile').filter({ hasText: 'Hands-off median' });
   await tile.focus();
   const tip = page.getByRole('tooltip');
-  await expect(tip).toContainText('M-09');
+  await expect(tip).toContainText('Hands-off stretch.');
+  await expect(tip).not.toContainText('M-09');
   await expect(tip).toContainText('How long your agents run before they need you.');
   await expect(tip).toContainText('No surface is excluded for timestamp health.');
   await page.keyboard.press('Escape');

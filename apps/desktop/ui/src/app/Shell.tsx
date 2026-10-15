@@ -7,7 +7,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { useAppInfo } from './useAppInfo';
 import { pages } from './routes';
 import { useShellShortcuts } from './useShellShortcuts';
-import { useTokensByHost, type ShellOutletContext } from './dashboard/range';
+import { useDashboardReport, useTokensByHost, type ShellOutletContext } from './dashboard/range';
 import { hostTokenRows } from './dashboard/host-tokens';
 import { windowLabel, zoneLabel } from './dashboard/present';
 import '../styles/shell.css';
@@ -27,8 +27,6 @@ export function Shell() {
   const hosts = hostTokenRows(tokens.data);
   const outlet: ShellOutletContext = { range };
   const onDashboard = current?.path === '/dashboard';
-  // The report window for the selected range; absent until that range has loaded.
-  const period = onDashboard ? tokens.data?.window : undefined;
   useShellShortcuts();
   function onNavigate(key: SidebarKey) {
     void navigate(`/${key}`);
@@ -41,8 +39,28 @@ export function Shell() {
         leaderboardEnabled
         hosts={hosts}
         tokensCaption={
-          tokens.isError ? 'Recorded tokens unavailable' : `Recorded tokens · ${range}`
+          source.kind === 'preview'
+            ? 'Recorded tokens unavailable'
+            : tokens.isError
+              ? tokens.data === undefined
+                ? 'Recorded tokens unavailable'
+                : `Recorded tokens refresh failed · ${range}`
+              : `Recorded tokens · ${range}`
         }
+        tokensEmptyMessage={
+          source.kind === 'preview' || tokens.isError
+            ? null
+            : tokens.data === undefined
+              ? 'Reading recorded tokens…'
+              : 'No host measurements'
+        }
+        onRetryTokens={
+          source.kind !== 'preview' &&
+          (tokens.isError || (tokens.data === undefined && tokens.isFetching))
+            ? () => void tokens.refetch()
+            : undefined
+        }
+        tokensRetryBusy={tokens.isFetching}
         surfaces={[]}
         listener={{ status: info.data?.listening === false ? 'off' : 'unknown' }}
         version={info.data?.version ?? '…'}
@@ -60,16 +78,7 @@ export function Shell() {
           nativeDrag={nativeMac}
           right={
             <>
-              {period && (
-                <span
-                  className="xt-topbar-period"
-                  data-testid="report-period"
-                  title={`${windowLabel(period)} · ${zoneLabel(period)}`}
-                >
-                  {windowLabel(period)}
-                  <span className="sr-only">, time zone {zoneLabel(period)}</span>
-                </span>
-              )}
+              {onDashboard && <DashboardPeriod range={range} />}
               {info.data?.fixture && (
                 <span className="xt-fixture-badge" role="status">
                   fixture {info.data.fixture}
@@ -104,5 +113,22 @@ export function Shell() {
         </main>
       </div>
     </div>
+  );
+}
+
+/** The TopBar reads the same successful Dashboard report as the page. */
+function DashboardPeriod({ range }: { range: TimeRange }) {
+  const report = useDashboardReport(range);
+  if (!report.isSuccess) return null;
+  const period = report.data.window;
+  return (
+    <span
+      className="xt-topbar-period"
+      data-testid="report-period"
+      title={`${windowLabel(period)} · ${zoneLabel(period)}`}
+    >
+      {windowLabel(period)}
+      <span className="sr-only">, time zone {zoneLabel(period)}</span>
+    </span>
   );
 }

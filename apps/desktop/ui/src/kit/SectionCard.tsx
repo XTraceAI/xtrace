@@ -29,7 +29,7 @@ export function SectionCard({
         <h2 id={id} title={title}>
           {title}
         </h2>
-        {ruleId && <RuleChip ruleId={ruleId} />}
+        {ruleId && <RuleChip ruleId={ruleId} subject={title} />}
         {meta && (
           <span className="xt-section-meta" title={meta}>
             {meta}
