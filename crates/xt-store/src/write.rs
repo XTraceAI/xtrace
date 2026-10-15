@@ -167,13 +167,14 @@ pub(crate) fn upsert_records(
         validate_session(&metadata)?;
         // Ownership/type conflicts do not exempt nonblank input from validation.
         let mut existing = existing_records.get_mut(uuid);
-        if native_host.is_some()
-            && existing
-                .as_ref()
-                .and_then(|stored| stored.content_json.as_ref())
-                .zip(input.message.content.as_ref())
-                .is_some_and(|(old, new)| old.as_array() != Some(new))
-        {
+        // Keep this observation's retained-content comparison available after
+        // privacy stripping, without treating unrelated conflicts as text facts.
+        let retained_content_compatible = existing
+            .as_ref()
+            .and_then(|stored| stored.content_json.as_ref())
+            .zip(input.message.content.as_ref())
+            .is_none_or(|(old, new)| old.as_array() == Some(new));
+        if native_host.is_some() && !retained_content_compatible {
             incoming.has_conflict = true;
         }
         let mut codex_repaired = false;
@@ -359,7 +360,8 @@ pub(crate) fn upsert_records(
                     params![session_id, uuid, incoming.identity.parent_uuid],
                 )? > 0;
                 let before = (**stored).clone();
-                let measurement_enriched = merge_record(stored, &comparable);
+                let measurement_enriched =
+                    merge_record(stored, &comparable, retained_content_compatible);
                 if before != **stored {
                     changed_records
                         .entry(uuid.to_owned())
@@ -443,7 +445,8 @@ pub(crate) fn upsert_records(
             }
             Some(stored) => {
                 let before = stored.clone();
-                let enriched = merge_record(stored, &incoming) || session_enriched;
+                let enriched = merge_record(stored, &incoming, retained_content_compatible)
+                    || session_enriched;
                 if before != *stored {
                     changed_records
                         .entry(uuid.to_owned())
@@ -714,7 +717,11 @@ pub(crate) fn prepare(
     })
 }
 
-fn merge_record(old: &mut StoredRecord, incoming: &StoredRecord) -> bool {
+fn merge_record(
+    old: &mut StoredRecord,
+    incoming: &StoredRecord,
+    retained_content_compatible: bool,
+) -> bool {
     fn agrees<T: PartialEq>(old: &Option<T>, incoming: &Option<T>) -> bool {
         old.as_ref()
             .zip(incoming.as_ref())
@@ -723,7 +730,8 @@ fn merge_record(old: &mut StoredRecord, incoming: &StoredRecord) -> bool {
     // Capture compatibility before any fields are filled. Human classification
     // may only enrich from an observation compatible with its retained inputs;
     // unrelated timestamp/model/usage conflicts do not invalidate that evidence.
-    let human_compatible = old.is_meta == incoming.is_meta
+    let human_compatible = retained_content_compatible
+        && old.is_meta == incoming.is_meta
         && old.is_sidechain == incoming.is_sidechain
         && agrees(&old.role, &incoming.role)
         && agrees(

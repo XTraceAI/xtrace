@@ -126,21 +126,21 @@ function Fixture() {
           />
         </label>
         <span data-testid="short-rule">
-          <RuleChip ruleId="M-06" />
+          <RuleChip ruleId="M-06" subject="Concurrency" />
         </span>
         <button tabIndex={0} onClick={() => setClicks(clicks + 1)}>
           Next control
         </button>
         <span data-testid="long-rule">
-          <RuleChip ruleId="M-04" />
+          <RuleChip ruleId="M-04" subject="Tokens and cost" />
         </span>
         <span data-testid="coverage-rule">
-          <RuleChip ruleId="C-08" size="sm" />
+          <RuleChip ruleId="C-08" subject="Session and capture receipt identity" size="sm" />
         </span>
       </div>
       <div style={{ position: 'relative', height: 120, marginTop: 16 }}>
         <span data-testid="click-rule">
-          <RuleChip ruleId="M-06" />
+          <RuleChip ruleId="M-06" subject="Concurrency" />
         </span>
         <button
           tabIndex={0}
@@ -172,7 +172,7 @@ function Fixture() {
         }}
       >
         <span data-testid="scope-rule">
-          <RuleChip ruleId="M-06" />
+          <RuleChip ruleId="M-06" subject="Concurrency" />
         </span>{' '}
         <button onClick={() => setScopeTheme(scopeTheme === 'light' ? 'dark' : 'light')}>
           Switch scoped theme

@@ -101,8 +101,8 @@ export const metricStories = [
   ),
   story('rulechip/sizes', ['RuleChip'], [260, 100], () => (
     <div className="gallery-row gallery-stack">
-      <RuleChip ruleId="M-06" />
-      <RuleChip ruleId="C-08" size="sm" />
+      <RuleChip ruleId="M-06" subject="Concurrency" />
+      <RuleChip ruleId="C-08" subject="Session and capture receipt identity" size="sm" />
     </div>
   )),
   story('rulepopover/open-context', ['RulePopover'], [560, 240], () => (

@@ -18,7 +18,7 @@ it('renders named section, definition, metadata and caller slots with 36/40px he
   );
   const section = screen.getByRole('region', { name: 'Activity' });
   expect(section.querySelector('header')?.style.height).toBe('36px');
-  expect(screen.getByRole('button', { name: 'Definition M-06' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'About Activity' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Export' })).toBeTruthy();
   for (const text of ['Synthetic window', 'Content', 'Footer'])
     expect(screen.getByText(text)).toBeTruthy();

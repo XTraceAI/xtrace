@@ -8,6 +8,7 @@ import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { MetricTile } from '../../data/generated/MetricTile';
 import type { MetricTokenSummary } from '../../data/generated/MetricTokenSummary';
+import type { NativeIndexStatus } from '../../data/generated/NativeIndexStatus';
 import { events, type DataEvent } from '../../data/ipc-names';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
@@ -99,6 +100,31 @@ const card = (title: string) =>
   screen.getByRole('heading', { level: 2, name: title }).closest('section')!;
 const tileNamed = (label: string) =>
   screen.getAllByRole('button').find((button) => button.textContent?.startsWith(label))!;
+
+it('names help by its displayed subject and keeps internal codes out of rendered definitions', async () => {
+  mount(nativeSource((days) => f1(days)));
+  await loaded();
+  const subjects = [
+    'Agent / human hours',
+    'Caught by your rules',
+    'Effort by type',
+    'Environment',
+    'Sessions',
+    'Tokens per day',
+    'API-equivalent cost',
+    'Coverage',
+  ];
+  for (const subject of subjects) {
+    const trigger = screen.getByRole('button', { name: `About ${subject}` });
+    expect(trigger.textContent).toBe('Info');
+    fireEvent.focus(trigger);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.textContent).not.toMatch(/\b(?:[CMOPRU]-\d+[a-z]?|F\d+)\b/);
+    expect(trigger.getAttribute('aria-describedby')).toBe(tooltip.id);
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+  }
+});
 
 it('renders the generated F1 report with honest unknowns and the shared sidebar totals', async () => {
   const source = nativeSource((days) => f1(days));
@@ -289,6 +315,122 @@ it('keeps F7 unmeasured tokens, cost, coverage and favorite model explicit', asy
   expect(await screen.findByLabelText('Cursor tokens: unmeasured')).toBeTruthy();
 });
 
+it.each<{
+  name: string;
+  previousModel: string | null;
+  previousReason: DashboardMetrics['favorite']['previous']['unknown_reason'];
+  currentModel: string | null;
+  currentReason: DashboardMetrics['favorite']['current']['unknown_reason'];
+  currentText: string;
+  previousText: string;
+}>([
+  {
+    name: 'previous output has an unknown model',
+    previousModel: null,
+    previousReason: 'unknown_model_output',
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'Measured output has an unknown model',
+  },
+  {
+    name: 'previous tie has unknown turn attribution',
+    previousModel: null,
+    previousReason: 'unknown_turn_attribution',
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'A tie could not be resolved from turn attribution',
+  },
+  {
+    name: 'previous period has no measured output',
+    previousModel: null,
+    previousReason: 'no_measured_output',
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'No measured output tokens in this range',
+  },
+  {
+    name: 'current output has an unknown model with a known previous favorite',
+    previousModel: 'previous-model',
+    previousReason: null,
+    currentModel: null,
+    currentReason: 'unknown_model_output',
+    currentText: 'Unmeasured: Measured output has an unknown model',
+    previousText: 'previous-model',
+  },
+  {
+    name: 'current tie has unknown turn attribution with a known previous favorite',
+    previousModel: 'previous-model',
+    previousReason: null,
+    currentModel: null,
+    currentReason: 'unknown_turn_attribution',
+    currentText: 'Unmeasured: A tie could not be resolved from turn attribution',
+    previousText: 'previous-model',
+  },
+  {
+    name: 'current and previous periods have different known favorites',
+    previousModel: 'previous-model',
+    previousReason: null,
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'previous-model',
+  },
+  {
+    name: 'missing previous reason keeps the defensive fallback',
+    previousModel: null,
+    previousReason: null,
+    currentModel: 'current-model',
+    currentReason: null,
+    currentText: 'current-model',
+    previousText: 'no favorite model',
+  },
+])(
+  'keeps favorite explanations separate in the rendered popover: $name',
+  async ({
+    previousModel,
+    previousReason,
+    currentModel,
+    currentReason,
+    currentText,
+    previousText,
+  }) => {
+    const report = synthetic((report) => {
+      report.favorite.previous = {
+        model: previousModel,
+        output_tokens: previousModel === null ? null : 100,
+        unknown_reason: previousReason,
+      };
+      report.favorite.current = {
+        model: currentModel,
+        output_tokens: currentModel === null ? null : 200,
+        unknown_reason: currentReason,
+      };
+    });
+    mount(nativeSource(() => report));
+    const summary = await loaded();
+    const trigger = within(summary).getByRole('button', { name: currentText });
+    expect(trigger.textContent).toBe(currentReason ? `—${currentText}` : currentText);
+    if (currentReason)
+      expect(trigger.querySelector('[title]')?.getAttribute('title')).toBe(
+        currentText.replace('Unmeasured: ', ''),
+      );
+    fireEvent.focus(trigger);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(trigger.getAttribute('aria-describedby')).toBe(tooltip.id);
+    const context = tooltip.querySelector('.xt-rule-context')!;
+    expect(context.textContent).toBe(`Previous period: ${previousText}.`);
+    if (previousReason) {
+      expect(context.textContent).not.toContain('no favorite model');
+      if (previousReason !== 'no_measured_output')
+        expect(context.textContent).not.toContain('No measured output tokens');
+    }
+    expect(context.textContent).not.toContain(currentText);
+  },
+);
+
 it('converts F11 percentage-point deltas exactly once and hides suppressed ones', async () => {
   mount(
     nativeSource(() =>
@@ -471,15 +613,20 @@ it('shows loading, then a safe error with retry', async () => {
     if (reject) throw new Error('backend-specific detail');
     return f1(days);
   });
+  const index = vi.fn(async () => exported.native_index);
+  source.nativeIndexStatus = index;
   mount(source);
   expect(await screen.findByText(/Reading Dashboard metrics for the last 7d/)).toBeTruthy();
   expect(
     await screen.findByText('Dashboard metrics could not be loaded.', { exact: false }),
   ).toBeTruthy();
   expect(screen.queryByText(/backend-specific detail/)).toBeNull();
+  expect.soft(index).not.toHaveBeenCalled();
   reject = false;
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await loaded()).toBeTruthy();
+  await settleReads();
+  expect(index).toHaveBeenCalledTimes(1);
 });
 
 it('refreshes on insertion and on enrichment that adds no session', async () => {
@@ -513,12 +660,15 @@ it('refreshes on insertion and on enrichment that adds no session', async () => 
 
 it('does not read metrics in a browser preview', async () => {
   const source = { ...nativeSource((days) => f1(days)), kind: 'preview' as const };
+  const index = vi.fn(async () => exported.native_index);
+  source.nativeIndexStatus = index;
   mount(source);
   expect(
     await screen.findByText('Open the desktop app to read local Dashboard metrics.'),
   ).toBeTruthy();
   expect(source.dashboard).not.toHaveBeenCalled();
   expect(source.tokensByHost).not.toHaveBeenCalled();
+  expect(index).not.toHaveBeenCalled();
 });
 
 it('keeps one lane row per returned span, including several spans of one session', async () => {
@@ -652,6 +802,231 @@ it('follows the design composition and keeps supplementary measurements in colla
   );
 });
 
+type DeltaContextCase = {
+  name: string;
+  target?: 'human' | 'stat';
+  value?: number | null;
+  previous?: number | null;
+  current_n?: number | null;
+  previous_n?: number | null;
+  cause?: string;
+  suppressed?: boolean;
+  pct?: number;
+  visibleDelta?: string;
+};
+
+it.each<DeltaContextCase>([
+  {
+    name: 'unknown current human hours',
+    target: 'human',
+    value: null,
+    previous: 8,
+    cause: 'the current value is unmeasured',
+  },
+  {
+    name: 'unknown previous stat value',
+    previous: null,
+    cause: 'the previous value is unmeasured',
+  },
+  {
+    name: 'both values unknown',
+    target: 'human',
+    value: null,
+    previous: null,
+    cause: 'the current and previous values are unmeasured',
+  },
+  {
+    name: 'current count unavailable',
+    current_n: null,
+    cause: 'the current sample count is unavailable',
+  },
+  {
+    name: 'previous count unavailable',
+    target: 'human',
+    previous_n: null,
+    cause: 'the previous sample count is unavailable',
+  },
+  {
+    name: 'both counts unavailable',
+    current_n: null,
+    previous_n: null,
+    cause: 'the current and previous sample counts are unavailable',
+  },
+  {
+    name: 'four current samples',
+    current_n: 4,
+    previous_n: 5,
+    cause: 'a window has fewer than 5 samples',
+  },
+  {
+    name: 'four previous samples',
+    target: 'human',
+    current_n: 5,
+    previous_n: 4,
+    cause: 'a window has fewer than 5 samples',
+  },
+  {
+    name: 'zero baseline with exactly five samples',
+    previous: 0,
+    current_n: 5,
+    previous_n: 5,
+    cause: 'the previous value is zero',
+  },
+  {
+    name: 'exactly five samples without a reported percentage',
+    current_n: 5,
+    previous_n: 5,
+    cause: 'the report did not provide a percentage change',
+  },
+  {
+    name: 'measured current zero is not a zero baseline',
+    target: 'human',
+    value: 0,
+    previous: 8,
+    cause: 'the report did not provide a percentage change',
+  },
+  {
+    name: 'finite extreme inputs with an unavailable percentage',
+    value: Number.MAX_VALUE,
+    previous: Number.MIN_VALUE,
+    cause: 'the report did not provide a percentage change',
+  },
+  {
+    name: 'unknown value precedes missing counts and zero baseline',
+    target: 'human',
+    value: null,
+    previous: 0,
+    current_n: null,
+    previous_n: null,
+    cause: 'the current value is unmeasured',
+  },
+  {
+    name: 'unknown previous value precedes low samples',
+    previous: null,
+    current_n: 4,
+    cause: 'the previous value is unmeasured',
+  },
+  {
+    name: 'missing count precedes low samples and zero baseline',
+    previous: 0,
+    current_n: null,
+    previous_n: 4,
+    cause: 'the current sample count is unavailable',
+  },
+  {
+    name: 'low samples precede zero baseline',
+    previous: 0,
+    current_n: 4,
+    previous_n: 5,
+    cause: 'a window has fewer than 5 samples',
+  },
+  {
+    name: 'unsuppressed measured zero and minus 100 percentage points',
+    value: 0,
+    previous: 8,
+    current_n: 5,
+    previous_n: 5,
+    suppressed: false,
+    pct: -100,
+    visibleDelta: '▼100%',
+  },
+  {
+    name: 'unsuppressed 50 percentage points at exactly five samples',
+    value: 3,
+    previous: 2,
+    current_n: 5,
+    previous_n: 5,
+    suppressed: false,
+    pct: 50,
+    visibleDelta: '▲50%',
+  },
+  {
+    name: 'unsuppressed zero percentage points',
+    value: 8,
+    previous: 8,
+    suppressed: false,
+    pct: 0,
+    visibleDelta: '0%',
+  },
+  // Deliberately inconsistent synthetic fields prove that the report flag remains authoritative.
+  {
+    name: 'unsuppressed report does not acquire a hidden reason from its fields',
+    target: 'human',
+    value: null,
+    previous: null,
+    current_n: null,
+    previous_n: 4,
+    suppressed: false,
+    pct: 50,
+  },
+])(
+  'explains reported suppression in the rendered definition: $name',
+  async ({
+    target = 'stat',
+    value = 8,
+    previous = 6,
+    current_n = 10,
+    previous_n = 10,
+    cause,
+    suppressed = true,
+    pct = null,
+    visibleDelta,
+  }) => {
+    const report = synthetic((report) => {
+      const metric = tile(value, {
+        rule_id: target === 'human' ? 'M-07' : 'M-09',
+        reason: 'Retained report reason.',
+        note: 'Retained report note.',
+        current_n,
+        previous_n,
+        delta: { previous, pct, suppressed },
+      });
+      if (target === 'human') report.tiles.human_hours_est = metric;
+      else report.tiles.hands_off_median = metric;
+    });
+    mount(nativeSource(() => report));
+    await loaded();
+    const trigger =
+      target === 'human'
+        ? screen.getByRole('button', { name: /^Human-in-the-loop hours, estimated/ })
+        : tileNamed('Hands-off median');
+    if (value === null)
+      expect(trigger.textContent).toContain('Unmeasured: Retained report reason.');
+    if (value === 0) {
+      expect(trigger.textContent).toContain('0');
+      expect(trigger.textContent).not.toContain('Unmeasured');
+    }
+    if (target === 'stat') {
+      const delta = trigger.querySelector('.xt-stat-delta');
+      if (visibleDelta) expect(delta?.textContent).toBe(visibleDelta);
+      else expect(delta).toBeNull();
+    }
+    fireEvent.focus(trigger);
+    const context = (await screen.findByRole('tooltip')).querySelector(
+      '.xt-rule-context',
+    )!.textContent!;
+    expect(context).toContain('Retained report reason. Retained report note.');
+    expect(context).toContain(
+      target === 'human'
+        ? 'Human-in-the-loop time is estimated from message timing and typing length, unioned on the wall clock.'
+        : 'How long your agents run before they need you.',
+    );
+    if (target === 'stat')
+      expect(context).toContain('No surface is excluded for timestamp health.');
+    if (current_n !== null)
+      expect(context).toContain(`n = ${current_n} sessions; previous period ${previous_n ?? '—'}.`);
+    else expect(context).not.toContain('n =');
+    if (cause) {
+      expect(context).toContain(`Change vs the previous period is hidden: ${cause}.`);
+      expect(context).not.toContain('samples or the previous value is zero');
+      if (cause !== 'a window has fewer than 5 samples')
+        expect(context).not.toContain('fewer than 5 samples');
+      if (cause !== 'the previous value is zero')
+        expect(context).not.toContain('previous value is zero');
+    } else expect(context).not.toContain('Change vs the previous period is hidden:');
+  },
+);
+
 it('hides the TopBar period off the Dashboard and while a range is loading', async () => {
   let release!: () => void;
   const gate = new Promise<void>((done) => (release = done));
@@ -669,4 +1044,164 @@ it('hides the TopBar period off the Dashboard and while a range is loading', asy
   );
   fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
   expect(screen.queryByTestId('report-period')).toBeNull();
+});
+
+/** Allow actual React/query notifications to settle without changing timer behavior. */
+const settleReads = () => act(async () => void (await new Promise((done) => setTimeout(done, 80))));
+const rangeReads = (source: ReturnType<typeof nativeSource>, days: number) => ({
+  dashboard: source.dashboard.mock.calls.filter(([range]) => range === days).length,
+  tokens: source.tokensByHost.mock.calls.filter(([range]) => range === days).length,
+});
+
+for (const phase of ['ready', 'disabled'] as const)
+  it(`keeps settled ${phase} index recovery mounted across uncached range changes`, async () => {
+    const status: NativeIndexStatus =
+      phase === 'disabled'
+        ? exported.native_index
+        : { ...exported.native_index, phase: { phase: 'ready' }, freshness: { freshness: 'live' } };
+    const source = nativeSource((days) => f1(days));
+    const index = vi.fn(async () => status);
+    source.nativeIndexStatus = index;
+    mount(source);
+    await loaded();
+    await waitFor(() =>
+      expect(screen.getByTestId('dashboard-index').textContent).toContain(
+        phase === 'ready' ? 'Ready' : 'Disabled',
+      ),
+    );
+    await settleReads();
+    const initial = rangeReads(source, 7);
+    const completedRanges = new Map([[7, initial]]);
+    const indexReads = index.mock.calls.length;
+    await settleReads();
+    expect(rangeReads(source, 7)).toEqual(initial);
+    for (const days of [14, 30]) {
+      const before = rangeReads(source, days);
+      fireEvent.click(screen.getByRole('radio', { name: `${days}d` }));
+      await waitFor(() => expect(source.dashboard).toHaveBeenCalledWith(days));
+      await loaded();
+      await settleReads();
+      expect
+        .soft(rangeReads(source, days))
+        .toEqual({ dashboard: before.dashboard + 1, tokens: before.tokens + 1 });
+      for (const [previousDays, previousReads] of completedRanges)
+        expect.soft(rangeReads(source, previousDays)).toEqual(previousReads);
+      expect.soft(index).toHaveBeenCalledTimes(indexReads);
+      completedRanges.set(days, rangeReads(source, days));
+      if (days === 14) {
+        const previous = rangeReads(source, 14);
+        await settleReads();
+        expect(rangeReads(source, 14)).toEqual(previous);
+      }
+    }
+    // No data event was emitted: changing the range alone must not repeat recovery.
+    expect(index).toHaveBeenCalledTimes(1);
+  });
+
+it('still refreshes current metrics when the first settled index status arrives after the report', async () => {
+  let release!: (status: NativeIndexStatus) => void;
+  const status = new Promise<NativeIndexStatus>((done) => (release = done));
+  const source = nativeSource((days) => f1(days));
+  const index = vi.fn(() => status);
+  source.nativeIndexStatus = index;
+  mount(source);
+  await loaded();
+  await settleReads();
+  const before = rangeReads(source, 7);
+  expect(screen.getByTestId('dashboard-index').textContent).toContain('reading status');
+  await act(async () => release(exported.native_index));
+  await waitFor(() =>
+    expect(rangeReads(source, 7)).toEqual({
+      dashboard: before.dashboard + 1,
+      tokens: before.tokens + 1,
+    }),
+  );
+  await settleReads();
+  expect(rangeReads(source, 7)).toEqual({
+    dashboard: before.dashboard + 1,
+    tokens: before.tokens + 1,
+  });
+  expect(index).toHaveBeenCalledTimes(1);
+});
+
+for (const phase of ['ready', 'disabled'] as const)
+  it(`recovers old first metric snapshots when the backend index is already ${phase}`, async () => {
+    const old = f1();
+    old.tiles.sessions.value = 11;
+    old.tokens_by_host[0].tokens.counters.total_tokens = 111;
+    const fresh = f1();
+    fresh.tiles.sessions.value = 22;
+    fresh.tokens_by_host[0].tokens.counters.total_tokens = 222;
+    let releaseReport!: (report: DashboardMetrics) => void;
+    let releaseTokens!: (tokens: {
+      window: DashboardMetrics['window'];
+      hosts: DashboardMetrics['tokens_by_host'];
+    }) => void;
+    const firstReport = new Promise<DashboardMetrics>((done) => (releaseReport = done));
+    const firstTokens = new Promise<{
+      window: DashboardMetrics['window'];
+      hosts: DashboardMetrics['tokens_by_host'];
+    }>((done) => (releaseTokens = done));
+    const source = nativeSource(() => fresh);
+    let reportReads = 0;
+    let tokenReads = 0;
+    source.dashboard = vi.fn(async () => (++reportReads === 1 ? firstReport : fresh));
+    source.tokensByHost = vi.fn(async () =>
+      ++tokenReads === 1 ? firstTokens : { window: fresh.window, hosts: fresh.tokens_by_host },
+    );
+    const index = vi.fn(async (): Promise<NativeIndexStatus> =>
+      phase === 'disabled'
+        ? exported.native_index
+        : { ...exported.native_index, phase: { phase: 'ready' }, freshness: { freshness: 'live' } },
+    );
+    source.nativeIndexStatus = index;
+    mount(source);
+    await settleReads();
+    expect(source.dashboard).toHaveBeenCalledTimes(1);
+    expect(source.tokensByHost).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('dashboard-summary')).toBeNull();
+    expect.soft(index).not.toHaveBeenCalled();
+    // Both first requests captured the old snapshot. Status returns settled whenever read.
+    await act(async () => {
+      releaseReport(old);
+      releaseTokens({ window: old.window, hosts: old.tokens_by_host });
+    });
+    await loaded();
+    await settleReads();
+    expect.soft(screen.getByTestId('dashboard-summary').textContent).toContain('22 sessions');
+    expect.soft(screen.queryByLabelText('Claude Code tokens: 222')).toBeTruthy();
+    expect.soft(source.dashboard).toHaveBeenCalledTimes(2);
+    expect.soft(source.tokensByHost).toHaveBeenCalledTimes(2);
+    expect(index).toHaveBeenCalledTimes(1);
+    await settleReads();
+    expect.soft(screen.getByTestId('dashboard-summary').textContent).toContain('22 sessions');
+    expect.soft(source.dashboard).toHaveBeenCalledTimes(2);
+    expect.soft(source.tokensByHost).toHaveBeenCalledTimes(2);
+    // No event was emitted and the real timer mode is unchanged.
+  });
+
+it('keeps activated index recovery mounted through a later report error and retry', async () => {
+  let reject = true;
+  const source = nativeSource((days) => {
+    if (days === 14 && reject) throw new Error('synthetic later range failure');
+    return f1(days);
+  });
+  const index = vi.fn(async () => exported.native_index);
+  source.nativeIndexStatus = index;
+  mount(source);
+  await loaded();
+  await settleReads();
+  expect(index).toHaveBeenCalledTimes(1);
+  const initial = rangeReads(source, 7);
+  fireEvent.click(screen.getByRole('radio', { name: '14d' }));
+  await screen.findByText('Dashboard metrics could not be loaded.', { exact: false });
+  expect(screen.queryByTestId('dashboard-summary')).toBeNull();
+  expect(index).toHaveBeenCalledTimes(1);
+  reject = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await loaded();
+  await settleReads();
+  expect(rangeReads(source, 14).dashboard).toBe(2);
+  expect(rangeReads(source, 7)).toEqual(initial);
+  expect(index).toHaveBeenCalledTimes(1);
 });

@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from 'react';
+import { Button } from './Button';
 import { HostGlyph } from './HostGlyph';
 import { BrandMark } from './BrandMark';
 import { HubPopover } from './HubPopover';
@@ -34,6 +35,9 @@ export interface SidebarProps {
   onConnectHub?: () => void;
   hosts: HostTokens[];
   tokensCaption?: string;
+  tokensEmptyMessage?: string | null;
+  onRetryTokens?: () => void;
+  tokensRetryBusy?: boolean;
   surfaces?: SurfaceStatus[];
   listener: { status: 'listening'; port: number } | { status: 'off' | 'unknown' };
   version: string;
@@ -72,6 +76,9 @@ export function Sidebar({
   onConnectHub,
   hosts,
   tokensCaption,
+  tokensEmptyMessage = 'No host measurements',
+  onRetryTokens,
+  tokensRetryBusy = false,
   surfaces = [],
   listener,
   version,
@@ -151,7 +158,9 @@ export function Sidebar({
             <h2>Usages</h2>
             {tokensCaption && <span>{tokensCaption}</span>}
           </div>
-          {hosts.length === 0 && <p className="xt-sidebar-empty">No host measurements</p>}
+          {hosts.length === 0 && tokensEmptyMessage && (
+            <p className="xt-sidebar-empty">{tokensEmptyMessage}</p>
+          )}
           {hosts.map((row) => {
             const measured = row.tokens !== null && Number.isFinite(row.tokens) && row.tokens >= 0;
             const fill =
@@ -178,6 +187,18 @@ export function Sidebar({
               </div>
             );
           })}
+          {onRetryTokens && (
+            <Button
+              variant="outline"
+              height={28}
+              aria-label="Retry recorded tokens"
+              disabled={tokensRetryBusy}
+              aria-busy={tokensRetryBusy || undefined}
+              onClick={onRetryTokens}
+            >
+              Retry recorded tokens
+            </Button>
+          )}
         </section>
         <PopoverTrigger
           handle={hubHandle}

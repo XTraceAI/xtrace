@@ -13,6 +13,7 @@ beyond nanoseconds and leap seconds. Filtering precedes segmentation; leading
 non-human records and trailing unanswered humans do not form turns. Each human
 followed by one or more explicit non-human records forms one responding segment.
 All structural blocks and tool calls survive usage-response deduplication.
+The M-03 definition now states this existing responding-segment behavior explicitly, reconciling its earlier wording with F1's five-turn golden and reference calculation.
 
 Sessions and explicit assistant-role records are counted structurally. Unknown
 human classification makes human messages, turns and typing unknown. A missing

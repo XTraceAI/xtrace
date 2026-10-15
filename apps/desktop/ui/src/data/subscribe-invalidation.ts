@@ -1,3 +1,4 @@
+import { invalidateDataQueries } from './invalidate-data-queries';
 import type { QueryClient } from '@tanstack/react-query';
 import type { DataSource, Unsubscribe } from './DataSource';
 import { events, type DataEvent } from './ipc-names';
@@ -44,8 +45,7 @@ export function subscribeInvalidation(
             if (!active) return;
             const prefixes = [...pending];
             pending.clear();
-            for (const prefix of prefixes)
-              void client.invalidateQueries({ queryKey: [prefix] }).catch(report);
+            for (const prefix of prefixes) void invalidateDataQueries(client, prefix).catch(report);
           }, 500);
         })
         .then((unlisten) => {
