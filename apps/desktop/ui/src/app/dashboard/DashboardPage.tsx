@@ -337,7 +337,7 @@ function DashCard({
     <section className={`xt-dash-card ${className}`} aria-labelledby={id}>
       <header className="xt-dash-card-header">
         <h2 id={id}>{title}</h2>
-        <RuleChip ruleId={rule} size="sm" />
+        <RuleChip ruleId={rule} subject={title} size="sm" />
       </header>
       {children}
     </section>
@@ -444,7 +444,7 @@ function ExtraSection({
     <section className="xt-dash-extra" aria-labelledby={id}>
       <header className="xt-dash-card-header">
         <h2 id={id}>{title}</h2>
-        <RuleChip ruleId={rule} size="sm" />
+        <RuleChip ruleId={rule} subject={title} size="sm" />
         {meta && (
           <span className="xt-dash-extra-meta" title={meta}>
             {meta}

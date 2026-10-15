@@ -101,6 +101,31 @@ const card = (title: string) =>
 const tileNamed = (label: string) =>
   screen.getAllByRole('button').find((button) => button.textContent?.startsWith(label))!;
 
+it('names help by its displayed subject and keeps internal codes out of rendered definitions', async () => {
+  mount(nativeSource((days) => f1(days)));
+  await loaded();
+  const subjects = [
+    'Agent / human hours',
+    'Caught by your rules',
+    'Effort by type',
+    'Environment',
+    'Sessions',
+    'Tokens per day',
+    'API-equivalent cost',
+    'Coverage',
+  ];
+  for (const subject of subjects) {
+    const trigger = screen.getByRole('button', { name: `About ${subject}` });
+    expect(trigger.textContent).toBe('Info');
+    fireEvent.focus(trigger);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.textContent).not.toMatch(/\b(?:[CMOPRU]-\d+[a-z]?|F\d+)\b/);
+    expect(trigger.getAttribute('aria-describedby')).toBe(tooltip.id);
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+  }
+});
+
 it('renders the generated F1 report with honest unknowns and the shared sidebar totals', async () => {
   const source = nativeSource((days) => f1(days));
   mount(source);
