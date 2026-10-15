@@ -49,7 +49,7 @@ pub struct IngestBatch<'a> {
     pub discovery: Option<&'a crate::ingest::DiscoveredSession>,
     /// Resume progress that commits with this batch's rows and never without
     /// them: the position through the input these rows came from, bound to
-    /// the source generation it was read under. A batch without records
+    /// the source generation it was read under. A batch without records or events
     /// cannot carry one; progress no rows carry is recorded on its own.
     pub checkpoint: Option<&'a NativeCheckpoint>,
 }
@@ -434,7 +434,7 @@ impl Store {
         }
         // Progress advances only past input every record of which was stored;
         // a batch with a rejected or dropped record keeps the earlier checkpoint
-        // (and a batch without records was refused above).
+        // (and a batch without records or events was refused above).
         if let Some(checkpoint) = batch.checkpoint
             && outcome
                 .records

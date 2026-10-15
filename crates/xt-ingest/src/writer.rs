@@ -104,7 +104,7 @@ fn identity(record: &ParsedRecord, observed_at: i64) -> RecordIdentity {
 }
 
 pub fn write_batch(store: &mut Store, request: &WriteBatch<'_>) -> Result<BatchOutcome> {
-    if request.records.len() > MAX_BATCH_RECORDS {
+    if request.records.len() + request.hook_summaries.len() > MAX_BATCH_RECORDS {
         return Err(Error::InvalidInput(
             "ingestion batch exceeds its record bound",
         ));

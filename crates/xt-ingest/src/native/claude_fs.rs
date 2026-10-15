@@ -674,7 +674,7 @@ pub fn import_file(
         consumed += read as u64;
         window.push(&buffer);
         prefix.update(&buffer);
-        if batch.len() == MAX_BATCH_RECORDS {
+        if batch.len() + summaries.len() == MAX_BATCH_RECORDS {
             if !writer.labels_complete() {
                 writer.enrich(&header(file, &batch));
             }
@@ -718,7 +718,7 @@ pub fn import_file(
             observed_at,
         )
     });
-    // A file without a storable record (empty, or inert lines only) keeps its
+    // A file without a storable record or summary keeps its
     // discovered identity and nothing else: an empty batch commits no row,
     // and no cursor is recorded without a committed batch.
     let carried = !batch.is_empty() || !summaries.is_empty();

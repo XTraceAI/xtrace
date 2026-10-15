@@ -3,9 +3,9 @@
 //!
 //! The kinds are the stable strings documented in `xt_store::tool_use`. Slash
 //! commands and hook summaries are structural events, not assistant tool calls:
-//! they never enter a record's `tool_use_count` or its tool-call rows. No test
-//! here asserts that a shell command, an argument or an output was retained,
-//! because none of them ever is.
+//! they never enter a record's `tool_use_count` or its tool-call rows. Structural
+//! event columns retain no shell command, argument or output. Ordinary input and
+//! message content may remain in full-content mode; metadata-only mode omits them.
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -56,7 +56,8 @@ fn tool_call_record(uuid: &str) -> ParsedRecord {
 }
 
 /// The user record a slash command is stated by. The command's arguments sit in
-/// the same message and must never reach storage or the structural row.
+/// the same message and must never reach structural-event columns; metadata-only
+/// storage also omits the message content that carries them.
 fn command_record(uuid: &str) -> ParsedRecord {
     parsed(
         json!({"uuid":uuid,"type":"user","timestamp":"2026-09-07T12:00:00Z",
@@ -835,4 +836,583 @@ fn a_rejected_occurrence_writes_no_command_onto_the_owning_session() {
     assert_eq!(scalar(db.path(), "SELECT count(*) FROM tool_uses"), 0);
     // A's record keeps what A stored; only the ownership conflict is recorded.
     assert_eq!(scalar(db.path(), "SELECT count(*) FROM records"), 1);
+}
+
+#[test]
+fn structural_raw_ids_preserve_accepted_record_and_summary_bytes_on_replay() {
+    let mut db = TempDb::empty().unwrap();
+    let raw_command = format!(" \t{COMMAND_UUID} ");
+    let raw_summary = format!(" \t{SUMMARY_UUID} ");
+    let context = context(SESSION, SessionSource::Transcript);
+    for _ in 0..2 {
+        write_batch(
+            db.store_mut(),
+            &request(
+                &context,
+                &[command_record(&raw_command)],
+                &[hook_summary(&raw_summary)],
+                None,
+                false,
+            ),
+        )
+        .unwrap();
+    }
+    assert_eq!(db.store().records(SESSION).unwrap()[0].uuid, raw_command);
+    let ids = db
+        .store()
+        .tool_events(SESSION)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.source_event_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        [raw_command, raw_summary],
+        "event IDs must keep the native bytes"
+    );
+    assert_eq!(scalar(db.path(), "SELECT count(*) FROM records"), 1);
+}
+
+fn rejected_padded_command(collision: bool) {
+    let mut db = TempDb::empty().unwrap();
+    let padded = format!(" {COMMAND_UUID} ");
+    let plain = |uuid: &str| {
+        parsed(json!({"uuid":uuid,"type":"user",
+        "timestamp":"2026-09-07T12:00:00Z","message":{"role":"user",
+        "content":[{"type":"text","text":"Ordinary turn."}]}}))
+    };
+    let mut records = vec![plain(&padded)];
+    if collision {
+        records.push(plain(COMMAND_UUID));
+    }
+    write_batch(
+        db.store_mut(),
+        &request(
+            &context(SESSION, SessionSource::Transcript),
+            &records,
+            &[],
+            None,
+            false,
+        ),
+    )
+    .unwrap();
+    let outcome = write_batch(
+        db.store_mut(),
+        &request(
+            &context(OTHER_SESSION, SessionSource::Transcript),
+            &[command_record(&padded)],
+            &[],
+            None,
+            false,
+        ),
+    )
+    .unwrap();
+    assert_eq!(outcome.records_dropped, 1);
+    assert_eq!(
+        scalar(db.path(), "SELECT count(*) FROM records"),
+        if collision { 2 } else { 1 }
+    );
+    let events = [SESSION, OTHER_SESSION]
+        .into_iter()
+        .flat_map(|session| db.store().tool_events(session).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events,
+        Vec::<ToolEvent>::new(),
+        "a rejected padded UUID must create no event under either spelling or session"
+    );
+}
+
+#[test]
+fn structural_raw_ids_rejected_padded_command_creates_no_event() {
+    rejected_padded_command(false);
+}
+
+#[test]
+fn structural_raw_ids_rejected_padded_command_cannot_target_trimmed_owner() {
+    rejected_padded_command(true);
+}
+
+#[test]
+fn structural_raw_ids_blank_summary_is_rejected_and_blank_command_is_omitted() {
+    for id in ["", " \t\n"] {
+        let mut db = TempDb::empty().unwrap();
+        let mut command = command_record(COMMAND_UUID);
+        command.canonical.uuid = Some(id.into());
+        let context = context(SESSION, SessionSource::Transcript);
+        let outcome = write_batch(
+            db.store_mut(),
+            &request(&context, &[command], &[], None, false),
+        )
+        .unwrap();
+        assert_eq!(outcome.records_dropped, 1);
+        assert!(db.store().tool_events(SESSION).unwrap().is_empty());
+        assert!(
+            write_batch(
+                db.store_mut(),
+                &request(&context, &[], &[hook_summary(id)], None, false)
+            )
+            .is_err()
+        );
+        assert_eq!(scalar(db.path(), "SELECT count(*) FROM tool_uses"), 0);
+    }
+}
+
+fn legacy_skill_replay(copy: bool, contradictory: bool, unrelated_conflict: bool, native: bool) {
+    let mut db = TempDb::empty().unwrap();
+    db.store_mut()
+        .set_retention_mode(xt_store::retention::RetentionMode::FullContent)
+        .unwrap();
+    let skill = |name: &str| {
+        parsed(json!({"uuid":"legacy-skill","type":"assistant",
+        "timestamp":"2026-09-07T12:00:00Z","message":{"role":"assistant",
+        "content":[{"type":"tool_use","name":"Skill","input":{"skill":name}}]}}))
+    };
+    let original = [skill("alpha")];
+    let owner_context = context(SESSION, SessionSource::Transcript);
+    let owner_discovery = discovered(SESSION);
+    let mut seed = request(&owner_context, &original, &[], None, true);
+    seed.discovery = native.then_some(&owner_discovery);
+    write_batch(db.store_mut(), &seed).unwrap();
+    if unrelated_conflict {
+        let mut conflicting_time = original.clone();
+        conflicting_time[0].canonical.timestamp = Some("2026-09-07T12:00:09Z".into());
+        let mut conflict_batch = request(&owner_context, &conflicting_time, &[], None, true);
+        conflict_batch.discovery = native.then_some(&owner_discovery);
+        write_batch(db.store_mut(), &conflict_batch).unwrap();
+        assert!(db.store().records(SESSION).unwrap()[0].has_conflict);
+    }
+    // A real retained row with an older build's missing structural columns.
+    Connection::open(db.path()).unwrap().execute(
+        "UPDATE tool_uses SET kind=NULL,server=NULL,tool=NULL,skill=NULL WHERE uuid='legacy-skill'", []
+    ).unwrap();
+    let before = db.store().records(SESSION).unwrap().remove(0);
+    let coverage = xt_ingest::writer::coverage(SESSION, &original[0]).unwrap();
+    db.store_mut()
+        .insert_capture_receipt(&receipt("sealed-legacy", SESSION), &[coverage])
+        .unwrap();
+    let receipts = db.store().capture_receipts(SESSION).unwrap();
+    let evidence = db.store().capture_coverage("sealed-legacy").unwrap();
+    db.store_mut()
+        .set_retention_mode(xt_store::retention::RetentionMode::MetadataOnly)
+        .unwrap();
+    let destination = if copy { OTHER_SESSION } else { SESSION };
+    let replay_context = context(destination, SessionSource::Transcript);
+    let replay_discovery = discovered(destination);
+    let incoming = [skill(if contradictory { "beta" } else { "alpha" })];
+    let mut replay = request(&replay_context, &incoming, &[], None, false);
+    replay.discovery = native.then_some(&replay_discovery);
+    let outcome = write_batch(db.store_mut(), &replay).unwrap();
+    let after = db.store().records(SESSION).unwrap().remove(0);
+    assert_eq!(after.content_json, before.content_json);
+    assert_eq!(
+        after.tool_uses[0].input_json,
+        before.tool_uses[0].input_json
+    );
+    assert_eq!(db.store().capture_receipts(SESSION).unwrap(), receipts);
+    assert_eq!(
+        db.store().capture_coverage("sealed-legacy").unwrap(),
+        evidence
+    );
+    assert_eq!(scalar(db.path(), "SELECT count(*) FROM records"), 1);
+    if contradictory {
+        assert!(
+            after.has_conflict == (native || unrelated_conflict),
+            "keep the existing content-conflict behavior for this source"
+        );
+        assert_eq!(
+            (after.tool_uses[0].kind, after.tool_uses[0].skill.as_deref()),
+            (None, None),
+            "retained alpha must not acquire beta"
+        );
+        assert_eq!(outcome.records_dropped, usize::from(copy));
+    } else {
+        assert_eq!(outcome.records_dropped, 0);
+        assert_eq!(after.tool_uses[0].kind, Some(ToolKind::Skill));
+        assert_eq!(after.tool_uses[0].skill.as_deref(), Some("alpha"));
+        if copy {
+            assert_eq!(
+                scalar(db.path(), "SELECT count(*) FROM native_record_copies"),
+                1
+            );
+        }
+        assert_eq!(after.has_conflict, unrelated_conflict);
+    }
+}
+
+#[test]
+fn structural_retained_skill_conflicting_replay_cannot_fill_unknown_fields() {
+    legacy_skill_replay(false, true, false, true);
+}
+
+#[test]
+fn structural_retained_skill_conflicting_native_copy_cannot_fill_unknown_fields() {
+    legacy_skill_replay(true, true, false, true);
+}
+
+#[test]
+fn structural_retained_skill_equal_replay_fills_both_merge_paths_despite_unrelated_conflict() {
+    for copy in [false, true] {
+        for unrelated_conflict in [false, true] {
+            legacy_skill_replay(copy, false, unrelated_conflict, true);
+        }
+    }
+}
+
+fn structural_batch_limit(records_count: usize, total: usize, accepted: bool) {
+    let mut db = TempDb::empty().unwrap();
+    let context = context(SESSION, SessionSource::Transcript);
+    let records = (0..records_count)
+        .map(|n| {
+            parsed(json!({"uuid":format!("record-{n}"),
+        "type":"assistant","message":{"role":"assistant","content":[]}}))
+        })
+        .collect::<Vec<_>>();
+    let summaries = (records_count..total)
+        .map(|n| hook_summary(&format!("summary-{n}")))
+        .collect::<Vec<_>>();
+    let result = write_batch(
+        db.store_mut(),
+        &request(&context, &records, &summaries, None, false),
+    );
+    assert_eq!(
+        (
+            result.is_ok(),
+            scalar(db.path(), "SELECT count(*) FROM records"),
+            scalar(db.path(), "SELECT count(*) FROM tool_uses")
+        ),
+        (
+            accepted,
+            if accepted { records_count as i64 } else { 0 },
+            if accepted { summaries.len() as i64 } else { 0 }
+        ),
+        "records={records_count}, summaries={}",
+        summaries.len()
+    );
+    assert_eq!(
+        scalar(db.path(), "SELECT count(*) FROM records"),
+        if accepted { records_count as i64 } else { 0 }
+    );
+    assert_eq!(
+        scalar(db.path(), "SELECT count(*) FROM tool_uses"),
+        if accepted { summaries.len() as i64 } else { 0 }
+    );
+    assert_eq!(
+        scalar(db.path(), "SELECT count(*) FROM sessions"),
+        i64::from(accepted)
+    );
+}
+
+#[test]
+fn structural_batch_bound_accepts_exact_record_summary_and_mixed_limits() {
+    let limit = xt_ingest::writer::MAX_BATCH_RECORDS;
+    for records in [0, 1, limit] {
+        structural_batch_limit(records, limit, true);
+    }
+}
+
+#[test]
+fn structural_batch_bound_rejects_summary_overflow_before_writes() {
+    structural_batch_limit(0, xt_ingest::writer::MAX_BATCH_RECORDS + 1, false);
+}
+
+#[test]
+fn structural_batch_bound_rejects_mixed_overflow_before_writes() {
+    structural_batch_limit(1, xt_ingest::writer::MAX_BATCH_RECORDS + 1, false);
+}
+
+#[test]
+fn structural_batch_bound_keeps_existing_record_overflow_rejection() {
+    structural_batch_limit(
+        xt_ingest::writer::MAX_BATCH_RECORDS + 1,
+        xt_ingest::writer::MAX_BATCH_RECORDS + 1,
+        false,
+    );
+}
+
+#[test]
+fn structural_timestamp_equivalent_offsets_and_fraction_tails_replay_once() {
+    for (first, equivalent) in [
+        (
+            "2026-09-07T12:00:00.123100Z",
+            "2026-09-07T14:00:00.1231+02:00",
+        ),
+        (
+            "2026-09-07T12:00:00.1231000000010Z",
+            "2026-09-07T14:00:00.123100000001+02:00",
+        ),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        let context = context(SESSION, SessionSource::Transcript);
+        let mut command = command_record(COMMAND_UUID);
+        command.canonical.timestamp = Some(first.into());
+        write_batch(
+            db.store_mut(),
+            &request(&context, &[command.clone()], &[], None, false),
+        )
+        .unwrap();
+        let before = db.store().tool_events(SESSION).unwrap();
+        command.canonical.timestamp = Some(equivalent.into());
+        let replay = write_batch(
+            db.store_mut(),
+            &request(&context, &[command], &[], None, false),
+        );
+        assert!(
+            replay.is_ok(),
+            "equivalent native instants must replay: {first} / {equivalent}; got {replay:?}"
+        );
+        assert_eq!(db.store().tool_events(SESSION).unwrap(), before);
+        assert_eq!(
+            before[0].timestamp.as_deref(),
+            Some(first),
+            "keep the first native spelling"
+        );
+        assert_eq!(scalar(db.path(), "SELECT count(*) FROM records"), 1);
+        assert!(!db.store().records(SESSION).unwrap()[0].has_conflict);
+    }
+}
+
+#[test]
+fn structural_timestamp_different_precise_instants_and_missing_times_roll_back() {
+    for (first, conflicting) in [
+        (
+            Some("2026-09-07T12:00:00.123100000001Z"),
+            Some("2026-09-07T12:00:00.123100000002Z"),
+        ),
+        (None, Some("2026-09-07T12:00:00Z")),
+        (Some("2026-09-07T12:00:00Z"), None),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        let context = context(SESSION, SessionSource::Transcript);
+        let mut command = command_record(COMMAND_UUID);
+        command.canonical.timestamp = first.map(str::to_owned);
+        write_batch(
+            db.store_mut(),
+            &request(&context, &[command.clone()], &[], None, false),
+        )
+        .unwrap();
+        let events = db.store().tool_events(SESSION).unwrap();
+        let records = db.store().records(SESSION).unwrap();
+        command.canonical.timestamp = conflicting.map(str::to_owned);
+        let incoming = [command_record("fresh-companion"), command];
+        let checkpoint = xt_store::batch::NativeCheckpoint {
+            source: SessionSource::Transcript,
+            cursor_key: "claude:synthetic-timestamp".into(),
+            generation: r#"{"kind":"file","ino":1}"#.into(),
+            position: 120,
+            updated_at: 100,
+        };
+        let mut replay = request(&context, &incoming, &[], None, false);
+        replay.checkpoint = Some(&checkpoint);
+        assert!(
+            write_batch(db.store_mut(), &replay).is_err(),
+            "{first:?} / {conflicting:?}"
+        );
+        assert_eq!(db.store().tool_events(SESSION).unwrap(), events);
+        assert_eq!(
+            db.store().records(SESSION).unwrap(),
+            records,
+            "the fresh companion and any conflicting enrichment must roll back"
+        );
+        assert!(
+            db.store()
+                .native_checkpoint(SessionSource::Transcript, &checkpoint.cursor_key)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn structural_retained_skill_generic_replay_guards_only_contradicted_fills() {
+    for contradictory in [false, true] {
+        for unrelated_conflict in [false, true] {
+            legacy_skill_replay(false, contradictory, unrelated_conflict, false);
+        }
+    }
+}
+
+#[test]
+fn structural_retained_skill_unknown_length_clone_keeps_prior_structure() {
+    for known in [false, true] {
+        let mut db = TempDb::empty().unwrap();
+        db.store_mut()
+            .set_retention_mode(xt_store::retention::RetentionMode::FullContent)
+            .unwrap();
+        let context = context(SESSION, SessionSource::Transcript);
+        let mut call = parsed(json!({"uuid":"legacy-clone","type":"assistant",
+            "message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"alpha"}}]}}));
+        write_batch(
+            db.store_mut(),
+            &request(&context, &[call.clone()], &[], None, true),
+        )
+        .unwrap();
+        let sql = Connection::open(db.path()).unwrap();
+        // Retained content predates a measured text length; the separate input
+        // projection is absent. Exercise acquisition of the whole tool vector.
+        sql.execute(
+            "UPDATE records SET text_len=NULL WHERE uuid='legacy-clone'",
+            [],
+        )
+        .unwrap();
+        sql.execute(
+            "UPDATE tool_uses SET input_json=NULL WHERE uuid='legacy-clone'",
+            [],
+        )
+        .unwrap();
+        if !known {
+            sql.execute(
+                "UPDATE tool_uses SET kind=NULL,skill=NULL WHERE uuid='legacy-clone'",
+                [],
+            )
+            .unwrap();
+        }
+        let before = db.store().records(SESSION).unwrap().remove(0);
+        db.store_mut()
+            .set_retention_mode(xt_store::retention::RetentionMode::MetadataOnly)
+            .unwrap();
+        call.canonical.message.content.as_mut().unwrap()[0]["input"]["skill"] = json!("beta");
+        write_batch(
+            db.store_mut(),
+            &request(&context, &[call], &[], None, false),
+        )
+        .unwrap();
+        let after = db.store().records(SESSION).unwrap().remove(0);
+        assert_eq!(after.content_json, before.content_json);
+        assert_eq!(after.tool_uses[0].input_json, None);
+        assert_eq!(
+            (after.tool_uses[0].kind, &after.tool_uses[0].skill),
+            (before.tool_uses[0].kind, &before.tool_uses[0].skill)
+        );
+        assert_eq!(
+            after.text_len,
+            Some(0),
+            "existing measurement enrichment remains available"
+        );
+    }
+}
+
+#[test]
+fn structural_identity_hook_command_collision_rolls_back_companions_in_both_orders() {
+    for hook_first in [false, true] {
+        let mut db = TempDb::empty().unwrap();
+        let original_context = context(SESSION, SessionSource::Transcript);
+        let original_discovery = discovered(SESSION);
+        let command = [command_record(COMMAND_UUID)];
+        let hook = [hook_summary(COMMAND_UUID)];
+        let mut first = request(
+            &original_context,
+            if hook_first { &[] } else { &command },
+            if hook_first { &hook } else { &[] },
+            None,
+            false,
+        );
+        first.discovery = Some(&original_discovery);
+        write_batch(db.store_mut(), &first).unwrap();
+        let original = db.store().tool_events(SESSION).unwrap();
+        let records = db.store().records(SESSION).unwrap();
+        let later_context = context(OTHER_SESSION, SessionSource::Transcript);
+        let later_discovery = discovered(OTHER_SESSION);
+        let mut incoming = vec![command_record("fresh-companion")];
+        if hook_first {
+            incoming.extend(command);
+        }
+        let checkpoint = xt_store::batch::NativeCheckpoint {
+            source: SessionSource::Transcript,
+            cursor_key: "claude:synthetic-owner".into(),
+            generation: r#"{"kind":"file","ino":1}"#.into(),
+            position: 200,
+            updated_at: 100,
+        };
+        let mut later = request(
+            &later_context,
+            &incoming,
+            if hook_first { &[] } else { &hook },
+            None,
+            false,
+        );
+        later.discovery = Some(&later_discovery);
+        later.checkpoint = Some(&checkpoint);
+        assert!(
+            write_batch(db.store_mut(), &later).is_err(),
+            "hook_first={hook_first}"
+        );
+        assert_eq!(db.store().tool_events(SESSION).unwrap(), original);
+        assert_eq!(db.store().records(SESSION).unwrap(), records);
+        assert!(db.store().records(OTHER_SESSION).unwrap().is_empty());
+        assert!(db.store().tool_events(OTHER_SESSION).unwrap().is_empty());
+        assert!(
+            db.store()
+                .native_checkpoint(SessionSource::Transcript, &checkpoint.cursor_key)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn structural_timestamp_cross_source_and_hook_replays_preserve_first_spelling() {
+    let spellings = [
+        "2026-09-07T12:00:00.1231000000010Z",
+        "2026-09-07T14:00:00.123100000001+02:00",
+    ];
+    for plugin_first in [false, true] {
+        for reverse_time in [false, true] {
+            let mut db = TempDb::empty().unwrap();
+            let sources = if plugin_first {
+                [SessionSource::Plugin, SessionSource::Transcript]
+            } else {
+                [SessionSource::Transcript, SessionSource::Plugin]
+            };
+            let times = if reverse_time {
+                [spellings[1], spellings[0]]
+            } else {
+                spellings
+            };
+            for (index, source) in sources.into_iter().enumerate() {
+                let context = context(SESSION, source);
+                let mut command = command_record(COMMAND_UUID);
+                command.canonical.timestamp = Some(times[index].into());
+                let receipt = receipt("equivalent-capture", SESSION);
+                write_batch(
+                    db.store_mut(),
+                    &request(
+                        &context,
+                        &[command],
+                        &[],
+                        (source == SessionSource::Plugin).then_some(&receipt),
+                        false,
+                    ),
+                )
+                .unwrap();
+            }
+            let events = db.store().tool_events(SESSION).unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].source, sources[0]);
+            assert_eq!(events[0].timestamp.as_deref(), Some(times[0]));
+            assert!(!db.store().records(SESSION).unwrap()[0].has_conflict);
+        }
+    }
+    // Hook summaries use their supported native/shared-writer path, not HTTP.
+    for reverse_time in [false, true] {
+        let mut db = TempDb::empty().unwrap();
+        let times = if reverse_time {
+            [spellings[1], spellings[0]]
+        } else {
+            spellings
+        };
+        let context = context(SESSION, SessionSource::Transcript);
+        for time in times {
+            let mut hook = hook_summary(SUMMARY_UUID);
+            hook.timestamp = Some(time.into());
+            write_batch(
+                db.store_mut(),
+                &request(&context, &[], &[hook], None, false),
+            )
+            .unwrap();
+        }
+        let events = db.store().tool_events(SESSION).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].timestamp.as_deref(), Some(times[0]));
+    }
 }

@@ -782,7 +782,7 @@ fn merge_record(
     change.fill(&mut old.request_id, &incoming.request_id);
     change.fill(&mut old.role, &incoming.role);
     change.fill(&mut old.model, &incoming.model);
-    let content_change = merge_content(old, incoming);
+    let content_change = merge_content(old, incoming, retained_content_compatible);
     if !content_change.conflict {
         if human_compatible {
             change.fill(
@@ -816,7 +816,11 @@ fn merge_record(
     change.enriched || content_change.enriched
 }
 
-fn merge_content(old: &mut StoredRecord, incoming: &StoredRecord) -> Change {
+fn merge_content(
+    old: &mut StoredRecord,
+    incoming: &StoredRecord,
+    retained_content_compatible: bool,
+) -> Change {
     fn differs<T: PartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
         a.as_ref().zip(b.as_ref()).is_some_and(|(a, b)| a != b)
     }
@@ -861,7 +865,25 @@ fn merge_content(old: &mut StoredRecord, incoming: &StoredRecord) -> Change {
     );
     if incoming.text_len.is_some() {
         if content_was_unknown {
-            old.tool_uses = incoming.tool_uses.clone();
+            old.tool_uses = incoming
+                .tool_uses
+                .iter()
+                .map(|tool| {
+                    let mut acquired = tool.clone();
+                    if !retained_content_compatible {
+                        // Keep the existing content projection behavior, but do not
+                        // acquire structural facts from contradicted retained input.
+                        let saved = old.tool_uses.iter().find(|saved| {
+                            saved.name == tool.name && saved.block_index == tool.block_index
+                        });
+                        acquired.kind = saved.and_then(|saved| saved.kind);
+                        acquired.server = saved.and_then(|saved| saved.server.clone());
+                        acquired.tool = saved.and_then(|saved| saved.tool.clone());
+                        acquired.skill = saved.and_then(|saved| saved.skill.clone());
+                    }
+                    acquired
+                })
+                .collect();
         }
         for (old_tool, new_tool) in old.tool_uses.iter_mut().zip(&incoming.tool_uses) {
             // A row an older build stored has no classification yet. Fill it only
@@ -871,10 +893,12 @@ fn merge_content(old: &mut StoredRecord, incoming: &StoredRecord) -> Change {
                 continue;
             }
             change.fill(&mut old_tool.input_json, &new_tool.input_json);
-            change.fill(&mut old_tool.kind, &new_tool.kind);
-            change.fill(&mut old_tool.server, &new_tool.server);
-            change.fill(&mut old_tool.tool, &new_tool.tool);
-            change.fill(&mut old_tool.skill, &new_tool.skill);
+            if retained_content_compatible {
+                change.fill(&mut old_tool.kind, &new_tool.kind);
+                change.fill(&mut old_tool.server, &new_tool.server);
+                change.fill(&mut old_tool.tool, &new_tool.tool);
+                change.fill(&mut old_tool.skill, &new_tool.skill);
+            }
         }
         change.fill(&mut old.content_json, &incoming.content_json);
     }

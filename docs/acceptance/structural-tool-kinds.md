@@ -61,12 +61,20 @@ that holds it. What it guarantees is that the identity has exactly one home and
 that a later context does not move it, not that the home is the summary's
 origin.
 
-Within that owning session the search is by `source_event_id` **regardless of
-source** under the batch's immediate transaction, so the same native event
+The search is globally by the exact raw `source_event_id`, regardless of session
+or delivery source, under the batch's immediate transaction. Whitespace is used
+only to reject a blank ID; nonblank IDs retain their original bytes. The same native event
 delivered by the plugin and by the native scan, in either order, is one row, a
 plain retry adds nothing, and the same identity replayed with different facts
-fails the whole batch. Events commit inside the batch that covers them, beside
-its records, cursor and checkpoint.
+or a different resolved owner fails the whole batch. Event times compare by their
+precise instant, including fractional digits beyond nanoseconds; equivalent UTC
+offsets and trailing fractional zeroes replay without changing the first stored
+spelling. Missing and present event times remain different facts.
+
+Events commit inside the batch that covers them, beside its records, cursor and
+checkpoint. Canonical records plus hook summaries share the existing 2,000-input
+batch limit. A command record that also produces an event counts once. A failure
+after a full batch preserves that batch's rows and checkpoint.
 
 A record this batch could not store contributes no event at all, whoever else
 owns the UUID. A rejected occurrence is not a trustworthy account of the record
@@ -78,7 +86,10 @@ fork still counts one event rather than none.
 ## Replay
 
 An index written by an earlier build holds tool rows with names and positions
-but no classification. A replay of the same call fills the missing columns.
+but no classification. A replay of the same call fills the missing columns only
+when it agrees with retained content, checked before incoming content is discarded.
+This also applies when acquiring tool rows whose text length was unknown. Unrelated
+timestamp or usage conflicts do not prevent compatible structural enrichment.
 Identity is the record UUID plus the block index: a differing name or position
 is a different call, and known structural metadata that disagrees is recorded as
 a conflict instead of overwriting the stored value or duplicating the row.
@@ -106,6 +117,13 @@ retain whole scans.
 | Native consumption  | `cargo test -p xt-ingest --test claude_fs claude_fs_consumes_hook_summaries`                                                                                                                                            | A Claude transcript's slash command and stop-hook summary become exactly one structural event each across two scans, its assistant calls are classified, and the source bytes are unchanged.                                                                                                          |
 | Migration           | `cargo test -p xt-store --test native_checkpoints migration_6`                                                                                                                                                          | Version 6 is recorded. Only transcript checkpoints are removed; reader checkpoints, sessions, records, tool rows, cursors, receipts, coverage and `is_human` are unchanged. A checkpoint recreated afterwards survives.                                                                               |
 | Version literals    | `cargo test --workspace`, `scripts/fixtures/export.sh`                                                                                                                                                                  | Migration history, the desktop app info and the generated F1 shell export report version 6.                                                                                                                                                                                                           |
+
+The `structural_` cases in `--test tool_use` cover raw padded IDs, rejected
+occurrences, exact timestamp replay across sources, owner changes, retained-input
+agreement and the combined batch limit. The `structural_` cases in `--test claude_fs`
+check that a later invalid summary preserves the preceding full batch/checkpoint
+and that a colliding command cannot duplicate a prior hook event. Companion rows
+and pending checkpoints roll back with conflicting event replays.
 
 The receipt digest schema and its historical coverage are unchanged: these
 columns are not part of a measurement projection, so a receipt sealed before

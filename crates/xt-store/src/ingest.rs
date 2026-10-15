@@ -231,8 +231,8 @@ pub(crate) fn structural_owner(
 /// Insert one structural event, or recognise the one already stored under the
 /// same stable identity. The event is bound to the session `structural_owner`
 /// resolves, not to the one the caller supplied, so a copied native context
-/// adds no second row. Within that session the search is by `source_event_id`
-/// **regardless of source**, so the same native event delivered by the plugin
+/// adds no second row. The search is globally by the raw `source_event_id`,
+/// regardless of session or source, so the same native event delivered by the plugin
 /// and by the native scan, in either order, is one row and a plain retry adds
 /// nothing. An identity that arrives again with different facts is a conflict:
 /// it fails, leaving the stored event untouched.
@@ -249,16 +249,19 @@ pub(crate) fn insert_tool_event(connection: &Connection, event: &ToolEvent) -> R
             "structural tool event requires a stable source event ID",
         ));
     }
-    if let Some(value) = &event.timestamp {
-        timestamp::parse(value)?;
-    }
+    let instant = event
+        .timestamp
+        .as_deref()
+        .map(timestamp::parse)
+        .transpose()?
+        .map(|(key, _)| key);
     let owner = structural_owner(connection, &event.source_event_id)?
         .unwrap_or_else(|| event.session_id.clone());
     let stored = connection
         .query_row(
             "SELECT id,session_id,source,source_event_id,name,kind,server,tool,skill,event_ts
-             FROM tool_uses WHERE session_id=?1 AND source_event_id=?2 AND uuid IS NULL",
-            params![owner, event.source_event_id],
+             FROM tool_uses WHERE source_event_id=?1 AND uuid IS NULL",
+            [&event.source_event_id],
             |row| Ok((row.get::<_, i64>(0)?, tool_event_from_row(row, 1)?)),
         )
         .optional()?;
@@ -269,6 +272,12 @@ pub(crate) fn insert_tool_event(connection: &Connection, event: &ToolEvent) -> R
         ..event.clone()
     };
     if let Some((id, saved)) = stored {
+        let saved_instant = saved
+            .timestamp
+            .as_deref()
+            .map(timestamp::parse)
+            .transpose()?
+            .map(|(key, _)| key);
         // Source is deliberately excluded: which adapter delivered the event
         // first is not part of what the event says happened.
         if (
@@ -279,7 +288,7 @@ pub(crate) fn insert_tool_event(connection: &Connection, event: &ToolEvent) -> R
             &saved.server,
             &saved.tool,
             &saved.skill,
-            &saved.timestamp,
+            saved_instant,
         ) != (
             &event.session_id,
             &event.source_event_id,
@@ -288,7 +297,7 @@ pub(crate) fn insert_tool_event(connection: &Connection, event: &ToolEvent) -> R
             &event.server,
             &event.tool,
             &event.skill,
-            &event.timestamp,
+            instant,
         ) {
             return Err(Error::InvalidInput(
                 "structural tool event identity replays with conflicting facts",

@@ -80,8 +80,7 @@ pub fn hook_event(
 }
 
 fn stable_id(uuid: Option<&str>) -> Option<String> {
-    uuid.map(str::trim)
-        .filter(|uuid| !uuid.is_empty())
+    uuid.filter(|uuid| !uuid.trim().is_empty())
         .map(str::to_owned)
 }
 

@@ -2477,3 +2477,199 @@ fn claude_fs_counts_one_event_for_a_summary_repeated_in_a_forked_file() {
         "both events live with the session that owns them"
     );
 }
+
+fn structural_summary_batch_survives_later_invalid_summary(mixed: bool, failure: bool) {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let project = home.join(".claude/projects/-synthetic-batch-bound");
+    fs::create_dir_all(&project).unwrap();
+    let path = project.join(format!("{SID}.jsonl"));
+    let limit = xt_ingest::writer::MAX_BATCH_RECORDS;
+    let prefix = (0..limit)
+        .map(|n| {
+            let value = if mixed && n == 0 {
+                json!({"uuid":"ordinary-record","type":"assistant",
+                "timestamp":"2026-09-07T12:00:00Z","message":{"role":"assistant","content":[]}})
+            } else {
+                json!({"uuid":format!("summary-{n}"),"type":"system","subtype":"stop_hook_summary",
+                "timestamp":"2026-09-07T12:00:00Z","hookCount":1})
+            };
+            native_line(value, SID) + "\n"
+        })
+        .collect::<String>();
+    // The parser recognizes this summary, but it has no stable identity. It must
+    // fail only the second batch, after the first full batch committed.
+    let invalid = native_line(
+        json!({"type":"system","subtype":"stop_hook_summary",
+        "timestamp":"2026-09-07T12:00:00Z","hookCount":1}),
+        SID,
+    ) + "\n";
+    fs::write(&path, format!("{prefix}{invalid}")).unwrap();
+    let before = hashes(&home);
+    let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+    let expected_events = limit - usize::from(mixed);
+    for _ in 0..if failure { 2 } else { 0 } {
+        let report = run(&mut store, &home);
+        assert!(
+            matches!(&report.hosts[0].sessions[0].outcome,
+            SessionOutcome::Skipped { reason } if reason.contains("structural summary has no stable identity")),
+            "{report:?}"
+        );
+        let checkpoint = store
+            .native_checkpoint(
+                SessionSource::Transcript,
+                &format!("claude:{}", path.display()),
+            )
+            .unwrap();
+        assert_eq!(
+            (
+                store.tool_events(SID).unwrap().len(),
+                checkpoint.as_ref().map(|saved| saved.position)
+            ),
+            (expected_events, Some(prefix.len() as i64)),
+            "the first full record/summary batch must survive the later invalid summary"
+        );
+        assert_eq!(store.records(SID).unwrap().len(), usize::from(mixed));
+        let checkpoint = store
+            .native_checkpoint(
+                SessionSource::Transcript,
+                &format!("claude:{}", path.display()),
+            )
+            .unwrap()
+            .expect("first batch checkpoint");
+        assert_eq!(
+            checkpoint.position,
+            prefix.len() as i64,
+            "checkpoint must stop before invalid summary"
+        );
+    }
+    assert_eq!(
+        hashes(&home),
+        before,
+        "scans must not modify synthetic sources"
+    );
+    // Complete the failed summary and retry: the original prefix is not counted
+    // again, and the new event advances the checkpoint to the new end of file.
+    let valid = native_line(
+        json!({"uuid":"summary-after-bound","type":"system","subtype":"stop_hook_summary",
+        "timestamp":"2026-09-07T12:00:01Z","hookCount":1}),
+        SID,
+    ) + "\n";
+    fs::write(&path, format!("{prefix}{valid}")).unwrap();
+    for _ in 0..2 {
+        let report = run(&mut store, &home);
+        assert!(report.complete(), "{report:?}");
+        assert_eq!(store.tool_events(SID).unwrap().len(), expected_events + 1);
+        assert_eq!(store.records(SID).unwrap().len(), usize::from(mixed));
+        assert_eq!(
+            store
+                .native_checkpoint(
+                    SessionSource::Transcript,
+                    &format!("claude:{}", path.display())
+                )
+                .unwrap()
+                .unwrap()
+                .position,
+            (prefix.len() + valid.len()) as i64
+        );
+    }
+}
+
+#[test]
+fn structural_batch_bound_native_summary_only_commits_before_later_failure() {
+    structural_summary_batch_survives_later_invalid_summary(false, true);
+}
+
+#[test]
+fn structural_batch_bound_native_mixed_commits_before_later_failure() {
+    structural_summary_batch_survives_later_invalid_summary(true, true);
+}
+
+#[test]
+fn structural_batch_bound_native_valid_summary_and_mixed_inputs_replay_once() {
+    for mixed in [false, true] {
+        structural_summary_batch_survives_later_invalid_summary(mixed, false);
+    }
+}
+
+#[test]
+fn structural_identity_later_record_cannot_move_or_duplicate_an_existing_hook() {
+    const SECOND: &str = "00000000-0000-4000-8000-000000000002";
+    const SHARED: &str = "00000000-0000-4000-8000-0000000000e1";
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let project = home.join(".claude/projects/-synthetic-event-owner");
+    fs::create_dir_all(&project).unwrap();
+    let first_path = project.join(format!("{SID}.jsonl"));
+    fs::write(
+        &first_path,
+        native_line(
+            json!({"uuid":SHARED,"type":"system",
+        "subtype":"stop_hook_summary","timestamp":"2026-09-07T12:00:00Z","hookCount":1}),
+            SID,
+        ) + "\n",
+    )
+    .unwrap();
+    let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+    assert!(run(&mut store, &home).complete());
+    let original = store.tool_events(SID).unwrap();
+    assert_eq!(original.len(), 1);
+    assert_eq!(original[0].source_event_id, SHARED);
+    assert_eq!(original[0].kind, xt_store::ingest::ToolKind::Hook);
+    assert!(store.records(SID).unwrap().is_empty());
+    let original_checkpoint = store
+        .native_checkpoint(
+            SessionSource::Transcript,
+            &format!("claude:{}", first_path.display()),
+        )
+        .unwrap();
+    assert!(original_checkpoint.is_some());
+
+    // This later canonical record changes structural_owner's first choice to
+    // SECOND; the previously committed hook must still arbitrate the identity.
+    let second_path = project.join(format!("{SECOND}.jsonl"));
+    fs::write(
+        &second_path,
+        native_line(
+            json!({"uuid":SHARED,"type":"user",
+        "timestamp":"2026-09-07T12:00:00Z","message":{"role":"user",
+        "content":[{"type":"text","text":"<command-name>/login</command-name>"}]}}),
+            SECOND,
+        ) + "\n",
+    )
+    .unwrap();
+    let source_bytes = hashes(&home);
+    let report = run(&mut store, &home);
+    assert_eq!(hashes(&home), source_bytes);
+    assert_eq!(store.tool_events(SID).unwrap(), original);
+    assert_eq!(
+        store
+            .native_checkpoint(
+                SessionSource::Transcript,
+                &format!("claude:{}", first_path.display())
+            )
+            .unwrap()
+            .unwrap()
+            .position,
+        original_checkpoint.unwrap().position
+    );
+    let second_checkpoint = store
+        .native_checkpoint(
+            SessionSource::Transcript,
+            &format!("claude:{}", second_path.display()),
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            store.tool_events(SECOND).unwrap().len(),
+            store.records(SECOND).unwrap().len(),
+            second_checkpoint.map(|checkpoint| checkpoint.position)
+        ),
+        (0, 0, None),
+        "a conflicting structural identity must roll back the later command record, event and checkpoint; report: {report:?}"
+    );
+    assert!(
+        !report.complete(),
+        "the later conflicting replay must be reported"
+    );
+}
