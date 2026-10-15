@@ -174,7 +174,8 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let id = insert_tool_event(&transaction, event)?;
+        let id = insert_tool_event(&transaction, event, true)?
+            .expect("the public event API permits new event insertion");
         transaction.commit()?;
         Ok(id)
     }
@@ -239,7 +240,11 @@ pub(crate) fn structural_owner(
 ///
 /// Callers inside a batch pass that batch's transaction; the public wrapper
 /// opens an immediate one, so the read and the insert cannot race a writer.
-pub(crate) fn insert_tool_event(connection: &Connection, event: &ToolEvent) -> Result<i64> {
+pub(crate) fn insert_tool_event(
+    connection: &Connection,
+    event: &ToolEvent,
+    acquire: bool,
+) -> Result<Option<i64>> {
     if event.name.trim().is_empty() {
         return Err(Error::InvalidInput("tool event name must be nonempty"));
     }
@@ -303,7 +308,12 @@ pub(crate) fn insert_tool_event(connection: &Connection, event: &ToolEvent) -> R
                 "structural tool event identity replays with conflicting facts",
             ));
         }
-        return Ok(id);
+        return Ok(Some(id));
+    }
+    // A contradicted command occurrence can establish no new event. Existing
+    // identities above still compare all facts and fail on a conflicting replay.
+    if !acquire {
+        return Ok(None);
     }
     connection.execute(
         "INSERT INTO tool_uses(session_id,source,source_event_id,name,kind,server,tool,skill,event_ts)
@@ -320,7 +330,7 @@ pub(crate) fn insert_tool_event(connection: &Connection, event: &ToolEvent) -> R
             event.timestamp
         ],
     )?;
-    Ok(connection.last_insert_rowid())
+    Ok(Some(connection.last_insert_rowid()))
 }
 
 fn tool_event_from_row(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<ToolEvent> {

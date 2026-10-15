@@ -83,6 +83,15 @@ it, any more than onto the session that rejected it. An accepted native copy is
 not rejected and still resolves to the canonical record's owner, which is why a
 fork still counts one event rather than none.
 
+A new command event also requires agreement with the record's known retained
+content, content measurements, role and classification. Unrelated timestamp,
+model or usage conflicts do not block it, and unknown facts can still fill.
+Leading-whitespace commands remain valid even though historical raw-prefix
+classification may say false. If repeated occurrences of one UUID contradict
+those facts, no new command event is acquired for that UUID. An already stored
+event still checks every replay for conflicting facts and rolls back the batch;
+this acquisition rule does not bypass event identity checks or affect hooks.
+
 ## Replay
 
 An index written by an earlier build holds tool rows with names and positions

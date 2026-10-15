@@ -1416,3 +1416,334 @@ fn structural_timestamp_cross_source_and_hook_replays_preserve_first_spelling() 
         assert_eq!(events[0].timestamp.as_deref(), Some(times[0]));
     }
 }
+
+fn conflicting_command_replay_cannot_create_event(keep_content: bool, replay_content: bool) {
+    let mut db = TempDb::empty().unwrap();
+    if keep_content {
+        db.store_mut()
+            .set_retention_mode(xt_store::retention::RetentionMode::FullContent)
+            .unwrap();
+    }
+    let context = context(SESSION, SessionSource::Transcript);
+    let command = command_record(COMMAND_UUID);
+    let command_text = command.canonical.message.content.as_ref().unwrap()[0]["text"]
+        .as_str()
+        .unwrap();
+    // Equal lengths isolate retained-content/classification disagreement from a
+    // simple text-length conflict, including when no text is persisted.
+    let mut ordinary = command.clone();
+    ordinary.canonical.message.content.as_mut().unwrap()[0]["text"] =
+        json!("x".repeat(command_text.len()));
+    write_batch(
+        db.store_mut(),
+        &request(&context, &[ordinary], &[], None, keep_content),
+    )
+    .unwrap();
+    let before = db.store().records(SESSION).unwrap().remove(0);
+    if !replay_content {
+        db.store_mut()
+            .set_retention_mode(xt_store::retention::RetentionMode::MetadataOnly)
+            .unwrap();
+    }
+    assert_eq!(before.classification.is_command, Some(false));
+    assert!(db.store().tool_events(SESSION).unwrap().is_empty());
+    let result = write_batch(
+        db.store_mut(),
+        &request(&context, &[command], &[], None, replay_content),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            result.records_new,
+            result.records_enriched,
+            result.records_dropped
+        ),
+        (0, 0, 0),
+        "same-owner content conflicts remain accepted duplicates"
+    );
+    let after = db.store().records(SESSION).unwrap().remove(0);
+    assert_eq!(after.content_json, before.content_json);
+    assert_eq!(after.classification.is_command, Some(false));
+    assert!(after.has_conflict);
+    assert!(
+        db.store().tool_events(SESSION).unwrap().is_empty(),
+        "a retained ordinary record must not gain a command from a conflicting accepted replay"
+    );
+}
+
+#[test]
+fn reviewed_command_conflict_retained_content_creates_no_event() {
+    conflicting_command_replay_cannot_create_event(true, true);
+}
+
+#[test]
+fn reviewed_command_conflict_metadata_classification_creates_no_event() {
+    conflicting_command_replay_cannot_create_event(false, false);
+}
+
+#[test]
+fn reviewed_command_conflict_compatible_legacy_fill_and_unrelated_conflicts_still_work() {
+    for unrelated in [false, true] {
+        let mut db = TempDb::empty().unwrap();
+        let mut command = command_record(COMMAND_UUID);
+        command.canonical.message.usage =
+            Some(serde_json::from_value(json!({"input_tokens":1})).unwrap());
+        // The old canonical API writes the known command classification but no
+        // structural event. Its first compatible writer replay must fill it.
+        db.store_mut()
+            .upsert_session(
+                &xt_store::SessionMeta::new(SESSION, "claude", SessionSource::Transcript),
+                false,
+            )
+            .unwrap();
+        db.store_mut()
+            .upsert_records(SESSION, &[command.canonical.clone()], false)
+            .unwrap();
+        assert!(db.store().tool_events(SESSION).unwrap().is_empty());
+        if unrelated {
+            command.canonical.timestamp = Some("2026-09-07T12:00:10Z".into());
+            command
+                .canonical
+                .message
+                .usage
+                .as_mut()
+                .unwrap()
+                .input_tokens = Some(2);
+        }
+        let context = context(SESSION, SessionSource::Transcript);
+        for _ in 0..2 {
+            write_batch(
+                db.store_mut(),
+                &request(&context, &[command.clone()], &[], None, false),
+            )
+            .unwrap();
+            let row = db.store().records(SESSION).unwrap().remove(0);
+            assert_eq!(row.classification.is_command, Some(true));
+            assert_eq!(row.has_conflict, unrelated);
+            assert_eq!(db.store().tool_events(SESSION).unwrap().len(), 1);
+        }
+    }
+}
+
+#[test]
+fn reviewed_command_conflict_retained_to_metadata_replay_creates_no_event() {
+    conflicting_command_replay_cannot_create_event(true, false);
+}
+
+#[test]
+fn reviewed_command_conflict_same_length_legacy_name_change_preserves_receipts() {
+    for plugin in [false, true] {
+        let mut db = TempDb::empty().unwrap();
+        db.store_mut()
+            .set_retention_mode(xt_store::retention::RetentionMode::FullContent)
+            .unwrap();
+        let mut command = command_record(COMMAND_UUID);
+        command.canonical.message.content.as_mut().unwrap()[0]["text"] =
+            json!("<command-name>/alpha</command-name>");
+        db.store_mut()
+            .upsert_session(
+                &xt_store::SessionMeta::new(SESSION, "claude", SessionSource::Transcript),
+                true,
+            )
+            .unwrap();
+        db.store_mut()
+            .upsert_records(SESSION, &[command.canonical.clone()], true)
+            .unwrap();
+        let parent = receipt("legacy-command", SESSION);
+        db.store_mut()
+            .insert_capture_receipt(
+                &parent,
+                &[xt_ingest::writer::coverage(SESSION, &command).unwrap()],
+            )
+            .unwrap();
+        let coverage = db.store().capture_coverage(&parent.receipt_id).unwrap();
+        let before = db.store().records(SESSION).unwrap().remove(0);
+        assert!(db.store().tool_events(SESSION).unwrap().is_empty());
+        db.store_mut()
+            .set_retention_mode(xt_store::retention::RetentionMode::MetadataOnly)
+            .unwrap();
+        command.canonical.message.content.as_mut().unwrap()[0]["text"] =
+            json!("<command-name>/bravo</command-name>");
+        let source = if plugin {
+            SessionSource::Plugin
+        } else {
+            SessionSource::Transcript
+        };
+        let context = context(SESSION, source);
+        let discovery = discovered(SESSION);
+        let incoming = [command];
+        let new_receipt = receipt("new-command-attempt", SESSION);
+        let mut batch = request(
+            &context,
+            &incoming,
+            &[],
+            plugin.then_some(&new_receipt),
+            false,
+        );
+        batch.discovery = (!plugin).then_some(&discovery);
+        let outcome = write_batch(db.store_mut(), &batch).unwrap();
+        assert_eq!(outcome.records_dropped, 0);
+        let after = db.store().records(SESSION).unwrap().remove(0);
+        assert_eq!(after.content_json, before.content_json);
+        assert_eq!(after.classification, before.classification);
+        assert!(db.store().tool_events(SESSION).unwrap().is_empty());
+        assert_eq!(
+            db.store().capture_coverage(&parent.receipt_id).unwrap(),
+            coverage
+        );
+        let receipts = db.store().capture_receipts(SESSION).unwrap();
+        assert!(receipts.contains(&parent));
+        assert_eq!(
+            receipts.len(),
+            1 + usize::from(plugin),
+            "accepted plugin receipt semantics stay unchanged"
+        );
+    }
+}
+
+#[test]
+fn reviewed_command_conflict_whitespace_prefix_allows_unknown_but_not_contradicted_content() {
+    for seed in ["fresh", "unknown", "ordinary"] {
+        let mut db = TempDb::empty().unwrap();
+        let context = context(SESSION, SessionSource::Transcript);
+        let mut command = command_record(COMMAND_UUID);
+        let text = " \t<command-name>/login</command-name>";
+        command.canonical.message.content.as_mut().unwrap()[0]["text"] = json!(text);
+        if seed != "fresh" {
+            let mut previous = command.clone();
+            if seed == "unknown" {
+                previous.canonical.message.content = None;
+                previous.canonical.message.role = None;
+            } else {
+                previous.canonical.message.content.as_mut().unwrap()[0]["text"] =
+                    json!("x".repeat(text.len()));
+            }
+            write_batch(
+                db.store_mut(),
+                &request(&context, &[previous], &[], None, false),
+            )
+            .unwrap();
+        }
+        write_batch(
+            db.store_mut(),
+            &request(&context, &[command], &[], None, false),
+        )
+        .unwrap();
+        let row = db.store().records(SESSION).unwrap().remove(0);
+        assert_eq!(
+            row.classification.is_command,
+            Some(false),
+            "historical raw-prefix classification stays unchanged"
+        );
+        assert_eq!(
+            db.store().tool_events(SESSION).unwrap().len(),
+            usize::from(seed != "ordinary"),
+            "seed={seed}"
+        );
+    }
+}
+
+#[test]
+fn reviewed_command_conflict_repeated_occurrences_conservatively_block_new_event_in_both_orders() {
+    for keep_content in [false, true] {
+        for command_first in [false, true] {
+            let mut db = TempDb::empty().unwrap();
+            if keep_content {
+                db.store_mut()
+                    .set_retention_mode(xt_store::retention::RetentionMode::FullContent)
+                    .unwrap();
+            }
+            let context = context(SESSION, SessionSource::Transcript);
+            let command = command_record(COMMAND_UUID);
+            let mut ordinary = command.clone();
+            let length = ordinary.canonical.message.content.as_ref().unwrap()[0]["text"]
+                .as_str()
+                .unwrap()
+                .len();
+            ordinary.canonical.message.content.as_mut().unwrap()[0]["text"] =
+                json!("x".repeat(length));
+            let inputs = if command_first {
+                [command, ordinary]
+            } else {
+                [ordinary, command]
+            };
+            let outcome = write_batch(
+                db.store_mut(),
+                &request(&context, &inputs, &[], None, keep_content),
+            )
+            .unwrap();
+            assert_eq!(outcome.records_dropped, 0);
+            let row = db.store().records(SESSION).unwrap().remove(0);
+            assert_eq!(row.classification.is_command, Some(command_first));
+            assert!(row.has_conflict);
+            assert!(
+                db.store().tool_events(SESSION).unwrap().is_empty(),
+                "one contradicted occurrence blocks new command evidence for the whole UUID"
+            );
+            if command_first {
+                write_batch(
+                    db.store_mut(),
+                    &request(&context, &inputs[..1], &[], None, keep_content),
+                )
+                .unwrap();
+                assert!(db.store().records(SESSION).unwrap()[0].has_conflict);
+                assert_eq!(
+                    db.store().tool_events(SESSION).unwrap().len(),
+                    1,
+                    "a later matching observation can acquire the command despite sticky conflict"
+                );
+            }
+        }
+    }
+    let mut db = TempDb::empty().unwrap();
+    let context = context(SESSION, SessionSource::Transcript);
+    let command = command_record(COMMAND_UUID);
+    write_batch(
+        db.store_mut(),
+        &request(&context, &[command.clone(), command], &[], None, false),
+    )
+    .unwrap();
+    assert_eq!(db.store().tool_events(SESSION).unwrap().len(), 1);
+}
+
+#[test]
+fn reviewed_command_conflict_existing_event_still_rolls_back_companion_and_checkpoint() {
+    for keep_content in [false, true] {
+        let mut db = TempDb::empty().unwrap();
+        if keep_content {
+            db.store_mut()
+                .set_retention_mode(xt_store::retention::RetentionMode::FullContent)
+                .unwrap();
+        }
+        let context = context(SESSION, SessionSource::Transcript);
+        let mut command = command_record(COMMAND_UUID);
+        write_batch(
+            db.store_mut(),
+            &request(&context, &[command.clone()], &[], None, keep_content),
+        )
+        .unwrap();
+        let records = db.store().records(SESSION).unwrap();
+        let events = db.store().tool_events(SESSION).unwrap();
+        command.canonical.message.content.as_mut().unwrap()[0]["text"] =
+            json!("<command-name>/other</command-name>");
+        let incoming = [command_record("fresh-companion"), command];
+        let checkpoint = xt_store::batch::NativeCheckpoint {
+            source: SessionSource::Transcript,
+            cursor_key: "claude:command-replay".into(),
+            generation: "{}".into(),
+            position: 200,
+            updated_at: 100,
+        };
+        let mut batch = request(&context, &incoming, &[], None, keep_content);
+        batch.checkpoint = Some(&checkpoint);
+        assert!(write_batch(db.store_mut(), &batch).is_err());
+        assert_eq!(db.store().records(SESSION).unwrap(), records);
+        assert_eq!(db.store().tool_events(SESSION).unwrap(), events);
+        assert!(
+            db.store()
+                .native_checkpoint(SessionSource::Transcript, &checkpoint.cursor_key)
+                .unwrap()
+                .is_none()
+        );
+    }
+}

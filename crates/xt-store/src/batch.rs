@@ -156,6 +156,9 @@ pub struct RecordOutcome {
     pub disposition: RecordDisposition,
     /// Conflicting known measurement fields from this input under the write lock.
     pub conflict_fields: i64,
+    /// This occurrence agrees with known content and command classification.
+    /// Used only when acquiring a new command event, never for replay equality.
+    pub command_compatible: bool,
     /// Sticky row conflict state immediately after this input. A later input of
     /// the same UUID can add a conflict; this is not a per-field provenance mask.
     pub stored_has_conflict: Option<bool>,
@@ -310,6 +313,14 @@ impl Store {
             .filter_map(|record| record.uuid.as_deref())
             .filter(|uuid| !rejected.contains(uuid))
             .collect::<BTreeSet<_>>();
+        // Any contradicted occurrence makes a new command's UUID-level evidence
+        // ambiguous, including when another occurrence in this batch agrees.
+        let incompatible_commands = outcome
+            .records
+            .iter()
+            .filter(|record| !record.command_compatible)
+            .filter_map(|record| record.uuid.as_deref())
+            .collect::<BTreeSet<_>>();
         // A stored UUID outside this submission (or rejected by the merger) must
         // not acquire this batch's source/receipt evidence just because it exists.
         // Any rejected occurrence makes UUID-level evidence ambiguous, even if
@@ -384,7 +395,9 @@ impl Store {
             // rejection is exactly the evidence that this input is not a
             // trustworthy account of it. An accepted native copy is not
             // rejected, so it still resolves to the canonical record's owner.
-            ingest::insert_tool_event(&transaction, event)?;
+            let acquire = event.kind != crate::ingest::ToolKind::Command
+                || !incompatible_commands.contains(event.source_event_id.as_str());
+            ingest::insert_tool_event(&transaction, event, acquire)?;
         }
         if provisional {
             if !outcome

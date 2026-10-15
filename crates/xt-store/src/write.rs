@@ -141,6 +141,7 @@ pub(crate) fn upsert_records(
                 uuid: None,
                 disposition: RecordDisposition::DroppedMissingUuid,
                 conflict_fields: 0,
+                command_compatible: false,
                 stored_has_conflict: None,
             });
             continue;
@@ -329,6 +330,31 @@ pub(crate) fn upsert_records(
             })
             .transpose()?
             .unwrap_or(0);
+        // Reuse this occurrence's pre-retention comparison and measurement
+        // conflicts. Time, model, usage and sticky conflict state say nothing
+        // about whether its command marker agrees with known record content.
+        let command_compatible = retained_content_compatible
+            && crate::measurement::FIELDS
+                .iter()
+                .enumerate()
+                .all(|(bit, field)| {
+                    conflict_fields & (1_i64 << bit) == 0
+                        || !matches!(
+                            *field,
+                            "type"
+                                | "is_meta"
+                                | "is_sidechain"
+                                | "role"
+                                | "tool_result_carrier"
+                                | "text_len"
+                                | "tool_use_count"
+                                | "tools"
+                                | "is_human"
+                                | "is_command"
+                                | "is_interrupted"
+                                | "is_system_reminder"
+                        )
+                });
         if native_history
             && !incoming.has_conflict
             && native_owner
@@ -395,6 +421,7 @@ pub(crate) fn upsert_records(
                         RecordDisposition::Duplicate
                     },
                     conflict_fields: 0,
+                    command_compatible,
                     stored_has_conflict: Some(stored.has_conflict),
                 });
                 continue;
@@ -431,6 +458,7 @@ pub(crate) fn upsert_records(
                 },
                 stored_has_conflict: Some(true),
                 conflict_fields,
+                command_compatible: false,
             });
             continue;
         }
@@ -469,6 +497,7 @@ pub(crate) fn upsert_records(
             uuid: Some(uuid.to_owned()),
             disposition,
             conflict_fields,
+            command_compatible,
             stored_has_conflict: Some(stored_has_conflict),
         });
     }
