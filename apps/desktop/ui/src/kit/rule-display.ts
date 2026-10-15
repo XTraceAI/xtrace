@@ -11,7 +11,7 @@ const referenceNames = {
   'M-01': 'event windows',
   'M-02': 'human messages',
   'M-03': 'assistant turns',
-  'M-04': 'tokens and cost',
+  'M-04': 'token usage',
   'M-05': 'active spans',
   'M-07': 'human-in-the-loop',
   'M-09': 'hands-off',
@@ -36,6 +36,7 @@ const referencePattern = new RegExp(
 export function displayRuleText(id: RuleId): string {
   return ruleText(id)
     .replace(/(?<![\w-])M-05 minutes(?![\w-])/g, 'agent minutes')
+    .replace(/(?<![\w-])M-04 selected usage(?![\w-])/g, 'selected token usage')
     .replace(
       referencePattern,
       (reference) => referenceNames[reference as keyof typeof referenceNames],

@@ -35,3 +35,13 @@ it('keeps meaningful formulas, technical details and readable references', () =>
   );
   expect(displayRuleText('M-06')).toBe(rules['M-06']);
 });
+
+it('keeps linked-PR totals token-only and capture verification tied to selected token usage', () => {
+  expect(displayRuleText('M-11')).toContain(
+    'Linked-session tokens per merged PR = Σ token usage over distinct sessions linked to that PR, within the selected event window;',
+  );
+  expect(displayRuleText('M-11')).not.toContain('tokens and cost');
+  expect(displayRuleText('U-08')).toContain(
+    'every selected token usage representative at the exact measurement revision used by that aggregate.',
+  );
+});
