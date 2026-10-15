@@ -47,9 +47,9 @@ the checkpoint covering it.
 
 An event's identity is the native record or event UUID it came from. A summary
 carrying no UUID is unsupported and is never given an arrival-ordered identity
-instead. The event is stored under one session, resolved in a fixed order: the
-canonical record holding the UUID owns it, otherwise an event already stored
-under the identity keeps its session, otherwise the identity is new and this
+instead. A newly ingested event is stored under one session: the
+canonical record holding the UUID owns it, otherwise an agreed existing event
+keeps its session, otherwise the identity is new and this
 batch's session holds it. A native fork repeating the same line in several files
 therefore counts one event, stored once, exactly as its copied work record is
 one record with an additional session context.
@@ -57,14 +57,14 @@ one record with an additional session context.
 Only the first step is provenance. A hook summary is no record, so nothing
 establishes which session originally produced it; the second step is a stable
 storage convention, and which context happens to be scanned first is the one
-that holds it. What it guarantees is that the identity has exactly one home and
+that holds it. For newly ingested identities, this keeps one home and
 that a later context does not move it, not that the home is the summary's
 origin.
 
 The search is globally by the exact raw `source_event_id`, regardless of session
 or delivery source, under the batch's immediate transaction. Whitespace is used
 only to reject a blank ID; nonblank IDs retain their original bytes. The same native event
-delivered by the plugin and by the native scan, in either order, is one row, a
+newly delivered by the plugin and by the native scan, in either order, is one row, a
 plain retry adds nothing, and the same identity replayed with different facts
 or a different resolved owner fails the whole batch. Event times compare by their
 precise instant, including fractional digits beyond nanoseconds; equivalent UTC
@@ -91,6 +91,36 @@ classification may say false. If repeated occurrences of one UUID contradict
 those facts, no new command event is acquired for that UUID. An already stored
 event still checks every replay for conflicting facts and rolls back the batch;
 this acquisition rule does not bypass event identity checks or affect hooks.
+
+## Preserved historical observations
+
+The older public event API permitted several saved observations of one raw ID.
+They remain unchanged. `Store::tool_events(session)` is the raw observation
+reader and is not a logical call-count API. `Store::resolved_tool_events()` and
+`xt_store::ingest::resolved_tool_events(&connection)` use the same full-group
+resolver as writes. The connection helper runs on the caller's existing snapshot
+without opening a store or applying migrations; its exported query also supplies
+the required columns for a reader's schema probe.
+
+A group resolves only when every saved owner and event fact agrees, including
+the optional precise instant. A canonical record owner must agree with every
+saved owner too. Different delivery sources and equivalent timestamp spellings
+are allowed. After agreement is proven, the smallest existing row ID is a stable
+representative handle; it does not choose an authoritative origin or remove
+another observation. A matching retry inserts nothing. Any conflicting saved
+group rejects a write even when the incoming event matches one member, rolling
+back its companions, pending receipts and checkpoint.
+
+The resolved read returns conflicting facts or uncertain ownership explicitly,
+with every saved observation and canonical-owner candidate. Historical tab or
+Unicode-whitespace-only IDs are preserved as separate missing-identity entries;
+equal blank spellings cannot establish a shared event. Empty and ASCII-space-only
+IDs were already refused by the old schema. Nonblank padded IDs remain distinct.
+Consumers must resolve complete groups before time, session or work filtering,
+count resolved groups once, and use the unresolved owner/time candidates to mark
+affected totals incomplete. Unresolved saved-row counts are not measured calls.
+This storage API supplies that decision; Environment aggregation and display
+consume it separately. Migration 6 still changes only transcript checkpoints.
 
 ## Replay
 

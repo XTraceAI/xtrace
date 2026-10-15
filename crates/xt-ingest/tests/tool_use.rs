@@ -1747,3 +1747,100 @@ fn reviewed_command_conflict_existing_event_still_rolls_back_companion_and_check
         );
     }
 }
+
+#[test]
+fn legacy_event_group_arbitration_preserves_rows_and_rolls_back_the_whole_writer_batch() {
+    for conflicting in [false, true] {
+        for plugin in [false, true] {
+            let mut db = TempDb::empty().unwrap();
+            db.store_mut()
+                .upsert_session(
+                    &xt_store::SessionMeta::new(SESSION, "claude", SessionSource::Transcript),
+                    false,
+                )
+                .unwrap();
+            let sql = Connection::open(db.path()).unwrap();
+            // The old public event API executed this legal INSERT. Migration history
+            // is unchanged; the actual af60 upgrade probes are preserved separately.
+            for source in [SessionSource::Transcript, SessionSource::Plugin] {
+                let name = if conflicting && source == SessionSource::Plugin {
+                    "different-hook"
+                } else {
+                    HOOK_EVENT_NAME
+                };
+                sql.execute("INSERT INTO tool_uses(session_id,source,source_event_id,name,kind,event_ts) VALUES (?1,?2,?3,?4,'hook',?5)",rusqlite::params![SESSION,source,SUMMARY_UUID,name,"2026-09-07T12:00:02Z"]).unwrap();
+            }
+            let old_events = db.store().tool_events(SESSION).unwrap();
+            let old_session = db.store().session(SESSION).unwrap();
+            let earlier = xt_store::batch::NativeCheckpoint {
+                source: SessionSource::Transcript,
+                cursor_key: "claude:legacy-group".into(),
+                generation: "{}".into(),
+                position: 10,
+                updated_at: 10,
+            };
+            db.store_mut().record_native_checkpoint(&earlier).unwrap();
+            let checkpoint = xt_store::batch::NativeCheckpoint {
+                position: 200,
+                updated_at: 100,
+                ..earlier.clone()
+            };
+            let source = if plugin {
+                SessionSource::Plugin
+            } else {
+                SessionSource::Transcript
+            };
+            let context = context(SESSION, source);
+            let records = [command_record("fresh-companion")];
+            let summaries = [hook_summary(SUMMARY_UUID)];
+            let receipt = receipt("legacy-group-replay", SESSION);
+            let mut batch = request(
+                &context,
+                &records,
+                &summaries,
+                plugin.then_some(&receipt),
+                false,
+            );
+            batch.checkpoint = (!plugin).then_some(&checkpoint);
+            let result = write_batch(db.store_mut(), &batch);
+            assert_eq!(result.is_err(), conflicting);
+            let events = db.store().tool_events(SESSION).unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e.source_event_id == SUMMARY_UUID)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                old_events
+            );
+            if conflicting {
+                assert_eq!(events, old_events);
+                assert!(db.store().records(SESSION).unwrap().is_empty());
+                assert!(db.store().capture_receipts(SESSION).unwrap().is_empty());
+                assert!(db.store().session_sources(SESSION).unwrap().is_empty());
+                assert_eq!(db.store().session(SESSION).unwrap(), old_session);
+            } else {
+                assert_eq!(
+                    events.len(),
+                    3,
+                    "two unchanged observations plus the fresh companion event"
+                );
+                assert_eq!(db.store().records(SESSION).unwrap().len(), 1);
+                assert_eq!(
+                    db.store().capture_receipts(SESSION).unwrap().len(),
+                    usize::from(plugin)
+                );
+            }
+            assert_eq!(
+                db.store()
+                    .native_checkpoint(SessionSource::Transcript, &earlier.cursor_key)
+                    .unwrap(),
+                Some(if conflicting || plugin {
+                    earlier
+                } else {
+                    checkpoint
+                })
+            );
+        }
+    }
+}

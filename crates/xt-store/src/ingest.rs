@@ -82,6 +82,147 @@ pub struct ToolEvent {
     pub skill: Option<String>,
 }
 
+/// One unchanged stored observation and its current canonical owner, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolEventObservation {
+    pub id: i64,
+    pub event: ToolEvent,
+    pub canonical_owner: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolEventUncertainty {
+    MissingIdentity,
+    ConflictingOwnership,
+    ConflictingFacts,
+}
+
+/// A logical event only when every saved observation agrees. The representative
+/// is a stable handle, not an authoritative choice among conflicting facts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolEventResolution {
+    Resolved(ToolEventObservation),
+    Unresolved {
+        reason: ToolEventUncertainty,
+        observations: Vec<ToolEventObservation>,
+    },
+}
+
+/// Shared read requirements, also available for a consumer's connection-time
+/// schema probe. Bind NULL for all rows or an exact raw event ID for one group.
+/// No window/session filter may hide a disagreeing member before resolution.
+pub const TOOL_EVENT_OBSERVATIONS_QUERY: &str =
+    "SELECT t.id,t.session_id,t.source,t.source_event_id,t.name,t.kind,t.server,t.tool,t.skill,t.event_ts,r.session_id
+     FROM tool_uses t LEFT JOIN records r ON r.uuid=t.source_event_id
+     WHERE t.uuid IS NULL AND (?1 IS NULL OR t.source_event_id=?1) ORDER BY t.id";
+
+/// Resolve structural events on the caller's existing connection/snapshot.
+/// This reads only; it opens no Store, runs no migration and changes no row.
+/// Unresolved entries preserve candidate owners/times for downstream completeness
+/// reporting and must not be interpreted as measured calls.
+pub fn resolved_tool_events(connection: &Connection) -> Result<Vec<ToolEventResolution>> {
+    let mut groups = std::collections::BTreeMap::<String, Vec<ToolEventObservation>>::new();
+    let mut result = Vec::new();
+    for observation in tool_event_observations(connection, None)? {
+        if observation.event.source_event_id.trim().is_empty() {
+            // Equal blank spellings do not establish a shared native identity.
+            result.push(ToolEventResolution::Unresolved {
+                reason: ToolEventUncertainty::MissingIdentity,
+                observations: vec![observation],
+            });
+        } else {
+            groups
+                .entry(observation.event.source_event_id.clone())
+                .or_default()
+                .push(observation);
+        }
+    }
+    for observations in groups.into_values() {
+        result.push(resolve_tool_event_group(observations)?);
+    }
+    Ok(result)
+}
+
+fn tool_event_observations(
+    connection: &Connection,
+    id: Option<&str>,
+) -> Result<Vec<ToolEventObservation>> {
+    Ok(connection
+        .prepare(TOOL_EVENT_OBSERVATIONS_QUERY)?
+        .query_map([id], |row| {
+            Ok(ToolEventObservation {
+                id: row.get(0)?,
+                event: tool_event_from_row(row, 1)?,
+                canonical_owner: row.get(10)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+fn resolve_tool_event_group(
+    observations: Vec<ToolEventObservation>,
+) -> Result<ToolEventResolution> {
+    let first = observations
+        .first()
+        .expect("a stored event group is nonempty");
+    if observations.iter().any(|row| {
+        row.event.session_id != first.event.session_id
+            || row
+                .canonical_owner
+                .as_ref()
+                .is_some_and(|owner| owner != &row.event.session_id)
+    }) {
+        return Ok(ToolEventResolution::Unresolved {
+            reason: ToolEventUncertainty::ConflictingOwnership,
+            observations,
+        });
+    }
+    for row in &observations {
+        if !same_tool_event(&first.event, &row.event)? {
+            return Ok(ToolEventResolution::Unresolved {
+                reason: ToolEventUncertainty::ConflictingFacts,
+                observations,
+            });
+        }
+    }
+    // The shared query orders by ID; select a handle only after all facts agree.
+    Ok(ToolEventResolution::Resolved(first.clone()))
+}
+
+fn same_tool_event(saved: &ToolEvent, incoming: &ToolEvent) -> Result<bool> {
+    let saved_instant = saved
+        .timestamp
+        .as_deref()
+        .map(timestamp::parse)
+        .transpose()?
+        .map(|(key, _)| key);
+    let incoming_instant = incoming
+        .timestamp
+        .as_deref()
+        .map(timestamp::parse)
+        .transpose()?
+        .map(|(key, _)| key);
+    Ok((
+        &saved.session_id,
+        &saved.source_event_id,
+        &saved.name,
+        saved.kind,
+        &saved.server,
+        &saved.tool,
+        &saved.skill,
+        saved_instant,
+    ) == (
+        &incoming.session_id,
+        &incoming.source_event_id,
+        &incoming.name,
+        incoming.kind,
+        &incoming.server,
+        &incoming.tool,
+        &incoming.skill,
+        incoming_instant,
+    ))
+}
+
 impl Store {
     /// Monotonic observation interval; this is not a delivery receipt.
     pub fn observe_session_source(&mut self, observation: &SessionSourceObservation) -> Result<()> {
@@ -168,8 +309,8 @@ impl Store {
     /// Store only the classified event identity and names, with no record FK
     /// when the native event is not a canonical user/assistant record.
     /// Idempotent for the event's own stable identity, and bound to the session
-    /// that owns that identity rather than the supplied one: see
-    /// `insert_tool_event` and `structural_owner`.
+    /// that owns that identity rather than the supplied one. All saved
+    /// observations must agree; unresolved historical groups fail explicitly.
     pub fn insert_tool_event(&mut self, event: &ToolEvent) -> Result<i64> {
         let transaction = self
             .connection
@@ -180,6 +321,8 @@ impl Store {
         Ok(id)
     }
 
+    /// Raw historical observations, including duplicates. For logical events
+    /// and explicit uncertainty, use the resolved reader instead of row counts.
     pub fn tool_events(&self, session_id: &str) -> Result<Vec<ToolEvent>> {
         Ok(self.connection.prepare(
             "SELECT session_id,source,source_event_id,name,kind,server,tool,skill,event_ts FROM tool_uses
@@ -188,58 +331,16 @@ impl Store {
         .query_map([session_id], |row| tool_event_from_row(row, 0))?
         .collect::<rusqlite::Result<_>>()?)
     }
-}
 
-/// The session a structural identity is stored under, so that a native fork
-/// repeating the same line in several files yields one event rather than one
-/// per file. Resolved in this order:
-///
-/// 1. The canonical record carrying this UUID owns it. That is the existing
-///    ownership rule `upsert_records` enforces, so a copied context resolves to
-///    the record's owner however many files repeat the line. This step is real
-///    provenance: the owner is where the work record is actually stored.
-/// 2. Otherwise, a structural event already stored under this identity keeps
-///    its session. This step is a stable storage convention, not provenance. A
-///    hook summary is no record, so nothing here establishes which session
-///    originally produced it; whichever context was scanned first is the one
-///    that holds it, and a later context does not move it. The value is that
-///    the identity has exactly one home and that home does not change, not that
-///    the home is the summary's origin.
-/// 3. Otherwise the identity is new and the caller's session holds it.
-pub(crate) fn structural_owner(
-    connection: &Connection,
-    source_event_id: &str,
-) -> Result<Option<String>> {
-    if let Some(owner) = connection
-        .query_row(
-            "SELECT session_id FROM records WHERE uuid=?1",
-            [source_event_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-    {
-        return Ok(Some(owner));
+    pub fn resolved_tool_events(&self) -> Result<Vec<ToolEventResolution>> {
+        resolved_tool_events(&self.connection)
     }
-    Ok(connection
-        .query_row(
-            "SELECT session_id FROM tool_uses WHERE source_event_id=?1 AND uuid IS NULL",
-            [source_event_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?)
 }
 
-/// Insert one structural event, or recognise the one already stored under the
-/// same stable identity. The event is bound to the session `structural_owner`
-/// resolves, not to the one the caller supplied, so a copied native context
-/// adds no second row. The search is globally by the raw `source_event_id`,
-/// regardless of session or source, so the same native event delivered by the plugin
-/// and by the native scan, in either order, is one row and a plain retry adds
-/// nothing. An identity that arrives again with different facts is a conflict:
-/// it fails, leaving the stored event untouched.
-///
-/// Callers inside a batch pass that batch's transaction; the public wrapper
-/// opens an immediate one, so the read and the insert cannot race a writer.
+/// Match a complete stored group under the caller's immediate transaction.
+/// Canonical ownership takes priority for new identities; saved groups must
+/// already agree with it. Matching copies bind to the group's unanimous owner.
+/// Acquisition permission never bypasses existing-group arbitration.
 pub(crate) fn insert_tool_event(
     connection: &Connection,
     event: &ToolEvent,
@@ -254,67 +355,44 @@ pub(crate) fn insert_tool_event(
             "structural tool event requires a stable source event ID",
         ));
     }
-    let instant = event
-        .timestamp
-        .as_deref()
-        .map(timestamp::parse)
-        .transpose()?
-        .map(|(key, _)| key);
-    let owner = structural_owner(connection, &event.source_event_id)?
-        .unwrap_or_else(|| event.session_id.clone());
-    let stored = connection
-        .query_row(
-            "SELECT id,session_id,source,source_event_id,name,kind,server,tool,skill,event_ts
-             FROM tool_uses WHERE source_event_id=?1 AND uuid IS NULL",
-            [&event.source_event_id],
-            |row| Ok((row.get::<_, i64>(0)?, tool_event_from_row(row, 1)?)),
-        )
-        .optional()?;
-    // Compare against the identity as owned, so a copied context is recognised
-    // as the same event instead of being read as a conflicting session.
-    let event = &ToolEvent {
-        session_id: owner,
-        ..event.clone()
-    };
-    if let Some((id, saved)) = stored {
-        let saved_instant = saved
-            .timestamp
-            .as_deref()
-            .map(timestamp::parse)
-            .transpose()?
-            .map(|(key, _)| key);
-        // Source is deliberately excluded: which adapter delivered the event
-        // first is not part of what the event says happened.
-        if (
-            &saved.session_id,
-            &saved.source_event_id,
-            &saved.name,
-            saved.kind,
-            &saved.server,
-            &saved.tool,
-            &saved.skill,
-            saved_instant,
-        ) != (
-            &event.session_id,
-            &event.source_event_id,
-            &event.name,
-            event.kind,
-            &event.server,
-            &event.tool,
-            &event.skill,
-            instant,
-        ) {
+    if let Some(value) = &event.timestamp {
+        timestamp::parse(value)?;
+    }
+    let observations = tool_event_observations(connection, Some(&event.source_event_id))?;
+    if !observations.is_empty() {
+        let ToolEventResolution::Resolved(saved) = resolve_tool_event_group(observations)? else {
+            return Err(Error::InvalidInput(
+                "structural tool event identity has unresolved saved observations",
+            ));
+        };
+        let owned = ToolEvent {
+            session_id: saved.event.session_id.clone(),
+            ..event.clone()
+        };
+        if !same_tool_event(&saved.event, &owned)? {
             return Err(Error::InvalidInput(
                 "structural tool event identity replays with conflicting facts",
             ));
         }
-        return Ok(Some(id));
+        return Ok(Some(saved.id));
     }
     // A contradicted command occurrence can establish no new event. Existing
     // identities above still compare all facts and fail on a conflicting replay.
     if !acquire {
         return Ok(None);
     }
+    let owner = connection
+        .query_row(
+            "SELECT session_id FROM records WHERE uuid=?1",
+            [&event.source_event_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| event.session_id.clone());
+    let event = &ToolEvent {
+        session_id: owner,
+        ..event.clone()
+    };
     connection.execute(
         "INSERT INTO tool_uses(session_id,source,source_event_id,name,kind,server,tool,skill,event_ts)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
