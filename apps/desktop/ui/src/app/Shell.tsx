@@ -1,11 +1,15 @@
+import { useState } from 'react';
 import { matchRoutes, Outlet, useLocation, useNavigate } from 'react-router';
 import { useData } from '../data/DataProvider';
 import { Sidebar, type SidebarKey } from '../kit/Sidebar';
-import { TopBar } from '../kit/TopBar';
+import { TopBar, type TimeRange } from '../kit/TopBar';
 import { useTheme } from '../theme/ThemeProvider';
 import { useAppInfo } from './useAppInfo';
 import { pages } from './routes';
 import { useShellShortcuts } from './useShellShortcuts';
+import { useDashboardReport, useTokensByHost, type ShellOutletContext } from './dashboard/range';
+import { hostTokenRows } from './dashboard/host-tokens';
+import { windowLabel, zoneLabel } from './dashboard/present';
 import '../styles/shell.css';
 
 export function Shell() {
@@ -17,6 +21,12 @@ export function Shell() {
   const page = matchRoutes(pages, location)?.at(-1);
   const current = page?.route;
   const nativeMac = source.kind === 'native' && navigator.platform.startsWith('Mac');
+  // One selected range for the Dashboard, its TopBar presets and the sidebar token totals.
+  const [range, setRange] = useState<TimeRange>('7d');
+  const tokens = useTokensByHost(range);
+  const hosts = hostTokenRows(tokens.data);
+  const outlet: ShellOutletContext = { range };
+  const onDashboard = current?.path === '/dashboard';
   useShellShortcuts();
   function onNavigate(key: SidebarKey) {
     void navigate(`/${key}`);
@@ -27,7 +37,30 @@ export function Shell() {
         activeKey={current?.active}
         onNavigate={onNavigate}
         leaderboardEnabled
-        hosts={[]}
+        hosts={hosts}
+        tokensCaption={
+          source.kind === 'preview'
+            ? 'Recorded tokens unavailable'
+            : tokens.isError
+              ? tokens.data === undefined
+                ? 'Recorded tokens unavailable'
+                : `Recorded tokens refresh failed · ${range}`
+              : `Recorded tokens · ${range}`
+        }
+        tokensEmptyMessage={
+          source.kind === 'preview' || tokens.isError
+            ? null
+            : tokens.data === undefined
+              ? 'Reading recorded tokens…'
+              : 'No host measurements'
+        }
+        onRetryTokens={
+          source.kind !== 'preview' &&
+          (tokens.isError || (tokens.data === undefined && tokens.isFetching))
+            ? () => void tokens.refetch()
+            : undefined
+        }
+        tokensRetryBusy={tokens.isFetching}
         surfaces={[]}
         listener={{ status: info.data?.listening === false ? 'off' : 'unknown' }}
         version={info.data?.version ?? '…'}
@@ -41,10 +74,11 @@ export function Shell() {
         <TopBar
           crumb={current?.crumb ?? 'not-found'}
           subcrumb={location.pathname === '/rulebook/fires' ? 'fires' : page?.params.ruleId}
-          showRange={false}
+          {...(onDashboard ? { range, onRange: setRange } : { showRange: false as const })}
           nativeDrag={nativeMac}
           right={
             <>
+              {onDashboard && <DashboardPeriod range={range} />}
               {info.data?.fixture && (
                 <span className="xt-fixture-badge" role="status">
                   fixture {info.data.fixture}
@@ -75,9 +109,26 @@ export function Shell() {
               Live updates are unavailable.
             </p>
           )}
-          <Outlet />
+          <Outlet context={outlet} />
         </main>
       </div>
     </div>
+  );
+}
+
+/** The TopBar reads the same successful Dashboard report as the page. */
+function DashboardPeriod({ range }: { range: TimeRange }) {
+  const report = useDashboardReport(range);
+  if (!report.isSuccess) return null;
+  const period = report.data.window;
+  return (
+    <span
+      className="xt-topbar-period"
+      data-testid="report-period"
+      title={`${windowLabel(period)} · ${zoneLabel(period)}`}
+    >
+      {windowLabel(period)}
+      <span className="sr-only">, time zone {zoneLabel(period)}</span>
+    </span>
   );
 }

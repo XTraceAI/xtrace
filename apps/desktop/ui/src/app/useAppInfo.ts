@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { useData } from '../data/DataProvider';
 import { events } from '../data/ipc-names';
+import { invalidateDataQueries } from '../data/invalidate-data-queries';
 import { eventPrefixes } from '../data/subscribe-invalidation';
 import type { NativeIndexStatus } from '../data/generated/NativeIndexStatus';
 import { queryKeys } from '../data/query-client';
@@ -46,8 +47,7 @@ export function useNativeIndexStatus() {
     if (observed === 'settled' && seen.current !== 'settled')
       for (const prefix of eventPrefixes[events.nativeIndexStatus])
         // The status query itself was just observed; only the data it describes is refetched.
-        if (prefix !== queryKeys.nativeIndex[0])
-          void client.invalidateQueries({ queryKey: [prefix] });
+        if (prefix !== queryKeys.nativeIndex[0]) void invalidateDataQueries(client, prefix);
     seen.current = observed;
   }, [observed, client]);
   return query;
