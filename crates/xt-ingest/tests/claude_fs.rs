@@ -2673,3 +2673,343 @@ fn structural_identity_later_record_cannot_move_or_duplicate_an_existing_hook() 
         "the later conflicting replay must be reported"
     );
 }
+
+fn summary_surface_is_shared_with_discovery_and_reports(
+    include_record: bool,
+    field: &str,
+    record_surface: Option<&str>,
+) {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let project = home.join(".claude/projects/-summary-surface");
+    fs::create_dir_all(&project).unwrap();
+    let path = project.join(format!("{SID}.jsonl"));
+    let mut lines = Vec::new();
+    if include_record {
+        let mut record = json!({"uuid":"surface-record","sessionId":SID,"type":"user","timestamp":"2026-09-07T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Synthetic turn."}]}});
+        if let Some(surface) = record_surface {
+            record["source_surface"] = json!(surface);
+        }
+        lines.push(record.to_string());
+    }
+    let mut summary = json!({"uuid":"surface-summary","sessionId":SID,"type":"system","subtype":"stop_hook_summary","timestamp":"2026-09-07T12:00:01Z","hookCount":1});
+    summary[field] = json!("cli");
+    lines.push(summary.to_string());
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let source_bytes = hashes(&home);
+    // Record an observation after the synthetic file's ctime settlement interval
+    // so the second scan takes the unchanged-checkpoint path without refreshing.
+    let observed_at =
+        xt_ingest::native::checkpoint::FileIdentity::of(&fs::metadata(&path).unwrap()).ctime_ns
+            / 1_000_000
+            + 10_000;
+    let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+    let mut surfaces = Vec::new();
+    let mut checkpoints = Vec::new();
+    for _ in 0..2 {
+        let report = import_native(
+            &mut store,
+            &ImportRequest {
+                home: &home,
+                hosts: &[Host::Claude],
+                producer: &ProducerSource::Checkout {
+                    pin: repo().join(".plugin-pin"),
+                    plugin_root: None,
+                },
+                python: None,
+                observed_at,
+                cancel: None,
+            },
+        );
+        assert!(report.complete(), "{report:?}");
+        let stored = store.session(SID).unwrap().unwrap().meta.surface;
+        let discovered = store
+            .discovered_sessions(Host::Claude)
+            .unwrap()
+            .remove(0)
+            .surface;
+        let reported = report.hosts[0].sessions[0].source_surface.clone();
+        surfaces.push((stored, discovered, reported));
+        checkpoints.push(
+            store
+                .native_checkpoint(
+                    SessionSource::Transcript,
+                    &format!("claude:{}", path.display()),
+                )
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(
+            store.records(SID).unwrap().len(),
+            usize::from(include_record)
+        );
+        assert_eq!(store.tool_events(SID).unwrap().len(), 1);
+    }
+    assert_eq!(
+        checkpoints[0], checkpoints[1],
+        "unchanged scan must preserve its settled checkpoint"
+    );
+    assert_eq!(hashes(&home), source_bytes);
+    assert_eq!(
+        surfaces,
+        vec![(Some("cli".into()), Some("cli".into()), Some("cli".into())); 2],
+        "stored/discovered/reported surfaces on initial and unchanged scans must agree"
+    );
+}
+
+#[test]
+fn reviewed_summary_surface_only_source_surface_reaches_discovery_and_reports() {
+    summary_surface_is_shared_with_discovery_and_reports(false, "source_surface", None);
+}
+#[test]
+fn reviewed_summary_surface_only_entrypoint_reaches_discovery_and_reports() {
+    summary_surface_is_shared_with_discovery_and_reports(false, "entrypoint", None);
+}
+#[test]
+fn reviewed_summary_surface_unsurfaced_record_source_surface_reaches_discovery_and_reports() {
+    summary_surface_is_shared_with_discovery_and_reports(true, "source_surface", None);
+}
+#[test]
+fn reviewed_summary_surface_unsurfaced_record_entrypoint_reaches_discovery_and_reports() {
+    summary_surface_is_shared_with_discovery_and_reports(true, "entrypoint", None);
+}
+#[test]
+fn reviewed_summary_surface_matching_record_surface_is_a_control() {
+    for field in ["source_surface", "entrypoint"] {
+        summary_surface_is_shared_with_discovery_and_reports(true, field, Some("cli"));
+    }
+}
+#[test]
+fn reviewed_summary_surface_conflicting_record_and_summary_do_not_commit() {
+    for field in ["source_surface", "entrypoint"] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let project = home.join(".claude/projects/-summary-conflict");
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join(format!("{SID}.jsonl"));
+        let record = json!({"uuid":"surface-record","sessionId":SID,"type":"user","source_surface":"cli","message":{"role":"user","content":[]}});
+        let mut summary = json!({"uuid":"surface-summary","sessionId":SID,"type":"system","subtype":"stop_hook_summary","hookCount":1});
+        summary[field] = json!("desktop");
+        fs::write(&path, format!("{record}\n{summary}\n")).unwrap();
+        let before = hashes(&home);
+        let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+        let report = run(&mut store, &home);
+        assert!(!report.complete());
+        assert!(matches!(
+            report.hosts[0].sessions[0].outcome,
+            SessionOutcome::Skipped { .. }
+        ));
+        assert!(store.session(SID).unwrap().is_none());
+        assert!(store.tool_events(SID).unwrap().is_empty());
+        assert!(store.records(SID).unwrap().is_empty());
+        assert_eq!(
+            store
+                .discovered_sessions(Host::Claude)
+                .unwrap()
+                .remove(0)
+                .surface,
+            None
+        );
+        assert!(
+            store
+                .native_checkpoint(
+                    SessionSource::Transcript,
+                    &format!("claude:{}", path.display())
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(hashes(&home), before);
+    }
+}
+
+#[test]
+fn reviewed_summary_surface_late_summary_agrees_before_any_batch_commits() {
+    for summary_surface in ["cli", "desktop"] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let project = home.join(".claude/projects/-late-summary-surface");
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join(format!("{SID}.jsonl"));
+        let mut transcript=(0..xt_ingest::writer::MAX_BATCH_RECORDS).map(|n|format!("{}\n",json!({"uuid":format!("ordinary-{n}"),"sessionId":SID,"source_surface":"cli","type":"user","message":{"role":"user","content":[]}}))).collect::<String>();
+        transcript.push_str(&format!("{}\n",json!({"uuid":"late-summary","sessionId":SID,"source_surface":summary_surface,"type":"system","subtype":"stop_hook_summary","hookCount":1})));
+        fs::write(&path, &transcript).unwrap();
+        let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+        let report = run(&mut store, &home);
+        let checkpoint = store
+            .native_checkpoint(
+                SessionSource::Transcript,
+                &format!("claude:{}", path.display()),
+            )
+            .unwrap();
+        if summary_surface == "cli" {
+            assert!(report.complete());
+            assert_eq!(
+                store.records(SID).unwrap().len(),
+                xt_ingest::writer::MAX_BATCH_RECORDS
+            );
+            assert_eq!(store.tool_events(SID).unwrap().len(), 1);
+            assert_eq!(checkpoint.unwrap().position, transcript.len() as i64);
+        } else {
+            assert!(!report.complete());
+            assert_eq!(
+                (
+                    store.records(SID).unwrap().len(),
+                    store.tool_events(SID).unwrap().len(),
+                    checkpoint.map(|c| c.position)
+                ),
+                (0, 0, None),
+                "whole-file surface disagreement must be caught before the first full batch"
+            );
+        }
+    }
+}
+
+#[test]
+fn reviewed_summary_surface_current_batch_labels_and_unsupported_boundaries() {
+    for case in [
+        "future_label_rejected",
+        "future_label_commits",
+        "missing_id",
+        "blank_native",
+        "disagreeing_native",
+        "blank_surface",
+        "disagreeing_surfaces",
+    ] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let project = home.join(".claude/projects/-summary-boundary");
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join(format!("{SID}.jsonl"));
+        let unlabeled = matches!(case, "future_label_rejected" | "future_label_commits");
+        let prefix=(0..xt_ingest::writer::MAX_BATCH_RECORDS).map(|n|{let mut row=json!({"uuid":format!("boundary-{n}"),"sessionId":SID,"type":"user","cwd":"/repo/fixture","gitBranch":"fixture-branch","message":{"role":"user","content":[]}});if !unlabeled {row["source_surface"]=json!("cli");}format!("{row}\n")}).collect::<String>();
+        let mut summary = json!({"uuid":"boundary-summary","sessionId":SID,"type":"system","subtype":"stop_hook_summary","source_surface":"desktop","hookCount":1});
+        match case {
+            "future_label_rejected" | "future_label_commits" => {
+                summary["source_surface"] = json!("cli")
+            }
+            "missing_id" => {
+                summary.as_object_mut().unwrap().remove("uuid");
+            }
+            "blank_native" => summary["sessionId"] = json!(" "),
+            "disagreeing_native" => summary["native_session_id"] = json!("other"),
+            "blank_surface" => summary["source_surface"] = json!(" "),
+            "disagreeing_surfaces" => {
+                summary["source_surface"] = json!("cli");
+                summary["entrypoint"] = json!("desktop");
+            }
+            _ => unreachable!(),
+        }
+        let mut transcript = format!("{prefix}{summary}\n");
+        if case == "future_label_rejected" {
+            transcript.push_str("{\"type\":\"system\",\"subtype\":\"stop_hook_summary\"}\n");
+        }
+        let full_length = transcript.len();
+        fs::write(&path, transcript).unwrap();
+        let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+        let report = run(&mut store, &home);
+        let succeeds = case == "future_label_commits";
+        assert_eq!(report.complete(), succeeds, "{case}");
+        let preflight_error = matches!(case, "blank_surface" | "disagreeing_surfaces");
+        let expected_surface =
+            (succeeds || (!unlabeled && !preflight_error)).then(|| "cli".to_owned());
+        assert_eq!(
+            store.records(SID).unwrap().len(),
+            if preflight_error {
+                0
+            } else {
+                xt_ingest::writer::MAX_BATCH_RECORDS
+            },
+            "{case}"
+        );
+        assert_eq!(
+            store.tool_events(SID).unwrap().len(),
+            usize::from(succeeds),
+            "{case}"
+        );
+        assert_eq!(
+            report.hosts[0].sessions[0].source_surface, expected_surface,
+            "{case}"
+        );
+        assert_eq!(
+            store
+                .discovered_session(Host::Claude, SID)
+                .unwrap()
+                .unwrap()
+                .surface,
+            expected_surface,
+            "{case}"
+        );
+        let checkpoint = store
+            .native_checkpoint(
+                SessionSource::Transcript,
+                &format!("claude:{}", path.display()),
+            )
+            .unwrap();
+        assert_eq!(
+            checkpoint.map(|c| c.position),
+            (!preflight_error).then_some(if succeeds { full_length } else { prefix.len() } as i64),
+            "{case}"
+        );
+        if let Some(session) = store.session(SID).unwrap() {
+            assert_eq!(session.meta.surface, expected_surface);
+            assert_eq!(session.meta.cwd.as_deref(), Some("/repo/fixture"));
+            assert_eq!(session.meta.git_branch.as_deref(), Some("fixture-branch"));
+        }
+    }
+}
+
+#[test]
+fn reviewed_summary_surface_before_records_and_conflicting_reverse_order() {
+    for surface in ["cli", "desktop"] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let project = home.join(".claude/projects/-summary-first");
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join(format!("{SID}.jsonl"));
+        let summary = json!({"uuid":"summary-first","sessionId":SID,"type":"system","subtype":"stop_hook_summary","entrypoint":"cli","hookCount":1});
+        let record = json!({"uuid":"record-after-summary","sessionId":SID,"type":"user","source_surface":surface,"cwd":"/repo/fixture","gitBranch":"branch","message":{"role":"user","content":[]}});
+        fs::write(&path, format!("{summary}\n{record}\n")).unwrap();
+        let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+        let report = run(&mut store, &home);
+        if surface == "cli" {
+            assert!(report.complete());
+            assert_eq!(
+                report.hosts[0].sessions[0].source_surface.as_deref(),
+                Some("cli")
+            );
+            assert_eq!(
+                store
+                    .discovered_session(Host::Claude, SID)
+                    .unwrap()
+                    .unwrap()
+                    .surface
+                    .as_deref(),
+                Some("cli")
+            );
+            assert_eq!(
+                store
+                    .session(SID)
+                    .unwrap()
+                    .unwrap()
+                    .meta
+                    .git_branch
+                    .as_deref(),
+                Some("branch")
+            );
+        } else {
+            assert!(!report.complete());
+            assert!(store.session(SID).unwrap().is_none());
+            assert!(store.tool_events(SID).unwrap().is_empty());
+            assert!(
+                store
+                    .native_checkpoint(
+                        SessionSource::Transcript,
+                        &format!("claude:{}", path.display())
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+}

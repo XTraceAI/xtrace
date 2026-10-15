@@ -63,8 +63,9 @@ impl Store {
             }
             transaction.commit()?;
         }
-        // Views follow the same writer-owned lifecycle; no second migration
-        // runner or version table. Replace only these named projections.
+        // Maintain only the named views and this rebuildable, nonunique lookup
+        // index after immutable history. Logical schema/data changes still belong
+        // to numbered migrations; this access path preserves every stored row.
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -101,6 +102,25 @@ impl Store {
             for (_, sql) in views {
                 transaction.execute_batch(sql)?;
             }
+        }
+        const INDEX_NAME: &str = "tool_uses_structural_event_id";
+        const INDEX_SQL: &str = "CREATE INDEX tool_uses_structural_event_id ON tool_uses(source_event_id) WHERE uuid IS NULL";
+        let index: Option<(String, String, Option<String>)> = transaction
+            .query_row(
+                "SELECT type,tbl_name,sql FROM sqlite_schema WHERE name=?1",
+                [INDEX_NAME],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        match index {
+            None => transaction.execute_batch(INDEX_SQL)?,
+            Some((kind, table, definition)) if kind == "index" && table == "tool_uses" => {
+                if definition.as_deref() != Some(INDEX_SQL) {
+                    transaction.execute_batch("DROP INDEX tool_uses_structural_event_id")?;
+                    transaction.execute_batch(INDEX_SQL)?;
+                }
+            }
+            Some(_) => return Err(Error::IncompatibleSchema),
         }
         transaction.commit()?;
         Ok(())

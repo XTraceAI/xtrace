@@ -65,7 +65,12 @@ the existing writer.
   for the next scan. Temporary contents are removed on close.
 - Surface consistency is checked within each Claude file before writing. Dropped
   records still contribute known surface facts; unusable explicit labels on ordinary
-  and dropped records are errors.
+  and dropped records are errors. Supported hook summaries participate in the
+  same prevalidation, including agreement between source_surface and entrypoint.
+  Unsupported or missing-ID summaries end prevalidation without lending surface
+  evidence; normal import then reports their error after any prior committed
+  batches. A summary's label reaches discovery/report metadata only with the batch
+  that carries it, never from a later prevalidated batch.
   Separate files with contradictory identities remain explicit conflicts; changing
   source files does not automatically replace historical index identities.
 - Reader code executes from a temporary export of the verified Git commit, excluding
@@ -118,6 +123,14 @@ the existing writer.
   reported with the surface the index holds, whether proven unchanged, read behind its
   checkpoint or read whole again (replaced, truncated, rewritten, replayed), and a
   record that names another surface stops the file as in the first read of a file.
+- **Committed surface recovery.** A proven-unchanged Claude file can repair the
+  older state with a committed canonical surface and a missing discovered surface.
+  Exact primary-key reads require matching known host/native/conversation identity;
+  known conflicts remain errors and missing identities are not synthesized. A
+  candidate repair is re-read under the store's immediate lock and fills only the
+  surface, preserving native start, completeness, observation time and checkpoint.
+  Healthy matching rows perform no discovery DML. The existing checkpoint refresh
+  above remains allowed independently; no replay/reset is introduced.
 - **Reader hosts are read whole.** Codex and Cursor have no checkpoint: every scan,
   the initial one and every reconciliation that touches the host, runs the pinned
   producer over the whole host and passes no `--since`; Desktop keeps no cutoff,

@@ -306,7 +306,11 @@ fn restore_iteration_usage(record: &mut ParsedRecord, text: &str) -> Result<(), 
     Ok(())
 }
 
-fn header(file: &ClaudeFile, first: &[ParsedRecord]) -> SessionHeader {
+fn header(
+    file: &ClaudeFile,
+    first: &[ParsedRecord],
+    summaries: &[StopHookSummary],
+) -> SessionHeader {
     SessionHeader {
         kind: "session".into(),
         host: Host::Claude.as_str().into(),
@@ -314,7 +318,13 @@ fn header(file: &ClaudeFile, first: &[ParsedRecord]) -> SessionHeader {
         native_session_id: file.session_id.clone(),
         source_surface: first
             .iter()
-            .find_map(|r| label(r.canonical.source_surface.as_ref())),
+            .find_map(|r| label(r.canonical.source_surface.as_ref()))
+            .or_else(|| {
+                summaries.iter().find_map(|summary| {
+                    label(summary.source.source_surface.as_ref())
+                        .or_else(|| label(summary.native.entrypoint.as_ref()))
+                })
+            }),
         started_at: None,
         cwd: first.iter().find_map(|r| label(r.canonical.cwd.as_ref())),
         git_branch: first
@@ -326,9 +336,110 @@ fn header(file: &ClaudeFile, first: &[ParsedRecord]) -> SessionHeader {
     }
 }
 
+enum SummaryError {
+    Unsupported(&'static str),
+    Surface(&'static str),
+}
+impl SummaryError {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Unsupported(reason) | Self::Surface(reason) => reason,
+        }
+    }
+}
+
+/// The same summary boundary in prevalidation and import. Unsupported identities
+/// stop prevalidation without lending a label to earlier batches. A valid native
+/// summary with contradictory/unusable surface labels fails surface validation.
+fn summary_surface(
+    summary: &mut StopHookSummary,
+    context: &SourceContext,
+) -> Result<Option<String>, SummaryError> {
+    if summary
+        .uuid
+        .as_deref()
+        .is_none_or(|id| id.trim().is_empty())
+    {
+        return Err(SummaryError::Unsupported(
+            "structural summary has no stable identity",
+        ));
+    }
+    if [
+        summary.native.session_id.as_deref(),
+        summary.source.native_session_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|id| id.trim().is_empty())
+        || summary
+            .source
+            .native_session_id
+            .as_ref()
+            .zip(summary.native.session_id.as_ref())
+            .is_some_and(|(a, b)| a != b)
+    {
+        return Err(SummaryError::Unsupported(
+            "structural summary identity labels disagree",
+        ));
+    }
+    // A fork may carry the original container ID; this file is its context.
+    summary.native.session_id = context.native_session_id.clone();
+    summary.source.native_session_id = context.native_session_id.clone();
+    let mut identity = summary.clone();
+    identity.source.source_surface = None;
+    identity.native.entrypoint = None;
+    // Reuse the shared identity rules before treating this summary as evidence
+    // about surfaces. Surface agreement is checked separately below.
+    crate::writer::resolve_session(&crate::writer::WriteBatch {
+        context,
+        declared_host: Some(Host::Claude),
+        records: &[],
+        hook_summaries: std::slice::from_ref(&identity),
+        title: None,
+        cwd: None,
+        git_branch: None,
+        namespace: None,
+        keep_content: false,
+        observed_at: 0,
+        receipt: None,
+        cursor: None,
+        discovery: None,
+        checkpoint: None,
+    })
+    .map_err(|_| SummaryError::Unsupported("structural summary identity labels disagree"))?;
+    if [
+        summary.source.source_surface.as_deref(),
+        summary.native.entrypoint.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|label| label.trim().is_empty())
+    {
+        return Err(SummaryError::Surface(
+            "structural summary has an unusable surface",
+        ));
+    }
+    if summary
+        .source
+        .source_surface
+        .as_ref()
+        .zip(summary.native.entrypoint.as_ref())
+        .is_some_and(|(a, b)| a != b)
+    {
+        return Err(SummaryError::Surface(
+            "structural summary surface labels disagree",
+        ));
+    }
+    Ok(summary
+        .source
+        .source_surface
+        .clone()
+        .or_else(|| summary.native.entrypoint.clone()))
+}
+
 /// The surface the whole file agrees on, settled before any row is written:
-/// the first non-blank surface a record names, which every later record must
-/// repeat. `settled` is the surface the bytes before the snapshot already
+/// the first non-blank surface a record or supported summary names, which
+/// every later supported observation must repeat. `settled` is the surface the bytes before the snapshot already
 /// named, when the snapshot holds only the bytes behind a checkpoint. One
 /// streaming pass, nothing retained; a line the parser rejects ends the pass
 /// early, and the import pass reports it precisely.
@@ -362,6 +473,13 @@ fn file_surface(
                 }
                 surface => surface.cloned(),
             },
+            Ok(Parsed::StructuralEvent(mut summary)) => {
+                match summary_surface(&mut summary, context) {
+                    Ok(surface) => surface,
+                    Err(SummaryError::Unsupported(_)) => return Ok(Ok(surface)),
+                    Err(error) => return Ok(Err((line_number, error.reason()))),
+                }
+            }
             Ok(Parsed::Dropped(_)) => {
                 let raw: serde_json::Value = serde_json::from_str(text)?;
                 let value = raw
@@ -404,8 +522,9 @@ fn file_surface(
 /// the session, so its discovered identity is registered before anything is
 /// written. In `Resume` mode the file's checkpoint is proven first (same
 /// inode, position still held, trailing bytes unchanged): a proven file is
-/// read only behind its position, and an unchanged one touches the index not
-/// at all; a replaced, truncated or rewritten file is read whole again. The
+/// read only behind its position. An unchanged file skips parsing; it may
+/// refresh its checkpoint or recover a missing discovery surface from committed
+/// identity-consistent metadata. A replaced, truncated or rewritten file is read whole again. The
 /// surface is settled over the bytes to be read before any row is written;
 /// each batch fills in whichever labels are still unknown, and those labels
 /// persist only with a committed batch. Batches commit as they fill, each
@@ -450,7 +569,7 @@ pub fn import_file(
                 store,
                 Host::Claude,
                 SessionSource::Transcript,
-                &header(file, &[]),
+                &header(file, &[], &[]),
                 observed_at,
             ) {
                 return Ok(*skipped);
@@ -478,12 +597,23 @@ pub fn import_file(
                 format!("checkpoint could not be refreshed: {error}"),
             ));
         }
-        // The report names the surface the index already holds for the
-        // session, so an unchanged file reads the same as when it was imported.
+        // Older summary imports could commit the canonical label while leaving
+        // discovery unknown. Recover only that identity-consistent committed
+        // fact; healthy unchanged scans do no discovery write.
+        let surface =
+            match store.repair_claude_discovery_surface(&file.session_id, &file.session_id) {
+                Ok(surface) => surface,
+                Err(error) => {
+                    return Ok(skipped(
+                        file,
+                        format!("committed surface could not be reconciled: {error}"),
+                    ));
+                }
+            };
         return Ok(SessionResult {
             native_session_id: Some(file.session_id.clone()),
             conversation_id: Some(file.session_id.clone()),
-            source_surface: stored_surface(store, &file.session_id),
+            source_surface: surface,
             path: Some(file.path.to_string_lossy().into_owned()),
             outcome: SessionOutcome::Imported {
                 records_new: 0,
@@ -495,7 +625,7 @@ pub fn import_file(
         store,
         Host::Claude,
         SessionSource::Transcript,
-        &header(file, &[]),
+        &header(file, &[], &[]),
         observed_at,
     ) {
         Ok(started) => started,
@@ -601,49 +731,11 @@ pub fn import_file(
                 }
                 Ok(Parsed::Dropped(_)) => dropped += 1,
                 Ok(Parsed::StructuralEvent(summary)) => {
-                    // The summary's own UUID is its stable identity; without one
-                    // the event is unsupported and is never given an arrival ID.
                     let mut summary = summary;
-                    if summary
-                        .uuid
-                        .as_deref()
-                        .is_none_or(|uuid| uuid.trim().is_empty())
-                    {
-                        return Ok(stop(
-                            &writer,
-                            lines,
-                            "structural summary has no stable identity",
-                        ));
-                    }
-                    // A summary names the same native identity a record does and
-                    // is reconciled by the same rules: blank labels are no
-                    // labels, the line's own two spellings must agree, and this
-                    // file is the session context whatever a fork's inherited
-                    // prefix still calls itself.
-                    if [
-                        summary.native.session_id.as_deref(),
-                        summary.source.native_session_id.as_deref(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|id| id.trim().is_empty())
-                        || summary
-                            .source
-                            .native_session_id
-                            .as_ref()
-                            .zip(summary.native.session_id.as_ref())
-                            .is_some_and(|(source, native)| source != native)
-                    {
-                        return Ok(stop(
-                            &writer,
-                            lines,
-                            "structural summary identity labels disagree",
-                        ));
-                    }
-                    summary.native.session_id = Some(file.session_id.clone());
-                    summary.source.native_session_id = Some(file.session_id.clone());
-                    let named = label(summary.source.source_surface.as_ref())
-                        .or_else(|| label(summary.native.entrypoint.as_ref()));
+                    let named = match summary_surface(&mut summary, &context) {
+                        Ok(named) => named,
+                        Err(error) => return Ok(stop(&writer, lines, error.reason())),
+                    };
                     if let Some(named) = named {
                         match &surface {
                             Some(known) if *known != named => {
@@ -676,7 +768,7 @@ pub fn import_file(
         prefix.update(&buffer);
         if batch.len() + summaries.len() == MAX_BATCH_RECORDS {
             if !writer.labels_complete() {
-                writer.enrich(&header(file, &batch));
+                writer.enrich(&header(file, &batch, &summaries));
             }
             let progress = (dropped == 0 && writer.gapless()).then(|| {
                 checkpoint::file_checkpoint(
@@ -704,7 +796,7 @@ pub fn import_file(
     }
     writer.note_dropped(dropped);
     if !writer.labels_complete() {
-        writer.enrich(&header(file, &batch));
+        writer.enrich(&header(file, &batch, &summaries));
     }
     let position = resume.start + consumed;
     let progress = (dropped == 0 && writer.gapless()).then(|| {

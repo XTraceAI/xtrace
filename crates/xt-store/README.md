@@ -24,6 +24,15 @@ native application opens the store on startup; capture adapters do not yet inges
   ordered by native timestamp with unknown timestamps last and UUID as a tie
   breaker. Query count remains bounded as the number of session records grows.
 
+After immutable numbered history succeeds, one writer-owned immediate transaction
+maintains the named views and the nonunique partial index
+`tool_uses_structural_event_id` on structural `source_event_id` values. This is a
+rebuildable schema access path, not a new history version or uniqueness rule.
+Missing or differently defined instances of that owned index are repaired; a
+collision with another schema object fails safely. Data and history rows stay
+unchanged. Failure rolls back this maintenance transaction, not earlier numbered
+migrations that already committed. Read-only helpers never maintain the index.
+
 Native timestamp ordering, imported first/last bounds and replay conflict checks
 preserve every RFC3339 fractional digit, including digits beyond nanoseconds.
 Equivalent offsets and trailing fractional zeroes describe the same instant.
@@ -125,7 +134,12 @@ columns remain in place.
 - `observe_discovered_session` preserves native identity and raw surface even
   before a canonical import. Missing values stay unknown; conflicting known
   identity fails, and an older observation cannot replace current completeness.
-  `discovered_sessions(host)` does not imply a plugin receipt.
+  `discovered_sessions(host)` does not imply a plugin receipt. The exact-key
+  `discovered_session(host, native_id)` avoids a host-wide scan. Unchanged Claude
+  scans may fill only a missing discovery surface from matching committed identity:
+  `repair_claude_discovery_surface` rechecks under an immediate lock before using
+  the current discovery fields. It preserves start, completeness, observation time
+  and known identities, and performs no DML on an already matching healthy row.
 - `insert_tool_event` stores a classified structural hook/event without a
   fabricated canonical record. Its shape contains names and source identity but
   no input, output, command or transcript payload. `tool_events` reads these

@@ -122,6 +122,23 @@ affected totals incomplete. Unresolved saved-row counts are not measured calls.
 This storage API supplies that decision; Environment aggregation and display
 consume it separately. Migration 6 still changes only transcript checkpoints.
 
+## Lookup access path
+
+Exact-ID write arbitration uses a separate equality predicate over the shared
+observation projection and decoder. Store open maintains one named nonunique
+partial `source_event_id` index in the same post-history transaction as its
+managed views. This explicitly adds a rebuildable index without changing any
+numbered migration, stored observation or uniqueness policy. It is not maintained
+by reads or per-event writes. Full resolved reads remain one complete pass on the
+supplied snapshot. Exact lookup seeks the native ID and still examines all K
+matching observations; fixed work for arbitrary K is not claimed.
+
+The focused store tests cover fresh/repeated/concurrent opens, missing and wrong
+owned definitions, maintenance rollback on a schema-object collision, row/history
+preservation, read-only non-repair and exact indexed lookup with several matches.
+Native surface tests cover summaries before/after records and batch boundaries,
+unsupported identity boundaries, discovery/report agreement and unchanged scans.
+
 ## Replay
 
 An index written by an earlier build holds tool rows with names and positions

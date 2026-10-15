@@ -109,12 +109,12 @@ pub enum ToolEventResolution {
 }
 
 /// Shared read requirements, also available for a consumer's connection-time
-/// schema probe. Bind NULL for all rows or an exact raw event ID for one group.
+/// schema probe. Exact-ID writes add a separate seek predicate to this projection.
 /// No window/session filter may hide a disagreeing member before resolution.
 pub const TOOL_EVENT_OBSERVATIONS_QUERY: &str =
     "SELECT t.id,t.session_id,t.source,t.source_event_id,t.name,t.kind,t.server,t.tool,t.skill,t.event_ts,r.session_id
      FROM tool_uses t LEFT JOIN records r ON r.uuid=t.source_event_id
-     WHERE t.uuid IS NULL AND (?1 IS NULL OR t.source_event_id=?1) ORDER BY t.id";
+     WHERE t.uuid IS NULL";
 
 /// Resolve structural events on the caller's existing connection/snapshot.
 /// This reads only; it opens no Store, runs no migration and changes no row.
@@ -143,13 +143,24 @@ pub fn resolved_tool_events(connection: &Connection) -> Result<Vec<ToolEventReso
     Ok(result)
 }
 
+fn tool_event_query(exact: bool) -> String {
+    format!(
+        "{TOOL_EVENT_OBSERVATIONS_QUERY} {} ORDER BY t.id",
+        if exact {
+            "AND t.source_event_id=?1"
+        } else {
+            ""
+        }
+    )
+}
+
 fn tool_event_observations(
     connection: &Connection,
     id: Option<&str>,
 ) -> Result<Vec<ToolEventObservation>> {
     Ok(connection
-        .prepare(TOOL_EVENT_OBSERVATIONS_QUERY)?
-        .query_map([id], |row| {
+        .prepare(&tool_event_query(id.is_some()))?
+        .query_map(rusqlite::params_from_iter(id), |row| {
             Ok(ToolEventObservation {
                 id: row.get(0)?,
                 event: tool_event_from_row(row, 1)?,
@@ -304,6 +315,41 @@ impl Store {
             host: row.get(0)?, native_session_id: row.get(1)?, conversation_id: row.get(2)?, surface: row.get(3)?,
             started_at_ms: row.get(4)?, last_observed_at: row.get(5)?, discovery_complete: row.get(6)?,
         }))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// One discovery identity by its primary key; no host-wide scan.
+    pub fn discovered_session(
+        &self,
+        host: Host,
+        native_session_id: &str,
+    ) -> Result<Option<DiscoveredSession>> {
+        discovered_session(&self.connection, host, native_session_id)
+    }
+
+    /// Recover only a missing Claude discovery surface from identity-consistent
+    /// committed session metadata. Healthy/unknown cases do no DML. A candidate
+    /// repair is re-read under the write lock, retaining all other current fields.
+    pub fn repair_claude_discovery_surface(
+        &mut self,
+        native_session_id: &str,
+        conversation_id: &str,
+    ) -> Result<Option<String>> {
+        let (surface, candidate) =
+            discovery_surface_candidate(&self.connection, native_session_id, conversation_id)?;
+        if candidate.is_none() {
+            return Ok(surface);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (surface, candidate) =
+            discovery_surface_candidate(&transaction, native_session_id, conversation_id)?;
+        if let Some(mut current) = candidate {
+            current.surface = surface.clone();
+            observe_discovered_session(&transaction, &current)?;
+        }
+        transaction.commit()?;
+        Ok(surface)
     }
 
     /// Store only the classified event identity and names, with no record FK
@@ -527,6 +573,71 @@ pub(crate) fn insert_or_match_receipt(
     Ok(true)
 }
 
+fn discovered_session(
+    connection: &Connection,
+    host: Host,
+    native_session_id: &str,
+) -> Result<Option<DiscoveredSession>> {
+    Ok(connection.query_row(
+        "SELECT host,native_session_id,conversation_id,surface,started_at_ms,last_observed_at,discovery_complete
+         FROM discovered_sessions WHERE host=?1 AND native_session_id=?2",
+        params![host, native_session_id], |row| Ok(DiscoveredSession {
+            host: row.get(0)?, native_session_id: row.get(1)?, conversation_id: row.get(2)?,
+            surface: row.get(3)?, started_at_ms: row.get(4)?, last_observed_at: row.get(5)?, discovery_complete: row.get(6)?,
+        }),
+    ).optional()?)
+}
+
+fn discovery_surface_candidate(
+    connection: &Connection,
+    native_session_id: &str,
+    conversation_id: &str,
+) -> Result<(Option<String>, Option<DiscoveredSession>)> {
+    let Some(session) = crate::read::session(connection, conversation_id)? else {
+        return Ok((None, None));
+    };
+    let canonical = session.meta;
+    if canonical.host != Host::Claude
+        || canonical
+            .native_session_id
+            .as_deref()
+            .is_some_and(|id| id != native_session_id)
+    {
+        return Err(Error::InvalidInput(
+            "committed and discovered session identities disagree",
+        ));
+    }
+    let Some(discovery) = discovered_session(connection, Host::Claude, native_session_id)? else {
+        return Ok((canonical.surface, None));
+    };
+    if discovery
+        .conversation_id
+        .as_deref()
+        .is_some_and(|id| id != conversation_id)
+        || discovery
+            .surface
+            .as_ref()
+            .zip(canonical.surface.as_ref())
+            .is_some_and(|(a, b)| a != b)
+        || discovery
+            .started_at_ms
+            .zip(canonical.started_at_ms)
+            .is_some_and(|(a, b)| a != b)
+    {
+        return Err(Error::InvalidInput(
+            "committed and discovered session identities disagree",
+        ));
+    }
+    let eligible = canonical.native_session_id.as_deref() == Some(native_session_id)
+        && discovery.conversation_id.as_deref() == Some(conversation_id)
+        && canonical
+            .surface
+            .as_deref()
+            .is_some_and(|surface| !surface.trim().is_empty())
+        && discovery.surface.is_none();
+    Ok((canonical.surface, eligible.then_some(discovery)))
+}
+
 /// The discovered-session upsert shared by direct observation and the batch
 /// transaction, so a batch can fill an identity atomically with its rows.
 pub(crate) fn observe_discovered_session(
@@ -553,3 +664,7 @@ pub(crate) fn observe_discovered_session(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "ingest_tests.rs"]
+mod tests;
