@@ -243,6 +243,7 @@ for (const [width, height] of [
       page,
       browserName,
     }, info) => {
+      const macWebKit = browserName === 'webkit' && process.platform === 'darwin';
       await open(page, width, height, scheme);
       const table = page.getByRole('table', { name: 'Session lanes' });
       const absent = page.getByRole('button', {
@@ -311,9 +312,9 @@ for (const [width, height] of [
             has: page.locator(`[data-visible-id="${sessionId}"]`),
           })
           .getByRole('img', { name, exact: true });
-      // Intl's en-US day/time separator is "at" in WebKit and a comma
-      // in Chromium. The synthetic times and durations remain fixed literals.
-      const separator = browserName === 'webkit' ? ' at ' : ', ';
+      // macOS WebKit uses "at" here; Linux WebKit and Chromium use a comma.
+      // The synthetic dates, times and durations remain fixed literals.
+      const separator = macWebKit ? ' at ' : ', ';
       const firstSpan = span(
         KID_A,
         `Active span Sep 7${separator}10:30 PM – Sep 7${separator}11:15 PM, 45 minutes`,
@@ -337,30 +338,29 @@ for (const [width, height] of [
         'Recorded compactions: unknown',
       );
       await expect(ordinaryCompactions).toHaveAttribute('tabindex', '0');
-      // Safari skips links in its default Tab order. Both browsers include
+      // macOS Safari skips links in its default Tab order. Both browsers include
       // each visible activity-span detail before reaching the next disclosure.
-      const stops =
-        browserName === 'webkit'
-          ? [firstSpan, secondSpan, ordinaryCompactions, ordinarySpan, present]
-          : [
-              link(listed[0]),
-              link(listed[1]),
-              link(listed[2]),
-              firstSpan,
-              link(listed[3]),
-              link(listed[4], 1),
-              secondSpan,
-              link(`Open session ${ORDINARY[0]}`),
-              ordinaryCompactions,
-              ordinarySpan,
-              present,
-            ];
+      const stops = macWebKit
+        ? [firstSpan, secondSpan, ordinaryCompactions, ordinarySpan, present]
+        : [
+            link(listed[0]),
+            link(listed[1]),
+            link(listed[2]),
+            firstSpan,
+            link(listed[3]),
+            link(listed[4], 1),
+            secondSpan,
+            link(`Open session ${ORDINARY[0]}`),
+            ordinaryCompactions,
+            ordinarySpan,
+            present,
+          ];
       for (const stop of stops) {
         await page.keyboard.press('Tab');
         await expect(stop).toBeFocused();
       }
       await expect(present).toBeFocused();
-      if (browserName === 'webkit') {
+      if (macWebKit) {
         for (const [index, name] of listed.entries()) {
           const target = link(name, index === 4 ? 1 : 0);
           await target.focus();

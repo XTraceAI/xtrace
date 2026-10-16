@@ -56,7 +56,12 @@ jobs:
 
   ui:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        browser: [webkit, chromium]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -73,19 +78,19 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-ubuntu-24.04-x64-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-ubuntu-24.04-x64-${{ matrix.browser }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Remove unused Chrome package sources
         # Playwright downloads its pinned browsers separately. The runner's
         # preinstalled Chrome repository must not block Ubuntu dependency updates.
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome*.list \
             /etc/apt/sources.list.d/google-chrome*.sources
-      - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps webkit chromium
-      - run: pnpm e2e
+      - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps ${{ matrix.browser }}
+      - run: pnpm e2e --project=${{ matrix.browser }}
         env:
           E2E_PORT: '5174'
-      - run: pnpm e2e:gallery:smoke
-      - run: pnpm e2e:production
+      - run: pnpm e2e:gallery:smoke --project=${{ matrix.browser }}
+      - run: pnpm e2e:production --project=${{ matrix.browser }}
 
   security:
     runs-on: ubuntu-24.04

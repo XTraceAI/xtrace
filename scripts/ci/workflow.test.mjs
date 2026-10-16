@@ -86,7 +86,29 @@ test('routine CI is Linux-only and native work is explicit release preparation',
   for (const checkout of release.split(/uses: actions\/checkout@/).slice(1))
     assert.match(checkout.split(/\n {6}- /)[0], /persist-credentials: false/);
   assert.match(jobs.ui, /path: ~\/\.cache\/ms-playwright/);
-  assert.match(jobs.ui, /playwright install --with-deps webkit chromium/);
+  assert.ok(jobs.ui.includes('playwright install --with-deps ${{ matrix.browser }}'));
+});
+
+test('each browser matrix entry keeps every UI gate and reports its own failures', () => {
+  assert.match(jobs.ui, /timeout-minutes: 30\n/);
+  assert.match(
+    jobs.ui,
+    /strategy:\n {6}fail-fast: false\n {6}max-parallel: 2\n {6}matrix:\n {8}browser: \[webkit, chromium\]\n/,
+  );
+  assert.match(jobs.ui, /- run: pnpm check\n/);
+  const selection = '--project=${{ matrix.browser }}';
+  assert.deepEqual(
+    [...jobs.ui.matchAll(/- run: pnpm (e2e[^\n]*)/g)].map((match) => match[1]),
+    ['e2e', 'e2e:gallery:smoke', 'e2e:production'].map((suite) => `${suite} ${selection}`),
+  );
+  assert.ok(jobs.ui.includes('playwright-ubuntu-24.04-x64-${{ matrix.browser }}-'));
+  assert.doesNotMatch(
+    jobs.ui,
+    /continue-on-error|--(?:grep|shard|workers|timeout|retries|max-failures)/,
+  );
+  assert.match(jobs['ci-ok'], /if: \$\{\{ always\(\) \}\}/);
+  assert.match(jobs['ci-ok'], /needs: \[policy, ui, security\]/);
+  assert.doesNotMatch(jobs['ci-ok'], /continue-on-error/);
 });
 
 test('actual release shell guards accept only default history or matching reviewed tags', async (t) => {
@@ -390,7 +412,11 @@ test('the actual aggregate rejects every missing, skipped, cancelled or failed w
     });
   assert.equal(aggregate(good).status, 0);
   for (const name of required) {
-    for (const result of ['skipped', 'cancelled', 'failure', undefined]) {
+    const missing = { ...good };
+    delete missing[name];
+    assert.equal(aggregate(missing).status, 1, `missing ${name}`);
+    // GitHub exposes the combined matrix outcome as needs.ui.result.
+    for (const result of ['skipped', 'cancelled', 'failure', 'in_progress', undefined]) {
       assert.equal(aggregate({ ...good, [name]: { result } }).status, 1, `${name}: ${result}`);
     }
   }
@@ -429,7 +455,7 @@ test('text edits run metadata only; target-branch edits call the full CI and can
 test('consolidated jobs retain each real command and do not blanket-accept failures', () => {
   for (const command of [
     'pnpm check',
-    'playwright install --with-deps webkit chromium',
+    'playwright install --with-deps ${{ matrix.browser }}',
     'pnpm e2e',
   ])
     assert.ok(jobs.ui.includes(command), command);

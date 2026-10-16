@@ -1218,11 +1218,11 @@ function indexedExport(index: NativeIndexStatus): FixtureExport {
   return out;
 }
 for (const scheme of SCHEMES)
-  test(`the Dashboard fits 1120x720 ${scheme} in every range, measure and index state`, async ({
-    page,
-  }, info) => {
-    const margins: Record<string, number> = {};
-    for (const [state, index] of Object.entries(INDEX)) {
+  for (const [state, index] of Object.entries(INDEX))
+    test(`the Dashboard fits 1120x720 ${scheme} in every range and measure with ${state} index state`, async ({
+      page,
+    }, info) => {
+      const margins: Record<string, number> = {};
       await page.unrouteAll();
       await open(page, indexedExport(index.status), 1120, 720, scheme);
       // The index's state is the sidebar's and Settings'; the Dashboard adds no line for it
@@ -1256,9 +1256,8 @@ for (const scheme of SCHEMES)
       const settings = page.getByRole('region', { name: 'Native index' });
       await expect(settings).toContainText(phaseText(index.status));
       await expect(settings).toContainText(freshnessText(index.status));
-    }
-    await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
-  });
+      await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
+    });
 
 /**
  * At 30d, in both measures, the page still fits — nothing scrolls, every

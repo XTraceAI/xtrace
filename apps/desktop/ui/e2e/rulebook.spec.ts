@@ -131,40 +131,41 @@ test('lays the overview out as the reference: read state, four tiles, a note, th
   expect(groups.right).toBeLessThan(fires.left);
 });
 
-test('lays out every answer at both window sizes in both themes without clipping', async ({
-  page,
-}, info) => {
-  test.slow();
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.name));
-  // Each answer's status line, and the Recorded fires tile's aside beside it.
-  const scenarios = [
-    ['populated', /^Read complete · 4 recorded fires/, '14d · exact'],
-    ['lowerBound', /^Read complete · ≥ 4 recorded fires/, '14d · lower bound'],
-    ['emptyExact', /^Read complete · 0 recorded fires/, '14d · exact'],
-    ['emptyLowerBound', /^Read complete · ≥ 0 recorded fires/, '14d · lower bound'],
-    ['truncated', /^Read complete · 220 recorded fires in 140 observed groups/, '14d · exact'],
-    [
-      'lowerBoundWide',
-      /^Read complete · ≥ 10,000 recorded fires in ≥ 1 observed groups/,
-      '14d · lower bound',
-    ],
-    ['pastCap', /^Read complete · 220 recorded fires in 140 observed groups/, '14d · exact'],
-    ['identities', /^Read complete · 252 recorded fires in 8 observed groups/, '14d · exact'],
-    ['unavailable', /^Source unavailable$/, 'unavailable'],
-    ['sourceChanged', /^The source changed during the read$/, 'changed'],
-    ['deadline', /^The read ran out of time$/, 'timed out'],
-    ['busy', /^Another rule activity read is still running$/, 'busy'],
-    ['failed', /^Rule activity could not be read$/, 'failed'],
-  ] as const;
-  for (const [width, height] of [
-    [1120, 720],
-    [1440, 900],
-  ] as const) {
-    await page.setViewportSize({ width, height });
-    for (const scheme of ['dark', 'light'] as const) {
-      await page.emulateMedia({ colorScheme: scheme });
-      for (const [scenario, text, aside] of scenarios)
+// Each answer's status line, and the Recorded fires tile's aside beside it.
+const layoutScenarios = [
+  ['populated', /^Read complete · 4 recorded fires/, '14d · exact'],
+  ['lowerBound', /^Read complete · ≥ 4 recorded fires/, '14d · lower bound'],
+  ['emptyExact', /^Read complete · 0 recorded fires/, '14d · exact'],
+  ['emptyLowerBound', /^Read complete · ≥ 0 recorded fires/, '14d · lower bound'],
+  ['truncated', /^Read complete · 220 recorded fires in 140 observed groups/, '14d · exact'],
+  [
+    'lowerBoundWide',
+    /^Read complete · ≥ 10,000 recorded fires in ≥ 1 observed groups/,
+    '14d · lower bound',
+  ],
+  ['pastCap', /^Read complete · 220 recorded fires in 140 observed groups/, '14d · exact'],
+  ['identities', /^Read complete · 252 recorded fires in 8 observed groups/, '14d · exact'],
+  ['unavailable', /^Source unavailable$/, 'unavailable'],
+  ['sourceChanged', /^The source changed during the read$/, 'changed'],
+  ['deadline', /^The read ran out of time$/, 'timed out'],
+  ['busy', /^Another rule activity read is still running$/, 'busy'],
+  ['failed', /^Rule activity could not be read$/, 'failed'],
+] as const;
+
+for (const [scenario, text, aside] of layoutScenarios)
+  test(`lays out ${scenario} at both window sizes in both themes without clipping`, async ({
+    page,
+  }, info) => {
+    test.slow();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.name));
+    for (const [width, height] of [
+      [1120, 720],
+      [1440, 900],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      for (const scheme of ['dark', 'light'] as const) {
+        await page.emulateMedia({ colorScheme: scheme });
         for (const path of ['/rulebook', '/rulebook/fires']) {
           await page.goto(harness(scenario, path));
           await expect(status(page)).toHaveText(text);
@@ -222,10 +223,10 @@ test('lays out every answer at both window sizes in both themes without clipping
               ),
             });
         }
+      }
     }
-  }
-  expect(errors).toEqual([]);
-});
+    expect(errors).toEqual([]);
+  });
 
 test('shows the returned window and the same bounded timeline on both views', async ({ page }) => {
   await page.goto(harness('truncated'));
