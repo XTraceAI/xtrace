@@ -518,14 +518,12 @@ test('the spoken range is re-measured after loading and after a resize', async (
     STORAGE,
   );
   await open(page, withSessions(3), 1120, 720);
-  const read = async (handle: Locator) =>
-    Object.fromEntries(
-      await Promise.all(
-        ['valuenow', 'valuemin', 'valuemax'].map(
-          async (name) => [name, Number(await handle.getAttribute(`aria-${name}`))] as const,
-        ),
-      ),
-    ) as Record<'valuenow' | 'valuemin' | 'valuemax', number>;
+  const read = (handle: Locator) =>
+    handle.evaluate((node) => ({
+      valuenow: Number(node.getAttribute('aria-valuenow')),
+      valuemin: Number(node.getAttribute('aria-valuemin')),
+      valuemax: Number(node.getAttribute('aria-valuemax')),
+    }));
   for (const handle of [rowsHandle(page), columnsHandle(page)])
     await expect
       .poll(async () => {
@@ -533,6 +531,8 @@ test('the spoken range is re-measured after loading and after a resize', async (
         return v.valuenow === v.valuemin && v.valuemin < v.valuemax;
       })
       .toBe(true);
+  // The stored 3% share draws the row at its minimum at this viewport.
+  const minimumMain = (await layout(page)).main;
 
   // Reset the rows, drag at 1440x900, keep the focus, and resize.
   await rowsHandle(page).dblclick();
@@ -540,16 +540,26 @@ test('the spoken range is re-measured after loading and after a resize', async (
   await drag(page, rowsHandle(page), 0, -40);
   await expect(rowsHandle(page)).toBeFocused();
   await page.setViewportSize({ width: 1120, height: 720 });
-  const g = await layout(page);
-  const expected = Math.round((g.main / (g.main + g.sessions)) * 100);
-  // What Home and End reach is what the range says.
-  await expect.poll(async () => (await read(rowsHandle(page))).valuenow).toBe(expected);
-  await page.waitForTimeout(400);
-  const settled = await read(rowsHandle(page));
+  // The share can stay unchanged while the old viewport's limits are still
+  // spoken. Check both limits against drawn minimums before a key refreshes them.
+  let settled = await layout(page);
+  await expect
+    .poll(async () => {
+      settled = await layout(page);
+      const { main, sessions, rowSplit } = settled;
+      const total = main + sessions;
+      return (
+        rowSplit.now === Math.round((main / total) * 100) &&
+        rowSplit.min === Math.round((minimumMain / total) * 100) &&
+        rowSplit.max === Math.round((1 - sessionsHeight(3) / total) * 100)
+      );
+    })
+    .toBe(true);
+  // What Home and End reach is what the already-refreshed range says.
   await page.keyboard.press('Home');
-  expect((await read(rowsHandle(page))).valuenow).toBe(settled.valuemin);
+  expect((await read(rowsHandle(page))).valuenow).toBe(settled.rowSplit.min);
   await page.keyboard.press('End');
-  expect((await read(rowsHandle(page))).valuenow).toBe(settled.valuemax);
+  expect((await read(rowsHandle(page))).valuenow).toBe(settled.rowSplit.max);
 });
 
 test('each boundary shows a faint grip before it is hovered', async ({ page }) => {
