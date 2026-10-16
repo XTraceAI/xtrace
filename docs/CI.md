@@ -39,6 +39,23 @@ it into the candidate. Run:
 pnpm check:native --base FULL_REVIEWED_BASE_SHA
 ```
 
+For a synthetic launch on a development Mac, explicitly select
+`pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke`. This still
+compiles the normal debug app first, then builds a separate debug configuration
+with the `fixtures` feature and launches only that fixture build with fixed F1.
+It uses a compiled test app ID, disposable data and native home, disables
+automatic PR checks, and keeps build/copy paths beneath `.noindex`. The copy is
+unregistered after the exact child exits. Evidence records `smokeMode:
+"fixture-f1"`; it verifies a synthetic native window, not production runtime,
+release runtime, tray interaction or macOS 14 compatibility on a newer Mac.
+`--fixture-smoke` and `--release` are rejected together before any build.
+
+The existing default and release launch routes remain unchanged. Fixture smoke
+does not establish production-runtime isolation or acceptance for those paths.
+In particular, a synthetic native-index home is not a general isolation boundary
+for account readers that a later app version may start; review those runtime
+paths before using normal smoke mode on a development Mac.
+
 The command requires a clean checkout and verifies the base is an ancestor of the
 tested head. It installs frozen dependencies; runs workspace Rust fmt, strict
 all-target/all-feature Clippy and tests; verifies installed DTO/plugin hooks
