@@ -559,49 +559,70 @@ it('says the appended source has grown without calling the text complete', async
 });
 
 it('shows a call whose identifier is used twice as neither answered nor unanswered', async () => {
-  const { source } = harness({
-    auto: {
-      ...readable,
-      records: [
-        {
-          id: 'aaaaaaaa-0000-4000-8000-00000000000a',
-          role: 'assistant',
-          at: null,
-          blocks: [{ kind: 'tool_call', index: 0, name: 'Read', call_id: 'toolu_1', input: null }],
-        },
-        {
-          id: 'bbbbbbbb-0000-4000-8000-00000000000b',
-          role: 'user',
-          at: null,
-          blocks: [
-            {
-              kind: 'tool_result',
-              index: 0,
-              call_id: 'toolu_1',
-              failed: false,
-              parts: [{ kind: 'text', text: 'the first answer' }],
-            },
-            {
-              kind: 'tool_result',
-              index: 1,
-              call_id: 'toolu_1',
-              failed: true,
-              parts: [{ kind: 'text', text: 'the second answer' }],
-            },
-          ],
-        },
-      ],
-    },
-  });
+  const transcript: SessionSourceStatus = {
+    ...readable,
+    records: [
+      {
+        id: 'aaaaaaaa-0000-4000-8000-00000000000a',
+        role: 'assistant',
+        at: null,
+        blocks: [{ kind: 'tool_call', index: 0, name: 'Read', call_id: 'toolu_1', input: null }],
+      },
+      {
+        id: 'bbbbbbbb-0000-4000-8000-00000000000b',
+        role: 'user',
+        at: null,
+        blocks: [
+          {
+            kind: 'tool_result',
+            index: 0,
+            call_id: 'toolu_1',
+            failed: false,
+            parts: [{ kind: 'text', text: 'the first answer' }],
+          },
+          {
+            kind: 'tool_result',
+            index: 1,
+            call_id: 'toolu_1',
+            failed: true,
+            parts: [{ kind: 'text', text: 'the second answer' }],
+          },
+        ],
+      },
+    ],
+  };
+  const { source, opened, settle } = harness();
+  // Keep the unrelated Reading usage… button present before the transcript arrives.
+  // A page-wide /Read/ match must not stand in for these records being ready.
+  source.accountUsage = () => new Promise(() => {});
   mount(source);
-  // Open every run, so the cards are mounted.
-  await screen.findAllByRole('button', { name: /Read/ });
-  for (const row of document.querySelectorAll('.xt-tool-row')) {
-    fireEvent.click(row);
-  }
-  const call = document.querySelector(
-    '.xt-tool-card[data-block-id="aaaaaaaa-0000-4000-8000-00000000000a:0"]',
-  )!;
+  await waitFor(() => expect(opened).toHaveLength(1));
+  expect(screen.getByRole('button', { name: 'Reading usage…' })).toBeTruthy();
+  expect(document.querySelectorAll('[data-record-id]')).toHaveLength(0);
+  expect(document.querySelectorAll('.xt-tool-row')).toHaveLength(0);
+  settle(transcript);
+
+  const { asked, answered } = await waitFor(() => {
+    const asked = document.querySelector<HTMLElement>(
+      '[data-record-id="aaaaaaaa-0000-4000-8000-00000000000a"]',
+    );
+    const answered = document.querySelector<HTMLElement>(
+      '[data-record-id="bbbbbbbb-0000-4000-8000-00000000000b"]',
+    );
+    expect(asked).not.toBeNull();
+    expect(answered).not.toBeNull();
+    return { asked: asked!, answered: answered! };
+  });
+  // Each exact record contains one collapsed tool group. Open those groups only.
+  fireEvent.click(within(asked).getByRole('button', { expanded: false }));
+  fireEvent.click(within(answered).getByRole('button', { expanded: false }));
+  const call = await waitFor(() => {
+    const card = asked.querySelector(
+      '.xt-tool-card[data-block-id="aaaaaaaa-0000-4000-8000-00000000000a:0"]',
+    );
+    expect(card).not.toBeNull();
+    return card!;
+  });
   expect(call.getAttribute('data-tool-state')).toBe('ambiguous');
   expect(call.textContent).toContain('identifier is used more than once');
   // Not a failure, not a success, and not "no result for this call".
@@ -609,10 +630,6 @@ it('shows a call whose identifier is used twice as neither answered nor unanswer
   // The turn that made the call counts no failure: an unanswerable call is
   // not a failed one. The turn that carried the results counts the one that
   // says it failed, because that is the result's own statement.
-  const asked = document.querySelector('[data-record-id="aaaaaaaa-0000-4000-8000-00000000000a"]')!;
-  const answered = document.querySelector(
-    '[data-record-id="bbbbbbbb-0000-4000-8000-00000000000b"]',
-  )!;
   expect(asked.textContent).not.toContain('failed');
   expect(answered.textContent).toContain('1 failed');
   // Both answers are still on the page, whole.
