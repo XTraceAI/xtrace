@@ -260,7 +260,8 @@
 .xt-human-axis,
 .xt-human-row {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) 48px;
+  /* Keep the axis aligned and fit two-digit hours/minutes at the existing mono size. */
+  grid-template-columns: 52px minmax(0, 1fr) 64px;
   gap: 10px;
 }
 .xt-human-axis {

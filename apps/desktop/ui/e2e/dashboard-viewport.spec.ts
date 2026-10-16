@@ -1282,3 +1282,87 @@ for (const scheme of SCHEMES)
     await expectPageStill(page);
     await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
   });
+
+/** Nine-character daily totals fit whole, including a long DST day and a larger stress value. */
+for (const [width, height] of [
+  [1120, 720],
+  [1440, 900],
+] as const)
+  for (const scheme of SCHEMES)
+    test(`human day totals stay whole and aligned at ${width}x${height} ${scheme}`, async ({
+      page,
+    }, info) => {
+      const data = indexedExport(live);
+      // 99 hours is deliberately beyond a real day: it checks the same widest
+      // two-digit shape, not a claim that the metric can count 99 hours in a day.
+      const values = [
+        { ms: (23 * 60 + 59) * 60_000, text: '23 h 59 m' },
+        { ms: 25 * 3_600_000, text: '25 h 0 m' },
+        { ms: 0, text: '0 h 0 m' },
+        { ms: 1, text: '<1 m' },
+        { ms: null, text: '—' },
+        { ms: (99 * 60 + 59) * 60_000, text: '99 h 59 m' },
+      ];
+      for (const report of data.dashboards)
+        report.human_hours.current.by_day.forEach((day, index) => {
+          day.active_ms = values[index % values.length]!.ms;
+        });
+      await open(page, data, width, height, scheme);
+      for (const range of ['7d', '30d'] as const) {
+        await page.getByRole('radio', { name: range }).click();
+        await expect(page.getByTestId('report-period')).toContainText(
+          range === '30d' ? 'Aug 9' : 'Sep 1',
+        );
+        await page.getByRole('radio', { name: 'human h' }).click();
+        await expectMeasure(page, 'human h');
+        const body = page.getByTestId('human-timeline-body');
+        const count = range === '30d' ? 30 : 7;
+        await expect(body.getByTestId('human-day')).toHaveCount(count);
+        await expect(body.locator('.xt-human-total')).toHaveText(
+          Array.from({ length: count }, (_, index) => values[index % values.length]!.text),
+        );
+        const measured = await page.evaluate(() => {
+          const body = document.querySelector<HTMLElement>('.xt-human-body')!;
+          const bodyBox = body.getBoundingClientRect();
+          const axis = document.querySelector('.xt-human-hours')!.getBoundingClientRect();
+          return {
+            clientWidth: body.clientWidth,
+            scrollWidth: body.scrollWidth,
+            visibleLeft: bodyBox.left + body.clientLeft,
+            visibleRight: bodyBox.left + body.clientLeft + body.clientWidth,
+            axis: { left: axis.left, right: axis.right },
+            totals: [...body.querySelectorAll('.xt-human-total')].map((total) => {
+              const range = document.createRange();
+              range.selectNodeContents(total);
+              const text = range.getBoundingClientRect();
+              const cell = total.getBoundingClientRect();
+              const track = total.previousElementSibling!.getBoundingClientRect();
+              return {
+                text: total.textContent,
+                glyph: { left: text.left, right: text.right },
+                cell: { left: cell.left, right: cell.right },
+                track: { left: track.left, right: track.right },
+              };
+            }),
+          };
+        });
+        await info.attach(`human-total-bounds-${range}`, {
+          body: JSON.stringify(measured, null, 2),
+          contentType: 'application/json',
+        });
+        expect(measured.scrollWidth).toBe(measured.clientWidth);
+        for (const total of measured.totals) {
+          expect(total.glyph.left, total.text!).toBeGreaterThanOrEqual(total.cell.left);
+          expect(total.glyph.right, total.text!).toBeLessThanOrEqual(total.cell.right);
+          expect(total.glyph.left, total.text!).toBeGreaterThanOrEqual(measured.visibleLeft);
+          expect(total.glyph.right, total.text!).toBeLessThanOrEqual(measured.visibleRight);
+          expect(total.track, total.text!).toEqual(measured.axis);
+        }
+        const g = await page.evaluate(geometry);
+        expectFits(g, width, height);
+        expectInsideMargin(g);
+        await page.screenshot({
+          path: info.outputPath(`human-totals-${width}-${scheme}-${range}.png`),
+        });
+      }
+    });
