@@ -70,11 +70,21 @@ test('sidebar geometry, controlled state, theme and Hub dismissal', async ({ pag
   await page.keyboard.press('Enter');
   await expect(hub).toBeVisible();
   await expect(hub).toHaveCSS('width', '264px');
-  const sidebarBounds = (await sidebar.boundingBox())!;
-  const hubBounds = (await hub.boundingBox())!;
-  const footerBounds = (await footer.boundingBox())!;
-  expect(hubBounds.x).toBe(sidebarBounds.x + sidebarBounds.width - 12 + 14);
-  expect(hubBounds.y + hubBounds.height).toBeCloseTo(footerBounds.y + footerBounds.height + 6, 0);
+  // Visibility can precede the positioner's final placement. Measure the popup
+  // and its sidebar anchor together, keeping the original alignment tolerance.
+  await expect
+    .poll(() =>
+      hub.evaluate((element) => {
+        const sidebarBounds = document.querySelector('.xt-sidebar')!.getBoundingClientRect();
+        const footerBounds = document.querySelector('.xt-sidebar-status')!.getBoundingClientRect();
+        const hubBounds = element.getBoundingClientRect();
+        return {
+          xOffset: hubBounds.x - (sidebarBounds.x + sidebarBounds.width - 12 + 14),
+          bottomOffset: hubBounds.bottom - (footerBounds.bottom + 6),
+        };
+      }),
+    )
+    .toEqual({ xOffset: 0, bottomOffset: expect.closeTo(0, 0) });
   await expect(hub).toHaveCSS('background-color', 'rgb(241, 241, 245)');
   await expect(page.getByRole('button', { name: 'Connect XTrace Hub' })).toBeDisabled();
   await page.screenshot({ path: info.outputPath('sidebar-hub.png') });

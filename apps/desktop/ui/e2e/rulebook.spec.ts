@@ -354,7 +354,11 @@ test('moves focus through the controls, tiles and lists with a visible ring', as
     });
     await expect(control).toBeFocused();
     expect(await ring()).toBe(true);
-    await expect(tooltip).toContainText(`Rule IDsynthetic-rule-${position - 1}`);
+    // The previous tooltip can remain mounted while focus opens the next one.
+    // Read count and content together so neither an old nor an extra popup passes.
+    await expect
+      .poll(() => tooltip.allTextContents())
+      .toEqual([expect.stringContaining(`Rule IDsynthetic-rule-${position - 1}`)]);
   }
   await page.keyboard.press('Escape');
   await expect(tooltip).toHaveCount(0);
