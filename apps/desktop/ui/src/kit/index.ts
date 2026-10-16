@@ -1,6 +1,10 @@
 export { BrandMark } from './BrandMark';
+export { LoadingMark } from './LoadingMark';
+export { StartupSplash } from './StartupSplash';
 export { Sidebar } from './Sidebar';
+export { AccountUsageWidget } from './AccountUsageWidget';
 export { HubPopover } from './HubPopover';
+export { LocalUpdatesPopover } from './LocalUpdatesPopover';
 export { TopBar } from './TopBar';
 export { HostGlyph } from './HostGlyph';
 export { Icon } from './icons';

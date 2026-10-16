@@ -135,7 +135,8 @@ body:has(.native-mac) {
   font-size: 11px;
   cursor: pointer;
 }
-.refresh-button:disabled {
+.refresh-button:disabled,
+.refresh-button[aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
 }

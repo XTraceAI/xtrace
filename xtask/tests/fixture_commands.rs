@@ -80,7 +80,7 @@ fn export_uses_shared_canonical_data_and_preserves_skeleton_status() {
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
     assert_eq!(value["manifest"]["status"], "skeleton");
-    assert_eq!(value["snapshots"].as_object().unwrap().len(), 5);
+    assert_eq!(value["snapshots"].as_object().unwrap().len(), 4);
     assert!(value["expected"].as_object().unwrap().is_empty());
     assert!(
         !run(&["fixture-export", "F16", "--out", file.to_str().unwrap()])

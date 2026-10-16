@@ -345,7 +345,7 @@ fn canonical_export_round_trips_the_loaded_inputs_and_auxiliary_files() {
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        ["fresh", "typical", "connected", "no-python3", "env"]
+        ["fresh", "typical", "connected", "no-python3"]
             .into_iter()
             .collect()
     );

@@ -1,3 +1,5 @@
-//! Host registries, shared binary resolution, and Git/GitHub probes.
-//!
-//! Foundation scaffold: no product API is implemented yet.
+//! GitHub probes for explicit pull-request identities.
+
+pub mod gh;
+
+pub use gh::{AttemptClock, CancelFlag, GhClient, GhClientError, Limits, SystemClock};

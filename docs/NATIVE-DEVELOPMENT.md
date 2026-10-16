@@ -25,9 +25,10 @@ synthetic window check on a development Mac. It compiles normal debug code,
 then launches only a fixtures-enabled debug copy with fixed F1, a distinct
 compiled app ID and disposable directories beneath `.noindex`. It reports
 `smokeMode: "fixture-f1"` and unregisters that copy after the check. This does
-not verify production account readers or the interactions below. The unchanged
-default/release smoke routes need separate runtime isolation review; a
-synthetic native-index home alone is not a general account-home boundary.
+not verify production account readers or the interactions below. The normal
+debug/release smoke paths also use compiled test IDs and verified copies, but
+still have unverified provider isolation; a
+synthetic native-index home alone does not isolate the real account home.
 Do not combine fixture smoke with `--release`. See [CI](CI.md#native-validation-before-merging)
 for the exact checks and limitations.
 

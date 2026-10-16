@@ -25,7 +25,25 @@ user's home against its own database, running the Codex/Cursor readers from the
 bundled copy of the pinned sources (`vendor/agent-plugins`, verified by object
 identity without Git) with a discovered Python 3.10+ interpreter, and exposes the
 result as the typed `native_index_status` command and `native-index://status`
-event; see [native import](acceptance/native-import.md#app-integration). The app
+event; see [native import](acceptance/native-import.md#app-integration).
+`xt_ingest::native::session_source` reads **one Claude** session's original
+local source on demand, for a detail view: it resolves that session alone
+through the same paths, reads only bytes it has verified against the open
+descriptor and the name both before and after the read, and returns its records
+in memory or the one reason they may not be shown. It writes nothing and caches
+nothing, reads under cumulative byte and record ceilings, and returns no
+content at all when cancelled. Codex and Cursor are refused before any
+interpreter or producer is looked for, because their sources are reachable only
+through the pinned reader's staged disk copies and whole-payload buffers, which
+a transient bounded read does not permit; indexing them is unaffected. See
+[session source](acceptance/session-source.md). The session page shows the M-09
+hands-off stretches that session contributed in the selected window, read from
+`xt-metrics` as metadata only, and reveals a stretch's first tool call only when
+exactly one tool call in the loaded transcript sits at the position M-09 named.
+Each stretch also carries M-20's repeat measurement of the same stretch, read in
+the same snapshot, with no comparison key or argument on the wire;
+see [session stretches](acceptance/session-stretches.md) and
+[session timeline](acceptance/session-timeline.md). The app
 exposes `app_info` and `db_counts` as well, but does not start the capture server
 automatically. Production metric calculation, product data queries and the
 remaining subsystem behavior are separate work.
@@ -39,7 +57,7 @@ or compiling placeholder does not establish implemented behavior.
 | `crates/xt-ingest/`       | Normalization, parsers, native source import through the pinned readers, and the canonical writer.   |
 | `crates/xt-server/`       | Guarded loopback HTTP/MCP endpoints and the headless core interface.                                 |
 | `crates/xt-metrics/`      | Metric definitions, SQL views, aggregation, and shared result DTOs.                                  |
-| `crates/xt-probes/`       | Host/plugin discovery, executable environment resolution, and `gh`/Git probes.                       |
+| `crates/xt-probes/`       | GitHub pull-request probes; host/plugin discovery and executable resolution remain planned.          |
 | `crates/xt-rulebook/`     | Rule lifecycle, local proposals, verification, and fire history.                                     |
 | `crates/xt-judge/`        | Isolated configured judge CLI routes and separate judge-usage accounting.                            |
 | `crates/xt-fixtures/`     | Development-only fixture loading, database construction, and expected-result assertions.             |
@@ -57,6 +75,36 @@ remain separate work. JavaScript consumes metric DTOs rather than
 reimplementing calculations. The fixture harness uses the canonical storage API;
 its bounded baseline reference assertions do not implement the production metric
 engine or establish whole-rule coverage.
+
+## Design principles
+
+### One rule per question (single source of truth)
+
+Every question the app answers — "is this week ahead of even use?", "is this
+session live?", "how long did this session run?", "how is this time shown?" —
+is decided by exactly one function. Everything that shows or acts on the answer
+(a label, a color, a warning, a chart, a sort order, a second screen) reads that
+one result instead of working it out again with its own formula or threshold.
+Derive, don't duplicate.
+
+- Before adding a calculation, threshold, label rule or formatter, search for an
+  existing one that answers the same question and reuse it. If it does not quite
+  fit, change it in place rather than writing a near copy.
+- Product decisions and metrics live in Rust and reach the renderer as DTO
+  fields. The renderer formats and arranges them; it does not re-derive them.
+  If the screen needs a new decision, add it to the DTO.
+- When two signals describe the same state (for example a bar color and a
+  warning line), derive both from the same comparison on the same unrounded
+  numbers, and round only for display.
+- A shared constant (a window length, a timeout, a cut-off) is defined once and
+  imported where it is needed.
+- Test the agreement, not only each part: a test should show that every signal
+  derived from one answer changes together.
+
+Example of the failure this prevents: the usage widget once colored its bar by
+comparing use with even use over the whole week, while its "Runs out" warning
+extended the last day's rate. A week below even use could show a green bar and
+a run-out warning at the same time. Both now come from one comparison.
 
 Keep subsystem contracts explicit at crate boundaries. Local checks are in
 [CONTRIBUTING.md](../CONTRIBUTING.md); [CI.md](CI.md) describes automated

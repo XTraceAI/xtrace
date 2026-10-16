@@ -33,6 +33,13 @@ collision with another schema object fails safely. Data and history rows stay
 unchanged. Failure rolls back this maintenance transaction, not earlier numbered
 migrations that already committed. Read-only helpers never maintain the index.
 
+Legacy migration validation still compares table, index and trigger SQL
+definitions. Only this separately maintained index, with its exact name and
+`tool_uses` table, is excluded from numbered-history comparison before its
+definition is repaired. A table, trigger or index on another table using that
+name is not excluded. Tests cover schema-6 main databases with the index,
+schema-22 public release databases, all migration prefixes and altered SQL.
+
 Native timestamp ordering, imported first/last bounds and replay conflict checks
 preserve every RFC3339 fractional digit, including digits beyond nanoseconds.
 Equivalent offsets and trailing fractional zeroes describe the same instant.
@@ -103,16 +110,19 @@ selection belongs to the metric projection.
 with optional version. Both values are bounded structural labels containing
 ASCII letters/digits or `._-`; additional fields and path/content values are
 rejected. Raw platform and surface values are separate fields and preserve
-unknown labels. Native `started_at_ms` is independent of the first imported event.
+unknown labels. The stored `started_at_ms` is only the host's own start and is
+independent of the first imported event. Display reads (`session_list`) show a
+Claude session with no stored start as starting at its earliest imported message,
+because Claude Code transcripts record no start; nothing writes that back.
 
 ## Structural ingestion storage
 
 Migration `0002_ingest.sql` extends the actual 0001 schema. Sessions gain
 repository/namespace/branch-set metadata, a user/judge kind and a record count
 maintained by canonical batch writes. Records gain nullable hygiene, parent,
-agent, subtype and first-seen fields. Hosts, settings, source cursors and PR-link
-tables reserve storage for their owning adapters; those product workflows are
-not wired here. The normalized usage table and existing source/surface/API-ID
+agent, subtype and first-seen fields. Hosts, settings and source cursors reserve
+storage for their owning adapters; those product workflows are not wired here.
+The PR-link tables are written only through `xt_store::pr_link` (below). The normalized usage table and existing source/surface/API-ID
 columns remain in place.
 
 `xt_store::ingest` exposes typed structural facts through `Store`:
@@ -182,6 +192,43 @@ flags are neither the final batch state nor a per-field provenance mask. The
 included `WriteStats` retains legacy per-input counters; `ignored` includes
 identity/type rejections, and session metadata filling can count as enrichment.
 
+`IngestBatch::injected_context` optionally carries, aligned with the inputs, a
+native Codex reader's proof that one input is context Codex injected (a selected
+skill's instructions). Only a discovered native Codex batch may carry one, and it
+is kept in `injected_context_inputs` only when that exact input inserted its
+record in this transaction, once, unconflicted, as an eligible human-classified
+user text input; otherwise it abstains and the records commit as without it.
+Malformed, misbound or ambiguous proofs reject the batch. The outcome reports
+one `InjectedContextOutcome` per proof. The Store's confirmation paths refuse an
+input a proof holds; SQL itself only refuses a proof for an already confirmed
+input, not a later raw confirmation row. No other API writes these rows; see
+`docs/acceptance/confirmed-automated-inputs.md`.
+
+`IngestBatch` also keeps, in its own transaction and whatever the retention
+mode, a short preview in `record_previews` (see `record_preview.rs`): one line of
+at most 280 characters for each accepted input whose whole text the stored
+classification calls a person's, and each proven task notification's own
+`<summary>`. `IngestBatch::withheld_previews` optionally marks, aligned with the
+inputs, those a human-input adjustment says are only partly a person's words;
+they keep none. Rows fill once; purge clears their text, and an applied
+adjustment removes a person preview. `Store::record_preview` reads one back.
+
+`IngestBatch::task_notifications` optionally carries, aligned with the inputs,
+the native line's own marker that Claude Code wrote that input as a task
+notification (`origin.kind`). An accepted marked input binds a row in
+`task_notification_inputs` to its stored record — new or already held — when
+that row is an unconflicted, human-classified Claude user input; otherwise it
+abstains. Like a confirmation, the row overrides only that input's effective
+human eligibility; the raw record is unchanged.
+
+`IngestBatch::tool_sent` optionally carries, aligned with the inputs, the kind
+of a validated pinned-reader claim that the Codex or Cursor tool (or the reader
+itself) wrote that input (see `tool_sent.rs`). An accepted marked input binds a
+row in `tool_sent_inputs` to its stored record in the batch's session — new or
+already held — when that row is an unconflicted, human-classified user input
+of the kind's own host; otherwise it abstains. The row overrides only that
+input's effective human eligibility, and withdraws any person preview of it.
+
 Session observations and receipt parents must match the batch's canonical session.
 Record observations and receipt coverage may reference only submitted UUIDs with
 no rejected occurrence anywhere in the batch. This restriction avoids assigning
@@ -229,6 +276,103 @@ this API does not reset cursors. Empty batches may update session metadata and
 cursors, but cannot manufacture receipt coverage. Effective retention combines the
 persisted policy with the caller's restriction. Adapters publish product events
 only after the returned transaction outcome.
+
+## Pull-request evidence
+
+`xt_store::pr_link` persists locally observed pull-request identities, their
+session links and typed refresh results over the existing `pull_requests` and
+`pr_links` tables. Migration 7 only clears transcript checkpoints so native
+witnesses are replayed once. Migration 8 adds two nullable refresh-status
+columns to `pull_requests` and changes no existing row or checkpoint.
+
+- `PrIdentity` accepts only `https://github.com/<owner>/<repo>/pull/<number>`,
+  at most 256 bytes. Scheme and host compare ASCII case-insensitively. Owners are
+  1-39 ASCII letters, digits or hyphens (not leading); repositories are 1-100
+  ASCII letters, digits, `.`, `_` or `-`, excluding `.`, `..` and a `.git` suffix.
+  Numbers are canonical decimal integers from 1 to `i64::MAX`. Userinfo, ports,
+  queries, fragments, trailing slashes, extra or missing segments, percent escapes,
+  leading zeroes, controls, whitespace, non-ASCII text, other hosts and schemes,
+  and GitHub Enterprise hosts are rejected rather than normalized.
+- GitHub resolves owner and repository names case-insensitively, so the canonical
+  identity is the ASCII-lowercase `owner/repo` plus the number, with exactly one
+  canonical URL. Distinct pull requests never collapse into one identity.
+  `PrIdentity::reconcile(url, repository, number)` requires a URL or both other
+  parts; every supplied part must name the same canonical identity.
+- `PrConfidence` is `exact`, `sha` or `inferred`. A link upgrades only toward
+  `exact > sha > inferred` and never downgrades.
+- `Store::record_pr_link(&PrLinkObservation)` writes one stub per canonical
+  repository/number and one link per session/pull request in one immediate
+  transaction. The canonical session must already exist. The link keeps the
+  earliest `first_seen_at`, the latest `last_seen_at` and the strongest confidence,
+  so duplicate and reversed arrivals converge; an identical replay writes nothing.
+  An existing row that matches the repository/number or URL ASCII
+  case-insensitively but is not spelled exactly canonically is a conflict. Every failure rolls back the stub and link together.
+- A link records a reference only. It never implies a merge: `title`, `state`,
+  `merged_at`, `additions`, `deletions`, `head_ref_name`, `refreshed_at`,
+  `last_attempted_at` and `refresh_error` stay unknown until a refresh result is
+  recorded. Observations carry no title, branch, path, command, tool argument or
+  transcript text.
+- `Store::record_pr_refresh(&RefreshOutcome)` persists one typed attempt,
+  `RefreshSuccess` or `RefreshFailure`, for an identity that already has a
+  canonical row, in one immediate transaction. It never creates a stub or link and
+  never changes confidence or first/last-seen times; an unknown identity or a row
+  the shared canonical lookup reports as a conflict fails. The whole result is
+  validated before the transaction: `attempted_at` is UTC milliseconds from 0 to
+  `MAX_ATTEMPTED_AT`; title (at most 1024 bytes) and head branch (at most 255
+  bytes) are nonblank and free of control characters; `state` is
+  `OPEN`/`CLOSED`/`MERGED`; additions and deletions are nonnegative; `MERGED`
+  requires an RFC3339 `merged_at` of at most 64 bytes and `OPEN`/`CLOSED` forbid
+  one. Every refresh-owned field of a success is required.
+- `Store::record_pr_refresh_from(&RefreshOutcome, RefreshOrigin)` is the same
+  write for an attempt the caller names as `Manual` or `Automatic`;
+  `record_pr_refresh` is the automatic one. Migration 23 adds the nullable
+  `manual_failed_at`: a newer manual failure sets it to the attempt when the
+  failure is about that pull request (`not_found`, `execution_failed`,
+  `invalid_response`, `output_too_large`;
+  `PrRefreshError::about_this_pull_request`, the same rule the automatic check
+  uses to pause or stop a run), any
+  other newer failure keeps it, and a newer success clears it. A schema CHECK
+  allows it only while `refresh_error` is set and no later than
+  `last_attempted_at`.
+- Refresh columns: `refreshed_at` is the last successful refresh,
+  `last_attempted_at` the newest applied attempt and `refresh_error` its typed
+  failure code (`unavailable`, `timeout`, `cancelled`, `output_too_large`,
+  `invalid_response`, `execution_failed`, `not_found`, `unauthorized`,
+  `rate_limited`), enforced by a schema CHECK. No message, stderr, response body
+  or stored stale flag exists. A newer success replaces `title`, `state`,
+  `merged_at`, `additions`, `deletions` and `head_ref_name`, sets
+  `refreshed_at` and `last_attempted_at` to the attempt and clears the error. A
+  newer failure sets only `last_attempted_at` and the error, keeping the last
+  successful metadata and `refreshed_at`. A row whose error is `not_found`
+  and that was never refreshed is "not found on GitHub"
+  (`StoredPullRequest::not_found_on_github`, and `not_found_on_github_sql!()`
+  for SQL readers): the link readers, the Sessions page's links, PR filter and
+  link counts, and the metrics link read leave it out. An attempt older than the stored one
+  (or than a pre-8 `refreshed_at`) returns `RefreshWrite::Stale` and writes
+  nothing. At an equal attempt time an exactly identical result is
+  `RefreshWrite::Unchanged`; any differing success or failure is a conflict error
+  and nothing is written.
+- `pull_request(&identity)`, `all_pull_requests()` (by repository then number),
+  `session_pr_links(session)` (by repository then number),
+  `pull_request_links(&identity)` (by session) and `all_pr_links()` (by
+  repository, number, session) are the read surface. `StoredPullRequest` exposes
+  every refresh column and `refresh_status()` derives `NeverAttempted`,
+  `Refreshed`, `FailedNeverRefreshed(code)` or `FailedAfterRefresh(code)` without
+  any age or staleness policy. The two identity readers
+  resolve rows with the writer's candidate lookup: no candidate is absent, one
+  exactly canonical row is returned, and a case variant, URL alias, split
+  identity or several candidates is an error. A non-canonical stored identity is
+  reported rather than re-spelled; reads never rewrite legacy rows.
+
+`IngestBatch::pr_links` carries exact native witnesses into the ingest batch's
+immediate transaction, where they commit through the same link write as the
+records and checkpoint they sit beside, or fail with them. Only discovered
+Claude history may carry them. A link naming another session (a fork's
+inherited copy) attaches only to an indexed Claude session and otherwise
+nowhere. Scanning belongs to `xt-ingest`; see
+[native PR witnesses](../../docs/acceptance/native-pr-witnesses.md). Fetching
+refresh results (any GitHub client, subprocess or network call), scheduling,
+staleness policy and PR metrics belong to later owners.
 
 ## Verification
 

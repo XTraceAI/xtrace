@@ -98,6 +98,7 @@ fn request<'a>(
         declared_host: None,
         records,
         hook_summaries,
+        pr_witnesses: &[],
         title: None,
         cwd: None,
         git_branch: None,

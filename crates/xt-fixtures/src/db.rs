@@ -1,10 +1,13 @@
-use crate::{LoadedSession, Result, invalid};
+use crate::{LoadedSession, Result, invalid, load::PrLinkInput};
 use std::{
     fs, io,
     path::{Path, PathBuf},
 };
 use tempfile::{NamedTempFile, TempDir};
 use xt_store::Store;
+
+/// The own-check key of a fixture session ([`xt_store::child_check`]).
+const FIXTURE_CHECK_KEY: &str = "u1:fixture";
 
 /// Own this value for the whole reader/server test. Dropping the Store before
 /// the TempDir lets SQLite close and checkpoint before its files are removed.
@@ -18,10 +21,14 @@ impl TempDb {
     /// Empty file-backed owner for schema and discovery tests that do not yet
     /// claim a populated fixture's product-rule acceptance.
     pub fn empty() -> Result<Self> {
-        Self::build(&[], false)
+        Self::build(&[], &[], false)
     }
 
-    pub(crate) fn build(sessions: &[LoadedSession], keep_content: bool) -> Result<Self> {
+    pub(crate) fn build(
+        sessions: &[LoadedSession],
+        pull_requests: &[PrLinkInput],
+        keep_content: bool,
+    ) -> Result<Self> {
         let directory = TempDir::new()?;
         let path = directory.path().join("fixture.sqlite");
         let mut store = Store::open(&path)?;
@@ -32,6 +39,18 @@ impl TempDb {
         for session in sessions {
             store.upsert_session(&session.metadata, keep_content)?;
             store.upsert_records(&session.metadata.session_id, &session.records, keep_content)?;
+            // A fixture is a closed synthetic catalog: no history any child
+            // detector reads exists for its sessions, as for a host with no
+            // detector. Their display checks are finished under that key.
+            let id = &session.metadata.session_id;
+            if let Some(attempt) = store.observe_own_check(id, Some(FIXTURE_CHECK_KEY))? {
+                store.settle_child_checks(&[(id, attempt.required, FIXTURE_CHECK_KEY)])?;
+            }
+        }
+        // Links only: the refresh-owned columns stay unset, as they are for a
+        // pull request nothing has refreshed yet.
+        for link in pull_requests {
+            store.record_pr_link(&link.observation()?)?;
         }
         Ok(Self {
             store,

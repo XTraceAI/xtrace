@@ -24,7 +24,7 @@ const metrics: {
   { icon: 'lanes', ruleId: 'M-06', label: 'Example concurrency', value: 2.4 },
   { icon: 'merge', ruleId: 'M-12', label: 'Example messages per PR', value: 3 },
   { icon: 'clock', ruleId: 'M-05', label: 'Example agent hours', value: 1.8, unit: 'h' },
-  { icon: 'bolt', ruleId: 'M-08', label: 'Example agent/human ratio', value: 1.6 },
+  { icon: 'bolt', ruleId: 'M-08', label: 'Example leverage', value: 1.6 },
   { icon: 'msg', ruleId: 'M-02', label: 'Example human messages', value: 9 },
   { icon: 'token', ruleId: 'M-04', label: 'Example tokens', value: 6400 },
   { icon: 'shield', ruleId: 'M-16', label: 'Example sessions per day', value: 3 },
@@ -102,7 +102,7 @@ export const metricStories = [
   story('rulechip/sizes', ['RuleChip'], [260, 100], () => (
     <div className="gallery-row gallery-stack">
       <RuleChip ruleId="M-06" subject="Concurrency" />
-      <RuleChip ruleId="C-08" subject="Session and capture receipt identity" size="sm" />
+      <RuleChip ruleId="C-08" subject="Capture identity" size="sm" />
     </div>
   )),
   story('rulepopover/open-context', ['RulePopover'], [560, 240], () => (

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use xt_fixtures::{Fixture, TempDb};
 use xt_metrics::{COST_BASIS, CostReport, MetricsDb, PriceCatalog, UnpricedReason, Window};
 use xt_store::{CanonicalRecord, SessionMeta, SessionSource};
+mod report_support;
 fn fixture(id: &str) -> Fixture {
     Fixture::load(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -25,11 +26,36 @@ fn catalog_json() -> Value {
 fn catalog() -> PriceCatalog {
     PriceCatalog::from_json(&catalog_json().to_string()).unwrap()
 }
+/// The cost report, checked against the combined report read.
+fn cost_in(
+    metrics: &MetricsDb,
+    window: Window,
+    zone: TimeZone,
+    catalog: &PriceCatalog,
+) -> xt_metrics::Result<CostReport> {
+    report_support::matches_standalone(metrics, window, window.end_ms(), &[], zone, catalog)
+        .current
+        .cost
+}
+/// The token report, checked against the combined report read.
+fn tokens_in(
+    metrics: &MetricsDb,
+    window: Window,
+    zone: TimeZone,
+) -> xt_metrics::Result<xt_metrics::TokenReport> {
+    let catalog = PriceCatalog::bundled().unwrap();
+    report_support::matches_standalone(metrics, window, window.end_ms(), &[], zone, &catalog)
+        .current
+        .tokens
+}
 fn query(db: &TempDb) -> CostReport {
-    MetricsDb::open(db.path())
-        .unwrap()
-        .cost(window(), TimeZone::UTC, &catalog())
-        .unwrap()
+    cost_in(
+        &MetricsDb::open(db.path()).unwrap(),
+        window(),
+        TimeZone::UTC,
+        &catalog(),
+    )
+    .unwrap()
 }
 fn seed(db: &mut TempDb, id: &str, host: &str, surface: Option<&str>, rows: &[CanonicalRecord]) {
     let mut session = SessionMeta::new(id, host, SessionSource::Fixture);
@@ -204,10 +230,12 @@ fn cost_unknowns_keep_named_model_tier_and_known_subtotal() {
     ] {
         assert!(r.total.unpriced.iter().any(|u| u.reason == reason));
     }
-    let tokens = MetricsDb::open(db.path())
-        .unwrap()
-        .tokens(window(), TimeZone::UTC)
-        .unwrap();
+    let tokens = tokens_in(
+        &MetricsDb::open(db.path()).unwrap(),
+        window(),
+        TimeZone::UTC,
+    )
+    .unwrap();
     assert_eq!(tokens.total.selected_responses, 7);
 }
 #[test]
@@ -246,8 +274,14 @@ fn cost_zero_writes_allow_absent_ttl_but_reject_contradictory_split() {
 #[test]
 fn cost_bundled_exact_ids_tiers_and_long_context_boundary() {
     let prices = PriceCatalog::bundled().unwrap();
-    assert_eq!(prices.as_of(), "2026-09-17");
+    assert_eq!(prices.as_of(), "2026-10-01");
     for (model, tier, rate) in [
+        ("gpt-6-sol", "default", 0.000002),
+        ("gpt-6.1-sol", "default", 0.000002),
+        ("gpt-5.5", "default", 0.000005),
+        ("claude-opus-5-5", "standard", 0.000004),
+        ("claude-fable-5-1", "standard", 0.00001),
+        ("claude-fable-5", "standard", 0.00001),
         ("gpt-6-astra", "default", 0.000010),
         ("gpt-5.6-sol", "default", 0.000004),
         ("gpt-5.6", "default", 0.000004),
@@ -266,12 +300,15 @@ fn cost_bundled_exact_ids_tiers_and_long_context_boundary() {
             &[record("s", model, tier, [1, 0, 0, 0], None)],
         );
         assert_eq!(
-            MetricsDb::open(db.path())
-                .unwrap()
-                .cost(window(), TimeZone::UTC, &prices)
-                .unwrap()
-                .total
-                .total_usd,
+            cost_in(
+                &MetricsDb::open(db.path()).unwrap(),
+                window(),
+                TimeZone::UTC,
+                &prices
+            )
+            .unwrap()
+            .total
+            .total_usd,
             Some(rate)
         );
     }
@@ -290,8 +327,7 @@ fn cost_bundled_exact_ids_tiers_and_long_context_boundary() {
         );
         let metrics = MetricsDb::open(db.path()).unwrap();
         assert_eq!(
-            metrics
-                .cost(window(), TimeZone::UTC, &prices)
+            cost_in(&metrics, window(), TimeZone::UTC, &prices)
                 .unwrap()
                 .total
                 .total_usd,
@@ -313,12 +349,15 @@ fn cost_bundled_exact_ids_tiers_and_long_context_boundary() {
             &[record("s", "gpt-6-astra", tier, [1, 0, 0, 0], None)],
         );
         assert_eq!(
-            MetricsDb::open(db.path())
-                .unwrap()
-                .cost(window(), TimeZone::UTC, &prices)
-                .unwrap()
-                .total
-                .total_usd,
+            cost_in(
+                &MetricsDb::open(db.path()).unwrap(),
+                window(),
+                TimeZone::UTC,
+                &prices
+            )
+            .unwrap()
+            .total
+            .total_usd,
             Some(0.00001 * factor)
         );
     }
@@ -339,12 +378,15 @@ fn cost_bundled_exact_ids_tiers_and_long_context_boundary() {
             &[record("s", model, tier, [0; 4], None)],
         );
         assert_eq!(
-            MetricsDb::open(db.path())
-                .unwrap()
-                .cost(window(), TimeZone::UTC, &prices)
-                .unwrap()
-                .total
-                .priced_observations,
+            cost_in(
+                &MetricsDb::open(db.path()).unwrap(),
+                window(),
+                TimeZone::UTC,
+                &prices
+            )
+            .unwrap()
+            .total
+            .priced_observations,
             0
         );
     }
@@ -366,14 +408,13 @@ fn cost_catalog_version_changes_history_and_invalid_catalogs_fail_closed() {
     let new = PriceCatalog::from_json(&new.to_string()).unwrap();
     let metrics = MetricsDb::open(db.path()).unwrap();
     assert_eq!(
-        metrics
-            .cost(window(), TimeZone::UTC, &old)
+        cost_in(&metrics, window(), TimeZone::UTC, &old)
             .unwrap()
             .total
             .total_usd,
         Some(0.001)
     );
-    let result = metrics.cost(window(), TimeZone::UTC, &new).unwrap();
+    let result = cost_in(&metrics, window(), TimeZone::UTC, &new).unwrap();
     assert_eq!(result.price_version, "synthetic-v2");
     assert_eq!(result.total.total_usd, Some(0.002));
     for bad in [json!(null), json!({"version":"bad"})] {
@@ -405,8 +446,7 @@ fn cost_catalog_version_changes_history_and_invalid_catalogs_fail_closed() {
     bad["extra"] = json!(true);
     assert!(PriceCatalog::from_json(&bad.to_string()).is_err());
     assert_eq!(
-        metrics
-            .cost(window(), TimeZone::UTC, &old)
+        cost_in(&metrics, window(), TimeZone::UTC, &old)
             .unwrap()
             .total
             .total_usd,
@@ -515,12 +555,15 @@ fn cost_f17_representative_replacement_and_window_day_membership() {
     );
     let next = Window::new(window().end_ms(), window().end_ms() + 86_400_000).unwrap();
     assert_eq!(
-        MetricsDb::open(db.path())
-            .unwrap()
-            .cost(next, TimeZone::UTC, &catalog())
-            .unwrap()
-            .total
-            .total_usd,
+        cost_in(
+            &MetricsDb::open(db.path()).unwrap(),
+            next,
+            TimeZone::UTC,
+            &catalog()
+        )
+        .unwrap()
+        .total
+        .total_usd,
         Some(0.00008)
     );
     let c = Connection::open(db.path()).unwrap();
@@ -528,10 +571,12 @@ fn cost_f17_representative_replacement_and_window_day_membership() {
     assert_eq!(query(&db).total.selected_observations, 0);
 }
 fn query_tokens(db: &TempDb) -> xt_metrics::TokenReport {
-    MetricsDb::open(db.path())
-        .unwrap()
-        .tokens(window(), TimeZone::UTC)
-        .unwrap()
+    tokens_in(
+        &MetricsDb::open(db.path()).unwrap(),
+        window(),
+        TimeZone::UTC,
+    )
+    .unwrap()
 }
 #[test]
 fn cost_missing_rate_prompt_facts_batch_ttl_and_checked_overflow() {
@@ -547,12 +592,15 @@ fn cost_missing_rate_prompt_facts_batch_ttl_and_checked_overflow() {
     value["models"][0]["bands"][0]["tiers"][0]["rates"]["input"] = Value::Null;
     let partial = PriceCatalog::from_json(&value.to_string()).unwrap();
     assert_eq!(
-        MetricsDb::open(db.path())
-            .unwrap()
-            .cost(window(), TimeZone::UTC, &partial)
-            .unwrap()
-            .total
-            .unpriced[0]
+        cost_in(
+            &MetricsDb::open(db.path()).unwrap(),
+            window(),
+            TimeZone::UTC,
+            &partial
+        )
+        .unwrap()
+        .total
+        .unpriced[0]
             .reason,
         UnpricedReason::MissingRate
     );
@@ -561,12 +609,15 @@ fn cost_missing_rate_prompt_facts_batch_ttl_and_checked_overflow() {
     row.message.usage.as_mut().unwrap().cache_read_input_tokens = None;
     seed(&mut db, "s", "codex", None, &[row]);
     assert_eq!(
-        MetricsDb::open(db.path())
-            .unwrap()
-            .cost(window(), TimeZone::UTC, &PriceCatalog::bundled().unwrap())
-            .unwrap()
-            .total
-            .unpriced[0]
+        cost_in(
+            &MetricsDb::open(db.path()).unwrap(),
+            window(),
+            TimeZone::UTC,
+            &PriceCatalog::bundled().unwrap()
+        )
+        .unwrap()
+        .total
+        .unpriced[0]
             .reason,
         UnpricedReason::MissingPromptCounters
     );
@@ -585,12 +636,15 @@ fn cost_missing_rate_prompt_facts_batch_ttl_and_checked_overflow() {
         )],
     );
     assert_eq!(
-        MetricsDb::open(db.path())
-            .unwrap()
-            .cost(window(), TimeZone::UTC, &PriceCatalog::bundled().unwrap())
-            .unwrap()
-            .total
-            .total_usd,
+        cost_in(
+            &MetricsDb::open(db.path()).unwrap(),
+            window(),
+            TimeZone::UTC,
+            &PriceCatalog::bundled().unwrap()
+        )
+        .unwrap()
+        .total
+        .total_usd,
         Some(0.0012375)
     );
     let mut value = catalog_json();
@@ -607,9 +661,12 @@ fn cost_missing_rate_prompt_facts_batch_ttl_and_checked_overflow() {
         &[record("s", "test-flat", "standard", [i64::MAX; 4], None)],
     );
     assert!(matches!(
-        MetricsDb::open(db.path())
-            .unwrap()
-            .cost(window(), TimeZone::UTC, &overflow),
+        cost_in(
+            &MetricsDb::open(db.path()).unwrap(),
+            window(),
+            TimeZone::UTC,
+            &overflow
+        ),
         Err(xt_metrics::Error::CounterOverflow)
     ));
 }
@@ -674,12 +731,333 @@ fn cost_precise_and_leap_membership_use_same_day_as_tokens() {
     assert_eq!(r.by_day.last().unwrap().cost, r.total);
     let next = Window::new(window().end_ms(), window().end_ms() + 1000).unwrap();
     assert_eq!(
-        MetricsDb::open(db.path())
-            .unwrap()
-            .cost(next, TimeZone::UTC, &catalog())
-            .unwrap()
-            .total
-            .total_usd,
+        cost_in(
+            &MetricsDb::open(db.path()).unwrap(),
+            next,
+            TimeZone::UTC,
+            &catalog()
+        )
+        .unwrap()
+        .total
+        .total_usd,
         Some(0.0001)
     );
+}
+
+fn bundled(db: &TempDb) -> CostReport {
+    cost_in(
+        &MetricsDb::open(db.path()).unwrap(),
+        window(),
+        TimeZone::UTC,
+        &PriceCatalog::bundled().unwrap(),
+    )
+    .unwrap()
+}
+fn untiered(id: &str, model: &str, counters: [i64; 4]) -> CanonicalRecord {
+    let mut row = record(id, model, "unused", counters, None);
+    row.message.usage.as_mut().unwrap().service_tier = None;
+    row
+}
+#[test]
+fn cost_bundled_claude_ttl_split_rates_for_new_models() {
+    for (model, tier, expected) in [
+        ("claude-opus-5-5", "standard", 0.0095),
+        ("claude-opus-5-5", "batch", 0.00475),
+        ("claude-fable-5-1", "standard", 0.02325),
+        ("claude-fable-5-1", "batch", 0.011625),
+        ("claude-fable-5", "standard", 0.02475),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        // 1,000 fresh, 100 output, 2,000 reads, 300 five-minute and 200
+        // one-hour writes, each at its own rate.
+        seed(
+            &mut db,
+            "s",
+            "claude",
+            None,
+            &[record(
+                "s",
+                model,
+                tier,
+                [1000, 100, 2000, 500],
+                Some([300, 200]),
+            )],
+        );
+        let total = bundled(&db).total;
+        assert_eq!(total.total_usd, Some(expected), "{model} {tier}");
+        assert_eq!(total.assumed_tier_observations, 0);
+    }
+}
+#[test]
+fn cost_codex_missing_tier_is_priced_at_default_and_counted_as_assumed() {
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        "codex",
+        "codex",
+        None,
+        &[
+            untiered("sol", "gpt-6-sol", [1000, 100, 2000, 500]),
+            untiered("review", "codex-auto-review", [1000, 100, 0, 0]),
+        ],
+    );
+    // Only Codex is assumed to bill at its default tier; another host's
+    // missing tier stays unpriced.
+    seed(
+        &mut db,
+        "claude",
+        "claude",
+        None,
+        &[untiered("claude", "claude-opus-5-5", [1, 0, 0, 0])],
+    );
+    seed(
+        &mut db,
+        "cursor",
+        "cursor",
+        None,
+        &[untiered("cursor", "gpt-6-sol", [1, 0, 0, 0])],
+    );
+    let report = bundled(&db);
+    let total = &report.total;
+    assert_eq!(
+        (
+            total.selected_observations,
+            total.priced_observations,
+            total.unpriced_observations,
+            total.assumed_tier_observations
+        ),
+        (3, 1, 2, 1)
+    );
+    assert_eq!(total.total_usd, None);
+    assert_eq!(total.priced_subtotal_usd, 0.00465);
+    let reasons: Vec<_> = total
+        .unpriced
+        .iter()
+        .map(|u| (u.model.as_deref(), u.reason, u.observations))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            (
+                Some("claude-opus-5-5"),
+                UnpricedReason::MissingServiceTier,
+                1
+            ),
+            (Some("gpt-6-sol"), UnpricedReason::MissingServiceTier, 1),
+        ]
+    );
+    let codex = report.by_host.iter().find(|h| h.host == "codex").unwrap();
+    assert_eq!(codex.cost.assumed_tier_observations, 1);
+    // A recorded tier is used as recorded and is not an assumption.
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        "s",
+        "codex",
+        None,
+        &[record(
+            "s",
+            "gpt-6-sol",
+            "flex",
+            [1000, 100, 2000, 500],
+            None,
+        )],
+    );
+    let total = bundled(&db).total;
+    assert_eq!(total.total_usd, Some(0.002325));
+    assert_eq!(total.assumed_tier_observations, 0);
+}
+#[test]
+fn cost_bundled_openai_long_context_bands_and_unpublished_rates() {
+    for (model, tier, counters, expected) in [
+        ("gpt-6-sol", None, [272000, 2, 0, 0], Some(0.54402)),
+        ("gpt-6-sol", None, [272001, 2, 0, 0], Some(1.088034)),
+        ("gpt-6-sol", Some("flex"), [272001, 2, 0, 0], Some(0.544017)),
+        ("gpt-6-sol", Some("fast"), [272000, 0, 0, 1], Some(2.17601)),
+        ("gpt-6.1-sol", None, [0, 0, 1000, 0], Some(0.0001)),
+        ("gpt-6.1-sol", None, [272000, 0, 1, 0], Some(1.0880002)),
+        ("gpt-5.5", Some("priority"), [1, 0, 0, 0], Some(0.0000125)),
+        ("gpt-5.5", None, [272001, 0, 0, 0], Some(2.72001)),
+        // Long-context priority rates are not published: unpriced, not zero.
+        ("gpt-5.5", Some("priority"), [272001, 0, 0, 0], None),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        let row = match tier {
+            Some(tier) => record("s", model, tier, counters, None),
+            None => untiered("s", model, counters),
+        };
+        seed(&mut db, "s", "codex", None, &[row]);
+        let total = bundled(&db).total;
+        assert_eq!(total.total_usd, expected, "{model} {tier:?} {counters:?}");
+        if expected.is_none() {
+            assert_eq!(total.unpriced[0].reason, UnpricedReason::MissingRate);
+        }
+    }
+}
+
+#[test]
+fn cost_excludes_automatic_reviews_from_every_summary_but_preserves_usage() {
+    let mut db = TempDb::empty().unwrap();
+    let paid = record(
+        "paid",
+        "test-flat",
+        "standard",
+        [1000, 300, 2000, 500],
+        None,
+    );
+    let review = record(
+        "review",
+        "codex-auto-review",
+        "standard",
+        [9000, 9000, 0, 0],
+        None,
+    );
+    let mut untimed_review = review.clone();
+    untimed_review.uuid = Some("untimed-review".into());
+    untimed_review.timestamp = None;
+    seed(
+        &mut db,
+        "mixed",
+        "codex",
+        Some("cli"),
+        &[paid, review.clone(), untimed_review],
+    );
+    seed(
+        &mut db,
+        "review-only",
+        "cursor",
+        Some("review"),
+        &[{
+            let mut row = review;
+            row.uuid = Some("only-review".into());
+            row
+        }],
+    );
+    let unknown = record(
+        "unknown",
+        "other-unknown-model",
+        "standard",
+        [100, 100, 0, 0],
+        None,
+    );
+    seed(&mut db, "unknown", "claude", Some("other"), &[unknown]);
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let prices = catalog();
+    let tokens_before = tokens_in(&metrics, window(), TimeZone::UTC).unwrap();
+    let report = cost_in(&metrics, window(), TimeZone::UTC, &prices).unwrap();
+    assert_eq!(tokens_before.total.selected_responses, 4);
+    assert_eq!(tokens_before.total.counters.output_tokens, Some(18_400));
+    assert_eq!(report.total.selected_observations, 2);
+    assert_eq!(report.total.priced_observations, 1);
+    assert_eq!(report.total.unpriced_observations, 1);
+    assert_eq!(report.total.total_usd, None);
+    assert_eq!(report.total.priced_subtotal_usd, 0.004825);
+    assert_eq!(
+        report.total.unpriced[0].model.as_deref(),
+        Some("other-unknown-model")
+    );
+    assert_eq!(
+        report.total.unpriced[0].reason,
+        UnpricedReason::UnknownModel
+    );
+    assert_eq!(report.by_host.len(), 2);
+    assert!(report.by_host.iter().all(|h| h.host != "cursor"));
+    assert_eq!(report.by_model.len(), 2);
+    assert!(
+        report
+            .by_model
+            .iter()
+            .all(|m| m.model.as_deref() != Some("codex-auto-review"))
+    );
+    assert_eq!(report.by_surface.len(), 2);
+    assert!(
+        report
+            .by_surface
+            .iter()
+            .all(|s| s.surface.as_deref() != Some("review"))
+    );
+    assert_eq!(report.by_day.last().unwrap().cost, report.total);
+    let costs = metrics
+        .whole_session_costs(&["mixed", "review-only", "unknown"], &prices)
+        .unwrap();
+    let mixed = &costs["mixed"];
+    assert_eq!(mixed.selected_observations, 1);
+    assert_eq!(mixed.priced_observations, 1);
+    assert_eq!(mixed.unpriced_observations, 0);
+    assert_eq!(mixed.total_usd, Some(0.004825));
+    assert_eq!(mixed.priced_subtotal_usd, report.total.priced_subtotal_usd);
+    assert!(mixed.unpriced.is_empty());
+    let only = &costs["review-only"];
+    assert_eq!(only.selected_observations, 0);
+    assert_eq!(only.total_usd, None);
+    assert_eq!(only.priced_subtotal_usd, 0.0);
+    assert!(only.unpriced.is_empty());
+    assert_eq!(costs["unknown"].unpriced_observations, 1);
+    assert_eq!(
+        tokens_in(&metrics, window(), TimeZone::UTC).unwrap(),
+        tokens_before
+    );
+    let stored_reviews: i64 = Connection::open(db.path())
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM records WHERE model='codex-auto-review'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_reviews, 3);
+}
+
+#[test]
+fn cost_review_exclusion_is_exact_and_precedes_catalog_and_timestamp_checks() {
+    let mut db = TempDb::empty().unwrap();
+    let mut untimed_unknown = record("untimed", "another-model", "standard", [1, 1, 0, 0], None);
+    untimed_unknown.timestamp = None;
+    seed(
+        &mut db,
+        "s",
+        "codex",
+        None,
+        &[
+            record(
+                "review",
+                "codex-auto-review",
+                "standard",
+                [1000, 100, 0, 0],
+                None,
+            ),
+            record(
+                "suffix",
+                "codex-auto-review-other",
+                "standard",
+                [1, 1, 0, 0],
+                None,
+            ),
+            untimed_unknown,
+        ],
+    );
+    // Even if a catalog later publishes a review rate, reviews stay outside
+    // the cost estimate. A similar name is still included and unpriced.
+    let mut value = catalog_json();
+    value["models"][1]["aliases"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("codex-auto-review"));
+    let prices = PriceCatalog::from_json(&value.to_string()).unwrap();
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let report = cost_in(&metrics, window(), TimeZone::UTC, &prices).unwrap();
+    assert_eq!(report.total.selected_observations, 1);
+    assert_eq!(report.total.priced_observations, 0);
+    assert_eq!(
+        report.total.unpriced[0].model.as_deref(),
+        Some("codex-auto-review-other")
+    );
+    let costs = metrics.whole_session_costs(&["s"], &prices).unwrap();
+    assert_eq!(costs["s"].selected_observations, 2);
+    assert_eq!(costs["s"].unpriced_observations, 2);
+    assert_eq!(
+        costs["s"].unpriced[0].reason,
+        UnpricedReason::MissingTimestamp
+    );
+    assert_eq!(costs["s"].unpriced[1].reason, UnpricedReason::UnknownModel);
 }

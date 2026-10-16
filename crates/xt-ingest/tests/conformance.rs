@@ -10,6 +10,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use xt_ingest::canonical::{Parsed, SourceContext, parse_with_context};
+#[path = "support/conformance_source.rs"]
+mod conformance_source;
 
 fn now_ms() -> i64 {
     i64::try_from(
@@ -138,9 +140,7 @@ fn conformance_native_reader_stream() {
 #[test]
 fn conformance_native_import() {
     use std::collections::BTreeMap;
-    use xt_ingest::native::{
-        HostStatus, ImportRequest, ProducerSource, SessionOutcome, import_native,
-    };
+    use xt_ingest::native::{HostStatus, ImportRequest, SessionOutcome, import_native};
     use xt_store::{Host, Store};
     let Some(plugin_root) = std::env::var_os("AGENT_PLUGINS_DIR") else {
         println!("SKIP conformance_native_import: set AGENT_PLUGINS_DIR to the pinned plugin root");
@@ -192,10 +192,7 @@ fn conformance_native_import() {
     )
     .unwrap();
     let mut store = Store::open(temp.join("index.sqlite")).unwrap();
-    let producer = ProducerSource::Checkout {
-        pin: root.join(".plugin-pin"),
-        plugin_root: Some(PathBuf::from(&plugin_root)),
-    };
+    let producer = conformance_source::source(&root, Path::new(&plugin_root));
     let request_now = || ImportRequest {
         home: &home,
         hosts: &[Host::Codex, Host::Cursor],
@@ -416,6 +413,141 @@ fn conformance_native_import() {
     let _ = fs::remove_dir_all(&temp);
 }
 
+/// A Codex conversation forked in Codex Desktop is imported as its own
+/// session. The fork's rollout references the original conversation's rollout
+/// instead of copying it; the pinned producer emits only the fork's own rows,
+/// with the original's cumulative counters at the cutoff as its usage
+/// baseline. Bundle mode supplies equivalent synthetic data; checkout mode
+/// uses the pinned checkout's own history fixture.
+#[test]
+fn conformance_codex_fork_import() {
+    use xt_ingest::native::{HostStatus, ImportRequest, SessionOutcome, import_native};
+    use xt_store::{Host, Store};
+    let Some(plugin_root) = std::env::var_os("AGENT_PLUGINS_DIR") else {
+        println!(
+            "SKIP conformance_codex_fork_import: set AGENT_PLUGINS_DIR to the pinned plugin root"
+        );
+        return;
+    };
+    let python = std::env::var_os("PYTHON").unwrap_or_else(|| "python3".into());
+    if Command::new(&python).arg("--version").output().is_err() {
+        println!("SKIP conformance_codex_fork_import: Python 3 is unavailable");
+        return;
+    }
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().canonicalize().unwrap().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let bundled = conformance_source::bundle_mode();
+    let fixture_script = if bundled {
+        "import runpy,sys\nfrom pathlib import Path\n\
+         history=runpy.run_path(sys.argv[1])\n\
+         parent,child,original,_=history['fixture'](Path(sys.argv[2]))\n\
+         child.unlink()\n\
+         history['fork_fixture'](Path(sys.argv[2]),parent,original,4)\n\
+         print(history['SID'])\nprint(history['FORK'])"
+    } else {
+        "import sys\nfrom pathlib import Path\n\
+         sys.path[:0]=[sys.argv[1]+'/tests',sys.argv[1]+'/plugins/memhub/scripts']\n\
+         import codex_history_test as history\n\
+         parent,child,original,_=history.fixture(Path(sys.argv[2]))\n\
+         child.unlink()\n\
+         history.fork_fixture(Path(sys.argv[2]),parent,original,4)\n\
+         print(history.SID)\nprint(history.FORK)"
+    };
+    let fixture_path = if bundled {
+        repo_root().join("scripts/conformance/paginated-fixture.py")
+    } else {
+        Path::new(&plugin_root).join("../..")
+    };
+    let built = Command::new(&python)
+        .env_remove("PYTHONOPTIMIZE")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .args(["-c", fixture_script])
+        .arg(fixture_path)
+        .arg(&home)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{built:?}");
+    let stdout = String::from_utf8(built.stdout).unwrap();
+    let ids: Vec<&str> = stdout.lines().collect();
+    let (original, fork) = (ids[0], ids[1]);
+    let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+    let producer = conformance_source::source(&repo_root(), Path::new(&plugin_root));
+    let request = || ImportRequest {
+        home: &home,
+        hosts: &[Host::Codex],
+        producer: &producer,
+        python: Some(&python),
+        observed_at: now_ms(),
+        cancel: None,
+    };
+    let report = import_native(&mut store, &request());
+    assert!(report.complete(), "{report:?}");
+    let codex = &report.hosts[0];
+    assert_eq!(codex.status, HostStatus::Complete, "{codex:?}");
+    let mut natives: Vec<_> = codex
+        .sessions
+        .iter()
+        .map(|session| session.native_session_id.clone().unwrap())
+        .collect();
+    natives.sort();
+    let mut want = vec![original.to_owned(), fork.to_owned()];
+    want.sort();
+    assert_eq!(natives, want, "{codex:?}");
+    let session = |native: &str| {
+        let reported = codex
+            .sessions
+            .iter()
+            .find(|session| session.native_session_id.as_deref() == Some(native))
+            .unwrap();
+        assert!(
+            matches!(reported.outcome, SessionOutcome::Imported { records_new, .. } if records_new > 0),
+            "{reported:?}"
+        );
+        store
+            .session(reported.conversation_id.as_deref().unwrap())
+            .unwrap()
+            .unwrap()
+    };
+    let forked = session(fork);
+    let base = session(original);
+    // Its own identity and start, not the original's.
+    assert_eq!(forked.meta.native_session_id.as_deref(), Some(fork));
+    assert_eq!(forked.meta.started_at_ms, Some(1_767_571_200_000));
+    let records = store.records(&forked.meta.session_id).unwrap();
+    let base_records = store.records(&base.meta.session_id).unwrap();
+    // Only the fork's own ask and reply; nothing of the original is copied.
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(
+        records
+            .iter()
+            .all(|r| base_records.iter().all(|b| b.uuid != r.uuid))
+    );
+    // 25 + 6 cumulative at the fork's meter, minus the 10 + 2 the original
+    // had counted at the cutoff: the fork's own work only.
+    let tokens: i64 = records
+        .iter()
+        .filter_map(|r| r.usage.as_ref())
+        .map(|u| {
+            u.input_tokens.unwrap_or(0)
+                + u.output_tokens.unwrap_or(0)
+                + u.cache_read_input_tokens.unwrap_or(0)
+                + u.cache_creation_input_tokens.unwrap_or(0)
+        })
+        .sum();
+    assert_eq!(tokens, 19);
+    // A repeated scan adds nothing.
+    let again = import_native(&mut store, &request());
+    assert!(again.complete(), "{again:?}");
+    assert!(again.hosts[0].sessions.iter().all(|session| {
+        session.outcome
+            == SessionOutcome::Imported {
+                records_new: 0,
+                records_enriched: 0,
+            }
+    }));
+}
+
 /// The bundled reader sources the app ships are byte for byte the pinned
 /// commit's scripts tree, notices included, and read the F18 fixture home to
 /// the same index as the verified checkout, in place, with no checkout or Git.
@@ -439,72 +571,83 @@ fn conformance_bundled_readers() {
     let root = repo_root();
     let pin = read_pin(&root.join(".plugin-pin")).unwrap();
     let bundle = root.join("vendor/agent-plugins");
-    let git = |args: &[&str]| {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&plugin_root)
-            .args(args)
-            .output()
-            .expect("git runs in the pinned checkout");
-        assert!(output.status.success(), "git {args:?}");
-        output.stdout
-    };
-    // Every committed file below the scripts tree, and only those, with the
-    // committed bytes; the notices as committed too.
-    let scripts = format!("{}/scripts", pin.plugin_root);
-    // The checkout root may be the plugin root: paths are asked for from the
-    // tree's root, as the pin names them.
-    let listed = String::from_utf8(git(&[
-        "ls-tree",
-        "-r",
-        "--full-tree",
-        "--name-only",
-        &pin.commit,
-        &scripts,
-    ]))
-    .unwrap();
-    let mut committed = listed.lines().map(str::to_owned).collect::<Vec<_>>();
-    committed.sort();
-    fn vendored(dir: &Path, prefix: &str, out: &mut Vec<String>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name == "__pycache__" {
-                continue;
-            }
-            let path = format!("{prefix}/{name}");
-            if entry.file_type().unwrap().is_dir() {
-                vendored(&entry.path(), &path, out);
-            } else {
-                out.push(path);
+    // Bundle mode verifies the reviewed tree directly. Checkout mode retains
+    // the independent byte/notice comparison with the committed producer.
+    if conformance_source::bundle_mode() {
+        let supplied = conformance_source::source(&root, Path::new(&plugin_root));
+        supplied.producer().expect("the supplied bundle verifies");
+        xt_ingest::native::readers_cli::verify_bundle(&pin, &bundle).unwrap();
+        assert!(bundle.join("LICENSE").is_file());
+        assert!(bundle.join("NOTICE").is_file());
+        println!("bundle objects verified; checkout byte/notice comparison requires checkout mode");
+    } else {
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&plugin_root)
+                .args(args)
+                .output()
+                .expect("git runs in the pinned checkout");
+            assert!(output.status.success(), "git {args:?}");
+            output.stdout
+        };
+        // Every committed file below the scripts tree, and only those, with the
+        // committed bytes; the notices as committed too.
+        let scripts = format!("{}/scripts", pin.plugin_root);
+        // The checkout root may be the plugin root: paths are asked for from the
+        // tree's root, as the pin names them.
+        let listed = String::from_utf8(git(&[
+            "ls-tree",
+            "-r",
+            "--full-tree",
+            "--name-only",
+            &pin.commit,
+            &scripts,
+        ]))
+        .unwrap();
+        let mut committed = listed.lines().map(str::to_owned).collect::<Vec<_>>();
+        committed.sort();
+        fn vendored(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == "__pycache__" {
+                    continue;
+                }
+                let path = format!("{prefix}/{name}");
+                if entry.file_type().unwrap().is_dir() {
+                    vendored(&entry.path(), &path, out);
+                } else {
+                    out.push(path);
+                }
             }
         }
-    }
-    let mut shipped = Vec::new();
-    vendored(&bundle.join(&scripts), &scripts, &mut shipped);
-    shipped.sort();
-    assert_eq!(
-        shipped, committed,
-        "the bundle holds exactly the committed scripts"
-    );
-    for path in committed
-        .iter()
-        .chain(["LICENSE".to_owned(), "NOTICE".to_owned()].iter())
-    {
+        let mut shipped = Vec::new();
+        vendored(&bundle.join(&scripts), &scripts, &mut shipped);
+        shipped.sort();
         assert_eq!(
-            fs::read(bundle.join(path)).unwrap(),
-            git(&["show", &format!("{}:{path}", pin.commit)]),
-            "{path} differs from the pinned commit"
+            shipped, committed,
+            "the bundle holds exactly the committed scripts"
+        );
+        for path in committed
+            .iter()
+            .chain(["LICENSE".to_owned(), "NOTICE".to_owned()].iter())
+        {
+            assert_eq!(
+                fs::read(bundle.join(path)).unwrap(),
+                git(&["show", &format!("{}:{path}", pin.commit)]),
+                "{path} differs from the pinned commit"
+            );
+        }
+        println!(
+            "bundled readers verified against {} (memhub {}): {} files",
+            pin.commit,
+            pin.plugin_version,
+            committed.len()
         );
     }
-    println!(
-        "bundled readers verified against {} (memhub {}): {} files",
-        pin.commit,
-        pin.plugin_version,
-        committed.len()
-    );
-    // The same fixture home, read by the bundle and by the checkout, yields
-    // the same sessions and counts, and leaves the sources untouched.
+    // The bundle reads the fixture in place, leaving sources untouched.
+    // Checkout mode also compares the two independent imports.
     let temp = std::env::temp_dir().join(format!("xtrace-bundle-{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp);
     let home = temp.join("home");
@@ -563,28 +706,73 @@ fn conformance_bundled_readers() {
         },
         "bundle.sqlite",
     );
-    let (from_checkout, checkout_counts) = run(
-        ProducerSource::Checkout {
-            pin: root.join(".plugin-pin"),
-            plugin_root: Some(PathBuf::from(&plugin_root)),
-        },
-        "checkout.sqlite",
-    );
-    for (bundled, checked) in from_bundle.hosts.iter().zip(&from_checkout.hosts) {
-        assert_eq!(bundled.status, HostStatus::Complete);
-        assert_eq!(bundled.host, checked.host);
+    if conformance_source::bundle_mode() {
+        let expected: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("fixtures/F18/input/native/native.json")).unwrap(),
+        )
+        .unwrap();
+        let headers = expected["expected_headers"].as_array().unwrap();
+        assert_eq!(bundle_counts.sessions as usize, headers.len());
         assert_eq!(
-            bundled.sessions,
-            checked.sessions,
-            "{}",
-            bundled.host.as_str()
+            bundle_counts.records,
+            headers
+                .iter()
+                .map(|h| h["records"].as_u64().unwrap())
+                .sum::<u64>()
         );
-        let detail = bundled.detail.as_deref().unwrap();
-        assert!(detail.contains(&pin.commit), "{detail}");
+        for host in &from_bundle.hosts {
+            assert_eq!(host.status, HostStatus::Complete);
+            let want: Vec<_> = headers
+                .iter()
+                .filter(|h| h["host"] == host.host.as_str())
+                .collect();
+            assert_eq!(host.sessions.len(), want.len());
+            for (session, want) in host.sessions.iter().zip(want) {
+                assert_eq!(
+                    session.native_session_id.as_deref(),
+                    want["native_session_id"].as_str()
+                );
+                assert_eq!(
+                    session.source_surface.as_deref(),
+                    want["source_surface"].as_str()
+                );
+                assert_eq!(
+                    session.outcome,
+                    xt_ingest::native::SessionOutcome::Imported {
+                        records_new: want["records"].as_u64().unwrap() as usize,
+                        records_enriched: 0,
+                    }
+                );
+            }
+            assert!(host.detail.as_deref().unwrap().contains(&pin.commit));
+        }
+        println!(
+            "bundle import matches F18; independent checkout/index comparison requires checkout mode"
+        );
+    } else {
+        let (from_checkout, checkout_counts) = run(
+            ProducerSource::Checkout {
+                pin: root.join(".plugin-pin"),
+                plugin_root: Some(PathBuf::from(&plugin_root)),
+            },
+            "checkout.sqlite",
+        );
+        for (bundled, checked) in from_bundle.hosts.iter().zip(&from_checkout.hosts) {
+            assert_eq!(bundled.status, HostStatus::Complete);
+            assert_eq!(bundled.host, checked.host);
+            assert_eq!(
+                bundled.sessions,
+                checked.sessions,
+                "{}",
+                bundled.host.as_str()
+            );
+            let detail = bundled.detail.as_deref().unwrap();
+            assert!(detail.contains(&pin.commit), "{detail}");
+        }
+        assert_eq!(bundle_counts.sessions, checkout_counts.sessions);
+        assert_eq!(bundle_counts.records, checkout_counts.records);
+        assert_eq!(bundle_counts.usage_rows, checkout_counts.usage_rows);
     }
-    assert_eq!(bundle_counts.sessions, checkout_counts.sessions);
-    assert_eq!(bundle_counts.records, checkout_counts.records);
-    assert_eq!(bundle_counts.usage_rows, checkout_counts.usage_rows);
     assert!(bundle_counts.sessions > 0);
     let mut after = std::collections::BTreeMap::new();
     hashes(&home, &mut after);

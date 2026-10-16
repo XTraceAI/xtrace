@@ -1,5 +1,20 @@
 [
   {
+    "id": "account-usage/available-missing",
+    "components": ["AccountUsageWidget"],
+    "size": [240, 300]
+  },
+  {
+    "id": "loading/mark-sizes",
+    "components": ["LoadingMark"],
+    "size": [240, 120]
+  },
+  {
+    "id": "startup/opening",
+    "components": ["StartupSplash"],
+    "size": [480, 300]
+  },
+  {
     "id": "brand/sizes-and-labels",
     "components": ["BrandMark"],
     "size": [500, 90]
@@ -428,6 +443,11 @@
     "id": "legend/dots",
     "components": ["Legend"],
     "size": [440, 100]
+  },
+  {
+    "id": "local-updates/information-only",
+    "components": ["LocalUpdatesPopover"],
+    "size": [620, 400]
   },
   {
     "id": "popover/closed",

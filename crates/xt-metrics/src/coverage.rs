@@ -127,10 +127,67 @@ fn in_window(raw: &str, window: Window) -> rusqlite::Result<bool> {
 fn known(value: Option<&str>) -> bool {
     value.is_some_and(|s| !s.trim().is_empty())
 }
-struct SessionUsage {
+pub(crate) struct SessionUsage {
     surface: CoverageSurface,
     observations: usize,
     gaps: BTreeSet<UsageGap>,
+}
+impl SessionUsage {
+    /// One selected in-window response of this session: its model and
+    /// whether each of its four counters is recorded.
+    pub(crate) fn observe(&mut self, model: Option<&str>, counters: [bool; 4]) {
+        self.observations += 1;
+        if !known(model) {
+            self.gaps.insert(UsageGap::UnknownModel);
+        }
+        if counters.contains(&false) {
+            self.gaps.insert(UsageGap::IncompleteCounters);
+        }
+    }
+}
+/// Every session with an in-window event, by session identifier.
+pub(crate) type Cohort = BTreeMap<String, SessionUsage>;
+/// The cohort's sessions, those with no selected response marked so.
+fn unobserved(mut sessions: Cohort) -> Cohort {
+    for session in sessions.values_mut() {
+        if session.observations == 0 {
+            session.gaps.insert(UsageGap::NoSelectedUsage);
+        }
+    }
+    sessions
+}
+/// The fixed trailing 14 days ending at `now_ms`.
+fn gate_window(now_ms: i64) -> Result<Window> {
+    Window::new(
+        now_ms
+            .checked_sub(14 * 24 * 60 * 60 * 1000)
+            .ok_or(Error::InvalidWindow)?,
+        now_ms,
+    )
+}
+/// [`MetricsDb::usage_gate`] over the sessions of its `fixed` window.
+fn gate(fixed: Window, sessions: &Cohort) -> UsageGate {
+    let mut eligible = UsageCoverageSummary::default();
+    let mut excluded = BTreeSet::new();
+    for session in sessions.values() {
+        if session.surface.host == "cursor"
+            && session.surface.surface.as_deref() == Some("cursor-cli")
+        {
+            excluded.insert(session.surface.clone());
+        } else {
+            eligible.add(session);
+        }
+    }
+    UsageGate {
+        window_start_ms: fixed.start_ms(),
+        window_end_ms: fixed.end_ms(),
+        eligible_sessions: eligible.sessions,
+        measured_sessions: eligible.measured,
+        pct: eligible.pct,
+        passes: (eligible.sessions > 0)
+            .then(|| u128::from(eligible.measured) * 10 >= u128::from(eligible.sessions) * 9),
+        excluded_surfaces: excluded.into_iter().collect(),
+    }
 }
 impl UsageCoverageSummary {
     fn add(&mut self, session: &SessionUsage) {
@@ -152,18 +209,41 @@ impl MetricsDb {
         now_ms: i64,
         health: &[DiscoveryHealth],
     ) -> Result<Coverage> {
-        let fixed = Window::new(
-            now_ms
-                .checked_sub(14 * 24 * 60 * 60 * 1000)
-                .ok_or(Error::InvalidWindow)?,
-            now_ms,
-        )?;
         let snapshot = self
             .connection
             .is_autocommit()
             .then(|| self.connection.unchecked_transaction())
             .transpose()?;
         let display = self.usage_sessions(window)?;
+        let coverage = self.finish_coverage(window, now_ms, health, &display)?;
+        if let Some(snapshot) = snapshot {
+            snapshot.commit()?;
+        }
+        Ok(coverage)
+    }
+
+    /// [`MetricsDb::coverage`] inside the caller's snapshot, from the
+    /// window's [`MetricsDb::cohort`] once each of its selected in-window
+    /// responses has been observed.
+    pub(crate) fn coverage_from(
+        &self,
+        window: Window,
+        now_ms: i64,
+        health: &[DiscoveryHealth],
+        display: Cohort,
+    ) -> Result<Coverage> {
+        self.finish_coverage(window, now_ms, health, &unobserved(display))
+    }
+
+    /// The display coverage of `display`, the fixed gate and capture. The
+    /// gate reuses `display` only when its fixed window is exactly `window`.
+    fn finish_coverage(
+        &self,
+        window: Window,
+        now_ms: i64,
+        health: &[DiscoveryHealth],
+        display: &Cohort,
+    ) -> Result<Coverage> {
         let mut total = UsageCoverageSummary::default();
         let mut hosts = BTreeMap::<String, UsageCoverageSummary>::new();
         let mut surfaces = BTreeMap::<CoverageSurface, UsageCoverageSummary>::new();
@@ -193,31 +273,13 @@ impl MetricsDb {
                 })
                 .collect(),
         };
-        let mut eligible = UsageCoverageSummary::default();
-        let mut excluded = BTreeSet::new();
-        for session in self.usage_sessions(fixed)?.values() {
-            if session.surface.host == "cursor"
-                && session.surface.surface.as_deref() == Some("cursor-cli")
-            {
-                excluded.insert(session.surface.clone());
-            } else {
-                eligible.add(session);
-            }
-        }
-        let gate_14d = UsageGate {
-            window_start_ms: fixed.start_ms(),
-            window_end_ms: fixed.end_ms(),
-            eligible_sessions: eligible.sessions,
-            measured_sessions: eligible.measured,
-            pct: eligible.pct,
-            passes: (eligible.sessions > 0)
-                .then(|| u128::from(eligible.measured) * 10 >= u128::from(eligible.sessions) * 9),
-            excluded_surfaces: excluded.into_iter().collect(),
+        let fixed = gate_window(now_ms)?;
+        let gate_14d = if fixed == window {
+            gate(fixed, display)
+        } else {
+            gate(fixed, &self.usage_sessions(fixed)?)
         };
         let capture = self.capture_coverage(window, health)?;
-        if let Some(snapshot) = snapshot {
-            snapshot.commit()?;
-        }
         Ok(Coverage {
             usage,
             gate_14d,
@@ -225,7 +287,40 @@ impl MetricsDb {
         })
     }
 
-    fn usage_sessions(&self, window: Window) -> Result<BTreeMap<String, SessionUsage>> {
+    /// M-11's token+model gate over the fixed trailing 14 days ending at the
+    /// caller's `now_ms`, never the display window. Structurally unmeasured
+    /// surfaces leave the denominator and stay named; an empty denominator is
+    /// unknown, and exactly 90% passes.
+    pub(crate) fn usage_gate(&self, now_ms: i64) -> Result<UsageGate> {
+        let fixed = gate_window(now_ms)?;
+        Ok(gate(fixed, &self.usage_sessions(fixed)?))
+    }
+
+    fn usage_sessions(&self, window: Window) -> Result<Cohort> {
+        let mut sessions = self.cohort(window)?;
+        let bounds = [window.start_ms(), window.candidate_end_ms()?];
+        let mut statement = self.connection.prepare(USAGE_QUERY)?;
+        let mut rows = statement.query(bounds)?;
+        while let Some(row) = rows.next()? {
+            if !in_window(&row.get::<_, String>(1)?, window)? {
+                continue;
+            }
+            let id: String = row.get(0)?;
+            let Some(session) = sessions.get_mut(&id) else {
+                continue;
+            };
+            let model: Option<String> = row.get(2)?;
+            let mut counters = [false; 4];
+            for (present, column) in counters.iter_mut().zip(3..7) {
+                *present = row.get::<_, Option<i64>>(column)?.is_some();
+            }
+            session.observe(model.as_deref(), counters);
+        }
+        Ok(unobserved(sessions))
+    }
+
+    /// Every session with an in-window event, before any usage is read.
+    pub(crate) fn cohort(&self, window: Window) -> Result<Cohort> {
         let mut sessions = BTreeMap::new();
         let bounds = [window.start_ms(), window.candidate_end_ms()?];
         let mut statement = self.connection.prepare(EVENTS_QUERY)?;
@@ -244,32 +339,6 @@ impl MetricsDb {
                     observations: 0,
                     gaps: BTreeSet::new(),
                 });
-        }
-        let mut statement = self.connection.prepare(USAGE_QUERY)?;
-        let mut rows = statement.query(bounds)?;
-        while let Some(row) = rows.next()? {
-            if !in_window(&row.get::<_, String>(1)?, window)? {
-                continue;
-            }
-            let id: String = row.get(0)?;
-            let Some(session) = sessions.get_mut(&id) else {
-                continue;
-            };
-            session.observations += 1;
-            let model: Option<String> = row.get(2)?;
-            if !known(model.as_deref()) {
-                session.gaps.insert(UsageGap::UnknownModel);
-            }
-            for column in 3..7 {
-                if row.get::<_, Option<i64>>(column)?.is_none() {
-                    session.gaps.insert(UsageGap::IncompleteCounters);
-                }
-            }
-        }
-        for session in sessions.values_mut() {
-            if session.observations == 0 {
-                session.gaps.insert(UsageGap::NoSelectedUsage);
-            }
         }
         Ok(sessions)
     }
@@ -418,7 +487,7 @@ mod tests {
             .unwrap();
         let metrics = MetricsDb::open(db.path()).unwrap();
         let writer = Connection::open(db.path()).unwrap();
-        writer.execute_batch("DROP VIEW v_session_events; CREATE VIEW v_session_events AS SELECT session_id,host,surface,ts_ms,coverage_snapshot_write(ts) AS ts,uuid,type,is_human,text_len,role,tool_use_count FROM v_records WHERE ts_ms IS NOT NULL").unwrap();
+        writer.execute_batch("DROP VIEW v_session_events; CREATE VIEW v_session_events AS SELECT session_id,host,surface,ts_ms,coverage_snapshot_write(ts) AS ts,uuid,type,is_human,text_len,human_is_eligible,human_text_len,human_excluded,role,tool_use_count,confirmed_automated_input FROM v_records WHERE ts_ms IS NOT NULL").unwrap();
         let path = db.path().to_owned();
         let written = std::sync::atomic::AtomicBool::new(false);
         metrics.connection.create_scalar_function("coverage_snapshot_write",1,FunctionFlags::SQLITE_UTF8,move |context| {

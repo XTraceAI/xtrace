@@ -8,6 +8,11 @@ import { FixtureDataSource } from '../data/FixtureDataSource';
 import type { DataSource } from '../data/DataSource';
 import { ThemeProvider } from '../theme/ThemeProvider';
 import type { FixtureExport } from '../data/generated/FixtureExport';
+
+/** Pull-request refresh is not exercised by this test. */
+const unavailable = async (): Promise<never> => {
+  throw new Error('Pull requests are not part of this test.');
+};
 // JSON imports widen literal unions; the export is the generated shape.
 const exported = fixture as FixtureExport;
 vi.mock('../data/createDataSource', () => ({ createDataSource: vi.fn() }));
@@ -59,6 +64,12 @@ it('renders an explicit unavailable fixture state when selection fails', async (
 it('uses hash routes for native protocol navigation and reloads', async () => {
   const source: DataSource = {
     kind: 'native',
+    accountUsage: async () => {
+      throw new Error('Account usage unavailable in this test');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Claude refresh unavailable in this test');
+    },
     appInfo: async () => exported.app_info,
     dbCounts: async () => exported.db_counts,
     dashboard: async () => exported.dashboards[0],
@@ -66,8 +77,19 @@ it('uses hash routes for native protocol navigation and reloads', async () => {
       window: exported.dashboards[0].window,
       hosts: exported.dashboards[0].tokens_by_host,
     }),
-    sessionsList: async () => ({ rows: [], next: null }),
+    today: async () => exported.today,
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
     nativeIndexStatus: async () => exported.native_index,
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    // These screens open no transcript; the seam is answered, never called.
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: unavailable,
+    pullRequestAnalytics: unavailable,
+    pullRequestSessions: unavailable,
+    refreshPullRequests: unavailable,
+    cancelPullRequestRefresh: unavailable,
     subscribe: async () => () => {},
   };
   vi.mocked(createDataSource).mockResolvedValue(source);

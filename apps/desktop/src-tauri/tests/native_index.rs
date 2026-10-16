@@ -109,6 +109,8 @@ fn indexes_a_synthetic_home_publishes_typed_status_and_reconciles_appends() {
             .iter()
             .all(|h| h.state == NativeHostState::Pending)
     );
+    // Hosts the running scan has not reached are waiting, not a problem.
+    assert!(!first.needs_attention && first.hosts.iter().all(|h| !h.needs_attention));
     let pin: serde_json::Value = serde_json::from_str(PIN).unwrap();
     assert_eq!(
         first.readers,
@@ -131,7 +133,13 @@ fn indexes_a_synthetic_home_publishes_typed_status_and_reconciles_appends() {
         // before the runtime).
         let reader = host(&ready, name);
         assert_eq!(reader.state, NativeHostState::MissingSource, "{reader:?}");
+        // No local history to read is settled, not a problem.
+        assert!(!reader.needs_attention, "{reader:?}");
     }
+    assert!(
+        !claude.needs_attention && !ready.needs_attention,
+        "{ready:?}"
+    );
     assert!(
         matches!(
             ready.python,
@@ -181,6 +189,56 @@ fn indexes_a_synthetic_home_publishes_typed_status_and_reconciles_appends() {
     );
     assert_eq!(store.counts().unwrap().records, 3);
     assert!(again.shutdown());
+}
+
+/// The first-launch fact is read when the app state is built, before the
+/// index starts: the initial scan filling the database moments later cannot
+/// turn a first launch into an upgrade, and a restart over the filled
+/// database reports the history that existed before its own scan.
+#[test]
+fn indexed_history_at_startup_is_fixed_before_the_initial_scan() {
+    use xtrace_desktop::state::{AppState, StartupOptions};
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = synthetic_home(temp.path());
+    let data = temp.path().join("data");
+    let build = || {
+        AppState::build(
+            StartupOptions {
+                data_dir: Some(data.clone()),
+                native_home: Some(home.clone()),
+                ..Default::default()
+            },
+            || panic!("an explicit data directory needs no default"),
+            || panic!("an explicit home needs no default"),
+        )
+        .unwrap()
+    };
+    let fresh = build();
+    assert!(!fresh.app_info().had_indexed_history_at_startup);
+    let (publish, _) = recorder();
+    let index = NativeIndex::start(
+        NativeIndexOptions {
+            home: home.clone(),
+            db: fresh.database_path().unwrap().to_owned(),
+            bundle: bundle(),
+            python: None,
+        },
+        publish,
+    );
+    wait_for(&index, |s| s.phase == NativeIndexPhase::Ready);
+    // The scan raced ahead of any first read: live counts now show history.
+    let counts = serde_json::to_value(fresh.db_counts().unwrap()).unwrap();
+    assert_eq!(counts["sessions"], 1);
+    assert!(
+        !fresh.app_info().had_indexed_history_at_startup,
+        "the startup fact does not follow the scan"
+    );
+    assert!(index.shutdown());
+    fresh.shutdown();
+    // An upgrade (or any later launch) over indexed history reports it.
+    let restarted = build();
+    assert!(restarted.app_info().had_indexed_history_at_startup);
+    restarted.shutdown();
 }
 
 #[test]
@@ -237,6 +295,8 @@ fn a_missing_interpreter_and_a_missing_bundle_are_reported_while_claude_indexes(
     // interpreter reports the runtime, explicitly.
     assert_eq!(codex.state, NativeHostState::MissingRuntime, "{codex:?}");
     assert!(codex.detail.as_deref().unwrap().contains("python"));
+    assert!(codex.needs_attention && ready.needs_attention, "{ready:?}");
+    assert!(!host(&ready, "claude").needs_attention);
     assert!(index.shutdown());
 }
 
@@ -385,6 +445,7 @@ fn an_unreadable_project_directory_is_reported_by_the_index_status() {
     assert_eq!(claude.state, NativeHostState::Incomplete, "{ready:?}");
     assert_eq!((claude.sessions_imported, claude.records_new), (1, 2));
     assert!(claude.diagnostics >= 1, "{claude:?}");
+    assert!(claude.needs_attention && ready.needs_attention, "{ready:?}");
     assert!(index.shutdown());
 }
 
@@ -400,6 +461,7 @@ fn the_compiled_pin_parses_and_the_status_serializes_with_tagged_variants() {
     assert_eq!(value["python"]["state"], "missing");
     assert_eq!(value["readers"]["state"], "unavailable");
     assert_eq!(value["hosts"], json!([]));
+    assert_eq!(value["needs_attention"], json!(false));
 }
 
 /// Runs in a child process of this test binary (see the test below), where
@@ -441,4 +503,176 @@ fn an_inherited_python_variable_does_not_narrow_desktop_discovery() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// A synthetic Codex rollout: its opening `session_meta` with this `source`
+/// and `session_id`, then one line that is never read.
+fn codex_rollout(
+    home: &Path,
+    native: &str,
+    session_id: &str,
+    source: serde_json::Value,
+) -> PathBuf {
+    let path = home
+        .join(".codex/sessions/2026/09/07")
+        .join(format!("rollout-2026-09-07T12-00-00-{native}.jsonl"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let header = json!({"timestamp": "2026-09-07T12:00:00.000Z", "type": "session_meta",
+        "payload": {"id": native, "session_id": session_id, "cwd": "/repo/fixture",
+                    "source": source}});
+    let body = json!({"type": "response_item", "payload": {"type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": "Synthetic"}]}});
+    fs::write(&path, format!("{header}\n{body}\n")).unwrap();
+    path
+}
+
+/// A sub-session relation a background pass commits after readiness reaches
+/// the app as its own data announcement, once, and leaves the typed status,
+/// its freshness and its reconciliation count as they were; the Sessions read
+/// then carries the parent. A restart that finds nothing new announces
+/// nothing. The reader cannot run and no source changes: the child, indexed
+/// after the bootstrap finished, is found by the worker's sweep of the index.
+#[test]
+fn a_background_sub_session_change_is_announced_once_and_leaves_the_status_alone() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use xt_store::creation::{CODEX_THREAD_SPAWN_VERSION, CreationBootstrap, CreationEvidence};
+    use xtrace_desktop::dto::{MetricClock, SessionQuery, session_page};
+    use xtrace_desktop::native_index::PublishCreations;
+    const PARENT: &str = "019a0000-0000-7000-8000-0000000000aa";
+    const CHILD: &str = "019a0000-0000-7000-8000-0000000000bb";
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let db = temp.path().join("data/xtrace.sqlite");
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let parent = codex_rollout(&home, PARENT, PARENT, json!("cli"));
+    // A first-level spawned thread's header names its parent, the root of
+    // its spawn tree, in `session_id`, as Codex writes one.
+    let child = codex_rollout(
+        &home,
+        CHILD,
+        PARENT,
+        json!({"subagent": {"thread_spawn": {"parent_thread_id": PARENT, "depth": 1}}}),
+    );
+    {
+        let mut store = Store::open(&db).unwrap();
+        store
+            .advance_session_creation_bootstrap(
+                CreationEvidence::CodexThreadSpawn,
+                CODEX_THREAD_SPAWN_VERSION,
+                &CreationBootstrap {
+                    after_locator: None,
+                    complete: true,
+                },
+            )
+            .unwrap();
+        let lines = [(PARENT, &parent), (CHILD, &child)]
+            .into_iter()
+            .flat_map(|(native, path)| {
+                [
+                    json!({"type": "session", "host": "codex", "native_session_id": native,
+                           "conversation_id": format!("codex-{native}"),
+                           "source_surface": "codex_cli", "started_at": "2026-09-07T12:00:00.000Z",
+                           "cwd": "/repo/fixture", "git_branch": null, "title": null,
+                           "path": path.display().to_string(), "mtime": 1788782400.0})
+                    .to_string(),
+                    json!({"uuid": format!("5555{}-5555-4555-8555-000000000000", &native[32..]),
+                           "type": "user", "cwd": "/repo/fixture",
+                           "timestamp": "2026-09-07T12:00:01Z",
+                           "message": {"role": "user", "content": [{"type": "text", "text": "turn"}]}})
+                    .to_string(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let report = xt_ingest::native::import_reader_lines(
+            &mut store,
+            xt_store::Host::Codex,
+            "test".into(),
+            lines.into_iter().map(Ok),
+            1_788_782_400_000,
+            || {
+                Ok(xt_ingest::native::readers_cli::ReaderOutcome {
+                    diagnostics: vec![],
+                    complete: true,
+                })
+            },
+        );
+        assert_eq!(
+            report.status,
+            xt_ingest::native::HostStatus::Complete,
+            "{report:?}"
+        );
+    }
+    let start = || {
+        let (publish, published) = recorder();
+        let announced = Arc::new(AtomicUsize::new(0));
+        let creations: PublishCreations = {
+            let announced = Arc::clone(&announced);
+            Arc::new(move || {
+                announced.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        let index = NativeIndex::start_with_creations(
+            NativeIndexOptions {
+                home: home.clone(),
+                db: db.clone(),
+                bundle: bundle(),
+                python: Some(temp.path().join("no-such-python").into_os_string()),
+            },
+            publish,
+            creations,
+        );
+        (index, published, announced)
+    };
+    let parent_of = || {
+        let metrics = xt_metrics::MetricsDb::open(&db).unwrap();
+        let page = session_page(
+            &metrics,
+            7,
+            1_788_825_600_000,
+            jiff::tz::TimeZone::UTC,
+            MetricClock::Fixture,
+            SessionQuery::default(),
+            &xt_metrics::PriceCatalog::bundled().unwrap(),
+        )
+        .unwrap();
+        page.rows
+            .into_iter()
+            .find(|row| row.id == format!("codex-{CHILD}"))
+            .expect("the child is listed")
+            .parent
+            .map(|parent| parent.session_id)
+    };
+    assert_eq!(parent_of(), None);
+
+    let (index, published, announced) = start();
+    let ready = wait_for(&index, |status| status.phase == NativeIndexPhase::Ready);
+    let deadline = Instant::now() + WAIT;
+    while announced.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "no change was announced");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(parent_of(), Some(format!("codex-{PARENT}")));
+    // One announcement; no reconciliation counted, no status changed by it.
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(announced.load(Ordering::SeqCst), 1);
+    let status = index.status();
+    assert_eq!(status.reconciles, ready.reconciles);
+    assert_eq!(status.hosts, ready.hosts);
+    assert_eq!(status.freshness, ready.freshness);
+    assert!(
+        published
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|each| each.reconciles <= ready.reconciles)
+    );
+    assert!(index.shutdown());
+
+    // Nothing new after a restart: nothing is announced.
+    let (index, _, announced) = start();
+    wait_for(&index, |status| status.phase == NativeIndexPhase::Ready);
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(announced.load(Ordering::SeqCst), 0);
+    assert!(index.shutdown());
+    assert_eq!(parent_of(), Some(format!("codex-{PARENT}")));
 }

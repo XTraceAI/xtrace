@@ -103,7 +103,12 @@ export function TokenDayChart({ days }: { days: readonly DashboardDay[] }) {
       </p>
       <details className="xt-dash-details">
         <summary>Daily token values</summary>
-        <div className="xt-dash-table-scroll">
+        <div
+          className="xt-dash-table-scroll"
+          role="region"
+          aria-label="Recorded tokens per day scroll area"
+          tabIndex={0}
+        >
           <table className="xt-dash-table">
             <caption className="sr-only">Recorded tokens per day</caption>
             <thead>

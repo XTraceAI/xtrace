@@ -323,9 +323,9 @@ test('compiled native inspector accepts test IDs and immediately rejects product
   });
   assert.equal(accepted.status, null);
   assert.equal(accepted.signal, 'SIGTERM');
-  const legacy = spawnSync(exe, ['2147483647', '/no/test/app'], { timeout: 250 });
-  assert.equal(legacy.status, null);
-  assert.equal(legacy.signal, 'SIGTERM');
+  // The released app changed identity; every launcher path now supplies the
+  // compiled test ID rather than relying on the old implicit production ID.
+  assert.equal(spawnSync(exe, ['2147483647', '/no/test/app']).status, 2);
 });
 
 test('a copied identity changed during signing is refused before spawn', async (t) => {

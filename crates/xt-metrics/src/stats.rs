@@ -16,6 +16,21 @@ pub(crate) fn median_p90(values: &mut [u64]) -> Option<(f64, u64)> {
     Some((median, p90))
 }
 
+/// Median of already-finite values, such as per-PR row medians; `None` when
+/// empty. Sorts the caller's bounded sample in place.
+pub(crate) fn median_f64(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    Some(if values.len().is_multiple_of(2) {
+        values[middle - 1] / 2.0 + values[middle] / 2.0
+    } else {
+        values[middle]
+    })
+}
+
 /// Sample counts belong to the caller's metric (sessions, stretches, PRs, etc.).
 /// Nonfinite input values are unknown; low samples and a zero baseline suppress
 /// percentages without erasing independently known current/previous values.
@@ -72,6 +87,9 @@ mod tests {
             median_p90(&mut (0..11).rev().collect::<Vec<_>>()),
             Some((5.0, 9))
         );
+        assert_eq!(median_f64(&mut []), None);
+        assert_eq!(median_f64(&mut [3.0, 1.0, 2.0]), Some(2.0));
+        assert_eq!(median_f64(&mut [4.0, 1.0, 2.0, 3.0]), Some(2.5));
         assert_eq!(
             median_p90(&mut [u64::MAX, u64::MAX]),
             Some((u64::MAX as f64, u64::MAX))

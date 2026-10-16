@@ -1,36 +1,65 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { act } from 'react';
+import { afterEach, expect, it, vi } from 'vitest';
 import { RuleChip } from './RuleChip';
-import { RulePopover } from './RulePopover';
-import { rules } from './rules';
+import { RULE_OPEN_DELAY_MS } from './RulePopover';
+import { ruleSummary } from './rules';
 
 afterEach(cleanup);
 
 it('associates a clearly named definition trigger with current rule text on focus', async () => {
   render(<RuleChip ruleId="M-06" subject="Concurrency" size="sm" />);
   const trigger = screen.getByRole('button', { name: 'About Concurrency' });
-  expect(trigger.textContent).toBe('Info');
   expect(trigger.getAttribute('data-size')).toBe('sm');
+  expect(trigger.textContent).toBe('Info');
+  trigger.focus();
   fireEvent.focus(trigger);
   const tooltip = await screen.findByRole('tooltip');
   expect(trigger.getAttribute('aria-describedby')).toBe(tooltip.id);
-  expect(tooltip.textContent).toBe(rules['M-06']);
-  fireEvent.blur(trigger, { relatedTarget: document.body });
+  // Focus opens at once; the hover delay is for the pointer only.
+  expect(tooltip.textContent).toBe(ruleSummary('M-06'));
+  expect(tooltip.textContent).not.toContain('M-06');
+  fireEvent.keyDown(trigger, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+  expect(document.activeElement).toBe(trigger);
 });
 
-it('preserves caller text and report context containing identifiers', async () => {
-  const context = 'Saved rule M-19; SHA-256; external reference CUSTOM-42';
-  render(
-    <RulePopover ruleId="M-08" context={context}>
-      <button>Saved rule M-19</button>
-    </RulePopover>,
-  );
-  const trigger = screen.getByRole('button', { name: 'Saved rule M-19' });
-  fireEvent.focus(trigger);
+it('opens the short plain-language definition after a hover delay, not on a pass', async () => {
+  render(<RuleChip ruleId="M-06" subject="Concurrency" />);
+  const trigger = screen.getByRole('button', { name: 'About Concurrency' });
+  const hoveredAt = performance.now();
+  fireEvent.mouseEnter(trigger);
+  fireEvent.mouseMove(trigger);
+  expect(screen.queryByRole('tooltip')).toBeNull();
   const tooltip = await screen.findByRole('tooltip');
-  expect(tooltip.querySelector('.xt-rule-context')?.textContent).toBe(context);
-  expect(tooltip.firstElementChild?.textContent).toBe(
-    'Agent-to-human ratio = agent minutes ÷ human-in-the-loop minutes over the window. No assumed workday.',
-  );
+  expect(performance.now() - hoveredAt).toBeGreaterThanOrEqual(RULE_OPEN_DELAY_MS - 50);
+  expect(tooltip.textContent).toBe(ruleSummary('M-06'));
+  expect(tooltip.textContent).toContain('average');
+  expect(tooltip.textContent).not.toContain('M-06');
+});
+
+it('does not open when the pointer passes over and leaves before the delay', async () => {
+  render(<RuleChip ruleId="M-06" subject="Concurrency" />);
+  const trigger = screen.getByRole('button', { name: 'About Concurrency' });
+  fireEvent.mouseEnter(trigger);
+  fireEvent.mouseMove(trigger);
+  fireEvent.mouseLeave(trigger);
+  await new Promise((resolve) => setTimeout(resolve, RULE_OPEN_DELAY_MS + 100));
+  expect(screen.queryByRole('tooltip')).toBeNull();
+});
+
+it('opens on keyboard focus at once, without the hover delay', () => {
+  vi.useFakeTimers();
+  try {
+    render(<RuleChip ruleId="M-06" subject="Concurrency" />);
+    const trigger = screen.getByRole('button', { name: 'About Concurrency' });
+    act(() => {
+      trigger.focus();
+      fireEvent.focus(trigger);
+    });
+    act(() => vi.advanceTimersByTime(50));
+    expect(screen.getByRole('tooltip').textContent).toBe(ruleSummary('M-06'));
+  } finally {
+    vi.useRealTimers();
+  }
 });

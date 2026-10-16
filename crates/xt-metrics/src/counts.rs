@@ -3,8 +3,9 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use xt_store::timestamp::{self, InstantKey};
 
-pub(crate) const QUERY: &str = "SELECT session_id,uuid,ts,role,is_human,text_len,tool_use_count
-    FROM v_session_events WHERE ts_ms>=?1 AND ts_ms<?2";
+pub(crate) const QUERY: &str =
+    "SELECT session_id,uuid,ts,role,is_human,human_text_len,tool_use_count,
+    confirmed_automated_input,human_is_eligible FROM v_session_events WHERE ts_ms>=?1 AND ts_ms<?2";
 
 /// Positive characters per minute for the explicitly estimated typing metric.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,15 +44,18 @@ struct Event {
     instant: InstantKey,
     uuid: String,
     human: Option<bool>,
+    /// A confirmed automated input: never a human message, and never the
+    /// response that closes a turn or an interruption of one.
+    automated: bool,
 }
 
-fn add(total: Option<u64>, value: Option<u64>) -> Result<Option<u64>> {
+pub(crate) fn add(total: Option<u64>, value: Option<u64>) -> Result<Option<u64>> {
     match (total, value) {
         (Some(a), Some(b)) => a.checked_add(b).map(Some).ok_or(Error::CounterOverflow),
         _ => Ok(None),
     }
 }
-fn counter(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Option<u64>> {
+pub(crate) fn counter(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Option<u64>> {
     row.get::<_, Option<i64>>(column)?
         .map(|value| {
             u64::try_from(value)
@@ -66,6 +70,9 @@ impl MetricsDb {
     /// records and trailing unanswered humans are not responding turns.
     /// Classification remains the ingest owner's responsibility: this reader
     /// never reparses content or infers a missing is_human value from role.
+    /// A confirmed automated input is an actual record but not a human message:
+    /// it adds no human message or characters, and neither answers a pending
+    /// turn nor starts one.
     pub fn counts(&self, window: Window, typing_rate: TypingRate) -> Result<Counts> {
         let start = InstantKey::from_millisecond(window.start_ms());
         let end = InstantKey::from_millisecond(window.end_ms());
@@ -96,10 +103,15 @@ impl MetricsDb {
                 continue;
             }
             let human: Option<bool> = row.get(4)?;
+            // Agent turns retain the existing classification and its unknowns,
+            // independently of Human-only exclusions or retained lengths.
+            if human.is_none() {
+                counts.assistant_turns = None;
+            }
             counts.assistant_records +=
                 u64::from(row.get::<_, Option<String>>(3)?.as_deref() == Some("assistant"));
             counts.tool_calls = add(counts.tool_calls, counter(row, 6)?)?;
-            match human {
+            match row.get::<_, Option<bool>>(8)? {
                 Some(true) => {
                     counts.human_messages = add(counts.human_messages, Some(1))?;
                     counts.human_chars = add(counts.human_chars, counter(row, 5)?)?;
@@ -107,7 +119,6 @@ impl MetricsDb {
                 Some(false) => {}
                 None => {
                     counts.human_messages = None;
-                    counts.assistant_turns = None;
                     counts.human_chars = None;
                 }
             }
@@ -115,6 +126,7 @@ impl MetricsDb {
                 instant,
                 uuid: row.get(1)?,
                 human,
+                automated: row.get(7)?,
             });
         }
         counts.sessions = sessions.len() as u64;
@@ -123,7 +135,7 @@ impl MetricsDb {
                 a.instant.cmp(&b.instant).then_with(|| a.uuid.cmp(&b.uuid))
             });
             let mut awaiting_response = false;
-            for event in events {
+            for event in events.iter().filter(|event| !event.automated) {
                 match event.human {
                     Some(true) => awaiting_response = true,
                     Some(false) if awaiting_response => {

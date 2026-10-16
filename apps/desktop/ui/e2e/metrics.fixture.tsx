@@ -132,10 +132,10 @@ function Fixture() {
           Next control
         </button>
         <span data-testid="long-rule">
-          <RuleChip ruleId="M-04" subject="Tokens and cost" />
+          <RuleChip ruleId="M-04" subject="Token usage" />
         </span>
         <span data-testid="coverage-rule">
-          <RuleChip ruleId="C-08" subject="Session and capture receipt identity" size="sm" />
+          <RuleChip ruleId="C-08" subject="Capture identity" size="sm" />
         </span>
       </div>
       <div style={{ position: 'relative', height: 120, marginTop: 16 }}>

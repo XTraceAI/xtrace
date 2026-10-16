@@ -149,7 +149,9 @@ the existing writer.
   scan replays unchanged Claude files through the human classifier; see
   [human classification replay](human-classification-replay.md). Migration 6
   does the same once more for structural tool extraction; see
-  [structural tool kinds](structural-tool-kinds.md).
+  [structural tool kinds](structural-tool-kinds.md). Migration 7 does it once
+  more so exact `pr-link` witnesses are linked; see
+  [native PR witnesses](native-pr-witnesses.md).
 - **Watching.** `xt_ingest::native::watch::Tailer` registers a recursive `notify`
   watcher (FSEvents on macOS, inotify on Linux) on each existing host root before the
   initial scan; an absent root is covered by a non-recursive watch on its nearest
@@ -258,8 +260,15 @@ the existing writer.
   (`resolving`, `available` with path, `missing` with reason),
   `readers`, one entry per host (`pending`, `complete`, `incomplete`,
   `missing_source`, `missing_runtime`, `pin_mismatch`, `reader_failed`,
-  `cancelled`; the detail; sessions imported/partial/skipped; records new/enriched;
-  diagnostics count), `reconciles` and `files_scanned`. Every change is published
+  `cancelled`; `needs_attention`; the detail; sessions imported/partial/skipped;
+  records new/enriched; diagnostics count), the index's own `needs_attention`
+  (some host's does), `reconciles` and `files_scanned`. Whether a host's last
+  scan needs attention is decided once, in `native_index::mark_attention`:
+  `complete` and `missing_source` do not, `pending` does not while the phase is
+  `scanning` and does once it is not, and every other state does, `cancelled`
+  included. The Sessions flag, the sidebar, Welcome and Settings all read that
+  flag and word host states from one shared label map
+  (`src/app/index-host-state.ts`); none re-decides it. Every change is published
   as `native-index://status` with the same payload: readiness, each
   reconciliation (a host a pass did not touch keeps its last scan), progress
   during the initial scan (at most every 250 ms) and the stop. Source paths stay
