@@ -1,5 +1,12 @@
 # Desktop updates
 
+For installation, see [setup](SETUP.md). The [latest release page](https://github.com/XTraceAI/xtrace-desktop/releases/latest)
+identifies the current update release and its download assets. Newer testing
+candidates appear on [all releases](https://github.com/XTraceAI/xtrace-desktop/releases)
+and may not be offered by the latest-release link or automatic updates. If the automatic update
+fails, quit XTrace Desktop and replace it with the latest DMG copy in Applications.
+A source version change alone does not publish a release or change the update feed.
+
 The macOS release app checks at startup and every six hours. A newer update
 downloads in the background with a ten-minute timeout; checks time out after
 30 seconds. Tauri verifies its signature and signed release version before
@@ -52,8 +59,8 @@ is missing. No signing keys are created by the app or these instructions.
 The repository `XTraceAI/xtrace-desktop` is now public, so its GitHub Releases
 feed needs no authentication. The configured endpoint is
 `https://github.com/XTraceAI/xtrace-desktop/releases/latest/download/latest.json`.
-The public endpoint is live and v0.1.4 has been published. Preparing v0.1.5
-in source does not publish that version or change the feed. `latest.json` must not offer an update before its real archive and
+The release page and its assets are the source of truth for publication status.
+`latest.json` must not offer an update before its real archive and
 signature assets are available. Never embed credentials in the app or URL.
 
 Keep the private signing key and password in private release storage, outside
@@ -82,11 +89,12 @@ remove that variable from the command's environment and pass its local file path
 explicitly:
 
 ```sh
-env -u TAURI_SIGNING_PRIVATE_KEY pnpm tauri signer sign --private-key-path "$TAURI_SIGNING_PRIVATE_KEY" --app-version "0.1.5" "/absolute/path/to/XTrace Desktop.app.tar.gz"
+RELEASE_VERSION="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/src-tauri/tauri.conf.json", "utf8")).version')"
+env -u TAURI_SIGNING_PRIVATE_KEY pnpm tauri signer sign --private-key-path "$TAURI_SIGNING_PRIVATE_KEY" --app-version "$RELEASE_VERSION" "/absolute/path/to/XTrace Desktop.app.tar.gz"
 ```
 
-Replace `0.1.5` with the app's exact release version and the archive path with the
-final archive to sign. The shell expands the key path before `env` removes the
+Run this from the exact release source checkout and replace the archive path
+with the final archive to sign. Confirm its built app version equals `RELEASE_VERSION`. The shell expands the key path before `env` removes the
 variable for the signer. Keep `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the local
 environment: empty for an unprotected key, or securely supplied for a protected
 key.
@@ -116,14 +124,15 @@ Before publishing, perform this sequence:
 
 See the [official updater guide](https://v2.tauri.app/plugin/updater/) and the
 [pinned updater source](https://github.com/tauri-apps/plugins-workspace/tree/updater-v2.12.0/plugins/updater).
-This source change configures the public release endpoint and trusted public
-key. It does not publish v0.1.5 or change the existing feed; release packaging and
-publication remain manual.
+The release overlay configures the public endpoint and trusted public key.
+Release packaging and publication remain separate manual steps.
 
-## Beta 0.1.5 limitations
+## Beta testing limits
 
 Some nested Guardian review conversations may appear under the root conversation rather than their immediate parent. This beta does not change those existing links.
 
-A final signed launch from `/Applications` on a Mac that has never run XTrace
-has not been checked for this testing release. Signed packaging, native source
-checks, and updater download checks do not establish that first-launch result.
+A final signed launch from `/Applications` on a Mac that has never run XTrace,
+macOS 14 runtime behavior, and a complete signed update/restart need evidence for
+each release. They remain unverified unless that release's notes record the exact
+checks and results. Signed packaging, native fixture/source checks and updater
+download checks do not establish those results.
