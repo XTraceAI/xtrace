@@ -18,7 +18,7 @@ those results separately before merging. Browser tests install their Linux syste
 dependencies even with cached binaries and do not certify native WKWebView behavior.
 
 The UI job runs a small gallery smoke suite and production-exclusion checks.
-The full 92-story gallery sweep runs locally before merging gallery, shared UI,
+The full 96-story gallery sweep runs locally before merging gallery, shared UI,
 theme, font or brand-asset changes. Record its source SHA and results in the PR;
 hosted success does not certify the full gallery. See [gallery checks](GALLERY.md#add-or-update-a-story).
 
@@ -36,11 +36,11 @@ After fetching the current target branch, record its full commit SHA and integra
 it into the candidate. Run:
 
 ```sh
-pnpm check:native --base FULL_REVIEWED_BASE_SHA
+AGENT_PLUGINS_SOURCE=bundle pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke
 ```
 
-For a synthetic launch on a development Mac, explicitly select
-`pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke`. This still
+This self-contained development check verifies the committed producer bundle
+and selects a synthetic launch with `--fixture-smoke`. It still
 compiles the normal debug app first, then builds a separate debug configuration
 with the `fixtures` feature and launches only that fixture build with fixed F1.
 It uses a compiled test app ID, disposable data and native home, disables
@@ -178,7 +178,10 @@ pinned commit from the public repository, without credentials, into the ignored
 `artifacts/private/plugin-conformance/` directory; a supplied checkout is
 accepted only at that commit. Either way the checkout must be clean and every
 listed reader source must be the pinned object, so an edited file at the right
-commit fails before any test runs.
+commit fails before any test runs. Checkout mode requires the pinned revision
+to remain available upstream or an exact clean checkout supplied through
+`AGENT_PLUGINS_DIR`. If the upstream no longer serves that revision, fetching
+cannot complete this mode; a bundle-mode pass is not upstream verification.
 
 Explicit `AGENT_PLUGINS_SOURCE=bundle` uses `vendor/agent-plugins` by default;
 `AGENT_PLUGINS_DIR` can name a bundle's `plugins/memhub` directory instead.
@@ -304,7 +307,7 @@ pnpm test:ci
 pnpm test:supply-chain
 pnpm --dir apps/desktop/ui exec playwright install webkit chromium
 pnpm e2e
-pnpm check:native --base FULL_REVIEWED_BASE_SHA
+AGENT_PLUGINS_SOURCE=bundle pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke
 pnpm publication:test
 pnpm secrets:check
 ```

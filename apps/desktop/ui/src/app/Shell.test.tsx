@@ -205,7 +205,7 @@ it('shows native metadata failure safely, retries, and preserves native drag exc
   expect(screen.queryByText('backend-specific detail')).toBeNull();
   const refresh = screen.getByRole('button', { name: 'Refresh' });
   fireEvent.click(refresh);
-  expect(await screen.findByText('v0.1.0')).toBeTruthy();
+  expect(await screen.findByText(`v${exported.app_info.version}`)).toBeTruthy();
   expect(
     view.container.querySelector('.xt-window-chrome')?.getAttribute('data-tauri-drag-region'),
   ).toBe('deep');

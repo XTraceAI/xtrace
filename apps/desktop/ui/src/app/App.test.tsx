@@ -39,7 +39,7 @@ it('does not replace the current source when an obsolete bootstrap resolves', as
       </ThemeProvider>
     </StrictMode>,
   );
-  expect(await screen.findByText('v0.1.0')).toBeTruthy();
+  expect(await screen.findByText(`v${exported.app_info.version}`)).toBeTruthy();
   await act(async () => {
     finish(
       new FixtureDataSource({
