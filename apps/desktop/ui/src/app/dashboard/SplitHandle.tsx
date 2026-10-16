@@ -111,6 +111,24 @@ export function SplitHandle({
         update();
       }, SETTLE_MS);
     };
+    const positions = new WeakMap<Element, { top: number; left: number }>();
+    const scrolled = (event: Event) => {
+      const element = event.target;
+      if (!(element instanceof Element)) return;
+      const top = element.scrollTop;
+      const left = element.scrollLeft;
+      const previous = positions.get(element);
+      // A probe can queue a scroll event while restoring this same position.
+      // Do not let that event schedule another probe indefinitely.
+      if (previous?.top === top && previous.left === left) return;
+      positions.set(element, { top, left });
+      // Probing and restoring an intermediate position cancels native keyboard
+      // scrolling. A frame already queued must only read the drawn share; the
+      // pending bounds measurement resumes once movement has settled.
+      bounds = false;
+      settle();
+    };
+    panes.container.addEventListener('scroll', scrolled, true);
     update();
     const resized =
       typeof ResizeObserver === 'function'
@@ -128,6 +146,7 @@ export function SplitHandle({
       clearTimeout(timer);
       resized?.disconnect();
       changed?.disconnect();
+      panes.container.removeEventListener('scroll', scrolled, true);
     };
   }, [axis]);
 
