@@ -3,13 +3,16 @@
 Reuse the existing [component kit](../apps/desktop/ui/src/kit/index.ts) and
 [gallery](GALLERY.md) before adding a new primitive. Keep renderer data access behind
 [DataSource](../apps/desktop/ui/src/data/DataSource.ts); product metrics belong in
-Rust rather than duplicated component calculations.
+Rust rather than duplicated component calculations; see
+[one rule per question](ARCHITECTURE.md#one-rule-per-question-single-source-of-truth).
 
 Use the existing theme tokens and semantic CSS variables. `pnpm lint` checks raw
 hex usage; `pnpm check` includes component tests. Preserve keyboard navigation,
 focus indicators, accessible names, and independent popup behavior in both themes.
 Unmeasured values display `—`, never a fabricated zero. Explain metric definitions
-through the existing definition components where appropriate.
+through the existing definition components where appropriate. Shared Info controls
+are named for their subject (for example, "About Concurrency"); internal rule
+IDs stay in the contract rather than the visible control label.
 
 Gallery samples demonstrate components; snapshots do not independently approve a
 product design. Follow [visual verification](VISUAL_TESTS.md), compare against the

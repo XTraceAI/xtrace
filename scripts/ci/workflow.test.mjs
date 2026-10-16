@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 const source = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
@@ -77,39 +79,260 @@ test('routine CI is Linux-only and native work is explicit release preparation',
   );
   assert.doesNotMatch(releaseJobs.native, /secrets\.|environment:/);
   assert.match(release, /persist-credentials: false/);
+  assert.deepEqual(Object.keys(jobsOf(release)), ['native', 'package']);
+  assert.match(release, /^permissions:\n {2}contents: read\n\n/m);
+  assert.doesNotMatch(jobsOf(release).native, /^\s+permissions:/m);
+  for (const action of release.matchAll(/uses: (\S+)/g)) assert.match(action[1], /@[a-f0-9]{40}$/);
+  for (const checkout of release.split(/uses: actions\/checkout@/).slice(1))
+    assert.match(checkout.split(/\n {6}- /)[0], /persist-credentials: false/);
   assert.match(jobs.ui, /path: ~\/\.cache\/ms-playwright/);
-  assert.match(jobs.ui, /playwright install --with-deps webkit chromium/);
+  assert.ok(jobs.ui.includes('playwright install --with-deps ${{ matrix.browser }}'));
 });
 
-test('release validation provisions the producer required by native conformance', async () => {
+test('each browser matrix entry keeps every UI gate and reports its own failures', () => {
+  assert.match(jobs.ui, /timeout-minutes: 30\n/);
+  assert.match(
+    jobs.ui,
+    /strategy:\n {6}fail-fast: false\n {6}max-parallel: 2\n {6}matrix:\n {8}browser: \[webkit, chromium\]\n/,
+  );
+  assert.match(jobs.ui, /- run: pnpm check\n/);
+  const selection = '--project=${{ matrix.browser }}';
+  assert.deepEqual(
+    [...jobs.ui.matchAll(/- run: pnpm (e2e[^\n]*)/g)].map((match) => match[1]),
+    ['e2e', 'e2e:gallery:smoke', 'e2e:production'].map((suite) => `${suite} ${selection}`),
+  );
+  assert.ok(jobs.ui.includes('playwright-ubuntu-24.04-x64-${{ matrix.browser }}-'));
+  assert.doesNotMatch(
+    jobs.ui,
+    /continue-on-error|--(?:grep|shard|workers|timeout|retries|max-failures)/,
+  );
+  assert.match(jobs['ci-ok'], /if: \$\{\{ always\(\) \}\}/);
+  assert.match(jobs['ci-ok'], /needs: \[policy, ui, security\]/);
+  assert.doesNotMatch(jobs['ci-ok'], /continue-on-error/);
+});
+
+test('actual release shell guards accept only default history or matching reviewed tags', async (t) => {
+  const steps = release.split(/\n {6}- /);
+  const guardSteps = [
+    steps.find((step) => step.startsWith('name: Require an explicit candidate')),
+    steps.find((step) => step.startsWith('name: Verify candidate identity')),
+  ];
+  for (const step of guardSteps) {
+    for (const [name, expression] of Object.entries({
+      CANDIDATE_SHA: 'inputs.candidate_sha',
+      WORKFLOW_REF: 'github.ref',
+      WORKFLOW_SHA: 'github.workflow_sha',
+      SOURCE_SHA: 'github.sha',
+      DEFAULT_BRANCH: 'github.event.repository.default_branch',
+    }))
+      assert.ok(step.includes(`${name}: \${{ ${expression} }}`), name);
+  }
+  assert.ok(guardSteps[0].includes('WORKFLOW_REF_TYPE: ${{ github.ref_type }}'));
+  const guards = guardSteps.map((step) =>
+    step.split('        run: |\n')[1].replace(/^ {10}/gm, ''),
+  );
+  const repo = await mkdtemp(join(tmpdir(), 'xtrace-release-guard-'));
+  const env = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Synthetic CI',
+    GIT_AUTHOR_EMAIL: 'ci@example.invalid',
+    GIT_COMMITTER_NAME: 'Synthetic CI',
+    GIT_COMMITTER_EMAIL: 'ci@example.invalid',
+  };
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: repo, env, input: '', encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  // Only the OS probes are controlled: both scripts and all Git checks run as written.
+  const runGuard = (index, values) =>
+    spawnSync(
+      'bash',
+      [
+        '--noprofile',
+        '--norc',
+        '-e',
+        '-o',
+        'pipefail',
+        '-c',
+        'uname() { echo "${TEST_MACHINE:-arm64}"; }; sw_vers() { echo "${TEST_MACOS:-14.7}"; };\n' +
+          guards[index],
+      ],
+      { cwd: repo, env: { ...env, ...values }, encoding: 'utf8' },
+    );
+  try {
+    git('init', '--template=', '--initial-branch=main');
+    const tree = git('mktree');
+    const base = git('commit-tree', tree, '-m', 'Synthetic baseline');
+    const candidate = git('commit-tree', tree, '-p', base, '-m', 'Synthetic candidate');
+    const descendant = git('commit-tree', tree, '-p', candidate, '-m', 'Synthetic later commit');
+    git('update-ref', 'HEAD', candidate);
+    git('update-ref', 'refs/remotes/origin/main', descendant);
+    git('tag', 'v0.1.1', candidate);
+    git('tag', '-a', 'v0.1.1-beta.1+qa.14', candidate, '-m', 'Synthetic annotated beta');
+    const defaults = {
+      CANDIDATE_SHA: candidate,
+      WORKFLOW_REF: 'refs/heads/main',
+      WORKFLOW_REF_TYPE: 'branch',
+      WORKFLOW_SHA: descendant,
+      SOURCE_SHA: descendant,
+      DEFAULT_BRANCH: 'main',
+    };
+    const tagged = {
+      ...defaults,
+      WORKFLOW_REF: 'refs/tags/v0.1.1',
+      WORKFLOW_REF_TYPE: 'tag',
+      WORKFLOW_SHA: candidate,
+      SOURCE_SHA: candidate,
+    };
+    const check = async (name, values, accepted, rejectedAt = 0) => {
+      await t.test(name, () => {
+        const results = [runGuard(0, values)];
+        if (results[0].status === 0) results.push(runGuard(1, values));
+        assert.equal(
+          results.every((result) => result.status === 0),
+          accepted,
+          results.map((result) => result.stderr).join('\n'),
+        );
+        if (!accepted) assert.notEqual(results[rejectedAt]?.status, 0);
+        if (!accepted && rejectedAt === 1) assert.equal(results[0].status, 0);
+      });
+    };
+    await check(
+      'default branch accepts an ancestor, without requiring workflow SHA equality',
+      defaults,
+      true,
+    );
+    git('update-ref', 'refs/remotes/origin/main', base);
+    await check('default branch rejects a candidate outside main history', defaults, false, 1);
+    await check('tag accepts identical commits outside main history', tagged, true);
+    await check(
+      'annotated SemVer beta resolves to the candidate commit',
+      { ...tagged, WORKFLOW_REF: 'refs/tags/v0.1.1-beta.1+qa.14' },
+      true,
+    );
+    for (const [field, value] of [
+      ['WORKFLOW_REF', 'refs/heads/feature'],
+      ['WORKFLOW_REF', 'refs/heads/v0.1.1'],
+      ['WORKFLOW_REF', 'refs/pull/1/head'],
+      ['WORKFLOW_REF', 'v0.1.1'],
+      ['WORKFLOW_REF_TYPE', 'branch'],
+      ['WORKFLOW_REF_TYPE', ''],
+      ['WORKFLOW_SHA', base],
+      ['WORKFLOW_SHA', ''],
+      ['SOURCE_SHA', base],
+      ['SOURCE_SHA', 'malformed'],
+      ['CANDIDATE_SHA', base],
+      ['CANDIDATE_SHA', candidate.slice(0, 7)],
+      ['CANDIDATE_SHA', 'A'.repeat(40)],
+      ['CANDIDATE_SHA', ''],
+      ['CANDIDATE_SHA', `${candidate}\n`],
+      ['CANDIDATE_SHA', `${candidate}; echo unexpected`],
+    ])
+      await check(`tag rejects ${field}=${value}`, { ...tagged, [field]: value }, false);
+    for (const version of [
+      '0.1',
+      '01.1.1',
+      '0.01.1',
+      '0.1.01',
+      '0.1.1-01',
+      '0.1.1-',
+      '0.1.1+',
+      '0.1.1-beta..1',
+      '0.1.1+qa..14',
+      '0.1.1/extra',
+      '0.1.1^{commit}',
+      '0.1.1; echo unexpected',
+      '0.1.1\n',
+    ])
+      await check(
+        `tag rejects malformed v${version}`,
+        { ...tagged, WORKFLOW_REF: `refs/tags/v${version}` },
+        false,
+      );
+    await check(
+      'default branch rejects a tag ref type',
+      { ...defaults, WORKFLOW_REF_TYPE: 'tag' },
+      false,
+    );
+    await check(
+      'missing tag rejects even with matching event identities',
+      { ...tagged, WORKFLOW_REF: 'refs/tags/v9.9.9' },
+      false,
+      1,
+    );
+    git('tag', 'v0.1.2', tree);
+    await check(
+      'a tag pointing to a tree rejects',
+      { ...tagged, WORKFLOW_REF: 'refs/tags/v0.1.2' },
+      false,
+      1,
+    );
+    await check(
+      'macOS 15 rejects despite identical source commits',
+      { ...tagged, TEST_MACOS: '15.7' },
+      false,
+      1,
+    );
+    await check(
+      'x86_64 rejects despite identical source commits',
+      { ...tagged, TEST_MACHINE: 'x86_64' },
+      false,
+      1,
+    );
+    git('update-ref', 'HEAD', base);
+    await check('tag rejects a different checked-out HEAD', tagged, false, 1);
+    await check(
+      'tag rejects a different resolved commit with all other identities matching',
+      { ...tagged, CANDIDATE_SHA: base, WORKFLOW_SHA: base, SOURCE_SHA: base },
+      false,
+      1,
+    );
+    git('update-ref', 'HEAD', candidate);
+    await t.test('tag moved after the first guard rejects at the Git identity guard', () => {
+      assert.equal(runGuard(0, tagged).status, 0);
+      git('update-ref', 'refs/tags/v0.1.1', base);
+      assert.notEqual(runGuard(1, tagged).status, 0);
+    });
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('release validation explicitly uses verified vendored producer conformance', async () => {
   const pin = JSON.parse(
     await readFile(new URL('../../.plugin-pin', import.meta.url), 'utf8'),
   ).commit;
   assert.match(pin, /^[a-f0-9]{40}$/);
   const steps = release.split(/\n {6}- /);
-  const producer = steps.findIndex((step) => step.includes('repository: XTraceAI/agent-plugins'));
   const validation = steps.findIndex((step) => step.includes('pnpm check:native'));
-  assert.ok(producer > 0 && validation > producer, 'producer must exist before the mandatory gate');
-  assert.equal(steps[producer].match(/\n {10}ref: ([a-f0-9]{40})(?: #[^\n]*)?\n/)[1], pin);
-  assert.match(steps[producer], /persist-credentials: false/);
-  const path = steps[producer].match(/\n {10}path: (.+)\n/)[1];
+  assert.ok(validation > 0);
+  assert.ok(!release.includes('repository: XTraceAI/agent-plugins'));
+  assert.match(steps[validation], /AGENT_PLUGINS_SOURCE: bundle/);
   assert.ok(
     steps[validation].includes(
-      'AGENT_PLUGINS_DIR: ${{ github.workspace }}/' + path + '/plugins/memhub',
+      'AGENT_PLUGINS_DIR: ${{ github.workspace }}/vendor/agent-plugins/plugins/memhub',
     ),
   );
-  const ignored = await readFile(new URL('../../.gitignore', import.meta.url), 'utf8');
-  assert.ok(
-    ignored
-      .split('\n')
-      .some((line) => line.startsWith('/') && line.endsWith('/') && path.startsWith(line.slice(1))),
-    'nested producer must not dirty the candidate checkout',
-  );
+  const gate = await readFile(new URL('./plugin-conformance.sh', import.meta.url), 'utf8');
+  assert.match(gate, /AGENT_PLUGINS_SOURCE:-checkout/);
+  assert.match(gate, /--example conformance_bundle --locked/);
+  assert.match(gate, /from bundle_source import verify_bundle/);
+  assert.match(gate, /verifyCheckout\(pin, git\)/);
+  assert.match(gate, /assert-no-skipped-conformance\.sh/);
 });
 
 test('only the signing step of the packaging job sees Apple values, after validation passes', () => {
   assert.deepEqual(Object.keys(releaseJobs), ['native', 'package']);
   const job = releaseJobs.package;
+  assert.ok(
+    job.includes(
+      "    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+    ),
+    'packaging runs only on the default branch and skips reviewed tag validation',
+  );
   assert.match(job, /^ {4}needs: native$/m);
   assert.match(job, /^ {4}environment: macos-signing$/m);
   assert.match(job, /runs-on: macos-14/);
@@ -189,7 +412,11 @@ test('the actual aggregate rejects every missing, skipped, cancelled or failed w
     });
   assert.equal(aggregate(good).status, 0);
   for (const name of required) {
-    for (const result of ['skipped', 'cancelled', 'failure', undefined]) {
+    const missing = { ...good };
+    delete missing[name];
+    assert.equal(aggregate(missing).status, 1, `missing ${name}`);
+    // GitHub exposes the combined matrix outcome as needs.ui.result.
+    for (const result of ['skipped', 'cancelled', 'failure', 'in_progress', undefined]) {
       assert.equal(aggregate({ ...good, [name]: { result } }).status, 1, `${name}: ${result}`);
     }
   }
@@ -228,7 +455,7 @@ test('text edits run metadata only; target-branch edits call the full CI and can
 test('consolidated jobs retain each real command and do not blanket-accept failures', () => {
   for (const command of [
     'pnpm check',
-    'playwright install --with-deps webkit chromium',
+    'playwright install --with-deps ${{ matrix.browser }}',
     'pnpm e2e',
   ])
     assert.ok(jobs.ui.includes(command), command);

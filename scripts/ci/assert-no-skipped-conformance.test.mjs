@@ -84,6 +84,9 @@ test('the committed inventory names the required workspace conformance tests', a
     'conformance_native_reader_stream',
     'conformance_native_import',
     'conformance_bundled_readers',
+    'conformance_exact_detail',
+    'conformance_codex_fork_import',
+    'conformance_tool_sent_import',
   ]);
   const result = await validate(names.map(ok).join('') + summary(names.length), names);
   assert.equal(result.status, 0, result.stderr);

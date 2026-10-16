@@ -1,17 +1,31 @@
 //! Read-only metrics over canonical work records and explicit event windows.
+mod activity;
 mod cost;
 mod counts;
 mod coverage;
+mod daily;
 mod favorite;
 mod hands_off;
 mod human;
+mod human_hours;
+mod pr_analytics;
+mod pr_effort;
 mod prices;
+mod repeats;
+mod report;
+mod session;
+mod session_hands_off;
+mod session_stretches;
+mod session_summary;
 mod sessions;
+mod span_detail;
 mod spans;
 mod stats;
 mod sweep;
 mod tokens;
+mod untimed;
 mod window;
+pub use activity::WindowActivity;
 pub use cost::{
     CostReport, CostSummary, DayCost, HostCost, ModelCost, SurfaceCost, UnpricedCost,
     UnpricedReason,
@@ -21,17 +35,41 @@ pub use coverage::{
     CaptureGap, Coverage, CoverageSurface, DiscoveryHealth, HostUsageCoverage, InventoryState,
     SurfaceCapture, SurfaceUsageCoverage, UsageCoverage, UsageCoverageSummary, UsageGap, UsageGate,
 };
+pub use daily::{DayConcurrency, DayHandsOff};
 pub use favorite::{FavoriteComparison, FavoriteModel, FavoriteUnknown};
 pub use hands_off::{ExcludedSurface, HandsOff};
-pub use human::HumanTime;
+pub use human::{DayHuman, HumanTime};
+pub use human_hours::{BreakLength, DayHumanHours, HumanHours, HumanHoursPeriods, HumanStretch};
+pub use pr_analytics::{
+    LinkEvidence, PrAnalyticsReport, PrEligibility, PrHandsOff, PrMedian, PrRow, PrSummary,
+    PrTokens, TokenMedian, TokenWithheld, TypeSummary,
+};
+pub use pr_effort::{
+    AssignmentEffort, DayEffort, EffortAssignment, EffortTotals, MergedPrTile, ModelDayEffort,
+    PrEffortReport, PrFreshness, PrFreshnessSummary, PrMarker,
+};
 pub use prices::{COST_BASIS, PriceCatalog};
+pub use repeats::{
+    DEFAULT_ACTIVE_MS, DEFAULT_REPEATS, RepeatDensity, RepeatGroup, RepeatThresholds,
+    SessionRepeats, StretchRepeats, UnknownRepeats,
+};
+pub use report::{PeriodReports, ReportPeriods};
+pub use session::{MAX_SESSIONS, SUB_SESSION_WALK, SessionWindow, SubSessions};
+pub use session_hands_off::SessionHandsOff;
+pub use session_stretches::{SessionStretch, SessionStretches, ToolBlock};
+pub use session_summary::SessionListSummary;
 pub use sessions::{DaySessions, SessionsPerDay};
-pub use spans::{ActiveSpan, ActiveSpanReport};
+pub use span_detail::{
+    AutomaticText, MAX_PROMPT_CHARS, PromptText, SpanAutomatic, SpanDetail, SpanPrompt, SpanTool,
+    notification_summary, prompt_excerpt,
+};
+pub use spans::{ActiveSpan, ActiveSpanReport, DayActive};
 pub use stats::Delta;
 pub use sweep::Concurrency;
 pub use tokens::{
     DayTokens, HostTokens, ModelTokens, SurfaceTokens, TokenCounters, TokenReport, TokenSummary,
 };
+pub use untimed::{UntimedHistory, UntimedSurface};
 pub use window::{DayBucket, Window};
 
 use rusqlite::{Connection, OpenFlags};
@@ -45,14 +83,22 @@ pub enum Error {
     CounterOverflow,
     #[error("Typing rate must be positive characters per minute")]
     InvalidTypingRate,
+    #[error("Break length must be positive whole minutes")]
+    InvalidBreakLength,
     #[error("Duplicate discovery health context for a host/surface")]
     InvalidCoverageContext,
+    #[error("Too many sessions requested for one measurement read")]
+    TooManySessions,
+    #[error("Repeat thresholds must be positive active milliseconds and repeats")]
+    InvalidRepeatThresholds,
     #[error("Invalid price catalog")]
     InvalidPriceCatalog,
     #[error(transparent)]
     Time(#[from] jiff::Error),
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Store(#[from] xt_store::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -76,6 +122,7 @@ impl MetricsDb {
         connection.prepare(&format!("{} LIMIT 0", spans::QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", counts::QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", human::QUERY))?;
+        connection.prepare(&format!("{} LIMIT 0", human_hours::QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", hands_off::QUERY))?;
         for query in [
             coverage::EVENTS_QUERY,
@@ -85,9 +132,30 @@ impl MetricsDb {
             connection.prepare(&format!("{query} LIMIT 0"))?;
         }
         connection.prepare(&format!("{} LIMIT 0", sessions::QUERY))?;
+        for query in [
+            session::EXISTS_QUERY,
+            session::EVENTS_QUERY,
+            xt_store::session_list::CONTEXT_SQL,
+            xt_store::session_list::PARENT_SQL,
+        ] {
+            connection.prepare(&format!("{query} LIMIT 0"))?;
+        }
+        connection.prepare(&format!("{} LIMIT 0", session_stretches::TOOL_QUERY))?;
+        for query in [
+            span_detail::EXISTS_QUERY,
+            span_detail::TOOL_QUERY,
+            span_detail::STATED_QUERY,
+            span_detail::PROMPT_QUERY,
+            span_detail::AUTOMATIC_QUERY,
+        ] {
+            connection.prepare(&format!("{query} LIMIT 0"))?;
+        }
+        connection.prepare(&format!("{} LIMIT 0", repeats::BLOCK_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", favorite::OUTPUT_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", favorite::TURN_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", cost::QUERY))?;
+        connection.prepare(&format!("{} LIMIT 0", untimed::QUERY))?;
+        connection.prepare(&format!("{} LIMIT 0", pr_effort::LINK_QUERY))?;
         Ok(Self { connection })
     }
 

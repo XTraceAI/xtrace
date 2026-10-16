@@ -1752,7 +1752,7 @@ fn v3_upgrade_replays_unchanged_forks_and_repairs_only_confirmed_zeroed_usage() 
                 .unwrap()
                 > 0
         );
-        sql.execute_batch("UPDATE usage SET input_tokens=0,output_tokens=0,cache_read_tokens=0,cache_creation_tokens=0; UPDATE records SET has_conflict=1; DROP VIEW session_work_records; DROP TABLE native_record_copies; DELETE FROM schema_version WHERE version>=4;").unwrap();
+        sql.execute_batch("ALTER TABLE pull_requests DROP COLUMN manual_failed_at; UPDATE usage SET input_tokens=0,output_tokens=0,cache_read_tokens=0,cache_creation_tokens=0; UPDATE records SET has_conflict=1; DROP VIEW session_work_records; DROP TABLE native_record_copies; DELETE FROM schema_version WHERE version>=4; ALTER TABLE pull_requests DROP COLUMN refresh_error; ALTER TABLE pull_requests DROP COLUMN last_attempted_at; ALTER TABLE tool_uses DROP COLUMN group_key; ALTER TABLE tool_uses DROP COLUMN group_version; ALTER TABLE tool_uses DROP COLUMN group_conflict; DROP TABLE confirmed_automated_inputs; DROP TABLE guardian_turn_inputs; DROP TABLE injected_context_inputs; DROP TABLE IF EXISTS tool_sent_inputs; DROP TABLE IF EXISTS task_notification_inputs; DROP TABLE IF EXISTS record_previews; DROP TABLE IF EXISTS session_child_checks; DROP TABLE IF EXISTS session_child_facts; DROP TABLE IF EXISTS human_input_adjustments; DROP TABLE IF EXISTS human_session_origins; DROP TABLE session_creation_relations; DROP TABLE session_creation_bootstrap; DROP TABLE cli_artifact_launch_owners; DROP TABLE claude_launch_groups; DROP TABLE claude_launch_group_members; DROP TABLE claude_launch_candidates; DROP TABLE claude_launch_staged_candidates; DROP INDEX sessions_host_native; DROP INDEX source_cursors_tail;").unwrap();
         if let Some(first) = original_first {
             record["message"]["usage"]["input_tokens"] = json!(11);
             record["message"]["usage"]["output_tokens"] = json!(7);
@@ -2131,6 +2131,7 @@ fn all_shared_contexts_receive_measurement_and_cost_invalidations() {
                     declared_host: Some(Host::Claude),
                     records: &records,
                     hook_summaries: &[],
+                    pr_witnesses: &[],
                     title: None,
                     cwd: None,
                     git_branch: None,
@@ -2476,6 +2477,112 @@ fn claude_fs_counts_one_event_for_a_summary_repeated_in_a_forked_file() {
         2,
         "both events live with the session that owns them"
     );
+}
+
+/// An index written before previews were kept fills them on the first scan
+/// after the upgrade: migration 17 forgets the Claude checkpoints once, the
+/// unchanged transcripts are read again, and each person's message gets its
+/// preview. Nothing else changes, and a later scan resumes as before.
+#[test]
+fn the_preview_upgrade_reads_unchanged_claude_history_once_to_fill_previews() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    fake_home(&home);
+    let database = temp.path().join("index.sqlite");
+    let mut store = Store::open(&database).unwrap();
+    assert!(run(&mut store, &home).complete());
+    drop(store);
+    let sql = rusqlite::Connection::open(&database).unwrap();
+    let previews = |sql: &rusqlite::Connection| -> Vec<(String, String)> {
+        sql.prepare("SELECT record_uuid,kind FROM record_previews ORDER BY record_uuid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    };
+    let filled = previews(&sql);
+    let people: i64 = sql
+        .query_row(
+            "SELECT count(*) FROM v_records WHERE type='user' AND human_is_eligible=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(people > 0);
+    assert_eq!(filled.len() as i64, people);
+    assert!(filled.iter().all(|row| row.1 == "person"));
+    let records = |sql: &rusqlite::Connection| -> String {
+        sql.query_row(
+            "SELECT json_group_array(json_array(uuid,session_id,is_human,text_len,has_conflict,content_json))
+             FROM (SELECT * FROM records ORDER BY uuid)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let stored = records(&sql);
+    // What a schema-16 build left: the same rows and checkpoints, no previews.
+    // Migration 20 rebuilds its two tables with their columns unchanged, so
+    // only the columns it, 19 and 22 add to the launch tables are removed.
+    // Opening the store recreates the managed views dropped first.
+    sql.execute_batch(
+        "DROP VIEW v_response_usage; DROP VIEW v_usage_records; DROP VIEW v_session_events; DROP VIEW v_records; DROP VIEW v_human_inputs; DROP VIEW v_record_metadata;
+         ALTER TABLE pull_requests DROP COLUMN manual_failed_at;
+         DROP TABLE record_previews; DROP TABLE session_child_facts; DROP TABLE IF EXISTS tool_sent_inputs; DROP TABLE session_child_checks;
+         ALTER TABLE claude_launch_groups DROP COLUMN unfinished_starts;
+         ALTER TABLE claude_launch_candidates DROP COLUMN child_check_complete;
+         ALTER TABLE claude_launch_candidates DROP COLUMN launch_check_fingerprint;
+         ALTER TABLE claude_launch_candidates DROP COLUMN child_host;
+         ALTER TABLE claude_launch_candidates DROP COLUMN binding_output_offset;
+         ALTER TABLE claude_launch_candidates DROP COLUMN binding_call_offset;
+         ALTER TABLE claude_launch_staged_candidates DROP COLUMN launch_check_fingerprint;
+         ALTER TABLE claude_launch_staged_candidates DROP COLUMN child_host;
+         ALTER TABLE claude_launch_staged_candidates DROP COLUMN binding_output_offset;
+         ALTER TABLE claude_launch_staged_candidates DROP COLUMN binding_call_offset;
+         DELETE FROM schema_version WHERE version>=17;",
+    )
+    .unwrap();
+    assert!(
+        sql.query_row(
+            "SELECT count(*) FROM native_checkpoints WHERE source='transcript'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap()
+            > 0
+    );
+    let before = hashes(&home);
+    let mut store = Store::open(&database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 23);
+    assert_eq!(
+        sql.query_row(
+            "SELECT count(*) FROM native_checkpoints WHERE source='transcript'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert!(previews(&sql).is_empty());
+    let report = run(&mut store, &home);
+    assert!(report.complete(), "{report:?}");
+    assert_eq!(previews(&sql), filled);
+    assert_eq!(records(&sql), stored);
+    assert_eq!(before, hashes(&home));
+    // Reopening never resets the checkpoints again.
+    drop(store);
+    let store = Store::open(&database).unwrap();
+    assert!(
+        sql.query_row(
+            "SELECT count(*) FROM native_checkpoints WHERE source='transcript'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap()
+            > 0
+    );
+    drop(store);
 }
 
 fn structural_summary_batch_survives_later_invalid_summary(mixed: bool, failure: bool) {

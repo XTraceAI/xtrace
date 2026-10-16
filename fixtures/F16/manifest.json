@@ -17,7 +17,6 @@
     "fresh": "input/probes/fresh.json",
     "typical": "input/probes/typical.json",
     "connected": "input/probes/connected.json",
-    "no-python3": "input/probes/no-python3.json",
-    "env": "input/probes/env.json"
+    "no-python3": "input/probes/no-python3.json"
   }
 }

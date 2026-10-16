@@ -145,24 +145,13 @@ async function main() {
   const fixtureSmoke = process.argv[4] === '--fixture-smoke';
   if (
     process.platform !== 'darwin' ||
-    (process.argv.length !== 3 && !(process.argv.length === 5 && fixtureSmoke))
+    (process.argv.length !== 4 && !(process.argv.length === 5 && fixtureSmoke))
   )
     throw new Error();
-  const identifier = fixtureSmoke ? process.argv[3] : undefined;
-  if (fixtureSmoke && !isSmokeIdentifier(identifier)) throw new Error();
+  const identifier = process.argv[3];
+  if (!isSmokeIdentifier(identifier)) throw new Error();
   const bundle = resolve(process.argv[2]);
   if (!(await stat(bundle)).isDirectory() || !bundle.endsWith('.app')) throw new Error();
-  let executable;
-  if (!fixtureSmoke) {
-    const plist = spawnSync(
-      '/usr/libexec/PlistBuddy',
-      ['-c', 'Print :CFBundleExecutable', join(bundle, 'Contents/Info.plist')],
-      { encoding: 'utf8' },
-    );
-    executable = plist.stdout?.trim();
-    if (plist.status !== 0 || !executable || !/^[A-Za-z0-9_. -]+$/.test(executable))
-      throw new Error();
-  }
   const temporary = await mkdtemp(join(tmpdir(), 'xtrace-native-smoke-'));
   const directory = fixtureSmoke ? join(temporary, 'staging.noindex') : temporary;
   const script = join(dirname(fileURLToPath(import.meta.url)), 'debug-bundle.swift');
@@ -178,25 +167,17 @@ async function main() {
     await mkdir(directory, { recursive: true });
     const env = smokeEnvironment(directory, process.env, { fixtureSmoke });
     await mkdir(env.XTRACE_NATIVE_HOME);
-    if (fixtureSmoke) {
-      const launched = await launchSmokeBundle(bundle, directory, { identifier, fixtureSmoke });
-      child = launched.child;
-      prepared = launched.prepared;
-    } else {
-      child = spawn(join(bundle, 'Contents/MacOS', executable), [], { stdio: 'ignore', env });
-    }
+    const launched = await launchSmokeBundle(bundle, directory, { identifier, fixtureSmoke });
+    child = launched.child;
+    prepared = launched.prepared;
     await new Promise((resolve, reject) => {
       child.once('spawn', resolve);
       child.once('error', reject);
     });
-    const inspect = spawnSync(
-      inspector,
-      fixtureSmoke ? inspectorArguments(child.pid, prepared) : [String(child.pid), bundle],
-      {
-        stdio: 'pipe',
-        timeout: 35_000,
-      },
-    );
+    const inspect = spawnSync(inspector, inspectorArguments(child.pid, launched.prepared), {
+      stdio: 'pipe',
+      timeout: 35_000,
+    });
     if (inspect.error || inspect.status !== 0 || child.exitCode !== null) throw new Error();
     console.log(
       fixtureSmoke

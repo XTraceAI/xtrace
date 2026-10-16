@@ -8,14 +8,16 @@ response selection, work exclusions and UUID ownership remain authoritative.
 
 The DTO and catalog state this basis:
 
-> Global public token API-equivalent, using recorded service tier; excludes unrecorded regional/speed modifiers, tool fees, and subscriptions.
+> Global public token API-equivalent, using recorded service tier, or OpenAI's default tier for Codex responses that record none; excludes codex-auto-review responses, unrecorded regional/speed modifiers, tool fees, and subscriptions.
 
 This is not an invoice. `price_version` and `price_as_of` identify the supplied
 catalog. `total_usd` is null if any selected observation is unpriced, or when no
 usage observation exists. `priced_subtotal_usd` is a separately named partial
 subtotal, never a substitute for an unknown total. Each unpriced group names the
-recorded model, service tier, reason and observation count. Independently measured
-tokens remain available through the token report.
+recorded model, service tier, reason and observation count. Automatic review responses (`codex-auto-review`) are excluded from all cost
+amounts and selected, priced and unpriced response counts, including responses
+without timestamps. Other unknown models still produce an unpriced reason.
+Saved records, independently measured tokens and agent time remain unchanged.
 
 ## Catalog and arithmetic
 
@@ -44,7 +46,8 @@ Rejected catalogs cannot replace a previously validated object.
 
 ## Public sources and supported identities
 
-The bundled version is `public-token-usd-2026-09-17`, verified on 2026-09-17 UTC.
+The bundled version is `public-token-usd-2026-10-01`, verified on 2026-10-01 UTC
+(the 2026-09-17 entries are unchanged).
 Prices below are USD per million tokens at short-context standard rates:
 
 | Exact model               | Fresh input | Cache read | Flat write | 5m write | 1h write | Output |
@@ -53,6 +56,12 @@ Prices below are USD per million tokens at short-context standard rates:
 | gpt-5.6-sol               |           4 |        0.4 |          5 |        — |        — |     20 |
 | gpt-5.6-terra             |           2 |        0.2 |        2.5 |        — |        — |     12 |
 | gpt-5.6-luna              |         0.2 |       0.02 |       0.25 |        — |        — |    1.2 |
+| gpt-6-sol                 |           2 |        0.2 |        2.5 |        — |        — |     10 |
+| gpt-6.1-sol               |           2 |        0.1 |        2.5 |        — |        — |     10 |
+| gpt-5.5                   |           5 |        0.5 |          5 |        — |        — |     30 |
+| claude-opus-5-5           |           4 |        0.2 |          — |        5 |        8 |     20 |
+| claude-fable-5-1          |          10 |       0.25 |          — |     12.5 |       20 |     50 |
+| claude-fable-5            |          10 |          1 |          — |     12.5 |       20 |     50 |
 | claude-opus-5             |           5 |        0.5 |          — |     6.25 |       10 |     25 |
 | claude-sonnet-5           |           2 |        0.2 |          — |      2.5 |        4 |     10 |
 | claude-haiku-4-5-20251001 |           1 |        0.1 |          — |     1.25 |        2 |      5 |
@@ -69,13 +78,31 @@ context doubles input/cache rates and multiplies output by 1.5 for the entire
 request. Sol explicitly documents the `gpt-5.6` alias; its current promotional
 rates are available at least through November 21, 2026.
 
+[gpt-6-sol](https://developers.openai.com/api/docs/models/gpt-6-sol),
+[gpt-6.1-sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
+[gpt-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) were added from
+those pages and the pricing table on 2026-10-01, with their published default,
+Flex and Priority/Fast rates in both context bands (for example, gpt-6-sol
+default above 272,000 prompt tokens: input 4, output 15). gpt-5.5 publishes no
+long-context Priority/Fast rate, so that band is null and unpriced. OpenAI states
+there is no additional cache-write charge
+([prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)),
+so gpt-5.5's cache-write rate is its input rate (inferred). `codex-auto-review`
+has no published price and stays unpriced.
+
 The [OpenAI response reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
 identifies `default` as standard pricing and documents `flex` and the equivalent
-`priority`/`fast` names. The catalog supports those exact tiers; Flex rates are
-half and Fast rates twice the applicable standard rates. No `standard`, `auto`,
+`priority`/`fast` names. The catalog supports those exact tiers; for the 2026-09-17
+models Flex rates are half and Fast rates twice the applicable standard rates,
+and the 2026-10-01 models carry their own published rates (gpt-5.5 Priority is
+2.5 times standard). No `standard`, `auto`,
 `scale`, `batch`, or `ultrafast` mapping is guessed. The pinned Codex reader does
-not currently supply service tier, so those missing-tier observations remain
-unpriced; this change does not add billing metadata to the reader.
+not supply service tier, and a request that names none is billed at OpenAI's
+default tier, so a Codex observation (host `codex`) with no recorded tier is
+priced at `default` and counted in `assumed_tier_observations` (part of
+`priced_observations`); the Dashboard's cost and Effort's ⓘ dialog say how many. A
+missing tier on any other host stays unpriced (`missing_service_tier`), as does an
+assumed tier the catalog lacks. The reader itself is unchanged.
 
 The [Claude pricing page](https://platform.claude.com/docs/en/about-claude/pricing)
 and [model overview](https://platform.claude.com/docs/en/models/overview) establish
@@ -87,6 +114,12 @@ confirms caching discounts stack with the 50% batch discount. Those two tiers ar
 supported. Contractual priority pricing, request-only `auto`/`standard_only`,
 undocumented aliases and guessed date suffixes remain unpriced. Claude speed and
 regional modifiers are outside the stated basis.
+
+Claude Opus 5.5 (one band, no long-context surcharge), Fable 5.1 and Fable 5 were
+added on 2026-10-01 from the same [pricing page](https://platform.claude.com/docs/en/about-claude/pricing)
+and [claude.com/pricing](https://claude.com/pricing). Their batch rates are half
+of standard; the batch cache-read and cache-write rates are inferred as half, as
+the stacked discount above implies.
 
 ## Synthetic checks
 
@@ -106,7 +139,7 @@ production catalog. Arithmetic includes:
   version. Explicit synthetic service tiers supplement fixtures that omit tier;
   no real absent tier is assumed.
 
-Tests cover the seven bundled IDs, verified tiers, context boundaries, zero
+Tests cover the thirteen bundled IDs, the added Claude TTL-split rates, Codex missing-tier pricing at the assumed default tier, verified tiers, context boundaries, zero
 writes, missing/inconsistent splits, unpriced context, version changes, invalid
 catalogs, overflow, precise/leap membership, read-side schema probes, indexed
 candidate selection and concurrent-write snapshot consistency.

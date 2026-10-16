@@ -283,6 +283,8 @@ fn watch_native(args: std::iter::Skip<std::env::ArgsOs>) -> Result<(), &'static 
                 TailEvent::Stopped { freshness } => {
                     live.store(*freshness == Freshness::Live, Ordering::SeqCst);
                 }
+                // Display relations only: neither freshness nor completeness.
+                TailEvent::SessionCreationsChanged { .. } => {}
             }
             let written = serde_json::to_string(&event)
                 .ok()
@@ -316,6 +318,7 @@ fn watch_native(args: std::iter::Skip<std::env::ArgsOs>) -> Result<(), &'static 
     let tailer = Tailer::start(
         store,
         WatchConfig {
+            usage_probe_dir: None,
             home: options.home.clone(),
             hosts: options.hosts.clone(),
             producer: ProducerSource::Checkout {
@@ -324,6 +327,7 @@ fn watch_native(args: std::iter::Skip<std::env::ArgsOs>) -> Result<(), &'static 
             },
             python: options.python.clone(),
             debounce: Duration::from_millis(250),
+            spawn_limits: xt_ingest::native::session_creation::spawn_limits(),
             probe: None,
         },
         sink,

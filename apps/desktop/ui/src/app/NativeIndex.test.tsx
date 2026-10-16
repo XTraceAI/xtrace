@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import fixture from '../../fixtures/F1.json';
@@ -9,6 +9,11 @@ import type { NativeIndexStatus } from '../data/generated/NativeIndexStatus';
 import { events } from '../data/ipc-names';
 import { ThemeProvider } from '../theme/ThemeProvider';
 import { AppRoutes } from './AppRoutes';
+
+/** Pull-request refresh is not exercised by this test. */
+const unavailable = async (): Promise<never> => {
+  throw new Error('Pull requests are not part of this test.');
+};
 // JSON imports widen literal unions; the export is the generated shape.
 const exported = fixture as FixtureExport;
 const dashboard = async () => exported.dashboards[0];
@@ -35,10 +40,13 @@ const ready: NativeIndexStatus = {
     {
       host: 'claude',
       state: 'complete',
+      needs_attention: false,
       detail: null,
       sessions_imported: 2,
       sessions_partial: 0,
       sessions_skipped: 0,
+      skipped_conversations: [],
+      skipped_conversations_omitted: 0,
       records_new: 6,
       records_enriched: 1,
       diagnostics: 0,
@@ -46,17 +54,22 @@ const ready: NativeIndexStatus = {
     {
       host: 'codex',
       state: 'missing_runtime',
+      needs_attention: true,
       detail: 'python runtime unavailable: python3 on PATH: python3 must be 3.10 or newer',
       sessions_imported: 0,
       sessions_partial: 0,
       sessions_skipped: 0,
+      skipped_conversations: [],
+      skipped_conversations_omitted: 0,
       records_new: 0,
       records_enriched: 0,
       diagnostics: 0,
     },
   ],
+  needs_attention: true,
   reconciles: 3,
   files_scanned: 2,
+  codex_history_gaps: null,
 };
 
 function mount(source: DataSource) {
@@ -76,12 +89,29 @@ it('shows the typed native index status as reported and refreshes it on its even
   let status = ready;
   const source: DataSource = {
     kind: 'native',
+    accountUsage: async () => {
+      throw new Error('Account usage unavailable in this test');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Claude refresh unavailable in this test');
+    },
     appInfo: async () => exported.app_info,
     dbCounts: async () => exported.db_counts,
     dashboard,
     tokensByHost,
-    sessionsList: async () => ({ rows: [], next: null }),
+    today: async () => exported.today,
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
     nativeIndexStatus: vi.fn(async () => status),
+    // These screens open no transcript; the seam is answered, never called.
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: unavailable,
+    pullRequestAnalytics: unavailable,
+    pullRequestSessions: unavailable,
+    refreshPullRequests: unavailable,
+    cancelPullRequestRefresh: unavailable,
     subscribe: vi.fn(async (event, callback) => {
       if (event === events.nativeIndexStatus) listener = callback;
       return () => {};
@@ -94,13 +124,11 @@ it('shows the typed native index status as reported and refreshes it on its even
   expect(within(card).getByText('/opt/homebrew/bin/python3')).toBeTruthy();
   expect(within(card).getByText('Bundled memhub 0.55.0 at d7c94227cc9b')).toBeTruthy();
   expect(
-    within(card).getByText(
-      'complete · 2 imported, 0 partial, 0 skipped, 6 new records, 1 enriched',
-    ),
+    within(card).getByText('Read · 2 imported, 0 partial, 0 skipped, 6 new records, 1 enriched'),
   ).toBeTruthy();
   expect(
     within(card).getByText(
-      'missing_runtime · 0 imported, 0 partial, 0 skipped, 0 new records, 0 enriched · python runtime unavailable: python3 on PATH: python3 must be 3.10 or newer',
+      'Needs Python 3 · 0 imported, 0 partial, 0 skipped, 0 new records, 0 enriched · python runtime unavailable: python3 on PATH: python3 must be 3.10 or newer',
     ),
   ).toBeTruthy();
   // The next status arrives through the event: the query is invalidated and refetched.
@@ -132,16 +160,37 @@ it('polls a transient status until it settles, so a ready event that precedes th
   let status = scanning;
   const source: DataSource = {
     kind: 'native',
+    accountUsage: async () => {
+      throw new Error('Account usage unavailable in this test');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Claude refresh unavailable in this test');
+    },
     appInfo: async () => exported.app_info,
     dbCounts: vi.fn(async () => exported.db_counts),
     dashboard,
     tokensByHost,
-    sessionsList: async () => ({ rows: [], next: null }),
+    today: async () => exported.today,
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
     nativeIndexStatus: vi.fn(async () => status),
     // No event ever arrives: the listener registered after the only `ready`.
+    // These screens open no transcript; the seam is answered, never called.
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: unavailable,
+    pullRequestAnalytics: unavailable,
+    pullRequestSessions: unavailable,
+    refreshPullRequests: unavailable,
+    cancelPullRequestRefresh: unavailable,
     subscribe: async () => () => {},
   };
   mount(source);
+  // The runtime mounts its screens once every listener has registered.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
   await act(async () => {
     await vi.advanceTimersByTimeAsync(50);
   });
@@ -168,12 +217,29 @@ it('reconciles the data queries when the first status seen is already settled', 
   // status refetches them once.
   const source: DataSource = {
     kind: 'native',
+    accountUsage: async () => {
+      throw new Error('Account usage unavailable in this test');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Claude refresh unavailable in this test');
+    },
     appInfo: async () => exported.app_info,
     dbCounts: vi.fn(async () => exported.db_counts),
     dashboard,
     tokensByHost,
-    sessionsList: async () => ({ rows: [], next: null }),
+    today: async () => exported.today,
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
     nativeIndexStatus: vi.fn(async () => ready),
+    // These screens open no transcript; the seam is answered, never called.
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: unavailable,
+    pullRequestAnalytics: unavailable,
+    pullRequestSessions: unavailable,
+    refreshPullRequests: unavailable,
+    cancelPullRequestRefresh: unavailable,
     subscribe: async () => () => {},
   };
   mount(source);
@@ -185,6 +251,75 @@ it('reconciles the data queries when the first status seen is already settled', 
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(1);
 });
 
+it('says a host state covers the supported source scan, and that Cursor IDE database conversations are outside it', async () => {
+  const cursor = {
+    ...ready.hosts[0],
+    host: 'cursor',
+    sessions_imported: 5,
+    records_new: 40,
+    records_enriched: 0,
+  };
+  let status: NativeIndexStatus = { ...ready, hosts: [...ready.hosts, cursor] };
+  let listener: (() => void) | undefined;
+  const source: DataSource = {
+    kind: 'native',
+    accountUsage: async () => {
+      throw new Error('Account usage unavailable in this test');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Claude refresh unavailable in this test');
+    },
+    appInfo: async () => exported.app_info,
+    dbCounts: async () => exported.db_counts,
+    dashboard,
+    tokensByHost,
+    today: async () => exported.today,
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
+    nativeIndexStatus: async () => status,
+    // These screens open no transcript; the seam is answered, never called.
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: unavailable,
+    pullRequestAnalytics: unavailable,
+    pullRequestSessions: unavailable,
+    refreshPullRequests: unavailable,
+    cancelPullRequestRefresh: unavailable,
+    subscribe: async (event, callback) => {
+      if (event === events.nativeIndexStatus) listener = callback;
+      return () => {};
+    },
+  };
+  mount(source);
+  const card = await screen.findByTestId('native-index');
+  // The reported state and counts are unchanged, and no total is invented.
+  expect(
+    within(card).getByText('Read · 5 imported, 0 partial, 0 skipped, 40 new records, 0 enriched'),
+  ).toBeTruthy();
+  const scope = screen.getByTestId('native-index-scope');
+  expect(scope.textContent).toBe(
+    "“Read” and “Read with gaps” describe each host's last scan of the sources this index reads, not all of that host's history. Conversations kept only in the Cursor IDE's database are not read, so they are not in Cursor's counts.",
+  );
+  // A plain note after the host rows: nothing to focus, nothing announced as it changes.
+  expect(card.compareDocumentPosition(scope) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(scope.getAttribute('role')).toBeNull();
+  expect(scope.querySelector('a, button, [tabindex]')).toBeNull();
+
+  // Without a Cursor scan, only the general scope is stated.
+  vi.useFakeTimers();
+  status = ready;
+  await act(async () => {
+    listener?.();
+    await vi.advanceTimersByTimeAsync(600);
+  });
+  vi.useRealTimers();
+  await waitFor(() => expect(screen.queryByText(/^cursor$/)).toBeNull());
+  expect(screen.getByTestId('native-index-scope').textContent).toBe(
+    "“Read” and “Read with gaps” describe each host's last scan of the sources this index reads, not all of that host's history.",
+  );
+});
+
 it('shows the disabled fixture index without inventing hosts', async () => {
   const { FixtureDataSource } = await import('../data/FixtureDataSource');
   mount(new FixtureDataSource(exported));
@@ -194,4 +329,178 @@ it('shows the disabled fixture index without inventing hosts', async () => {
   expect(within(card).getByText('Unavailable: not resolved: the index is disabled')).toBeTruthy();
   expect(within(card).getByText('Unavailable: not verified: the index is disabled')).toBeTruthy();
   expect(within(card).queryByText(/imported/)).toBeNull();
+  // No host was scanned, so there is no scan scope to explain.
+  expect(screen.queryByTestId('native-index-scope')).toBeNull();
+});
+
+it('expands skipped details, states missing facts and truncation, and clears old reasons on host updates', async () => {
+  const { FixtureDataSource } = await import('../data/FixtureDataSource');
+  const id = '00000000-0000-4000-8000-000000000001';
+  const skippedHost: NativeIndexStatus['hosts'][number] = {
+    ...ready.hosts[0],
+    state: 'incomplete',
+    sessions_skipped: 3,
+    skipped_conversations: [
+      { conversation_id: id, reason: 'invalid_transcript' },
+      { conversation_id: null, reason: 'unknown' },
+    ],
+    skipped_conversations_omitted: 1,
+  };
+  let status: NativeIndexStatus = { ...ready, hosts: [skippedHost] };
+  let listener: (() => void) | undefined;
+  const source = new FixtureDataSource(exported);
+  source.nativeIndexStatus = async () => status;
+  source.subscribe = async (event, callback) => {
+    if (event === events.nativeIndexStatus) listener = callback;
+    return () => {};
+  };
+  mount(source);
+  const summary = await screen.findByText('Skipped conversation details (claude)');
+  const details = summary.closest('details')!;
+  expect(details.open).toBe(false);
+  fireEvent.click(summary);
+  expect(details.open).toBe(true);
+  expect(
+    within(details).getByText(`${id} — Conversation data has an invalid format.`),
+  ).toBeTruthy();
+  expect(within(details).getByText('ID unavailable — Reason unavailable.')).toBeTruthy();
+  expect(
+    within(details).getByText('Showing 2 of 3 skipped conversations. 1 more omitted.'),
+  ).toBeTruthy();
+  expect(details.textContent).toContain('including earlier outcomes it retained');
+  fireEvent.click(summary);
+  expect(details.open).toBe(false);
+
+  const update = async (nextHost: NativeIndexStatus['hosts'][number]) => {
+    status = { ...ready, hosts: [nextHost], reconciles: status.reconciles + 1 };
+    vi.useFakeTimers();
+    await act(async () => {
+      listener?.();
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    vi.useRealTimers();
+  };
+  // An incomplete/cancelled scan can still report skips; the facts remain visible.
+  await update({ ...skippedHost, state: 'cancelled' });
+  expect(screen.getByText('Skipped conversation details (claude)')).toBeTruthy();
+  // The next report replaces both the ID and reason, including while expanded.
+  fireEvent.click(screen.getByText('Skipped conversation details (claude)'));
+  await update({
+    ...skippedHost,
+    sessions_skipped: 1,
+    skipped_conversations: [{ conversation_id: null, reason: 'unreadable' }],
+    skipped_conversations_omitted: 0,
+  });
+  expect(screen.queryByText(new RegExp(id))).toBeNull();
+  expect(screen.queryByText(/Reason unavailable/)).toBeNull();
+  expect(screen.getByText('ID unavailable — Conversation file could not be read.')).toBeTruthy();
+  expect(screen.queryByText(/more omitted/)).toBeNull();
+  // A recovered scan, then an empty host, removes the disclosure and its old text.
+  await update(ready.hosts[0]);
+  expect(screen.queryByText(/Skipped conversation details/)).toBeNull();
+  expect(screen.queryByText(/Conversation file could not be read/)).toBeNull();
+  await update({ ...ready.hosts[0], state: 'missing_source', sessions_imported: 0 });
+  expect(screen.queryByText(/Skipped conversation details/)).toBeNull();
+});
+
+it('says which Codex histories the sub-session launch search skipped, and only when it skipped some', async () => {
+  let status: NativeIndexStatus = {
+    ...ready,
+    codex_history_gaps: {
+      unsearched: 2,
+      forks_not_searched: 0,
+      unfinished_line_skipped: 0,
+      folders_not_read: 0,
+      too_many_files: false,
+      exec_launches_without_result: 0,
+    },
+  };
+  let listener: (() => void) | undefined;
+  const source: DataSource = {
+    kind: 'native',
+    accountUsage: async () => {
+      throw new Error('Account usage unavailable in this test');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Claude refresh unavailable in this test');
+    },
+    appInfo: async () => exported.app_info,
+    dbCounts: async () => exported.db_counts,
+    dashboard,
+    tokensByHost,
+    today: async () => exported.today,
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
+    nativeIndexStatus: async () => status,
+    // These screens open no transcript; the seam is answered, never called.
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: unavailable,
+    pullRequestAnalytics: unavailable,
+    pullRequestSessions: unavailable,
+    refreshPullRequests: unavailable,
+    cancelPullRequestRefresh: unavailable,
+    subscribe: async (event, callback) => {
+      if (event === events.nativeIndexStatus) listener = callback;
+      return () => {};
+    },
+  };
+  mount(source);
+  const card = await screen.findByTestId('native-index');
+  const note = await screen.findByTestId('native-index-codex-gaps');
+  expect(note.textContent).toBe(
+    '2 Codex histories could not be searched for sub-session launches. Conversations they may have started are shown as main conversations, not sub-sessions.',
+  );
+  // A plain note after the host rows and the scope note: nothing to focus.
+  expect(card.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(note.querySelector('a, button, [tabindex]')).toBeNull();
+  // The host rows are unchanged by it.
+  expect(
+    within(card).getByText('Read · 2 imported, 0 partial, 0 skipped, 6 new records, 1 enriched'),
+  ).toBeTruthy();
+
+  // Only forks, never searched by design: said plainly, as no failure.
+  vi.useFakeTimers();
+  status = {
+    ...ready,
+    codex_history_gaps: {
+      unsearched: 0,
+      forks_not_searched: 11,
+      unfinished_line_skipped: 0,
+      folders_not_read: 0,
+      too_many_files: false,
+      exec_launches_without_result: 0,
+    },
+  };
+  await act(async () => {
+    listener?.();
+    await vi.advanceTimersByTimeAsync(600);
+  });
+  vi.useRealTimers();
+  await waitFor(() =>
+    expect(screen.getByTestId('native-index-codex-gaps').textContent).toBe(
+      '11 forked Codex conversations are not searched for sub-session launches, because their copied part cannot be told apart from their own. Sub-sessions started from them show as main conversations.',
+    ),
+  );
+
+  // Nothing skipped any more: the note goes.
+  vi.useFakeTimers();
+  status = {
+    ...ready,
+    codex_history_gaps: {
+      unsearched: 0,
+      forks_not_searched: 0,
+      unfinished_line_skipped: 0,
+      folders_not_read: 0,
+      too_many_files: false,
+      exec_launches_without_result: 0,
+    },
+  };
+  await act(async () => {
+    listener?.();
+    await vi.advanceTimersByTimeAsync(600);
+  });
+  vi.useRealTimers();
+  await waitFor(() => expect(screen.queryByTestId('native-index-codex-gaps')).toBeNull());
 });

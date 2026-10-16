@@ -24,7 +24,10 @@ mod assembled {
     use jiff::tz::TimeZone;
     use std::path::PathBuf;
     use xt_fixtures::{Fixture, TempDb};
-    use xt_metrics::{MetricsDb, PriceCatalog};
+    use xt_metrics::{BreakLength, MetricsDb, PriceCatalog, TypingRate};
+    use xt_store::pr_link::{
+        PrConfidence, PrIdentity, PrLinkObservation, PrState, RefreshOutcome, RefreshSuccess,
+    };
     use xtrace_desktop::{
         dashboard::{LANE_LIMIT, LANE_WINDOW_MS, assemble, fixture_catalog},
         dto::*,
@@ -56,11 +59,122 @@ mod assembled {
             TimeZone::UTC,
             MetricClock::Fixture,
             &catalog(),
+            TypingRate::default(),
+            BreakLength::default(),
         )
         .unwrap()
     }
     fn records(value: &serde_json::Value) -> Vec<CanonicalRecord> {
         serde_json::from_value(value.clone()).unwrap()
+    }
+
+    /// A steady user, every day from Sep 15 for `days` days (UTC, synthetic):
+    /// your messages every 30 minutes from 09:00 to 17:00 (8 hours of human time),
+    /// and two sessions whose agents work from 08:00 to 16:00 (16 agent hours).
+    fn steady_user(days: i64) -> TempDb {
+        let mut db = TempDb::empty().unwrap();
+        let at = |day: i64, minutes: i64| {
+            Timestamp::from_millisecond(
+                ms("2026-09-15T00:00:00Z") + day * 86_400_000 + minutes * 60_000,
+            )
+            .unwrap()
+            .to_string()
+        };
+        let event = |id: String, ts: String, human: bool| -> CanonicalRecord {
+            let role = if human { "user" } else { "assistant" };
+            serde_json::from_value(json!({"uuid":id,"type":role,"timestamp":ts,
+                "message":{"role":role,"model":"test-claude",
+                    "content":[{"type":"text","text":"x"}]}}))
+            .unwrap()
+        };
+        for day in 0..days {
+            for session in ["a", "b"] {
+                let mut rows: Vec<_> = (0..=48)
+                    .map(|step| {
+                        event(
+                            format!("{session}-{day}-agent-{step}"),
+                            at(day, 8 * 60 + step * 10),
+                            false,
+                        )
+                    })
+                    .collect();
+                if session == "a" {
+                    rows.extend((0..=16).map(|step| {
+                        event(
+                            format!("a-{day}-you-{step}"),
+                            at(day, 9 * 60 + step * 30),
+                            true,
+                        )
+                    }));
+                }
+                seed(
+                    db.store_mut(),
+                    &format!("{session}-{day}"),
+                    "claude",
+                    Some("cli"),
+                    &rows,
+                );
+            }
+        }
+        db
+    }
+
+    #[test]
+    fn leverage_divides_agent_hours_and_your_hours_over_the_same_whole_days() {
+        // At 08:00 on Oct 5 nothing of that day has happened yet; at 20:00
+        // all of it has.
+        for (now, days) in [("2026-10-05T08:00:00Z", 20), ("2026-10-05T20:00:00Z", 21)] {
+            let db = steady_user(days);
+            let metrics = MetricsDb::open(db.path()).unwrap();
+            let report = assemble(
+                &metrics,
+                7,
+                ms(now),
+                TimeZone::UTC,
+                MetricClock::Fixture,
+                &catalog(),
+                TypingRate::default(),
+                BreakLength::default(),
+            )
+            .unwrap();
+            let human = &report.human_hours.current;
+            assert_eq!(human.by_day.len(), 8, "{now}");
+            // The tile's value is exactly the shown division, and both sides
+            // cover the same whole days.
+            let leverage = &report.tiles.leverage;
+            let agent_h = report.leverage.agent_ms as f64 / 3_600_000.0;
+            let your_h = human.active_ms.unwrap() as f64 / 3_600_000.0;
+            assert_eq!(leverage.value, Some(agent_h / your_h), "{now}");
+            assert_eq!(leverage.value, Some(2.0), "{now}");
+            // The previous whole days are just as steady: no change.
+            assert_eq!(leverage.delta.previous, Some(2.0), "{now}");
+            assert_eq!(leverage.delta.pct, Some(0.0), "{now}");
+            // Each day's own leverage, the first day too, is 2.0; today at
+            // 08:00 has nothing yet on either side, so no point.
+            let days = &report.leverage.by_day;
+            assert_eq!(
+                days.iter().map(|day| day.date.as_str()).collect::<Vec<_>>(),
+                human
+                    .by_day
+                    .iter()
+                    .map(|day| day.date.as_str())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(days[0].value, Some(2.0), "{now}");
+            assert_eq!(days[0].agent_ms, 16 * 3_600_000);
+            for day in &days[..7] {
+                assert_eq!(day.value, Some(2.0), "{now} {}", day.date);
+            }
+            let today = days.last().unwrap();
+            if now.ends_with("08:00:00Z") {
+                assert_eq!(
+                    (today.agent_ms, today.human_ms, today.value),
+                    (0, Some(0), None)
+                );
+            } else {
+                assert_eq!(today.value, Some(2.0));
+            }
+        }
     }
 
     #[test]
@@ -208,17 +322,25 @@ mod assembled {
         );
         // Receipts and index state never make the runtime inventory known.
         assert_eq!(report.capture_inventory, MetricInventory::Unknown);
-        for tile in [&report.tiles.merged_prs, &report.tiles.rule_fires] {
-            assert_eq!(tile.value, None);
-            assert!(tile.reason.is_some());
-            assert_eq!(tile.sample_unit, "unavailable");
-            assert!(tile.delta.suppressed);
-        }
-        let keys: Vec<_> = report.unavailable.iter().map(|u| u.key.as_str()).collect();
+        let rule_fires = &report.tiles.rule_fires;
+        assert_eq!(rule_fires.value, None);
+        assert!(rule_fires.reason.is_some());
+        assert_eq!(rule_fires.sample_unit, "unavailable");
+        assert!(rule_fires.delta.suppressed);
+        // No session links a pull request: every retained fact is known, so
+        // zero merged is a measured zero, not an unavailable metric.
+        let merged = &report.tiles.merged_prs;
         assert_eq!(
-            keys,
-            ["merged_prs", "rule_fires", "environment", "work_type"]
+            (
+                merged.value,
+                merged.reason.as_deref(),
+                merged.rule_id.as_str()
+            ),
+            (Some(0.0), None, "M-19")
         );
+        assert!(merged.delta.suppressed);
+        let keys: Vec<_> = report.unavailable.iter().map(|u| u.key.as_str()).collect();
+        assert_eq!(keys, ["rule_fires"]);
         assert_eq!(report.favorite.rule_id, "M-10");
         assert_eq!(report.favorite.current.model, None);
         assert!(report.favorite.current.unknown_reason.is_some());
@@ -238,7 +360,7 @@ mod assembled {
             assert_eq!((zero.value, zero.reason.as_deref()), (Some(0.0), None));
         }
         for unknown in [
-            &tiles.ratio,
+            &tiles.leverage,
             &tiles.concurrency_max,
             &tiles.concurrency_mean,
             &tiles.hands_off_median,
@@ -252,9 +374,96 @@ mod assembled {
         assert_eq!(report.usage_gate_14d.pct, None);
         assert_eq!((report.lanes.len(), report.lanes_total), (0, 0));
         assert!(report.capture_coverage.is_empty());
+        // Nothing indexed at all, so nothing indexed is missing a timestamp:
+        // a measured zero with no surface rows, never an unknown.
+        assert_eq!(
+            report.untimed_history,
+            DashboardUntimed {
+                records: 0,
+                by_surface: vec![]
+            }
+        );
         assert!(report.tokens_by_host.is_empty());
         assert_eq!(report.days.len(), 30);
         assert!(report.days.iter().all(|day| day.sessions == 0));
+        // Nothing was recorded on any day, which is a measurement: the hero's
+        // own zeros, split thirty ways, never an unknown.
+        assert!(
+            report
+                .days
+                .iter()
+                .all(|day| (day.agent_hours, day.human_hours_est) == (0.0, Some(0.0)))
+        );
+    }
+
+    /// One untimed record per uuid, whatever the source did or did not state.
+    fn untimed(uuid: &str) -> CanonicalRecord {
+        serde_json::from_value(json!({"uuid":uuid,"type":"assistant",
+            "message":{"role":"assistant","model":"test-claude","content":[]}}))
+        .unwrap()
+    }
+
+    #[test]
+    fn dashboard_untimed_history_is_all_indexed_history_and_ignores_the_range() {
+        let mut db = TempDb::empty().unwrap();
+        seed(
+            db.store_mut(),
+            "claude-cli",
+            "claude",
+            Some("cli"),
+            &[
+                assistant("timed", "2026-09-07T12:00:00Z", None),
+                untimed("11111111-1111-4111-8111-111111111111"),
+                untimed("22222222-2222-4222-8222-222222222222"),
+            ],
+        );
+        // A second host whose surface the source never stated.
+        seed(
+            db.store_mut(),
+            "cursor-unknown",
+            "cursor",
+            None,
+            &[untimed("33333333-3333-4333-8333-333333333333")],
+        );
+        let expected = DashboardUntimed {
+            records: 3,
+            by_surface: vec![
+                MetricUntimedSurface {
+                    host: "claude".into(),
+                    surface: Some("cli".into()),
+                    records: 2,
+                },
+                MetricUntimedSurface {
+                    host: "cursor".into(),
+                    surface: None,
+                    records: 1,
+                },
+            ],
+        };
+        for days in [7, 14, 30] {
+            let report = report(&db, days);
+            // The same disclosure whatever range is selected: these records are
+            // in no day, so no range can include or exclude them.
+            assert_eq!(report.untimed_history, expected, "{days}d");
+            assert_eq!(
+                report.untimed_history.records,
+                report
+                    .untimed_history
+                    .by_surface
+                    .iter()
+                    .map(|row| row.records)
+                    .sum::<u64>(),
+                "{days}d"
+            );
+            // And the windowed measurements still hold only the timed record:
+            // the disclosure explains that gap rather than closing it.
+            assert_eq!(report.tiles.sessions.value, Some(1.0), "{days}d");
+            assert_eq!(
+                report.days.iter().map(|day| day.sessions).sum::<u64>(),
+                1,
+                "{days}d"
+            );
+        }
     }
 
     #[test]
@@ -462,6 +671,93 @@ mod assembled {
     }
 
     #[test]
+    fn dashboard_daily_hours_split_the_hero_totals_without_re_measuring_a_day() {
+        let mut db = TempDb::empty().unwrap();
+        // One stretch of work either side of local midnight: a fifteen-minute
+        // agent span, and a human message on the later date whose estimate
+        // reaches back to the agent event on the earlier one. Whatever range is
+        // selected, the days must add up to the hero's own totals.
+        seed(
+            db.store_mut(),
+            "crossing",
+            "claude",
+            Some("cli"),
+            &records(&json!([
+                {"uuid":"a1","type":"assistant","timestamp":"2026-09-05T23:50:00Z",
+                 "message":{"role":"assistant","model":"test-claude","content":[]}},
+                {"uuid":"h1","type":"user","timestamp":"2026-09-06T00:05:00Z",
+                 "message":{"role":"user","content":[{"type":"text","text":"x"}]}},
+            ])),
+        );
+        for days in [7, 14, 30] {
+            let report = report(&db, days);
+            assert_eq!(report.days.len(), days as usize);
+            assert_eq!(report.tiles.agent_hours.value, Some(0.25));
+            assert_eq!(report.tiles.human_hours_est.value, Some(1.0 / 12000.0));
+            let agent: f64 = report.days.iter().map(|day| day.agent_hours).sum();
+            let human: f64 = report
+                .days
+                .iter()
+                .map(|day| day.human_hours_est.unwrap())
+                .sum();
+            assert!((agent - 0.25).abs() < 1e-12, "{agent}");
+            assert!((human - 1.0 / 12000.0).abs() < 1e-12, "{human}");
+            // Ten minutes before midnight and five after, for both measurements:
+            // a day re-measured on its own would have neither the span's earlier
+            // endpoint nor the human estimate's previous agent event.
+            let worked: Vec<_> = report
+                .days
+                .iter()
+                .filter(|day| day.agent_hours > 0.0)
+                .map(|day| (day.date.as_str(), day.agent_hours, day.human_hours_est))
+                .collect();
+            assert_eq!(
+                worked,
+                [
+                    ("2026-09-05", 10.0 / 60.0, Some(0.0)),
+                    ("2026-09-06", 5.0 / 60.0, Some(1.0 / 12000.0)),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn dashboard_daily_human_hours_are_unknown_together_while_agent_stays_measured() {
+        let mut db = TempDb::empty().unwrap();
+        // A user record whose content was never observed cannot be classified,
+        // which leaves this window's human estimate unknown as a whole: no day
+        // may report a human zero, and agent time is unaffected.
+        seed(
+            db.store_mut(),
+            "mixed",
+            "claude",
+            Some("cli"),
+            &records(&json!([
+                {"uuid":"a1","type":"assistant","timestamp":"2026-09-06T09:00:00Z",
+                 "message":{"role":"assistant","model":"test-claude","content":[]}},
+                {"uuid":"u1","type":"user","timestamp":"2026-09-06T09:15:00Z",
+                 "message":{"role":"user"}},
+                {"uuid":"a2","type":"assistant","timestamp":"2026-09-06T09:30:00Z",
+                 "message":{"role":"assistant","model":"test-claude","content":[]}},
+            ])),
+        );
+        let report = report(&db, 7);
+        assert_eq!(report.tiles.human_hours_est.value, None);
+        assert!(report.tiles.human_hours_est.reason.is_some());
+        assert_eq!(report.tiles.agent_hours.value, Some(0.5));
+        assert!(report.days.iter().all(|day| day.human_hours_est.is_none()));
+        assert_eq!(
+            report.days.iter().map(|day| day.agent_hours).sum::<f64>(),
+            0.5
+        );
+        // An unknown human day serializes as null, never as a measured zero.
+        let json = serde_json::to_value(&report).unwrap();
+        for day in json["days"].as_array().unwrap() {
+            assert_eq!(day["human_hours_est"], serde_json::Value::Null);
+        }
+    }
+
+    #[test]
     fn dashboard_agent_hours_per_day_counts_partial_and_dst_local_days() {
         let mut db = TempDb::empty().unwrap();
         seed(
@@ -481,7 +777,17 @@ mod assembled {
         // the 25-hour transition date still contributes one bucket.
         let now = ms("2026-11-03T15:00:00Z");
         let metrics = MetricsDb::open(db.path()).unwrap();
-        let report = assemble(&metrics, 7, now, zone, MetricClock::System, &catalog()).unwrap();
+        let report = assemble(
+            &metrics,
+            7,
+            now,
+            zone,
+            MetricClock::System,
+            &catalog(),
+            TypingRate::default(),
+            BreakLength::default(),
+        )
+        .unwrap();
         assert_eq!(report.days.len(), 8);
         assert_eq!(report.days[0].date, "2026-10-27");
         assert_eq!(report.days[7].date, "2026-11-03");
@@ -490,6 +796,26 @@ mod assembled {
         assert_eq!(report.tiles.agent_hours.value, Some(1.0));
         assert_eq!(report.tiles.agent_hours_per_day.value, Some(1.0 / 8.0));
         assert_eq!(report.tiles.sessions_per_day.value, Some(1.0 / 8.0));
+        // The hour is local to the 25-hour transition date and stays whole in
+        // its one bucket; the partial first and last dates are measured zeros.
+        assert_eq!(transition.agent_hours, 1.0);
+        assert_eq!(
+            report.days.iter().map(|day| day.agent_hours).sum::<f64>(),
+            1.0
+        );
+        assert!(
+            report
+                .days
+                .iter()
+                .filter(|day| day.date != "2026-11-01")
+                .all(|day| day.agent_hours == 0.0)
+        );
+        assert!(
+            report
+                .days
+                .iter()
+                .all(|day| day.human_hours_est == Some(0.0))
+        );
         let note = report.tiles.agent_hours_per_day.note.unwrap();
         assert!(note.contains("divided by 8 reported local date buckets"));
         assert!(note.contains("previous denominator: 8"));
@@ -508,7 +834,9 @@ mod assembled {
                     now(),
                     TimeZone::UTC,
                     MetricClock::Fixture,
-                    &catalog()
+                    &catalog(),
+                    TypingRate::default(),
+                    BreakLength::default()
                 ),
                 Err(StateError::InvalidMetricWindow)
             ));
@@ -535,7 +863,9 @@ mod assembled {
                 now(),
                 TimeZone::UTC,
                 MetricClock::Fixture,
-                &catalog()
+                &catalog(),
+                TypingRate::default(),
+                BreakLength::default()
             ),
             Err(StateError::CountRange)
         ));
@@ -592,6 +922,583 @@ mod assembled {
             Err(StateError::Closed)
         ));
         assert!(matches!(state.tokens_by_host(7), Err(StateError::Closed)));
+    }
+
+    /// The four canonical counters, all measured, with an explicit output.
+    fn counters(output: u64) -> serde_json::Value {
+        json!({"input_tokens":10,"output_tokens":output,
+            "cache_read_input_tokens":0,"cache_creation_input_tokens":0})
+    }
+    /// The four counters at the catalog's standard tier, so the response is
+    /// priced: 10 input and `output` output tokens of `test-claude` cost
+    /// 10 × 1,000 + output × 10,000 nano-USD.
+    fn priced(output: u64) -> serde_json::Value {
+        json!({"input_tokens":10,"output_tokens":output,
+            "cache_read_input_tokens":0,"cache_creation_input_tokens":0,
+            "service_tier":"standard"})
+    }
+    /// One Claude response snapshot, addressable by the (message id, request
+    /// id) pair the M-04 selection groups on.
+    fn response(
+        uuid: &str,
+        timestamp: &str,
+        request: &str,
+        usage: serde_json::Value,
+    ) -> CanonicalRecord {
+        serde_json::from_value(json!({"uuid":uuid,"type":"assistant","timestamp":timestamp,
+            "requestId":request,
+            "message":{"id":format!("response-{request}"),"role":"assistant",
+                "model":"test-claude","content":[],"usage":usage}}))
+        .unwrap()
+    }
+    /// A session carrying the stored context a lane row names it by.
+    fn seed_context(
+        store: &mut Store,
+        id: &str,
+        cwd: Option<&str>,
+        branch: Option<&str>,
+        rows: &[CanonicalRecord],
+    ) {
+        let mut session = SessionMeta::new(id, "claude", SessionSource::Fixture);
+        session.surface = Some("cli".into());
+        session.cwd = cwd.map(str::to_owned);
+        session.git_branch = branch.map(str::to_owned);
+        store.upsert_session(&session, false).unwrap();
+        store.upsert_records(id, rows, false).unwrap();
+    }
+    fn lane_session<'a>(
+        report: &'a DashboardMetrics,
+        id: &str,
+    ) -> Option<&'a DashboardLaneSession> {
+        report.lane_sessions.iter().find(|s| s.session_id == id)
+    }
+
+    #[test]
+    fn dashboard_lane_sessions_name_indexed_context_over_the_fixed_window() {
+        let mut db = TempDb::empty().unwrap();
+        seed_context(
+            db.store_mut(),
+            "ctx-repo",
+            Some("/Users/dev/code/acme-api"),
+            Some("feature/lanes"),
+            &[
+                response("ctx-repo-a", "2026-09-07T10:00:00Z", "r1", priced(7)),
+                response("ctx-repo-b", "2026-09-07T10:05:00Z", "r2", priced(7)),
+                // Inside the selected range but outside the fixed lane window,
+                // with no service tier, so it cannot be priced.
+                response("ctx-repo-old", "2026-09-04T10:00:00Z", "r3", counters(100)),
+                // Before the selected range too: still part of the session.
+                response("ctx-repo-older", "2026-08-01T10:00:00Z", "r4", priced(1)),
+            ],
+        );
+        // An indexed session whose history carries neither repository nor
+        // branch, and measures no usage at all.
+        seed_context(
+            db.store_mut(),
+            "ctx-bare",
+            None,
+            None,
+            &[assistant("ctx-bare-a", "2026-09-07T11:00:00Z", None)],
+        );
+        let report = report(&db, 7);
+        // One row per distinct session the returned spans name, by identifier.
+        assert_eq!(report.lanes_total, 2);
+        let named: Vec<&str> = report
+            .lane_sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(named, ["ctx-bare", "ctx-repo"]);
+        let repo = lane_session(&report, "ctx-repo").unwrap();
+        assert_eq!(
+            (
+                repo.host.as_str(),
+                repo.repo.as_deref(),
+                repo.branch.as_deref()
+            ),
+            (
+                "claude",
+                Some("/Users/dev/code/acme-api"),
+                Some("feature/lanes")
+            )
+        );
+        // The whole session, not the lane window: the responses before these
+        // 48 hours count, and the unpriced one keeps the total open.
+        let cost = repo.cost.as_ref().unwrap();
+        assert_eq!(
+            (
+                cost.selected_observations,
+                cost.priced_observations,
+                cost.unpriced_observations
+            ),
+            (4, 3, 1)
+        );
+        assert_eq!(cost.total_usd, None);
+        assert!((cost.priced_subtotal_usd - 0.00018).abs() < 1e-12);
+        assert_eq!(
+            cost.unpriced,
+            [DashboardUnpriced {
+                model: Some("test-claude".into()),
+                service_tier: None,
+                reason: MetricUnpricedReason::MissingServiceTier,
+                observations: 1,
+            }]
+        );
+        let bare = lane_session(&report, "ctx-bare").unwrap();
+        assert_eq!((bare.repo.as_deref(), bare.branch.as_deref()), (None, None));
+        // Indexed, but no selected response: nothing to price, never a zero.
+        let cost = bare.cost.as_ref().unwrap();
+        assert_eq!((cost.selected_observations, cost.total_usd), (0, None));
+        // The selected range's own totals are untouched by the lane reads.
+        assert_eq!(report.tokens.counters.output_tokens, Some(114));
+        assert_eq!(report.tokens.counters.total_tokens, Some(144));
+        assert_eq!(report.tiles.sessions.value, Some(2.0));
+    }
+
+    #[test]
+    fn dashboard_lane_cost_separates_zero_partial_unpriced_and_empty() {
+        let mut db = TempDb::empty().unwrap();
+        seed_context(
+            db.store_mut(),
+            "zero-cost",
+            None,
+            None,
+            &[response(
+                "zero-a",
+                "2026-09-07T12:00:00Z",
+                "z1",
+                json!({"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,
+                    "cache_creation_input_tokens":0,"service_tier":"standard"}),
+            )],
+        );
+        // One priced response beside one that records no service tier.
+        seed_context(
+            db.store_mut(),
+            "partial-cost",
+            None,
+            None,
+            &[
+                response("partial-a", "2026-09-07T12:00:00Z", "p1", priced(1)),
+                response("partial-b", "2026-09-07T12:01:00Z", "p2", counters(5)),
+            ],
+        );
+        seed_context(
+            db.store_mut(),
+            "unpriced-cost",
+            None,
+            None,
+            &[response(
+                "unpriced-a",
+                "2026-09-07T12:00:00Z",
+                "u1",
+                counters(5),
+            )],
+        );
+        seed_context(
+            db.store_mut(),
+            "no-usage",
+            None,
+            None,
+            &[assistant("none-a", "2026-09-07T12:00:00Z", None)],
+        );
+        let report = report(&db, 7);
+        let cost = |id: &str| lane_session(&report, id).unwrap().cost.clone().unwrap();
+        // A measured zero is a zero.
+        let zero = cost("zero-cost");
+        assert_eq!((zero.priced_observations, zero.total_usd), (1, Some(0.0)));
+        // Partial: a priced subtotal, no total, and the unpriced response named.
+        let partial = cost("partial-cost");
+        assert_eq!(
+            (
+                partial.selected_observations,
+                partial.priced_observations,
+                partial.unpriced_observations,
+                partial.total_usd,
+                partial.priced_subtotal_usd,
+            ),
+            (2, 1, 1, None, 0.00002)
+        );
+        // The unpriced response is named by model, tier and reason.
+        assert_eq!(
+            partial.unpriced,
+            [DashboardUnpriced {
+                model: Some("test-claude".into()),
+                service_tier: None,
+                reason: MetricUnpricedReason::MissingServiceTier,
+                observations: 1,
+            }]
+        );
+        let unpriced = cost("unpriced-cost");
+        assert_eq!(
+            (
+                unpriced.priced_observations,
+                unpriced.unpriced_observations,
+                unpriced.priced_subtotal_usd
+            ),
+            (0, 1, 0.0)
+        );
+        let empty = cost("no-usage");
+        assert_eq!((empty.selected_observations, empty.total_usd), (0, None));
+        // Every response here is inside both windows, so the lane costs are a
+        // slice of the range's own cost report: the same selection and prices.
+        // The DTO carries dollars as f64, so the sum is compared to within a
+        // thousandth of a nano-dollar (the pricer's own unit is the nano-dollar;
+        // xt-metrics checks the same sum exactly in nano-USD).
+        let lanes: f64 = report
+            .lane_sessions
+            .iter()
+            .map(|s| s.cost.as_ref().unwrap().priced_subtotal_usd)
+            .sum();
+        assert!(
+            (lanes - report.cost.priced_subtotal_usd).abs() < 1e-12,
+            "{lanes} != {}",
+            report.cost.priced_subtotal_usd
+        );
+        assert_eq!(
+            report
+                .lane_sessions
+                .iter()
+                .map(|s| s.cost.as_ref().unwrap().selected_observations)
+                .sum::<u64>(),
+            report.cost.selected_observations
+        );
+    }
+
+    #[test]
+    fn dashboard_lane_session_dedupes_copied_responses_across_its_spans() {
+        let mut db = TempDb::empty().unwrap();
+        seed_context(
+            db.store_mut(),
+            "split",
+            Some("/Users/dev/code/acme-api"),
+            None,
+            &[
+                // Two snapshots of one response: the latest is selected once.
+                response("split-a", "2026-09-07T12:00:00Z", "req-1", priced(5)),
+                response("split-b", "2026-09-07T12:00:01Z", "req-1", priced(9)),
+                // More than twenty minutes later: a second span, same session.
+                response("split-c", "2026-09-07T13:30:00Z", "req-2", priced(3)),
+            ],
+        );
+        let report = report(&db, 7);
+        let spans: Vec<_> = report
+            .lanes
+            .iter()
+            .filter(|lane| lane.session_id == "split")
+            .collect();
+        assert_eq!(spans.len(), 2);
+        // Several spans, one context row, and the response counted once.
+        assert_eq!(report.lane_sessions.len(), 1);
+        let split = lane_session(&report, "split").unwrap();
+        let cost = split.cost.as_ref().unwrap();
+        assert_eq!(cost.selected_observations, 2);
+        assert_eq!(cost.total_usd, Some(0.00014));
+        assert_eq!(split.repo.as_deref(), Some("/Users/dev/code/acme-api"));
+        assert_eq!(split.branch, None);
+    }
+
+    #[test]
+    fn dashboard_lane_session_cost_survives_the_display_cap() {
+        let mut db = TempDb::empty().unwrap();
+        // Fillers newer than the capped session's earlier span, so the cap
+        // drops that span while keeping its most recent one.
+        for index in 0..LANE_LIMIT {
+            let id = format!("filler-{index:03}");
+            seed_context(
+                db.store_mut(),
+                &id,
+                None,
+                None,
+                &[assistant(&format!("{id}-a"), "2026-09-07T22:00:00Z", None)],
+            );
+        }
+        seed_context(
+            db.store_mut(),
+            "capped",
+            Some("/Users/dev/code/acme-api"),
+            Some("main"),
+            &[
+                response("capped-old", "2026-09-06T04:00:00Z", "c1", priced(40)),
+                response("capped-new", "2026-09-07T23:30:00Z", "c2", priced(2)),
+            ],
+        );
+        let report = report(&db, 7);
+        assert!(report.lanes_truncated);
+        assert_eq!(report.lanes.len(), LANE_LIMIT);
+        assert_eq!(report.lanes_total, LANE_LIMIT as u64 + 2);
+        // Only the newest span of the capped session is drawn.
+        assert_eq!(
+            report
+                .lanes
+                .iter()
+                .filter(|lane| lane.session_id == "capped")
+                .count(),
+            1
+        );
+        // Context rows describe exactly the sessions the returned spans name.
+        let named: std::collections::BTreeSet<&str> = report
+            .lane_sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        let drawn: std::collections::BTreeSet<&str> = report
+            .lanes
+            .iter()
+            .map(|lane| lane.session_id.as_str())
+            .collect();
+        assert_eq!(named, drawn);
+        assert_eq!(report.lane_sessions.len(), LANE_LIMIT);
+        // The measurement still covers the whole session, including the span
+        // the cap left out.
+        let cost = lane_session(&report, "capped")
+            .unwrap()
+            .cost
+            .clone()
+            .unwrap();
+        assert_eq!(cost.selected_observations, 2);
+        assert_eq!(cost.total_usd, Some(0.00044));
+    }
+
+    #[test]
+    fn dashboard_lane_cap_keeps_the_native_start_of_a_capped_session() {
+        let mut db = TempDb::empty().unwrap();
+        for index in 0..LANE_LIMIT {
+            let id = format!("filler-{index:03}");
+            seed_context(
+                db.store_mut(),
+                &id,
+                None,
+                None,
+                &[assistant(&format!("{id}-a"), "2026-09-07T22:00:00Z", None)],
+            );
+        }
+        let mut capped = SessionMeta::new("capped", "claude", SessionSource::Fixture);
+        capped.started_at_ms = Some(ms("2026-09-06T03:00:00Z"));
+        db.store_mut().upsert_session(&capped, false).unwrap();
+        db.store_mut()
+            .upsert_records(
+                "capped",
+                &[
+                    response("capped-old", "2026-09-06T04:00:00Z", "c1", counters(40)),
+                    response("capped-new", "2026-09-07T23:30:00Z", "c2", counters(2)),
+                ],
+                false,
+            )
+            .unwrap();
+        pr_link(db.store_mut(), "capped", 5, PrConfidence::Exact, 1);
+        let report = report(&db, 7);
+        assert!(report.lanes_truncated);
+        let drawn: Vec<_> = report
+            .lanes
+            .iter()
+            .filter(|lane| lane.session_id == "capped")
+            .collect();
+        assert_eq!(drawn.len(), 1);
+        let row = lane_session(&report, "capped").unwrap();
+        // Neither the cap nor the drawn span moves the recorded start.
+        assert_eq!(row.started_at_ms, Some(ms("2026-09-06T03:00:00Z")));
+        assert!(row.started_at_ms.unwrap() < drawn[0].start_ms);
+        assert_eq!(
+            (
+                row.pr_links,
+                row.cost.as_ref().map(|c| c.selected_observations)
+            ),
+            (Some(1), Some(2))
+        );
+    }
+
+    fn pr_link(store: &mut Store, id: &str, number: u64, confidence: PrConfidence, seen: i64) {
+        store
+            .record_pr_link(&PrLinkObservation {
+                session_id: id.into(),
+                pull_request: PrIdentity::from_parts("example/atlas", number).unwrap(),
+                confidence,
+                first_seen_at: seen,
+                last_seen_at: seen,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn dashboard_lane_sessions_carry_native_start_saved_title_and_recorded_links() {
+        let mut db = TempDb::empty().unwrap();
+        db.store_mut()
+            .set_retention_mode(xt_store::retention::RetentionMode::FullContent)
+            .unwrap();
+        // A native start long before the 48-hour axis and the selected range.
+        let mut old = SessionMeta::new("started-old", "claude", SessionSource::Fixture);
+        old.started_at_ms = Some(ms("2026-06-01T08:30:00Z"));
+        old.title = Some("Saved title".into());
+        db.store_mut().upsert_session(&old, true).unwrap();
+        db.store_mut()
+            .upsert_records(
+                "started-old",
+                &[response("old-a", "2026-09-07T10:00:00Z", "o1", counters(4))],
+                false,
+            )
+            .unwrap();
+        // Valid events in the window and a blank saved title. Claude Code
+        // records no start, so its start is its earliest message.
+        let mut untimed = SessionMeta::new("start-unknown", "claude", SessionSource::Fixture);
+        untimed.title = Some("   ".into());
+        db.store_mut().upsert_session(&untimed, true).unwrap();
+        db.store_mut()
+            .upsert_records(
+                "start-unknown",
+                &[assistant("unknown-a", "2026-09-07T11:00:00Z", None)],
+                false,
+            )
+            .unwrap();
+        // Another host that recorded no start: its start stays unknown.
+        let codex = SessionMeta::new("codex-start-unknown", "codex", SessionSource::Fixture);
+        db.store_mut().upsert_session(&codex, false).unwrap();
+        db.store_mut()
+            .upsert_records(
+                "codex-start-unknown",
+                &[assistant("codex-a", "2026-09-07T11:30:00Z", None)],
+                false,
+            )
+            .unwrap();
+        // Indexed, in the window, never linked.
+        seed_context(
+            db.store_mut(),
+            "unlinked",
+            None,
+            None,
+            &[assistant("unlinked-a", "2026-09-07T12:00:00Z", None)],
+        );
+        let before: Vec<_> = [7, 30].map(|days| report(&db, days)).into();
+        {
+            let store = db.store_mut();
+            // Exact, sha and inferred evidence; several PRs on one session; one
+            // PR shared with another session; a link observed long before any
+            // window.
+            pr_link(store, "started-old", 1, PrConfidence::Exact, 1);
+            pr_link(
+                store,
+                "started-old",
+                2,
+                PrConfidence::Sha,
+                ms("2026-09-07T10:00:00Z"),
+            );
+            pr_link(store, "started-old", 3, PrConfidence::Inferred, 1);
+            pr_link(store, "start-unknown", 1, PrConfidence::Inferred, 1);
+            // Merge and refresh state never change what is counted: one PR is
+            // refreshed as merged, one as open, the third never refreshed.
+            for (number, state) in [(1, PrState::Merged), (2, PrState::Open)] {
+                store
+                    .record_pr_refresh(&RefreshOutcome::Success(RefreshSuccess {
+                        pull_request: PrIdentity::from_parts("example/atlas", number).unwrap(),
+                        attempted_at: 100,
+                        title: format!("Synthetic {number}"),
+                        state,
+                        merged_at: (state == PrState::Merged)
+                            .then(|| "2026-09-07T09:00:00Z".into()),
+                        additions: 1,
+                        deletions: 1,
+                        head_ref_name: "feature/synthetic".into(),
+                    }))
+                    .unwrap();
+            }
+        }
+        for (days, before) in [7, 30].into_iter().zip(before) {
+            let report = report(&db, days);
+            let old = lane_session(&report, "started-old").unwrap();
+            // The stored start, not the first span inside the window.
+            assert_eq!(old.started_at_ms, Some(ms("2026-06-01T08:30:00Z")));
+            assert!(old.started_at_ms.unwrap() < report.lane_start_ms);
+            assert_eq!(old.title.as_deref(), Some("Saved title"));
+            assert_eq!((old.pr_links, old.inferred_pr_links), (Some(3), Some(1)));
+            let unknown = lane_session(&report, "start-unknown").unwrap();
+            assert_eq!(
+                (unknown.started_at_ms, unknown.title.as_deref()),
+                (Some(ms("2026-09-07T11:00:00Z")), None)
+            );
+            let codex = lane_session(&report, "codex-start-unknown").unwrap();
+            assert_eq!(codex.started_at_ms, None);
+            assert_eq!(
+                (unknown.pr_links, unknown.inferred_pr_links),
+                (Some(1), Some(1))
+            );
+            let unlinked = lane_session(&report, "unlinked").unwrap();
+            // Indexed with no link: a measured zero, not unknown.
+            assert_eq!(
+                (unlinked.pr_links, unlinked.inferred_pr_links),
+                (Some(0), Some(0))
+            );
+            // Adding links changes no row, span, total or session tile: only
+            // the counts. The merged-PR tile legitimately counts the linked PR
+            // refreshed as merged (M-19), so it alone is compared apart.
+            assert_eq!(report.lanes, before.lanes);
+            let mut tiles = report.tiles.clone();
+            tiles.merged_prs = before.tiles.merged_prs.clone();
+            assert_eq!(tiles, before.tiles);
+            assert_eq!(report.tiles.merged_prs.value, Some(1.0));
+            assert_eq!(report.tokens, before.tokens);
+            assert_eq!(
+                report
+                    .lane_sessions
+                    .iter()
+                    .map(|s| (&s.session_id, s.cost.clone(), s.started_at_ms))
+                    .collect::<Vec<_>>(),
+                before
+                    .lane_sessions
+                    .iter()
+                    .map(|s| (&s.session_id, s.cost.clone(), s.started_at_ms))
+                    .collect::<Vec<_>>()
+            );
+        }
+        // The selected range never filters the counts or the start.
+        let (week, month) = (report(&db, 7), report(&db, 30));
+        assert_eq!(week.lane_sessions, month.lane_sessions);
+    }
+
+    /// Lane context and lane costs are read inside the one dashboard
+    /// snapshot, by construction: both reads happen only in `lane_report`, and
+    /// `lane_report` is called only from inside `read_snapshot`'s closure. The
+    /// spans are read only by `lane_spans`, which `lane_report` calls; the
+    /// fixture span-detail export calls it too, for spans alone.
+    #[test]
+    fn dashboard_lane_reads_stay_inside_one_snapshot_by_construction() {
+        let module = include_str!("../src/dashboard.rs");
+        let body_of = |name: &str| {
+            let (_, after) = module.split_once(name).expect(name);
+            after.split_once("\n}\n").expect("body").0
+        };
+        let body = body_of("fn lane_report(");
+        // Context is read three times: for the returned sessions, for the
+        // parents they link that have no span, and for the sub-sessions under
+        // them that have none; cost twice, for the returned sessions and for
+        // those sub-sessions. Every one of these reads is lane_report's.
+        for (read, times) in [
+            ("db.session_context(", 3),
+            ("db.whole_session_costs(", 2),
+            ("db.sub_sessions(", 1),
+            ("lane_spans(db, lane_window)", 1),
+        ] {
+            assert_eq!(
+                module.matches(read).count(),
+                times,
+                "{read} is read elsewhere"
+            );
+            assert_eq!(
+                body.matches(read).count(),
+                times,
+                "{read} is not read by lane_report"
+            );
+        }
+        let read = "db.active_spans(lane_window)";
+        assert_eq!(module.matches(read).count(), 1, "{read} is read elsewhere");
+        assert!(body_of("fn lane_spans(").contains(read));
+        let (_, assembled) = module.split_once("pub fn assemble(").expect("assemble");
+        let (snapshot, _) = assembled
+            .split_once("    })?;")
+            .expect("assemble read snapshot");
+        let (_, closure) = snapshot
+            .split_once("db.read_snapshot(|db| {")
+            .expect("one snapshot");
+        assert!(closure.contains("lane_report(db, lane_window, catalog)?"));
+        assert_eq!(module.matches("lane_report(").count(), 2);
     }
 }
 

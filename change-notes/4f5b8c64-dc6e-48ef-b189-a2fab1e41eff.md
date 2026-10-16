@@ -1,0 +1,1 @@
+- Run Dashboard index states and Rulebook layout scenarios as separate browser cases while keeping every existing assertion and time limit.

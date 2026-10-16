@@ -1,168 +1,119 @@
-use crate::{Error, MetricsDb, Result, TypingRate, Window};
+use crate::{ActiveSpanReport, Error, MetricsDb, Result, TypingRate, Window};
+use jiff::tz::TimeZone;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use xt_store::timestamp::{self, InstantKey};
 
-pub(crate) const QUERY: &str = "SELECT session_id,uuid,ts,ts_ms,is_human,text_len
+pub(crate) const QUERY: &str = "SELECT ts,human_is_eligible,human_text_len,human_excluded
     FROM v_session_events WHERE ts_ms>=?1 AND ts_ms<?2";
-const MAX_GAP_MS: i128 = 30 * 60 * 1000;
 
-/// Human wall time is estimated and unioned across sessions. The comparison sums
-/// each session's union, not its overlapping raw intervals. Unknown classification
-/// or a needed typing length leaves both human totals and the ratio unknown.
+/// Prompt-effort estimate: counted characters divided by the configured typing
+/// rate. This is not measured attention or a claim that retained text was typed.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HumanTime {
     pub human_minutes_est: Option<f64>,
+    /// Compatibility field: character sums are additive across sessions, so
+    /// this is always the same estimate as `human_minutes_est`.
     pub summed_session_minutes_est: Option<f64>,
     pub agent_minutes: f64,
-    pub agent_to_human_ratio: Option<f64>,
+    /// Each message belongs to the local day containing its exact timestamp.
+    /// A missing classification or counted length makes every bucket unknown.
+    pub by_day: Vec<DayHuman>,
 }
 
-struct Event {
-    instant: InstantKey,
-    uuid: String,
-    ms: i64,
-    human: Option<bool>,
-    chars: Option<i64>,
-}
-
-// Coordinates are milliseconds multiplied by the common positive typing rate.
-// A typing duration is therefore exactly chars * 60_000 in this private domain.
-// Subtraction/union happens before conversion to f64, even at large epochs.
-type Interval = (i128, i128);
-fn union_duration(intervals: &mut [Interval]) -> Result<i128> {
-    intervals.sort_unstable();
-    let mut end = None;
-    let mut total = 0_i128;
-    for &(start, stop) in intervals.iter() {
-        let start = end.map_or(start, |previous| start.max(previous));
-        if stop > start {
-            total = total
-                .checked_add(stop.checked_sub(start).ok_or(Error::CounterOverflow)?)
-                .ok_or(Error::CounterOverflow)?;
-        }
-        end = Some(end.map_or(stop, |previous| stop.max(previous)));
-    }
-    Ok(total)
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DayHuman {
+    pub date: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub minutes_est: Option<f64>,
 }
 
 impl MetricsDb {
-    /// Both human intervals and the existing active-span numerator observe one
-    /// read-only snapshot. If a caller already owns a transaction, reuse it.
-    pub fn human_time(&self, window: Window, typing_rate: TypingRate) -> Result<HumanTime> {
-        let snapshot = self
-            .connection
-            .is_autocommit()
-            .then(|| self.connection.unchecked_transaction())
-            .transpose()?;
-        let agent_minutes = self.active_spans(window)?.active_ms as f64 / 60_000.0;
-        let human = self.human_durations(window, typing_rate)?;
-        let scale = f64::from(typing_rate.characters_per_minute()) * 60_000.0;
-        let human_minutes_est = human.map(|(wall, _)| wall as f64 / scale);
-        let summed_session_minutes_est = human.map(|(_, summed)| summed as f64 / scale);
-        let agent_to_human_ratio = human_minutes_est
-            .filter(|minutes| *minutes > 0.0)
-            .map(|minutes| agent_minutes / minutes);
-        let report = HumanTime {
-            human_minutes_est,
-            summed_session_minutes_est,
-            agent_minutes,
-            agent_to_human_ratio,
-        };
-        if let Some(snapshot) = snapshot {
-            snapshot.commit()?;
-        }
-        Ok(report)
-    }
-
-    fn human_durations(
+    /// Character totals and measured agent spans share one read-only snapshot.
+    /// Exact source instants decide membership, including submillisecond and
+    /// leap-second boundaries. No duration is clipped, capped or unioned.
+    pub fn human_time(
         &self,
         window: Window,
         typing_rate: TypingRate,
-    ) -> Result<Option<(i128, i128)>> {
+        zone: TimeZone,
+    ) -> Result<HumanTime> {
+        self.read_snapshot(|db| db.read_human_time(window, typing_rate, zone, None))
+    }
+
+    /// [`MetricsDb::human_time`] inside the caller's snapshot. `measured` is
+    /// this window's [`MetricsDb::active_spans`] already read in that same
+    /// snapshot; without it the spans are read here.
+    pub(crate) fn read_human_time(
+        &self,
+        window: Window,
+        typing_rate: TypingRate,
+        zone: TimeZone,
+        measured: Option<&ActiveSpanReport>,
+    ) -> Result<HumanTime> {
+        let days = window.local_days(zone)?;
+        let active_ms = match measured {
+            Some(spans) => spans.active_ms,
+            None => self.active_spans(window)?.active_ms,
+        };
+        let agent_minutes = active_ms as f64 / 60_000.0;
         let start = InstantKey::from_millisecond(window.start_ms());
         let end = InstantKey::from_millisecond(window.end_ms());
-        let rate = i128::from(typing_rate.characters_per_minute());
-        let scaled = |ms: i64| {
-            i128::from(ms)
-                .checked_mul(rate)
-                .ok_or(Error::CounterOverflow)
-        };
-        let lower = scaled(window.start_ms())?;
-        let upper = scaled(window.end_ms())?;
-        let mut sessions = BTreeMap::<String, Vec<Event>>::new();
+        let day_ends: Vec<_> = days
+            .iter()
+            .map(|day| InstantKey::from_millisecond(day.window.end_ms()))
+            .collect();
+        let mut total = Some(0_u64);
+        let mut daily = vec![0_u64; days.len()];
         let mut statement = self.connection.prepare(QUERY)?;
         let mut rows = statement.query([window.start_ms(), window.candidate_end_ms()?])?;
         while let Some(row) = rows.next()? {
-            let raw: String = row.get(2)?;
+            let raw: String = row.get(0)?;
             let instant = timestamp::parse(&raw)
                 .map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        2,
+                        0,
                         rusqlite::types::Type::Text,
                         Box::new(error),
                     )
                 })?
                 .0;
-            if instant < start || instant >= end {
+            if instant < start || instant >= end || row.get::<_, bool>(3)? {
                 continue;
             }
-            sessions.entry(row.get(0)?).or_default().push(Event {
-                instant,
-                uuid: row.get(1)?,
-                ms: row.get(3)?,
-                human: row.get(4)?,
-                chars: row.get(5)?,
-            });
-        }
-        let mut all = Vec::new();
-        let mut summed = 0_i128;
-        for events in sessions.values_mut() {
-            events.sort_unstable_by(|a, b| {
-                a.instant.cmp(&b.instant).then_with(|| a.uuid.cmp(&b.uuid))
-            });
-            let mut previous_agent = None;
-            let mut intervals = Vec::new();
-            for event in events {
-                match event.human {
-                    None => return Ok(None),
-                    Some(false) => previous_agent = Some(event.ms),
-                    Some(true) => {
-                        let duration = if let Some(previous) = previous_agent {
-                            i128::from(event.ms)
-                                .checked_sub(i128::from(previous))
-                                .ok_or(Error::CounterOverflow)?
-                                .clamp(0, MAX_GAP_MS)
-                                .checked_mul(rate)
-                                .ok_or(Error::CounterOverflow)?
-                        } else {
-                            let Some(chars) = event.chars else {
-                                return Ok(None);
-                            };
-                            let chars = u64::try_from(chars)
-                                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(5, chars))?;
-                            i128::from(chars)
-                                .checked_mul(60_000)
-                                .ok_or(Error::CounterOverflow)?
-                        };
-                        let stop = scaled(event.ms)?;
-                        let begin = stop
-                            .checked_sub(duration)
-                            .ok_or(Error::CounterOverflow)?
-                            .max(lower);
-                        let stop = stop.min(upper);
-                        if stop > begin {
-                            intervals.push((begin, stop));
-                        }
-                    }
+            match row.get::<_, Option<bool>>(1)? {
+                Some(false) => {}
+                None => total = None,
+                Some(true) => {
+                    let Some(chars) = crate::counts::counter(row, 2)? else {
+                        total = None;
+                        continue;
+                    };
+                    total = crate::counts::add(total, Some(chars))?;
+                    let day = day_ends.partition_point(|end| *end <= instant);
+                    daily[day] = daily[day]
+                        .checked_add(chars)
+                        .ok_or(Error::CounterOverflow)?;
                 }
             }
-            summed = summed
-                .checked_add(union_duration(&mut intervals)?)
-                .ok_or(Error::CounterOverflow)?;
-            all.extend(intervals);
         }
-        Ok(Some((union_duration(&mut all)?, summed)))
+        let rate = f64::from(typing_rate.characters_per_minute());
+        let human_minutes_est = total.map(|chars| chars as f64 / rate);
+        Ok(HumanTime {
+            human_minutes_est,
+            summed_session_minutes_est: human_minutes_est,
+            agent_minutes,
+            by_day: days
+                .iter()
+                .zip(daily)
+                .map(|(day, chars)| DayHuman {
+                    date: day.date.to_string(),
+                    start_ms: day.window.start_ms(),
+                    end_ms: day.window.end_ms(),
+                    minutes_est: total.map(|_| chars as f64 / rate),
+                })
+                .collect(),
+        })
     }
 }
 
@@ -187,7 +138,7 @@ mod tests {
         let db = fixture();
         let metrics = MetricsDb::open(db.path()).unwrap();
         let writer = Connection::open(db.path()).unwrap();
-        writer.execute_batch("DROP VIEW v_session_events; CREATE VIEW v_session_events AS SELECT session_id,host,ts_ms,human_snapshot_write(ts) AS ts,uuid,is_human,text_len,role,tool_use_count FROM v_records WHERE ts_ms IS NOT NULL").unwrap();
+        writer.execute_batch("DROP VIEW v_session_events; CREATE VIEW v_session_events AS SELECT session_id,host,ts_ms,human_snapshot_write(ts) AS ts,uuid,is_human,text_len,human_is_eligible,human_text_len,human_excluded,role,tool_use_count,confirmed_automated_input FROM v_records WHERE ts_ms IS NOT NULL").unwrap();
         let path = db.path().to_owned();
         let written = std::sync::atomic::AtomicBool::new(false);
         metrics
@@ -204,13 +155,15 @@ mod tests {
                 },
             )
             .unwrap();
-        let report = metrics.human_time(window(), TypingRate::default()).unwrap();
-        assert_eq!(report.human_minutes_est, Some(8.135));
-        assert_eq!(report.agent_to_human_ratio, Some(23.0 / 8.135));
+        let report = metrics
+            .human_time(window(), TypingRate::default(), TimeZone::UTC)
+            .unwrap();
+        assert_eq!(report.human_minutes_est, Some(0.675));
+        assert_eq!(report.agent_minutes, 23.0);
         assert!(metrics.connection.is_autocommit());
         assert_eq!(
             metrics
-                .human_time(window(), TypingRate::default())
+                .human_time(window(), TypingRate::default(), TimeZone::UTC)
                 .unwrap()
                 .human_minutes_est,
             Some(0.0)
@@ -231,31 +184,19 @@ mod tests {
             .unwrap();
         assert_eq!(
             metrics
-                .human_time(window(), TypingRate::default())
+                .human_time(window(), TypingRate::default(), TimeZone::UTC)
                 .unwrap()
                 .human_minutes_est,
-            Some(8.135)
+            Some(0.675)
         );
         assert!(!metrics.connection.is_autocommit());
         transaction.commit().unwrap();
         assert_eq!(
             metrics
-                .human_time(window(), TypingRate::default())
+                .human_time(window(), TypingRate::default(), TimeZone::UTC)
                 .unwrap()
                 .human_minutes_est,
             Some(0.0)
         );
-    }
-    #[test]
-    fn union_adjacent_nested_disjoint_and_checked_overflow() {
-        assert_eq!(
-            union_duration(&mut [(0, 10), (5, 8), (10, 20), (30, 40)]).unwrap(),
-            30
-        );
-        assert_eq!(union_duration(&mut []).unwrap(), 0);
-        assert!(matches!(
-            union_duration(&mut [(i128::MIN, i128::MAX)]),
-            Err(Error::CounterOverflow)
-        ));
     }
 }

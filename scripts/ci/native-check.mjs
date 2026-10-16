@@ -5,6 +5,7 @@ import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { installAbout, installSyft } from '../supply-chain/install-tools.mjs';
+import { readPin } from './plugin-pin.mjs';
 
 export async function checkNative({
   base,
@@ -13,13 +14,14 @@ export async function checkNative({
   repo = process.cwd(),
   platform = process.platform,
   run = spawnSync,
+  environment = process.env,
   install = async () => [await installSyft(), await installAbout()],
 } = {}) {
   if (release && fixtureSmoke)
     throw new Error('--fixture-smoke cannot be combined with --release.');
   if (platform !== 'darwin' || !/^[a-f0-9]{40}$/.test(base ?? ''))
     throw new Error('Native checks require macOS and --base with a full reviewed commit SHA.');
-  const env = { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' };
+  const env = { ...environment, GH_TOKEN: '', GITHUB_TOKEN: '' };
   const execute = (command, args, options = {}) => {
     const result = run(command, args, { cwd: repo, env, stdio: 'inherit', ...options });
     if (result.error || result.signal || result.status !== 0)
@@ -60,6 +62,36 @@ export async function checkNative({
       '-D',
       'warnings',
     ]);
+    if (env.AGENT_PLUGINS_SOURCE === 'bundle') {
+      // The first workspace test already runs the Python conformance harnesses;
+      // they need the same verifier and clean interpreter environment as the hook.
+      const pin = await readPin(repo);
+      env.AGENT_PLUGINS_DIR = resolve(
+        repo,
+        env.AGENT_PLUGINS_DIR || join('vendor/agent-plugins', pin.plugin_root),
+      );
+      env.XTRACE_CONFORMANCE_BUNDLE_VERIFIER = resolve(
+        repo,
+        env.CARGO_TARGET_DIR || 'target',
+        'debug/examples/conformance_bundle',
+      );
+      env.PYTHONDONTWRITEBYTECODE = '1';
+      for (const key of ['PYTHONOPTIMIZE', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP'])
+        delete env[key];
+      execute('cargo', ['build', '-p', 'xt-ingest', '--example', 'conformance_bundle', '--locked']);
+      execute(env.PYTHON || 'python3', [
+        '-B',
+        '-c',
+        [
+          'import sys; from pathlib import Path',
+          'if sys.version_info < (3, 10) or sys.flags.optimize: raise RuntimeError("Conformance requires Python 3.10+ with assertions active")',
+          'sys.path.insert(0, "scripts/conformance")',
+          'from bundle_source import verify_bundle',
+          'print("pinned producer bundle " + verify_bundle(Path(sys.argv[1])))',
+        ].join('\n'),
+        env.AGENT_PLUGINS_DIR,
+      ]);
+    }
     execute('cargo', ['test', '--workspace', '--all-features', '--locked']);
     for (const hook of ['plugin-conformance', 'dto'])
       execute('node', ['scripts/ci/run-hook.mjs', hook]);
@@ -67,42 +99,42 @@ export async function checkNative({
     execute('pnpm', ['sbom']);
     execute('pnpm', ['notices:check']);
     execute('node', ['scripts/security/scan-secrets.mjs', '--content', 'artifacts/sbom.cdx.json']);
-    if (fixtureSmoke) {
-      // Compile the test identity into Tauri's singleton too. Copy the cache,
-      // then build normal code before building and launching only fixed F1.
-      const identifier = `ai.xtrace.app.test.${randomUUID()}`;
-      const testTarget = join(trusted, 'smoke-target.noindex');
-      execute('cp', ['-c', '-R', join(repo, 'target'), testTarget]);
-      env.CARGO_TARGET_DIR = testTarget;
-      const build = [
+    // A test identity must be compiled into Tauri, including its singleton
+    // socket. A plist-only change cannot isolate it from the installed app.
+    const testIdentifier = `ai.xtrace.app.test.${randomUUID()}`;
+    const testTarget = join(trusted, fixtureSmoke ? 'smoke-target.noindex' : 'smoke-target');
+    // APFS clones reuse our completed build cache without writable links back
+    // to it. All test build outputs are disposable and separate from source.
+    execute('cp', ['-c', '-R', join(repo, 'target'), testTarget]);
+    env.CARGO_TARGET_DIR = testTarget;
+    const testConfig = JSON.stringify({ identifier: testIdentifier });
+    execute('pnpm', ['tauri', 'build', '--debug', '--bundles', 'app', '--config', testConfig]);
+    // Keep the normal build above checked, but launch only the explicitly
+    // requested fixture build. Its provider readers return synthetic data.
+    if (fixtureSmoke)
+      execute('pnpm', [
         'tauri',
         'build',
         '--debug',
         '--bundles',
         'app',
         '--config',
-        JSON.stringify({ identifier }),
-      ];
-      execute('pnpm', build);
-      execute('pnpm', [...build, '--features', 'fixtures']);
-      execute('node', [
-        'scripts/ci/debug-bundle.mjs',
-        join(testTarget, 'debug/bundle/macos/XTrace Desktop.app'),
-        identifier,
-        '--fixture-smoke',
+        testConfig,
+        '--features',
+        'fixtures',
       ]);
-    } else {
-      execute('pnpm', ['tauri', 'build', '--debug', '--bundles', 'app']);
-      execute('node', [
-        'scripts/ci/debug-bundle.mjs',
-        'target/debug/bundle/macos/XTrace Desktop.app',
-      ]);
-    }
+    execute('node', [
+      'scripts/ci/debug-bundle.mjs',
+      join(testTarget, 'debug/bundle/macos/XTrace Desktop.app'),
+      testIdentifier,
+      ...(fixtureSmoke ? ['--fixture-smoke'] : []),
+    ]);
     if (release) {
-      execute('pnpm', ['tauri', 'build', '--bundles', 'app']);
+      execute('pnpm', ['tauri', 'build', '--bundles', 'app', '--config', testConfig]);
       execute('node', [
         'scripts/ci/debug-bundle.mjs',
-        'target/release/bundle/macos/XTrace Desktop.app',
+        join(testTarget, 'release/bundle/macos/XTrace Desktop.app'),
+        testIdentifier,
       ]);
     }
     if (git('rev-parse', 'HEAD') !== head)
@@ -113,7 +145,7 @@ export async function checkNative({
       base,
       macOS: version,
       release,
-      ...(fixtureSmoke ? { smokeMode: 'fixture-f1' } : {}),
+      smokeMode: fixtureSmoke ? 'fixture-f1' : 'native',
     };
   } finally {
     await rm(trusted, { recursive: true, force: true });

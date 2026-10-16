@@ -378,10 +378,56 @@ impl Store {
         .collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Several reads through this store that must agree with each other: the
+    /// native index writes on its own connection. `read` must only read.
+    pub fn in_read_snapshot<T>(&self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let snapshot = self.connection.unchecked_transaction()?;
+        let value = read(self)?;
+        snapshot.commit()?;
+        Ok(value)
+    }
+
+    /// The number of indexed Claude stop summaries in `[start, end)`, and at
+    /// most `limit` of them in session order. The caller applies the precise
+    /// selected window to these timestamps before touching any original
+    /// source, and reads both through one snapshot.
+    pub fn claude_hook_summaries(
+        &self,
+        start: &str,
+        end: &str,
+        limit: usize,
+    ) -> Result<(usize, Vec<HookSummaryRow>)> {
+        const SELECTED: &str = "FROM tool_uses t JOIN sessions s ON s.session_id=t.session_id
+             WHERE t.uuid IS NULL AND t.source='transcript' AND t.kind='hook'
+               AND t.name='stop_hook_summary' AND s.host='claude' AND s.kind='user'
+               AND t.event_ts IS NOT NULL
+               AND xt_timestamp_cmp(t.event_ts,?1)>=0
+               AND xt_timestamp_cmp(t.event_ts,?2)<0";
+        let total: i64 = self.connection.query_row(
+            &format!("SELECT COUNT(*) {SELECTED}"),
+            params![start, end],
+            |row| row.get(0),
+        )?;
+        let total = usize::try_from(total)
+            .map_err(|_| Error::InvalidInput("hook summary count is out of range"))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| Error::InvalidInput("hook summary limit is out of range"))?;
+        let rows = self.connection.prepare(&format!(
+            "SELECT t.session_id,t.source,t.source_event_id,t.name,t.kind,t.server,t.tool,t.skill,t.event_ts,s.native_session_id
+             {SELECTED}
+             ORDER BY t.session_id,t.source_event_id LIMIT ?3"
+        ))?
+        .query_map(params![start, end, limit], |row| Ok((tool_event_from_row(row, 0)?, row.get(9)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+        Ok((total, rows))
+    }
     pub fn resolved_tool_events(&self) -> Result<Vec<ToolEventResolution>> {
         resolved_tool_events(&self.connection)
     }
 }
+
+/// A saved stop summary and its session's native identifier, if recorded.
+pub type HookSummaryRow = (ToolEvent, Option<String>);
 
 /// Match a complete stored group under the caller's immediate transaction.
 /// Canonical ownership takes priority for new identities; saved groups must

@@ -1,9 +1,16 @@
 import { isMeasured, type MetricValue } from './format';
 import '../styles/metrics.css';
 
-export function Unmeasured({ reason = 'This value was not measured' }: { reason?: string }) {
+export function Unmeasured({
+  reason = 'This value was not measured',
+  titled = true,
+}: {
+  reason?: string;
+  /** False where a definition popover already states the reason on hover. */
+  titled?: boolean;
+}) {
   return (
-    <span className="xt-unmeasured" title={reason}>
+    <span className="xt-unmeasured" title={titled ? reason : undefined}>
       <span aria-hidden="true">—</span>
       <span className="sr-only">Unmeasured: {reason}</span>
     </span>
@@ -16,6 +23,10 @@ export interface MetricCellProps {
   reason?: string;
   size?: 10.5 | 11 | 18 | 24 | 30;
   align?: 'left' | 'right';
+  /** A plain-words note on a measured value, shown on hover. */
+  title?: string;
+  /** False where a definition popover already states the reason on hover. */
+  reasonTitle?: boolean;
 }
 
 export function MetricCell({
@@ -24,10 +35,13 @@ export function MetricCell({
   reason,
   size = 11,
   align = 'left',
+  title,
+  reasonTitle = true,
 }: MetricCellProps) {
   return (
     <span
       className="xt-metric-cell"
+      title={isMeasured(value) ? title : undefined}
       style={{ fontSize: size, textAlign: align, width: align === 'right' ? '100%' : undefined }}
     >
       {isMeasured(value) ? (
@@ -37,7 +51,7 @@ export function MetricCell({
           value
         )
       ) : (
-        <Unmeasured reason={reason} />
+        <Unmeasured reason={reason} titled={reasonTitle} />
       )}
     </span>
   );

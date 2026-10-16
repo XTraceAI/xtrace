@@ -1,5 +1,5 @@
 use crate::{
-    Error, MetricsDb, PriceCatalog, Result, Window,
+    DayBucket, Error, MetricsDb, PriceCatalog, Result, Window,
     prices::{COST_BASIS, CacheWriteMode},
 };
 use jiff::tz::TimeZone;
@@ -8,6 +8,17 @@ use std::collections::BTreeMap;
 use xt_store::timestamp::{self, InstantKey};
 
 pub(crate) const QUERY: &str = "SELECT host,model,surface,ts,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,cache_creation_5m,cache_creation_1h,service_tier FROM v_response_usage WHERE ts_ms>=?1 AND ts_ms<?2";
+/// The same selection and columns as [`QUERY`], plus the response's session
+/// (column 11), for callers that group the priced responses by session.
+pub(crate) const SESSION_QUERY: &str = "SELECT host,model,surface,ts,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,cache_creation_5m,cache_creation_1h,service_tier,session_id FROM v_response_usage WHERE ts_ms>=?1 AND ts_ms<?2";
+/// [`SESSION_QUERY`]'s selection and columns with no window: every response
+/// of the named sessions, whenever it was, and those with no timestamp too,
+/// which no window holds and which are counted, unpriced, rather than dropped.
+pub(crate) const WHOLE_SESSION_QUERY: &str = "SELECT host,model,surface,ts,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,cache_creation_5m,cache_creation_1h,service_tier,session_id FROM v_response_usage";
+/// The host whose responses carry no service tier: its reader does not keep
+/// one, and OpenAI bills a request that names no tier at its default tier.
+const ASSUMED_DEFAULT_TIER_HOST: &str = "codex";
+const ASSUMED_DEFAULT_TIER: &str = "default";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnpricedReason {
@@ -20,6 +31,9 @@ pub enum UnpricedReason {
     MissingCacheSplit,
     InconsistentCacheSplit,
     MissingRate,
+    /// The response records no time. Only a whole-session read selects it:
+    /// it is in no window, and it is counted rather than dropped.
+    MissingTimestamp,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnpricedCost {
@@ -30,11 +44,20 @@ pub struct UnpricedCost {
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CostSummary {
+    /// Responses included in the cost estimate; automatic reviews are excluded.
     pub selected_observations: u64,
     pub priced_observations: u64,
     pub unpriced_observations: u64,
+    /// Priced observations that recorded no service tier and were priced at
+    /// the host's documented default tier (Codex only); included in
+    /// `priced_observations`.
+    pub assumed_tier_observations: u64,
     pub total_usd: Option<f64>,
     pub priced_subtotal_usd: f64,
+    /// `priced_subtotal_usd` exactly, in nano-USD, so callers can add
+    /// subtotals without floating-point rounding. Not serialized.
+    #[serde(skip)]
+    pub priced_subtotal_nano_usd: u128,
     pub unpriced: Vec<UnpricedCost>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -71,28 +94,96 @@ pub struct CostReport {
     pub by_surface: Vec<SurfaceCost>,
     pub by_day: Vec<DayCost>,
 }
-struct Observation {
+pub(crate) struct Observation {
+    host: String,
     model: Option<String>,
     tier: Option<String>,
     counters: [Option<u64>; 4],
     split: [Option<u64>; 2],
 }
 #[derive(Clone, Copy)]
-enum Outcome {
-    Priced(u128),
+pub(crate) enum Outcome {
+    /// Automatic reviews are outside the cost estimate, including its counts.
+    Excluded,
+    /// Nano-USD, and whether the tier was assumed rather than recorded.
+    Priced(u128, bool),
     Unpriced(UnpricedReason),
 }
+/// One row of [`QUERY`] or [`SESSION_QUERY`]: its raw timestamp, host, surface
+/// and the observation to price.
+pub(crate) fn read_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(InstantKey, Option<String>, Observation)> {
+    let raw: String = row.get(3)?;
+    let ts = timestamp::parse(&raw)
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+        })?
+        .0;
+    Ok((ts, row.get(2)?, read_observation(row)?))
+}
+/// The observation of one such row, whatever its timestamp.
+fn read_observation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Observation> {
+    let mut values = [None; 6];
+    for (i, value) in values.iter_mut().enumerate() {
+        *value = row
+            .get::<_, Option<i64>>(i + 4)?
+            .map(|v| {
+                u64::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(i + 4, v))
+            })
+            .transpose()?;
+    }
+    Ok(Observation {
+        host: row.get(0)?,
+        model: row.get(1)?,
+        tier: row.get(10)?,
+        counters: [values[0], values[1], values[2], values[3]],
+        split: [values[4], values[5]],
+    })
+}
 impl Observation {
-    fn price(&self, catalog: &PriceCatalog) -> Result<Outcome> {
+    /// The recorded model name; `None` when absent or blank, by the one rule
+    /// pricing and the most-used model share ([`xt_store::session_model::named_model`]).
+    pub(crate) fn model(&self) -> Option<&str> {
+        xt_store::session_model::named_model(self.model.as_deref())
+    }
+    /// The recorded output-token counter, when present.
+    pub(crate) fn output_tokens(&self) -> Option<u64> {
+        self.counters[1]
+    }
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+    /// The recorded model name exactly, blank included: the token and cost
+    /// breakdowns keep a blank name apart from an absent one.
+    pub(crate) fn raw_model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+    /// Input, output, cache-read and cache-creation counters, each absent
+    /// when unrecorded.
+    pub(crate) fn counters(&self) -> [Option<u64>; 4] {
+        self.counters
+    }
+    pub(crate) fn price(&self, catalog: &PriceCatalog, has_timestamp: bool) -> Result<Outcome> {
         use UnpricedReason::*;
         let unpriced = |reason| Ok(Outcome::Unpriced(reason));
-        let Some(name) = self.model.as_deref().filter(|s| !s.trim().is_empty()) else {
+        // One cost-only exclusion, before missing timestamp/model/rate checks.
+        // Keep the shared response selection intact for tokens and agent time.
+        if self.model() == Some("codex-auto-review") {
+            return Ok(Outcome::Excluded);
+        }
+        if !has_timestamp {
+            return unpriced(MissingTimestamp);
+        }
+        let Some(name) = self.model() else {
             return unpriced(MissingModel);
         };
         let Some(model) = catalog.model(name) else {
             return unpriced(UnknownModel);
         };
-        let Some(tier) = self.tier.as_deref().filter(|s| !s.trim().is_empty()) else {
+        let recorded = self.tier.as_deref().filter(|s| !s.trim().is_empty());
+        let assumed = recorded.is_none() && self.host == ASSUMED_DEFAULT_TIER_HOST;
+        let Some(tier) = recorded.or(assumed.then_some(ASSUMED_DEFAULT_TIER)) else {
             return unpriced(MissingServiceTier);
         };
         let [input, _, read, write] = self.counters;
@@ -118,7 +209,12 @@ impl Observation {
             .iter()
             .find(|t| t.names.iter().any(|n| n == tier))
         else {
-            return unpriced(UnknownServiceTier);
+            // An assumed tier the catalog lacks is still a missing tier.
+            return unpriced(if assumed {
+                MissingServiceTier
+            } else {
+                UnknownServiceTier
+            });
         };
         let rates = &tier.rates;
         let (Some(input_rate), Some(output_rate), Some(read_rate)) =
@@ -169,22 +265,28 @@ impl Observation {
                 )
                 .ok_or(Error::CounterOverflow)?;
         }
-        Ok(Outcome::Priced(nano_usd))
+        Ok(Outcome::Priced(nano_usd, assumed))
     }
 }
-#[derive(Default)]
-struct Totals {
+#[derive(Clone, Default)]
+pub(crate) struct Totals {
     observations: u64,
     priced: u64,
+    assumed: u64,
     nano_usd: u128,
     unpriced: BTreeMap<(Option<String>, Option<String>, UnpricedReason), u64>,
 }
 impl Totals {
-    fn push(&mut self, row: &Observation, outcome: Outcome) -> Result<()> {
+    pub(crate) fn push(&mut self, row: &Observation, outcome: Outcome) -> Result<()> {
+        if matches!(outcome, Outcome::Excluded) {
+            return Ok(());
+        }
         self.observations += 1;
         match outcome {
-            Outcome::Priced(value) => {
+            Outcome::Excluded => unreachable!("excluded observations return before counting"),
+            Outcome::Priced(value, assumed) => {
                 self.priced += 1;
+                self.assumed += u64::from(assumed);
                 self.nano_usd = self
                     .nano_usd
                     .checked_add(value)
@@ -199,15 +301,17 @@ impl Totals {
         }
         Ok(())
     }
-    fn finish(self) -> CostSummary {
+    pub(crate) fn finish(self) -> CostSummary {
         let subtotal = self.nano_usd as f64 / 1_000_000_000.0;
         CostSummary {
             selected_observations: self.observations,
             priced_observations: self.priced,
             unpriced_observations: self.observations - self.priced,
+            assumed_tier_observations: self.assumed,
             total_usd: (self.observations > 0 && self.observations == self.priced)
                 .then_some(subtotal),
             priced_subtotal_usd: subtotal,
+            priced_subtotal_nano_usd: self.nano_usd,
             unpriced: self
                 .unpriced
                 .into_iter()
@@ -223,78 +327,71 @@ impl Totals {
         }
     }
 }
-impl MetricsDb {
-    /// Price current selected response observations once from one read snapshot.
-    /// Enrichment, representative replacement and catalog changes need no stored cost.
-    pub fn cost(
-        &self,
-        window: Window,
-        zone: TimeZone,
-        catalog: &PriceCatalog,
-    ) -> Result<CostReport> {
+/// The cost report's breakdowns over one window, filled one in-window
+/// response at a time.
+pub(crate) struct Breakdowns {
+    days: Vec<DayBucket>,
+    day_ends: Vec<InstantKey>,
+    daily: Vec<Totals>,
+    total: Totals,
+    hosts: BTreeMap<String, Totals>,
+    models: BTreeMap<Option<String>, Totals>,
+    surfaces: BTreeMap<(String, Option<String>), Totals>,
+}
+impl Breakdowns {
+    pub(crate) fn new(window: Window, zone: TimeZone) -> Result<Self> {
         let days = window.local_days(zone)?;
-        let start = InstantKey::from_millisecond(window.start_ms());
-        let end = InstantKey::from_millisecond(window.end_ms());
-        let day_ends: Vec<_> = days
-            .iter()
-            .map(|d| InstantKey::from_millisecond(d.window.end_ms()))
-            .collect();
-        let mut daily: Vec<Totals> = days.iter().map(|_| Totals::default()).collect();
-        let mut total = Totals::default();
-        let mut hosts = BTreeMap::<String, Totals>::new();
-        let mut models = BTreeMap::<Option<String>, Totals>::new();
-        let mut surfaces = BTreeMap::<(String, Option<String>), Totals>::new();
-        let mut statement = self.connection.prepare(QUERY)?;
-        let mut rows = statement.query([window.start_ms(), window.candidate_end_ms()?])?;
-        while let Some(row) = rows.next()? {
-            let raw: String = row.get(3)?;
-            let ts = timestamp::parse(&raw)
-                .map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?
-                .0;
-            if ts < start || ts >= end {
-                continue;
-            }
-            let host: String = row.get(0)?;
-            let surface: Option<String> = row.get(2)?;
-            let mut values = [None; 6];
-            for (i, value) in values.iter_mut().enumerate() {
-                *value = row
-                    .get::<_, Option<i64>>(i + 4)?
-                    .map(|v| {
-                        u64::try_from(v)
-                            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(i + 4, v))
-                    })
-                    .transpose()?;
-            }
-            let observation = Observation {
-                model: row.get(1)?,
-                tier: row.get(10)?,
-                counters: [values[0], values[1], values[2], values[3]],
-                split: [values[4], values[5]],
-            };
-            let priced = observation.price(catalog)?;
-            total.push(&observation, priced)?;
-            hosts
-                .entry(host.clone())
-                .or_default()
-                .push(&observation, priced)?;
-            models
-                .entry(observation.model.clone())
-                .or_default()
-                .push(&observation, priced)?;
-            surfaces
-                .entry((host, surface))
-                .or_default()
-                .push(&observation, priced)?;
-            daily[day_ends.partition_point(|end| end <= &ts)].push(&observation, priced)?;
+        Ok(Self {
+            day_ends: days
+                .iter()
+                .map(|d| InstantKey::from_millisecond(d.window.end_ms()))
+                .collect(),
+            daily: days.iter().map(|_| Totals::default()).collect(),
+            days,
+            total: Totals::default(),
+            hosts: BTreeMap::new(),
+            models: BTreeMap::new(),
+            surfaces: BTreeMap::new(),
+        })
+    }
+    pub(crate) fn push(
+        &mut self,
+        ts: &InstantKey,
+        surface: Option<&str>,
+        observation: &Observation,
+        catalog: &PriceCatalog,
+    ) -> Result<()> {
+        let host = observation.host.clone();
+        let priced = observation.price(catalog, true)?;
+        if matches!(priced, Outcome::Excluded) {
+            return Ok(());
         }
-        Ok(CostReport {
+        self.total.push(observation, priced)?;
+        self.hosts
+            .entry(host.clone())
+            .or_default()
+            .push(observation, priced)?;
+        self.models
+            .entry(observation.model.clone())
+            .or_default()
+            .push(observation, priced)?;
+        self.surfaces
+            .entry((host, surface.map(str::to_owned)))
+            .or_default()
+            .push(observation, priced)?;
+        self.daily[self.day_ends.partition_point(|end| end <= ts)].push(observation, priced)
+    }
+    pub(crate) fn finish(self, catalog: &PriceCatalog) -> CostReport {
+        let Self {
+            days,
+            daily,
+            total,
+            hosts,
+            models,
+            surfaces,
+            ..
+        } = self;
+        CostReport {
             price_version: catalog.version().into(),
             price_as_of: catalog.as_of().into(),
             basis: COST_BASIS.into(),
@@ -331,7 +428,136 @@ impl MetricsDb {
                     cost: t.finish(),
                 })
                 .collect(),
-        })
+        }
+    }
+}
+impl MetricsDb {
+    /// Price current selected response observations once from one read snapshot.
+    /// Enrichment, representative replacement and catalog changes need no stored cost.
+    pub fn cost(
+        &self,
+        window: Window,
+        zone: TimeZone,
+        catalog: &PriceCatalog,
+    ) -> Result<CostReport> {
+        let mut report = Breakdowns::new(window, zone)?;
+        let start = InstantKey::from_millisecond(window.start_ms());
+        let end = InstantKey::from_millisecond(window.end_ms());
+        let mut statement = self.connection.prepare(QUERY)?;
+        let mut rows = statement.query([window.start_ms(), window.candidate_end_ms()?])?;
+        while let Some(row) = rows.next()? {
+            let (ts, surface, observation) = read_row(row)?;
+            if ts < start || ts >= end {
+                continue;
+            }
+            report.push(&ts, surface.as_deref(), &observation, catalog)?;
+        }
+        Ok(report.finish(catalog))
+    }
+}
+
+impl MetricsDb {
+    /// Price the globally selected responses of one span using the same
+    /// millisecond slice as its output-token read. Called inside the span's
+    /// read snapshot; repeated response records are already selected once by
+    /// `v_response_usage`.
+    pub(crate) fn span_cost(
+        &self,
+        session_id: &str,
+        window: Window,
+        catalog: &PriceCatalog,
+    ) -> Result<CostSummary> {
+        let mut total = Totals::default();
+        let start = InstantKey::from_millisecond(window.start_ms());
+        let end = InstantKey::from_millisecond(window.end_ms());
+        let mut statement = self
+            .connection
+            .prepare(&format!("{QUERY} AND session_id=?3"))?;
+        let mut rows = statement.query(rusqlite::params![
+            window.start_ms(),
+            window.candidate_end_ms()?,
+            session_id
+        ])?;
+        while let Some(row) = rows.next()? {
+            let (ts, _, observation) = read_row(row)?;
+            if ts < start || ts >= end {
+                continue;
+            }
+            total.push(&observation, observation.price(catalog, true)?)?;
+        }
+        Ok(total.finish())
+    }
+
+    /// The cost of exactly the named sessions' selected responses over their
+    /// whole history, whenever each was: the same `v_response_usage`
+    /// selection, deduplication and pricing as [`MetricsDb::cost`], restricted
+    /// to a session but not to a window. A response belongs to the session
+    /// that owns its record (a Claude Code sidechain belongs to its parent
+    /// session; a separately indexed sub-session is its own). A response with
+    /// no timestamp is in no window, so no other cost read sees it; here it is
+    /// counted as unpriced ([`UnpricedReason::MissingTimestamp`]), so the
+    /// session's total is a floor rather than silently short. Automatic reviews
+    /// are excluded from every cost read, even when their timestamp is absent.
+    ///
+    /// Only indexed user sessions get an entry; an unknown identifier is
+    /// absent rather than an invented zero. An indexed session with no
+    /// selected response reports zero selected observations and no total.
+    /// Bounded like [`MetricsDb::session_windows`].
+    pub fn whole_session_costs(
+        &self,
+        sessions: &[&str],
+        catalog: &PriceCatalog,
+    ) -> Result<BTreeMap<String, CostSummary>> {
+        let mut ids: Vec<&str> = sessions.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.len() > crate::session::MAX_SESSIONS {
+            return Err(Error::TooManySessions);
+        }
+        if ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        // No window, so the identifiers are bound from ?1.
+        let parameters = rusqlite::params_from_iter(ids.iter());
+        let mut totals = BTreeMap::<String, Totals>::new();
+        let mut statement = self.connection.prepare(&crate::session::by_session_from(
+            crate::session::EXISTS_QUERY,
+            ids.len(),
+            1,
+        ))?;
+        let mut rows = statement.query(parameters.clone())?;
+        while let Some(row) = rows.next()? {
+            totals.insert(row.get(0)?, Totals::default());
+        }
+        drop(rows);
+        drop(statement);
+        if totals.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut statement = self.connection.prepare(&crate::session::by_session_from(
+            WHOLE_SESSION_QUERY,
+            ids.len(),
+            1,
+        ))?;
+        let mut rows = statement.query(parameters)?;
+        while let Some(row) = rows.next()? {
+            let session: String = row.get(11)?;
+            let Some(total) = totals.get_mut(&session) else {
+                continue;
+            };
+            if row.get_ref(3)?.data_type() == rusqlite::types::Type::Null {
+                let observation = read_observation(row)?;
+                total.push(&observation, observation.price(catalog, false)?)?;
+            } else {
+                let (_, _, observation) = read_row(row)?;
+                let priced = observation.price(catalog, true)?;
+                total.push(&observation, priced)?;
+            }
+        }
+        Ok(totals
+            .into_iter()
+            .map(|(id, total)| (id, total.finish()))
+            .collect())
     }
 }
 
@@ -394,6 +620,124 @@ mod tests {
                 .total
                 .total_usd,
             Some(0.002)
+        );
+    }
+    #[test]
+    fn whole_session_costs_price_every_response_whenever_it_was() {
+        let fixture = xt_fixtures::Fixture::load(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/F1"),
+        )
+        .unwrap();
+        let catalog = PriceCatalog::from_json(&fixture.snapshots()["prices"].to_string()).unwrap();
+        let mut db = xt_fixtures::TempDb::empty().unwrap();
+        let record = |uuid: &str, ts: Option<&str>, model: &str| -> xt_store::CanonicalRecord {
+            let mut value = json!({"uuid":uuid,"type":"assistant","message":{"model":model,"usage":{"input_tokens":0,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"service_tier":"standard"}}});
+            if let Some(ts) = ts {
+                value["timestamp"] = json!(ts);
+            }
+            serde_json::from_value(value).unwrap()
+        };
+        for (id, rows) in [
+            (
+                "long",
+                vec![
+                    // Years apart, both counted; one has no published price.
+                    record("l1", Some("2020-01-01T00:00:00Z"), "test-flat"),
+                    record("l2", Some("2026-09-07T12:00:00Z"), "test-flat"),
+                    record("l3", Some("2026-09-07T13:00:00Z"), "not-in-catalog"),
+                    // No timestamp: counted, unpriced, never dropped.
+                    record("l4", None, "test-flat"),
+                ],
+            ),
+            (
+                "other",
+                vec![record("o1", Some("2026-09-07T12:00:00Z"), "test-flat")],
+            ),
+            (
+                "unpriced",
+                vec![record("u1", Some("2026-09-07T12:00:00Z"), "not-in-catalog")],
+            ),
+        ] {
+            let session = xt_store::SessionMeta::new(id, "codex", xt_store::SessionSource::Fixture);
+            db.store_mut().upsert_session(&session, false).unwrap();
+            db.store_mut().upsert_records(id, &rows, false).unwrap();
+        }
+        let empty = xt_store::SessionMeta::new("empty", "codex", xt_store::SessionSource::Fixture);
+        db.store_mut().upsert_session(&empty, false).unwrap();
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let costs = metrics
+            .whole_session_costs(
+                &["long", "absent", "long", "other", "unpriced", "empty"],
+                &catalog,
+            )
+            .unwrap();
+        // An unknown identifier is absent, never an invented zero.
+        assert_eq!(
+            costs.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["empty", "long", "other", "unpriced"]
+        );
+        let long = &costs["long"];
+        assert_eq!(
+            (
+                long.selected_observations,
+                long.priced_observations,
+                long.unpriced_observations,
+                long.total_usd,
+                long.priced_subtotal_nano_usd
+            ),
+            (4, 2, 2, None, 20_000)
+        );
+        assert_eq!(
+            long.unpriced
+                .iter()
+                .map(|u| (u.model.as_deref(), u.reason, u.observations))
+                .collect::<Vec<_>>(),
+            [
+                (Some("not-in-catalog"), UnpricedReason::UnknownModel, 1),
+                (Some("test-flat"), UnpricedReason::MissingTimestamp, 1),
+            ]
+        );
+        assert_eq!(
+            (
+                costs["empty"].selected_observations,
+                costs["empty"].total_usd
+            ),
+            (0, None)
+        );
+        assert_eq!(
+            (
+                costs["unpriced"].priced_observations,
+                costs["unpriced"].unpriced_observations
+            ),
+            (0, 1)
+        );
+        // Every timed response is the cost report's own: over a window that
+        // holds them all, the sessions add up to its total exactly, in
+        // nano-USD, never as floating-point sums.
+        let all = Window::new(946684800000, 1893456000000).unwrap(); // 2000 through 2029.
+        let total = metrics.cost(all, TimeZone::UTC, &catalog).unwrap().total;
+        let sum: u128 = costs.values().map(|c| c.priced_subtotal_nano_usd).sum();
+        assert_eq!(sum, total.priced_subtotal_nano_usd);
+        assert_eq!(
+            costs.values().map(|c| c.selected_observations).sum::<u64>(),
+            total.selected_observations + 1,
+            "only the untimed response is beyond every window"
+        );
+        // Read through the session index, not a scan of all history.
+        let plan: Vec<String> = metrics
+            .connection
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                crate::session::by_session_from(WHOLE_SESSION_QUERY, 1, 1)
+            ))
+            .unwrap()
+            .query_map(["long"], |row| row.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|s| s.contains("records_session_ts")),
+            "{plan:?}"
         );
     }
 }

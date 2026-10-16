@@ -1,17 +1,19 @@
 # App shell frontend acceptance
 
-The app now composes the shared Sidebar and TopBar around routed placeholders. Settings reads app metadata and database counts through the same data interface used by native IPC. Dashboard and the other product pages remain placeholders; this is not acceptance of finished screen content.
+The app composes the shared Sidebar and TopBar around Dashboard, Sessions and session details, pull requests, recorded rule activity, Settings and first-launch views. Each page reads through the same data interface used by native IPC. Leaderboard remains a named placeholder. This document covers the shell; each product page has its own acceptance checks.
 
 ## Verified behavior
 
 - Native presence takes precedence over a browser fixture flag. Unsupported development fixtures fail explicitly; a production browser shows an honest unavailable preview.
 - Source replacement gives queries a fresh cache and observers. Query keys keep reversed request completion from overwriting another range. One 500ms event coordinator coalesces updates without starving continuous imports; Strict Mode, late registration, disposal and registration failure have regression coverage.
-- Navigation updates the selected Sidebar item and TopBar breadcrumb. Nine routes and the not-found page support direct load and reload. Sessions preserve PR query context as text. Cmd+, opens Settings; Cmd+K focuses a real page Search when present.
+- Navigation updates the selected Sidebar item and TopBar breadcrumb. Nine routes and the not-found page support direct load and reload. Sessions preserve PR query context as text. Cmd+, opens Settings; Cmd+K focuses a real page Search when present. Leaderboard stays the kit's disabled “soon” row in the app: a pointer press or the keyboard never leaves the current page, while `/leaderboard` still opens its named placeholder directly.
 - Settings supports system/light/dark appearance and a database refresh. Empty host/capture information stays unknown instead of displaying sample measurements. Synthetic F1 counts are 1 session, 25 records and 15 usage rows.
 - Both browsers fit the shell at 1120×720, load bundled fonts without external requests, and continue navigation while offline. Native window controls are not drawn in HTML.
 - A real production build made with the fixture environment flag excludes fixture data and the adapter chunk. Both browsers show that build without a fixture badge or database counts.
 
 ## Commands and results
+
+These are historical shell-check results, not acceptance of the source synchronization candidate. Run its affected checks and record the exact candidate commit separately.
 
 | Check                                    | Result                                                                                              |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------- |

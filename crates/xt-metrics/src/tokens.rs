@@ -1,4 +1,4 @@
-use crate::{Error, MetricsDb, Result, Window};
+use crate::{DayBucket, Error, MetricsDb, Result, Window};
 use jiff::tz::TimeZone;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -56,12 +56,29 @@ pub struct TokenReport {
     pub by_day: Vec<DayTokens>,
 }
 
+/// The shared M-04 accumulator: the four canonical counters only add when every
+/// one of them is measured, and a session stays measured only while all of its
+/// selected responses are.
 #[derive(Default)]
-struct Totals {
+pub(crate) struct Totals {
     values: [Option<u64>; 4],
     responses: u64,
     measured: u64,
     sessions: BTreeMap<String, bool>,
+}
+/// The four canonical counters of one selected response row, in the order this
+/// module's query selects them. An absent counter stays unknown.
+pub(crate) fn counters(row: &rusqlite::Row<'_>) -> rusqlite::Result<[Option<u64>; 4]> {
+    let mut values = [None; 4];
+    for (i, value) in values.iter_mut().enumerate() {
+        *value = row
+            .get::<_, Option<i64>>(i + 5)?
+            .map(|v| {
+                u64::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(i + 5, v))
+            })
+            .transpose()?;
+    }
+    Ok(values)
 }
 fn add(a: Option<u64>, b: Option<u64>) -> Result<Option<u64>> {
     match (a, b) {
@@ -70,7 +87,7 @@ fn add(a: Option<u64>, b: Option<u64>) -> Result<Option<u64>> {
     }
 }
 impl Totals {
-    fn push(&mut self, session: &str, values: [Option<u64>; 4]) -> Result<()> {
+    pub(crate) fn push(&mut self, session: &str, values: [Option<u64>; 4]) -> Result<()> {
         let measured = values.iter().all(Option::is_some);
         if self.responses == 0 {
             self.values = [Some(0); 4];
@@ -86,7 +103,7 @@ impl Totals {
         }
         Ok(())
     }
-    fn finish(self) -> Result<TokenSummary> {
+    pub(crate) fn finish(self) -> Result<TokenSummary> {
         let [
             input_tokens,
             output_tokens,
@@ -109,65 +126,68 @@ impl Totals {
         })
     }
 }
-impl MetricsDb {
-    /// Select response snapshots before applying the event window. All breakdowns
-    /// share one SQLite statement/snapshot and one checked, nullable accumulator.
-    pub fn tokens(&self, window: Window, zone: TimeZone) -> Result<TokenReport> {
+/// The token report's breakdowns over one window, filled one in-window
+/// response at a time.
+pub(crate) struct Breakdowns {
+    days: Vec<DayBucket>,
+    day_ends: Vec<InstantKey>,
+    daily: Vec<Totals>,
+    total: Totals,
+    hosts: BTreeMap<String, Totals>,
+    models: BTreeMap<Option<String>, Totals>,
+    surfaces: BTreeMap<(String, Option<String>), Totals>,
+}
+impl Breakdowns {
+    pub(crate) fn new(window: Window, zone: TimeZone) -> Result<Self> {
         let days = window.local_days(zone)?;
-        let start = InstantKey::from_millisecond(window.start_ms());
-        let end = InstantKey::from_millisecond(window.end_ms());
-        let day_ends: Vec<_> = days
-            .iter()
-            .map(|day| InstantKey::from_millisecond(day.window.end_ms()))
-            .collect();
-        let mut daily: Vec<Totals> = days.iter().map(|_| Totals::default()).collect();
-        let mut total = Totals::default();
-        let mut hosts = BTreeMap::<String, Totals>::new();
-        let mut models = BTreeMap::<Option<String>, Totals>::new();
-        let mut surfaces = BTreeMap::<(String, Option<String>), Totals>::new();
-        let mut statement = self.connection.prepare(QUERY)?;
-        let mut rows = statement.query([window.start_ms(), window.candidate_end_ms()?])?;
-        while let Some(row) = rows.next()? {
-            let raw_ts: String = row.get(4)?;
-            let ts = timestamp::parse(&raw_ts)
-                .map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        4,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?
-                .0;
-            if ts < start || ts >= end {
-                continue;
-            }
-            let session: String = row.get(0)?;
-            let host: String = row.get(1)?;
-            let model: Option<String> = row.get(2)?;
-            let surface: Option<String> = row.get(3)?;
-            let mut values = [None; 4];
-            for (i, value) in values.iter_mut().enumerate() {
-                *value = row
-                    .get::<_, Option<i64>>(i + 5)?
-                    .map(|v| {
-                        u64::try_from(v)
-                            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(i + 5, v))
-                    })
-                    .transpose()?;
-            }
-            total.push(&session, values)?;
-            hosts
-                .entry(host.clone())
-                .or_default()
-                .push(&session, values)?;
-            models.entry(model).or_default().push(&session, values)?;
-            surfaces
-                .entry((host, surface))
-                .or_default()
-                .push(&session, values)?;
-            let day = day_ends.partition_point(|end| end <= &ts);
-            daily[day].push(&session, values)?;
-        }
+        Ok(Self {
+            day_ends: days
+                .iter()
+                .map(|day| InstantKey::from_millisecond(day.window.end_ms()))
+                .collect(),
+            daily: days.iter().map(|_| Totals::default()).collect(),
+            days,
+            total: Totals::default(),
+            hosts: BTreeMap::new(),
+            models: BTreeMap::new(),
+            surfaces: BTreeMap::new(),
+        })
+    }
+    pub(crate) fn push(
+        &mut self,
+        ts: &InstantKey,
+        session: &str,
+        host: &str,
+        model: Option<&str>,
+        surface: Option<&str>,
+        values: [Option<u64>; 4],
+    ) -> Result<()> {
+        self.total.push(session, values)?;
+        self.hosts
+            .entry(host.to_owned())
+            .or_default()
+            .push(session, values)?;
+        self.models
+            .entry(model.map(str::to_owned))
+            .or_default()
+            .push(session, values)?;
+        self.surfaces
+            .entry((host.to_owned(), surface.map(str::to_owned)))
+            .or_default()
+            .push(session, values)?;
+        let day = self.day_ends.partition_point(|end| end <= ts);
+        self.daily[day].push(session, values)
+    }
+    pub(crate) fn finish(self) -> Result<TokenReport> {
+        let Self {
+            days,
+            daily,
+            total,
+            hosts,
+            models,
+            surfaces,
+            ..
+        } = self;
         Ok(TokenReport {
             total: total.finish()?,
             by_host: hosts
@@ -211,6 +231,46 @@ impl MetricsDb {
                 })
                 .collect::<Result<_>>()?,
         })
+    }
+}
+impl MetricsDb {
+    /// Select response snapshots before applying the event window. All breakdowns
+    /// share one SQLite statement/snapshot and one checked, nullable accumulator.
+    pub fn tokens(&self, window: Window, zone: TimeZone) -> Result<TokenReport> {
+        let mut report = Breakdowns::new(window, zone)?;
+        let start = InstantKey::from_millisecond(window.start_ms());
+        let end = InstantKey::from_millisecond(window.end_ms());
+        let mut statement = self.connection.prepare(QUERY)?;
+        let mut rows = statement.query([window.start_ms(), window.candidate_end_ms()?])?;
+        while let Some(row) = rows.next()? {
+            let raw_ts: String = row.get(4)?;
+            let ts = timestamp::parse(&raw_ts)
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?
+                .0;
+            if ts < start || ts >= end {
+                continue;
+            }
+            let session: String = row.get(0)?;
+            let host: String = row.get(1)?;
+            let model: Option<String> = row.get(2)?;
+            let surface: Option<String> = row.get(3)?;
+            let values = counters(row)?;
+            report.push(
+                &ts,
+                &session,
+                &host,
+                model.as_deref(),
+                surface.as_deref(),
+                values,
+            )?;
+        }
+        report.finish()
     }
 }
 

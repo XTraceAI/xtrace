@@ -60,6 +60,7 @@ fn matching_legacy_groups_resolve_once_without_changing_any_observation() {
     for unknown_time in [false, true] {
         for reverse in [false, true] {
             let mut db = database();
+            let schema_before = db.store().schema_version().unwrap();
             let mut first = event("A", SessionSource::Transcript, "shared");
             let mut second = event("A", SessionSource::Plugin, "shared");
             second.timestamp = Some("2026-09-07T14:00:00.123100000001+02:00".into());
@@ -83,7 +84,7 @@ fn matching_legacy_groups_resolve_once_without_changing_any_observation() {
                 assert_eq!(db.store_mut().insert_tool_event(incoming).unwrap(), id);
             }
             let mut reopened = Store::open(db.path()).unwrap();
-            assert_eq!(reopened.schema_version().unwrap(), 6);
+            assert_eq!(reopened.schema_version().unwrap(), schema_before);
             assert_eq!(reopened.resolved_tool_events().unwrap(), resolved);
             assert_eq!(reopened.insert_tool_event(&first).unwrap(), id);
             assert_eq!(
@@ -252,6 +253,7 @@ fn exact_nonblank_ids_stay_separate_and_legacy_blank_rows_are_not_grouped() {
 #[test]
 fn resolved_reads_use_the_supplied_read_only_snapshot() {
     let mut db = database();
+    let schema_before = db.store().schema_version().unwrap();
     db.store_mut()
         .insert_tool_event(&event("A", SessionSource::Transcript, "first"))
         .unwrap();
@@ -270,5 +272,5 @@ fn resolved_reads_use_the_supplied_read_only_snapshot() {
     assert_eq!(ingest::resolved_tool_events(&reader).unwrap(), first);
     reader.execute_batch("COMMIT").unwrap();
     assert_eq!(ingest::resolved_tool_events(&reader).unwrap().len(), 2);
-    assert_eq!(db.store().schema_version().unwrap(), 6);
+    assert_eq!(db.store().schema_version().unwrap(), schema_before);
 }

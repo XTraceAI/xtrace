@@ -2,7 +2,62 @@
 import type { AppInfo } from "./AppInfo";
 import type { DashboardMetrics } from "./DashboardMetrics";
 import type { DbCounts } from "./DbCounts";
+import type { FixturePrEffortState } from "./FixturePrEffortState";
+import type { FixturePrSessions } from "./FixturePrSessions";
+import type { FixtureSessionStretches } from "./FixtureSessionStretches";
+import type { FixtureSessionsSummary } from "./FixtureSessionsSummary";
+import type { FixtureSpanDetail } from "./FixtureSpanDetail";
 import type { NativeIndexStatus } from "./NativeIndexStatus";
+import type { PrAnalyticsPage } from "./PrAnalyticsPage";
+import type { PrList } from "./PrList";
+import type { PrRefreshReport } from "./PrRefreshReport";
+import type { RuleActivityResult } from "./RuleActivityResult";
 import type { SessionPage } from "./SessionPage";
+import type { TodaySummary } from "./TodaySummary";
 
-export type FixtureExport = { app_info: AppInfo, db_counts: DbCounts, native_index: NativeIndexStatus, sessions: SessionPage, dashboards: Array<DashboardMetrics>, };
+export type FixtureExport = { app_info: AppInfo, db_counts: DbCounts, native_index: NativeIndexStatus, sessions: Array<SessionPage>, sessions_summaries: Array<FixtureSessionsSummary>, 
+/**
+ * M-09 stretches for each listed session, per window preset.
+ */
+session_stretches: Array<FixtureSessionStretches>, 
+/**
+ * The detail of every span the Dashboard lanes return, as the span
+ * detail command answers it.
+ */
+span_details: Array<FixtureSpanDetail>, dashboards: Array<DashboardMetrics>, 
+/**
+ * The stored pull requests this fixture's sessions link, before anything
+ * refreshed them.
+ */
+pull_requests: PrList, 
+/**
+ * One synthetic refresh of every listed pull request, at the fixture's
+ * pinned instant, produced by the application's own batch.
+ */
+pr_refresh: PrRefreshReport, 
+/**
+ * The list that refresh leaves behind.
+ */
+pull_requests_refreshed: PrList, 
+/**
+ * Each range's M-19 section after refreshing each non-empty subset of the
+ * listed pull requests from the unrefreshed start. `dashboards` is read
+ * before any refresh, as a fixture database starts.
+ */
+pr_effort_states: Array<FixturePrEffortState>, 
+/**
+ * The PRs page report for each range and confidence mode, read before
+ * any refresh as a fixture database starts: no cached merge facts yet.
+ */
+pr_analytics: Array<PrAnalyticsPage>, 
+/**
+ * Each listed pull request's exact linked sessions for each range and
+ * confidence mode, pinned to that report's window end. Membership is
+ * links, not refreshed facts, so a refresh changes only link titles.
+ */
+pr_sessions: Array<FixturePrSessions>, today: TodaySummary, 
+/**
+ * A rule activity read as fixture startup answers it. Fixture mode has
+ * no native home, so it has no source, and it never reads the user's own.
+ */
+rule_activity: RuleActivityResult, };

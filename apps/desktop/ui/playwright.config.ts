@@ -7,7 +7,7 @@ export default defineConfig({
   testIgnore: ['*-production.spec.ts', 'gallery.spec.ts', '**/parity/**'],
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [[process.env.CI ? 'line' : 'list'], ['html', { open: 'never' }]],
   use: { baseURL: `http://127.0.0.1:${port}`, trace: 'on-first-retry' },
   projects: [
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },

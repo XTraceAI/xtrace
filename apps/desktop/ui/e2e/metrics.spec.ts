@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { rules } from '../src/kit/rules';
-import { displayRuleText } from '../src/kit/rule-display';
+import { ruleSummary } from '../src/kit/rules';
 
 test.use({ viewport: { width: 1120, height: 720 } });
 
@@ -61,11 +60,11 @@ for (const theme of ['dark', 'light'] as const) {
     const input = page.getByRole('textbox', { name: 'Outside focus' });
     const trigger = page.getByTestId('short-rule').getByRole('button');
     const tooltip = page.getByRole('tooltip');
-    await expect(trigger).toHaveText('Info');
     await expect(trigger).toHaveAccessibleName('About Concurrency');
+    await expect(trigger).toHaveText('Info');
     await input.focus();
     await trigger.hover();
-    await expect(tooltip).toHaveText(rules['M-06']);
+    await expect(tooltip).toHaveText(ruleSummary('M-06'));
     await expect(tooltip).toHaveCSS('pointer-events', 'none');
     await expect(input).toBeFocused();
     await page.mouse.move(10, 10);
@@ -82,7 +81,7 @@ for (const theme of ['dark', 'light'] as const) {
     await page.keyboard.press('Tab');
     await expect(trigger).toBeFocused();
     await expect(tooltip).toBeVisible();
-    await expect(trigger).toHaveAccessibleDescription(rules['M-06']);
+    await expect(trigger).toHaveAccessibleDescription(ruleSummary('M-06'));
     await expect(tooltip.locator('button, a, input, [tabindex]')).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(tooltip).toBeHidden();
@@ -99,8 +98,7 @@ for (const theme of ['dark', 'light'] as const) {
       ['coverage-rule', 'C-08'],
     ] as const) {
       await page.getByTestId(testId).getByRole('button').focus();
-      await expect(tooltip).toHaveText(displayRuleText(ruleId));
-      await expect(tooltip).not.toContainText(/\b(?:[CMOPRU]-\d+[a-z]?|F\d+)\b/);
+      await expect(tooltip).toHaveText(ruleSummary(ruleId));
       // offsetWidth/Height round the native layout dimensions to integer CSS pixels.
       const box = await tooltip.boundingBox();
       expect(box!.x).toBeGreaterThanOrEqual(8);

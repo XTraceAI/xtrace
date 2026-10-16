@@ -40,7 +40,31 @@ function source() {
     tokensByHost: vi.fn(async (days: number) => hosts(days)),
     appInfo: async () => exported.app_info,
     dbCounts: async () => exported.db_counts,
-    sessionsList: async () => ({ rows: [], next: null }),
+    sessionsList: async () => ({ window: exported.sessions[0].window, rows: [], next: null }),
+    accountUsage: async () => {
+      throw new Error('Synthetic unavailable usage');
+    },
+    refreshClaudeUsage: async () => {
+      throw new Error('Synthetic unavailable usage');
+    },
+    today: async () => exported.today,
+    sessionRow: async () => null,
+    sessionStretches: async () => ({ state: 'missing' }),
+    sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
+    cancelSessionTranscript: async () => {},
+    pullRequests: async () => {
+      throw new Error('Not read here');
+    },
+    pullRequestAnalytics: async () => {
+      throw new Error('Not read here');
+    },
+    pullRequestSessions: async () => {
+      throw new Error('Not read here');
+    },
+    refreshPullRequests: async () => {
+      throw new Error('Not read here');
+    },
+    cancelPullRequestRefresh: async () => false,
     // Keep startup recovery pending here to isolate the period's two report observers.
     // Existing Dashboard/NativeIndex cases verify actual first-settled recovery separately.
     nativeIndexStatus: vi.fn(() => index.promise),
@@ -109,7 +133,8 @@ it('hides fast host-token dates while the independent Dashboard is pending or fa
   data.dashboard.mockImplementationOnce(() => held.promise).mockResolvedValue(current);
   data.tokensByHost.mockResolvedValue(host);
   mount(data);
-  await screen.findByLabelText('Claude Code tokens: 1100');
+  await waitFor(() => expect(data.tokensByHost).toHaveBeenCalledTimes(1));
+  await settle();
   expect.soft(screen.queryByTestId('report-period')).toBeNull();
   expect(screen.queryByTestId('dashboard-summary')).toBeNull();
   await act(async () => held.reject(new Error('synthetic Dashboard failure')));
@@ -132,7 +157,7 @@ it('shows Dashboard dates while host tokens are independently pending and then f
   await settle();
   expect.soft(periodText()).toBe(expectedPeriod(report()));
   await act(async () => held.reject(new Error('synthetic token failure')));
-  await screen.findByText('Recorded tokens unavailable');
+  await settle();
   expect(periodText()).toBe(expectedPeriod(report()));
   expect(data.dashboard).toHaveBeenCalledTimes(1);
 });
@@ -152,7 +177,8 @@ it('uses the exact Dashboard window and UTC zone when the two clock samples stra
   data.tokensByHost.mockResolvedValue(host);
   mount(data);
   await loaded();
-  await screen.findByLabelText('Claude Code tokens: 1100');
+  await waitFor(() => expect(data.tokensByHost).toHaveBeenCalledTimes(1));
+  await settle();
   await settle();
   expect(periodText()).toMatch(/^Sep 1\s–\s8, 2026, time zone UTC$/);
   expect(screen.getByTestId('report-period').getAttribute('title')).toMatch(
@@ -259,7 +285,7 @@ it('does not request a full report for a header first opened off Dashboard or af
   await loaded();
   await settle();
   expect(data.dashboard).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   await settle();
   expect(screen.queryByTestId('report-period')).toBeNull();
   expect(data.dashboard).toHaveBeenCalledTimes(1);

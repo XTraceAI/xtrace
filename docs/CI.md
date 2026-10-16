@@ -5,20 +5,29 @@ Native validation runs locally before merging and on a hosted macOS 14 runner
 only when explicitly preparing a downloadable release. Public disclosure review
 remains manual. These workflows do not publish releases or change repository rules.
 
-| Job        | Required hosted coverage                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------ |
-| `policy`   | Reviewed source-commit DCO and substantive contribution descriptions.                      |
-| `ui`       | Types, lint, formatting, unit tests, WebKit and Chromium boot tests.                       |
-| `security` | CI/supply-chain/publication regressions and source-history/diff scanning.                  |
-| `ci-ok`    | Requires all three jobs to succeed; rejects missing, skipped, cancelled or failed results. |
+| Job        | Required hosted coverage                                                                        |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| `policy`   | Reviewed source-commit DCO and substantive contribution descriptions.                           |
+| `ui`       | Two browser entries, each with types, lint, formatting, unit tests and its full browser suites. |
+| `security` | CI/supply-chain/publication regressions and source-history/diff scanning.                       |
+| `ci-ok`    | Requires all three jobs to succeed; rejects missing, skipped, cancelled or failed results.      |
 
 `ci-ok` certifies these hosted checks only. It does not certify native tests,
 dependency notices, local evidence or disclosure approval. Maintainers review
 those results separately before merging. Browser tests install their Linux system
 dependencies even with cached binaries and do not certify native WKWebView behavior.
 
-The UI job runs a small gallery smoke suite and production-exclusion checks.
-The full 92-story gallery sweep runs locally before merging gallery, shared UI,
+The `ui` job has separate WebKit and Chromium entries, with at most two entries
+running together. Each entry runs `pnpm check`, then selects its browser in the
+main browser suite, gallery smoke suite and production-exclusion checks. A failed
+entry does not cancel the other; `ci-ok` still requires the combined `ui` result
+to succeed. Each entry has a 30-minute job ceiling for the expanded suite,
+including setup and unit checks. This changes no individual test/assertion
+limit, retry count or Playwright worker setting. CI prints browser failures as
+they finish; the HTML reporter remains enabled. Successful hosted runs of both
+entries are required before claiming the full browser gate passed.
+
+The full 96-story gallery sweep runs locally before merging gallery, shared UI,
 theme, font or brand-asset changes. Record its source SHA and results in the PR;
 hosted success does not certify the full gallery. See [gallery checks](GALLERY.md#add-or-update-a-story).
 
@@ -36,11 +45,11 @@ After fetching the current target branch, record its full commit SHA and integra
 it into the candidate. Run:
 
 ```sh
-pnpm check:native --base FULL_REVIEWED_BASE_SHA
+AGENT_PLUGINS_SOURCE=bundle pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke
 ```
 
-For a synthetic launch on a development Mac, explicitly select
-`pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke`. This still
+This self-contained development check verifies the committed producer bundle
+and selects a synthetic launch with `--fixture-smoke`. It still
 compiles the normal debug app first, then builds a separate debug configuration
 with the `fixtures` feature and launches only that fixture build with fixed F1.
 It uses a compiled test app ID, disposable data and native home, disables
@@ -50,11 +59,15 @@ unregistered after the exact child exits. Evidence records `smokeMode:
 release runtime, tray interaction or macOS 14 compatibility on a newer Mac.
 `--fixture-smoke` and `--release` are rejected together before any build.
 
-The existing default and release launch routes remain unchanged. Fixture smoke
-does not establish production-runtime isolation or acceptance for those paths.
-In particular, a synthetic native-index home is not a general isolation boundary
-for account readers that a later app version may start; review those runtime
-paths before using normal smoke mode on a development Mac.
+The released validator also compiles distinct test IDs for normal debug and
+release builds and launches verified disposable copies; the launcher and native
+inspector require that explicit ID instead of the older implicit production ID.
+These normal runtime paths do not enable fixtures. Their synthetic
+native-index home does not isolate every provider reader: Claude usage startup
+also resolves the real app home/configuration, and passive usage can invoke
+Codex. Their production-runtime isolation remains unverified; resolve that
+isolation before running those modes on a development Mac. Fixture smoke does
+not establish safety or acceptance for those launch paths.
 
 The command requires a clean checkout and verifies the base is an ancestor of the
 tested head. It installs frozen dependencies; runs workspace Rust fmt, strict
@@ -76,20 +89,31 @@ not an automatically enforced status check. No self-hosted runner is installed.
 
 Only an explicit `workflow_dispatch` starts `Release native validation`.
 Select the default branch for the workflow and supply the full SHA of a candidate
-already merged into that branch. The workflow rejects malformed identities,
-non-default workflow refs and candidates outside default-branch history. It checks
-out the exact candidate without persistent credentials and verifies macOS 14 arm64.
+already merged into that branch. That path still requires the candidate to be
+in default-branch history. Alternatively, manually select an explicitly reviewed
+`refs/tags/vSemVer` tag (for example, `refs/tags/v0.1.1`) and supply its full
+candidate commit SHA. The workflow source commit (`github.workflow_sha`), GitHub
+source commit (`github.sha`), resolved tag commit and checked-out HEAD must all
+equal that candidate. Non-default branches, other ref types, malformed versions
+and mismatched identities fail. A tagged beta can be prepared and published from
+that exact reviewed source without first merging its app source into `main`;
+the workflow must already exist on the default branch to enable manual dispatch.
+The workflow checks out the exact candidate without persistent credentials and
+verifies actual macOS 14 arm64 on both paths.
 
 The workflow resolves the candidate's first parent as its reviewed baseline and
 runs `pnpm check:native --base REVIEWED_BASE_SHA --release`. Comparing against that
 distinct predecessor detects installed hook declarations removed by the candidate;
 using the candidate itself as its baseline would lose that protection. Earlier
 merged changes still require their own recorded local validation before merging.
-Release mode additionally builds and launches the production app configuration.
+Release mode additionally builds release code with a unique test app identifier
+and launches a separately signed disposable copy with its own data directory.
+It does not launch the final signed public bundle.
 The validation job uploads the validated, secret-scanned SBOM and has no signing
 values.
 
-Only after validation passes does the `package` job build the signed disk image,
+On default-branch dispatches, only after validation passes does the `package`
+job build the signed disk image. Reviewed tag dispatches skip this job. It runs
 in the `macos-signing` GitHub environment. It compiles the release app without
 any Apple values, then one step runs `node scripts/ci/release-dmg.mjs`, which:
 
@@ -129,10 +153,16 @@ The signing identity is fixed in the workflow. The script writes the `.p8`
 contents to a private temporary file and deletes it when packaging ends.
 
 Before publishing each downloadable version, require successful native release
-validation for its exact source plus acceptance of the final signed and notarized
-downloadable bytes, including a launch from `/Applications` on a Mac that has
-never run the app. Universal builds and update delivery are not covered by this
-workflow. Changes to source or packaging invalidate the relevant release evidence.
+validation for its exact source plus the separate acceptance of the final signed
+and notarized downloadable bytes. Signing, notarization, universal builds,
+Gatekeeper behavior and update delivery are not certified by this unsigned app
+launch. Tag validation is source validation only, not disclosure approval or a
+waiver of macOS 14 QA, final-byte acceptance or publication checks. Changes to
+source or packaging invalidate the relevant release evidence.
+
+Final signed launch from `/Applications` on a Mac that has never run the app
+requires separate acceptance. The 0.1.5 testing release does not yet claim that
+check.
 
 `macos-14` is scheduled for retirement on November 2, 2026. Before retirement,
 replace it with a runner that preserves actual macOS 14 floor testing. Building
@@ -150,13 +180,31 @@ bundles as `vendor/agent-plugins` and verifies by the same object identities
 without Git). `node scripts/ci/plugin-pin.mjs commit` prints a field;
 `scripts/ci/plugin-pin.test.mjs` rejects malformed pins in hosted CI.
 
-`scripts/ci/plugin-conformance.sh` owns the pinned checkout, the environment
-and unskipped execution. Without `AGENT_PLUGINS_DIR` it fetches exactly the
+`scripts/ci/plugin-conformance.sh` owns the producer source, the environment
+and unskipped execution. `AGENT_PLUGINS_SOURCE` defaults to `checkout`.
+In checkout mode, without `AGENT_PLUGINS_DIR` it fetches exactly the
 pinned commit from the public repository, without credentials, into the ignored
 `artifacts/private/plugin-conformance/` directory; a supplied checkout is
 accepted only at that commit. Either way the checkout must be clean and every
 listed reader source must be the pinned object, so an edited file at the right
-commit fails before any test runs. It requires Python 3.10+ (`PYTHON` selects
+commit fails before any test runs. Checkout mode requires the pinned revision
+to remain available upstream or an exact clean checkout supplied through
+`AGENT_PLUGINS_DIR`. If the upstream no longer serves that revision, fetching
+cannot complete this mode; a bundle-mode pass is not upstream verification.
+
+Explicit `AGENT_PLUGINS_SOURCE=bundle` uses `vendor/agent-plugins` by default;
+`AGENT_PLUGINS_DIR` can name a bundle's `plugins/memhub` directory instead.
+Before any producer import or launch, a test-only Rust example calls the app's
+existing `verify_bundle` against `.plugin-pin`: all four listed objects,
+including the complete scripts tree with executable modes, must match. Extra
+or missing files, altered bytes or modes, symlinks and bytecode caches fail.
+The Python harnesses call that same verifier on their source and copied tree.
+The gate runs six mutation regressions against all three Python harnesses.
+It sets `PYTHONDONTWRITEBYTECODE=1` so imports cannot add caches to verified trees.
+The explicit native release workflow selects this mode and uses the producer
+bytes already in the candidate repository, with no external producer fetch.
+
+Both modes require Python 3.10+ (`PYTHON` selects
 the interpreter), clears `PYTHONOPTIMIZE`, `PYTHONPATH`, `PYTHONHOME` and
 `PYTHONSTARTUP` so the harnesses' assertions and standard library stay intact
 (an interpreter running with `-O` is rejected), runs
@@ -167,22 +215,29 @@ validator requires every name in `scripts/ci/conformance-inventory.txt` to have
 run and passed, and fails on any `SKIP` line, ignored test, failure, zero count
 or missing name. Under a plain `cargo test` without the environment the
 conformance tests print `SKIP` and return; that output can never satisfy the
-gate. Missing checkout, missing Python, an unfetchable or differing pin, a
+gate. Missing source, missing Python, an unfetchable checkout pin or differing bundle object, a
 removed hook or an absent named test are all red before merging.
 
 The inventory currently requires:
 
-| Test                               | Real contract exercised                                                                                                                                                                                                |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `conformance_flush_turn`           | The pinned Stop hook imports through both routing mechanisms, advancing its real cursor only after committed acknowledgements, including retry after a failed commit and metadata-only storage.                        |
-| `conformance_plugin_transport`     | The pinned decoder and token client against the headless binary: initialize, SSE `tools/list`, token mint/list/delete, notification and empty-import rejection.                                                        |
-| `conformance_native_reader_stream` | The pinned `readers_cli.py` over the fixture catalog's synthetic native Codex/Cursor files ([F18 and F20](FIXTURES.md)); see [acceptance](acceptance/plugin-conformance.md).                                           |
-| `conformance_native_import`        | The complete native import through the pinned readers into a disposable index: identity and counts per session, a repeated run adds nothing, source bytes unchanged; see [native import](acceptance/native-import.md). |
-| `conformance_bundled_readers`      | The bundled reader sources are byte for byte the pinned commit's scripts tree and notices, and read F18 in place, without a checkout or Git, to the same index as the verified checkout.                               |
+| Test                               | Real contract exercised                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conformance_flush_turn`           | The pinned Stop hook imports through both routing mechanisms, advancing its real cursor only after committed acknowledgements, including retry after a failed commit and metadata-only storage.                                                                                                                                                                             |
+| `conformance_plugin_transport`     | The pinned decoder and token client against the headless binary: initialize, SSE `tools/list`, token mint/list/delete, notification and empty-import rejection.                                                                                                                                                                                                             |
+| `conformance_native_reader_stream` | The pinned `readers_cli.py` over the fixture catalog's synthetic native Codex/Cursor files ([F18 and F20](FIXTURES.md)); see [acceptance](acceptance/plugin-conformance.md).                                                                                                                                                                                                |
+| `conformance_native_import`        | The complete native import through the pinned readers into a disposable index: identity and counts per session, a repeated run adds nothing, source bytes unchanged; see [native import](acceptance/native-import.md).                                                                                                                                                      |
+| `conformance_bundled_readers`      | Both modes verify the pinned bundled scripts and read F18 in place to its expected identities and counts, leaving sources unchanged. Checkout mode additionally compares every scripts file and LICENSE/NOTICE byte with the producer commit and compares the two independent indexes.                                                                                      |
+| `conformance_exact_detail`         | The bundle's exact-detail mode reads F18's JSONL sessions and a synthetic paginated Codex group whole, matches ordinary export record for record, refuses the Cursor store beside a committed write-ahead log, and changes no source or temporary snapshot. Checkout mode additionally runs exact detail through the verified checkout and uses its own pagination fixture. |
+| `conformance_codex_fork_import`    | A Codex conversation forked in Codex Desktop imports as its own session: its own ID and start, only its own records, and the original's counters at the cutoff as its usage baseline. Bundle mode supplies equivalent synthetic history data; checkout mode uses the pinned checkout's fixture.                                                                             |
+| `conformance_tool_sent_import`     | The pinned bundle over a synthetic Codex and Cursor home: with `--automated-input-evidence` the lines differ from the plain export only by the evidence, and a scan into an index an earlier build filled binds one proof to each subagent notification, interrupted-turn note, app page record, Cursor summary and Cursor import banner, changing no record.               |
 
 Record in the PR the pin commit printed by the hook and the `executed N of N`
-line with its test names. Every producer release train that Desktop adopts
-updates `.plugin-pin`, the release workflow's producer `ref`, the reader source
+line with its test names and the selected source mode. A bundle-mode pass does
+not certify the independent checkout/index comparison, the producer checkout's
+pagination fixture, or notices against upstream Git; run checkout mode for those
+checks. A bundle execution is never reported as an independent checkout.
+Every producer release train that Desktop adopts
+updates `.plugin-pin`, the reader source
 object IDs, the bundled copy (`sh scripts/vendor-readers.sh`, then the printed
 scripts tree ID in the pin) and, when the reader stream changes on purpose, the fixture goldens
 (`python3 scripts/conformance/test-reader-stream.py --write-golden`, then review
@@ -261,7 +316,7 @@ pnpm test:ci
 pnpm test:supply-chain
 pnpm --dir apps/desktop/ui exec playwright install webkit chromium
 pnpm e2e
-pnpm check:native --base FULL_REVIEWED_BASE_SHA
+AGENT_PLUGINS_SOURCE=bundle pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke
 pnpm publication:test
 pnpm secrets:check
 ```
@@ -299,11 +354,13 @@ Actions use pinned commits. Rust, pnpm, Playwright and pinned supply-chain tools
 have caches. Automated dependency-update PRs are deferred until their generated commits and metadata meet
 the sign-off, verification and disclosure requirements; no Dependabot schedule is installed by
 this change. Dependency updates use the normal reviewed PR process. Cache timing and manual combined-result validation need recorded run evidence.
-The release-only workflow checks out the pinned production plugin under an ignored
-private artifact directory and supplies its plugin root to the mandatory native
-conformance hook. Its checkout `ref` must equal the `.plugin-pin` commit; the
-workflow tests enforce that. This adds no PR job.
-The first hosted release dispatch remains pending until release preparation. Live queue evidence
-is required before queue activation, rather than during private manual merging.
+The release-only workflow uses the bundled producer under `vendor/agent-plugins`
+and supplies its plugin root to the mandatory native conformance hook. Before the
+first workspace test, native validation builds the bundle verifier and checks the
+bundled producer's identity and file modes against `.plugin-pin`. The workflow
+tests enforce bundle mode and bootstrap order. This adds no PR job.
+The 0.1.4 release completed native validation for its exact source on macOS 14
+arm64. Each later release needs a new exact-source result. Live queue evidence
+is required before queue activation.
 
 Native Rust tests and Clippy enable all debug features so fixture-mode tests cannot silently disappear behind an optional feature. Production packaging uses its normal feature set and must still exclude debug fixture assets.

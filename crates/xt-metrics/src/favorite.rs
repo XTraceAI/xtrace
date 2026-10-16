@@ -6,7 +6,7 @@ use xt_store::timestamp::{self, InstantKey};
 
 pub(crate) const OUTPUT_QUERY: &str =
     "SELECT model,output_tokens,ts FROM v_response_usage WHERE ts_ms>=?1 AND ts_ms<?2";
-pub(crate) const TURN_QUERY: &str = "SELECT session_id,uuid,ts,is_human,role,model FROM v_session_events WHERE ts_ms>=?1 AND ts_ms<?2";
+pub(crate) const TURN_QUERY: &str = "SELECT session_id,uuid,ts,is_human,role,model,confirmed_automated_input FROM v_session_events WHERE ts_ms>=?1 AND ts_ms<?2";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FavoriteUnknown {
@@ -47,6 +47,32 @@ struct Event {
     human: Option<bool>,
     role: Option<String>,
     model: Option<String>,
+    /// A confirmed automated input, which is no turn boundary: M-03 skips it.
+    automated: bool,
+}
+/// The in-window responses that measured output, by named model.
+#[derive(Default)]
+pub(crate) struct Outputs {
+    models: BTreeMap<String, u64>,
+    unknown_output: u64,
+    unknown_identity: bool,
+    measured: bool,
+}
+impl Outputs {
+    pub(crate) fn push(&mut self, model: Option<&str>, output: u64) -> Result<()> {
+        self.measured = true;
+        if let Some(model) = model.filter(|model| !model.trim().is_empty()) {
+            let total = self.models.entry(model.to_owned()).or_default();
+            *total = total.checked_add(output).ok_or(Error::CounterOverflow)?;
+        } else {
+            self.unknown_identity = true;
+            self.unknown_output = self
+                .unknown_output
+                .checked_add(output)
+                .ok_or(Error::CounterOverflow)?;
+        }
+        Ok(())
+    }
 }
 fn instant(raw: &str, column: usize) -> Result<InstantKey> {
     Ok(timestamp::parse(raw)
@@ -97,10 +123,7 @@ impl MetricsDb {
     fn favorite_in_snapshot(&self, window: Window) -> Result<FavoriteModel> {
         let start = InstantKey::from_millisecond(window.start_ms());
         let end = InstantKey::from_millisecond(window.end_ms());
-        let mut models = BTreeMap::<String, u64>::new();
-        let mut unknown_output = 0_u64;
-        let mut unknown_identity = false;
-        let mut measured = false;
+        let mut outputs = Outputs::default();
         let mut statement = self.connection.prepare(OUTPUT_QUERY)?;
         let mut rows = statement.query([window.start_ms(), window.candidate_end_ms()?])?;
         while let Some(row) = rows.next()? {
@@ -113,20 +136,21 @@ impl MetricsDb {
             };
             let output = u64::try_from(output)
                 .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, output))?;
-            measured = true;
-            if let Some(model) = row
-                .get::<_, Option<String>>(0)?
-                .filter(|model| !model.trim().is_empty())
-            {
-                let total = models.entry(model).or_default();
-                *total = total.checked_add(output).ok_or(Error::CounterOverflow)?;
-            } else {
-                unknown_identity = true;
-                unknown_output = unknown_output
-                    .checked_add(output)
-                    .ok_or(Error::CounterOverflow)?;
-            }
+            outputs.push(row.get::<_, Option<String>>(0)?.as_deref(), output)?;
         }
+        drop(rows);
+        drop(statement);
+        self.favorite_from(window, outputs)
+    }
+    /// [`MetricsDb::favorite_model`] from the window's measured outputs,
+    /// inside the caller's snapshot; a tie reads the window's turns.
+    pub(crate) fn favorite_from(&self, window: Window, outputs: Outputs) -> Result<FavoriteModel> {
+        let Outputs {
+            models,
+            unknown_output,
+            unknown_identity,
+            measured,
+        } = outputs;
         if !measured {
             return Ok(FavoriteModel::unknown(FavoriteUnknown::NoMeasuredOutput));
         }
@@ -187,6 +211,7 @@ impl MetricsDb {
                 human: row.get(3)?,
                 role: row.get(4)?,
                 model: row.get(5)?,
+                automated: row.get(6)?,
             });
         }
         let mut turns: BTreeMap<_, u64> =
@@ -197,7 +222,9 @@ impl MetricsDb {
             });
             let mut pending = false;
             let mut uncertain_boundary = false;
-            for event in events {
+            // M-03's boundaries: a confirmed automated input neither opens a
+            // turn nor answers one, exactly as the turn count reads it.
+            for event in events.iter().filter(|event| !event.automated) {
                 let may_be_assistant = event.role.as_deref().is_none_or(|role| role == "assistant");
                 match event.human {
                     Some(true) => {

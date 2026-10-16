@@ -78,11 +78,21 @@ fn snapshot(store: &Store) -> BTreeMap<String, Vec<Vec<Value>>> {
     tables
         .into_iter()
         .map(|table| {
+            // Released launch tables use WITHOUT ROWID. Compare every stored
+            // column in a stable order rather than relying on a rowid alias.
+            let width = store
+                .connection
+                .prepare(&format!("SELECT * FROM {table}"))
+                .unwrap()
+                .column_count();
+            let order = (1..=width)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             let mut stmt = store
                 .connection
-                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .prepare(&format!("SELECT * FROM {table} ORDER BY {order}"))
                 .unwrap();
-            let width = stmt.column_count();
             let rows = stmt
                 .query_map([], |r| (0..width).map(|i| r.get(i)).collect())
                 .unwrap()

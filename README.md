@@ -3,13 +3,17 @@
 XTrace Desktop is a macOS app for understanding work with coding agents. The
 current build includes the native shell, shared UI components and gallery,
 SQLite storage, and automatic indexing of local Claude, Codex and Cursor history.
-Indexing defaults to metadata-only storage and leaves source files unchanged.
+Indexing defaults to metadata-only storage (plus a short, at most 280-character
+preview of each message you typed and of each Claude Code background-task
+summary) and leaves source files unchanged.
 Sessions shows indexed metadata with search, host filters and pagination; Settings
 reports indexing status and incomplete coverage. See [Sessions acceptance](docs/acceptance/indexed-sessions.md)
 for the current behavior. Dashboard metrics and session detail remain in development.
 
-There is no supported downloadable release yet. Build locally using the guide
-below; do not expect an installer or Homebrew cask to be available.
+Testing releases for Apple Silicon Macs running macOS 14 or newer are available
+from [GitHub Releases](https://github.com/XTraceAI/xtrace-desktop/releases/latest).
+The 0.1.5 source prepares the next release; publication is a separate step.
+See [updates and testing limits](docs/UPDATES.md). A Homebrew cask is not available.
 
 Use macOS 14.0 or newer, Xcode command-line tools, Rust 1.94.1, Node 22.23.1 and pnpm 10.33.0:
 

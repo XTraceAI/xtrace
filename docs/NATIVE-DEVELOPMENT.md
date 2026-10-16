@@ -20,16 +20,26 @@ and inspect the favicon and Finder/Dock icon before committing an asset change.
 
 ## Native verification
 
-Use `pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke` for the
-synthetic window check on a development Mac. It compiles normal debug code,
+Use this self-contained check on a development Mac:
+
+```sh
+AGENT_PLUGINS_SOURCE=bundle pnpm check:native --base FULL_REVIEWED_BASE_SHA --fixture-smoke
+```
+
+It verifies the committed producer bundle and compiles normal debug code,
 then launches only a fixtures-enabled debug copy with fixed F1, a distinct
 compiled app ID and disposable directories beneath `.noindex`. It reports
 `smokeMode: "fixture-f1"` and unregisters that copy after the check. This does
-not verify production account readers or the interactions below. The unchanged
-default/release smoke routes need separate runtime isolation review; a
-synthetic native-index home alone is not a general account-home boundary.
+not verify production account readers or the interactions below. The normal
+debug/release smoke paths also use compiled test IDs and verified copies, but
+still have unverified provider isolation; a
+synthetic native-index home alone does not isolate the real account home.
 Do not combine fixture smoke with `--release`. See [CI](CI.md#native-validation-before-merging)
 for the exact checks and limitations.
+
+Checkout-mode verification additionally needs the pinned revision available
+upstream or an exact clean checkout supplied through `AGENT_PLUGINS_DIR`.
+A bundle-mode pass does not establish that independent upstream comparison.
 
 At the default 1440×900 size and minimum 1120×720 size, confirm that the three native window controls sit above the sidebar brand and the main area reaches the top edge without a separate title strip. Drag the empty sidebar/header areas; Refresh must still work as a button. Verify minimize/restore, fullscreen/return and close/reopen. Launch the executable again and confirm it focuses the same process and window.
 

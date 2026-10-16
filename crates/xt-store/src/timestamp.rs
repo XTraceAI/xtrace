@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InstantKey {
     second: i64,
     leap_second: bool,

@@ -135,6 +135,7 @@ impl Home {
         let tailer = Tailer::start(
             self.store(),
             WatchConfig {
+                usage_probe_dir: None,
                 home: self.root.clone(),
                 hosts: vec![Host::Claude],
                 producer: ProducerSource::Checkout {
@@ -143,6 +144,7 @@ impl Home {
                 },
                 python: None,
                 debounce: Duration::from_millis(100),
+                spawn_limits: xt_ingest::native::session_creation::spawn_limits(),
                 probe,
             },
             sink,
@@ -1139,6 +1141,7 @@ fn claude_tail_reports_a_watcher_failure_as_degraded_never_silent_ready() {
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: absent.clone(),
             hosts: vec![Host::Claude],
             producer: ProducerSource::Checkout {
@@ -1147,6 +1150,7 @@ fn claude_tail_reports_a_watcher_failure_as_degraded_never_silent_ready() {
             },
             python: None,
             debounce: Duration::from_millis(100),
+            spawn_limits: xt_ingest::native::session_creation::spawn_limits(),
             probe: None,
         },
         sink,
@@ -1281,6 +1285,7 @@ fn claude_tail_watches_the_cursor_parent_so_a_sibling_root_is_seen_when_it_appea
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: root.clone(),
             hosts: vec![Host::Cursor],
             producer: ProducerSource::Checkout {
@@ -1289,6 +1294,7 @@ fn claude_tail_watches_the_cursor_parent_so_a_sibling_root_is_seen_when_it_appea
             },
             python: None,
             debounce: Duration::from_millis(100),
+            spawn_limits: xt_ingest::native::session_creation::spawn_limits(),
             probe: None,
         },
         sink,
@@ -1346,6 +1352,7 @@ fn claude_tail_watches_the_cursor_hook_state_pins_so_a_pin_change_is_reconciled(
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: root.clone(),
             hosts: vec![Host::Cursor],
             producer: ProducerSource::Checkout {
@@ -1354,6 +1361,7 @@ fn claude_tail_watches_the_cursor_hook_state_pins_so_a_pin_change_is_reconciled(
             },
             python: None,
             debounce: Duration::from_millis(100),
+            spawn_limits: xt_ingest::native::session_creation::spawn_limits(),
             probe: None,
         },
         sink,
@@ -1381,6 +1389,83 @@ fn claude_tail_watches_the_cursor_hook_state_pins_so_a_pin_change_is_reconciled(
         unreachable!()
     };
     assert_eq!(report.hosts[0].host, Host::Cursor);
+    tailer.stop();
+}
+
+#[test]
+fn cursor_ide_appearance_recreation_and_wal_changes_are_watched_without_alias_duplicates() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let events = Events::default();
+    let sink = {
+        let events = events.clone();
+        Box::new(move |event: TailEvent| events.0.lock().unwrap().push(event))
+            as Box<dyn Fn(TailEvent) + Send>
+    };
+    let tailer = Tailer::start(
+        Store::open(temp.path().join("index.sqlite")).unwrap(),
+        WatchConfig {
+            usage_probe_dir: None,
+            home: home.clone(),
+            hosts: vec![Host::Cursor],
+            producer: ProducerSource::Checkout {
+                pin: repo().join(".plugin-pin"),
+                plugin_root: None,
+            },
+            python: None,
+            debounce: Duration::from_millis(100),
+            spawn_limits: xt_ingest::native::session_creation::spawn_limits(),
+            probe: None,
+        },
+        sink,
+    );
+    tailer.wait_ready(WAIT).expect("ready");
+    assert_eq!(tailer.status().watched.len(), 1, "one physical fallback");
+    let relative = "Library/Application Support/Cursor/User/globalStorage";
+    let global = home.join(relative);
+    let mut seen = tailer.status().reconciles;
+    fs::create_dir_all(&global).unwrap();
+    fs::write(global.join("state.vscdb"), b"synthetic watch-only fixture").unwrap();
+    seen = settle(&tailer, seen);
+    assert!(tailer.status().watched.iter().any(|path| Path::new(path).canonicalize().ok() == Some(global.canonicalize().unwrap())));
+    for spelling in [&home, &home.canonicalize().unwrap()] {
+        // Only WAL bytes change; no indexed records or transcript activity.
+        fs::write(
+            spelling.join(relative).join("state.vscdb-wal"),
+            b"synthetic WAL change",
+        )
+        .unwrap();
+        seen = settle(&tailer, seen);
+        let installed = tailer.status().watch_installs;
+        tailer.inject_removed(&spelling.join(relative));
+        seen = settle(&tailer, seen);
+        assert!(tailer.status().watch_installs > installed);
+    }
+    fs::remove_file(global.join("state.vscdb-wal")).unwrap();
+    fs::remove_file(global.join("state.vscdb")).unwrap();
+    fs::remove_dir(&global).unwrap();
+    seen = settle(&tailer, seen);
+    fs::create_dir_all(&global).unwrap();
+    seen = settle(&tailer, seen);
+    fs::write(global.join("state.vscdb-wal"), b"after recreation").unwrap();
+    settle(&tailer, seen);
+    let status = tailer.status();
+    let physical: std::collections::BTreeSet<_> = status
+        .watched
+        .iter()
+        .map(|path| Path::new(path).canonicalize().unwrap())
+        .collect();
+    assert_eq!(physical.len(), status.watched.len());
+    assert!(events.reconciled().iter().all(|event| matches!(event, TailEvent::Reconciled { report, .. } if report.hosts.len() == 1 && report.hosts[0].host == Host::Cursor)));
+    assert_eq!(
+        Store::open(temp.path().join("index.sqlite"))
+            .unwrap()
+            .counts()
+            .unwrap()
+            .records,
+        0
+    );
     tailer.stop();
 }
 
@@ -1639,6 +1724,7 @@ fn claude_tail_follows_an_accepted_symlinked_home_for_the_fallback_watch() {
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: alias.clone(),
             hosts: vec![Host::Claude],
             producer: ProducerSource::Checkout {
@@ -1647,6 +1733,7 @@ fn claude_tail_follows_an_accepted_symlinked_home_for_the_fallback_watch() {
             },
             python: None,
             debounce: Duration::from_millis(100),
+            spawn_limits: xt_ingest::native::session_creation::spawn_limits(),
             probe: None,
         },
         sink,
@@ -1719,6 +1806,9 @@ fn claude_tail_rebuilds_its_watches_after_a_watcher_error() {
 #[test]
 fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classification() {
     const MARKER: &str = "synthetic-replay-marker-5c1e";
+    // Tool input and output are never kept; only the person's message has a
+    // short preview.
+    const UNKEPT: &str = "synthetic-tool-marker-9d2a";
     let temp = tempfile::TempDir::new().unwrap();
     let home = Home::new(temp.path());
     let uuid = |index: usize| format!("7777a0a1-7777-4777-8777-{index:012}");
@@ -1746,12 +1836,12 @@ fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classif
         row(
             1,
             "assistant",
-            json!([{"type":"text","text":"answer"},{"type":"tool_use","id":"t1","name":"Read","input":{"path":MARKER}}]),
+            json!([{"type":"text","text":"answer"},{"type":"tool_use","id":"t1","name":"Read","input":{"path":UNKEPT}}]),
         ),
         row(
             2,
             "user",
-            json!([{"type":"tool_result","tool_use_id":"t1","content":MARKER}]),
+            json!([{"type":"tool_result","tool_use_id":"t1","content":UNKEPT}]),
         ),
         row(
             3,
@@ -1852,7 +1942,19 @@ fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classif
     let legacy_checkpoint = checkpoint(&store, &path).unwrap();
     assert_eq!(legacy_checkpoint.1, file_len(&path));
     drop(store);
-    sql.execute("DELETE FROM schema_version WHERE version>=5", [])
+    sql.execute_batch(
+        "ALTER TABLE pull_requests DROP COLUMN manual_failed_at; DELETE FROM schema_version WHERE version>=5;
+         ALTER TABLE pull_requests DROP COLUMN refresh_error; ALTER TABLE pull_requests DROP COLUMN last_attempted_at;
+         ALTER TABLE tool_uses DROP COLUMN group_key;
+         ALTER TABLE tool_uses DROP COLUMN group_version;
+         ALTER TABLE tool_uses DROP COLUMN group_conflict;
+         DROP TABLE confirmed_automated_inputs;
+         DROP TABLE guardian_turn_inputs;
+         DROP TABLE injected_context_inputs; DROP TABLE IF EXISTS tool_sent_inputs; DROP TABLE IF EXISTS task_notification_inputs; DROP TABLE IF EXISTS record_previews; DROP TABLE IF EXISTS session_child_checks; DROP TABLE IF EXISTS session_child_facts; DROP TABLE IF EXISTS human_input_adjustments; DROP TABLE IF EXISTS human_session_origins;
+         DROP TABLE session_creation_relations;
+         DROP TABLE session_creation_bootstrap; DROP TABLE cli_artifact_launch_owners; DROP TABLE claude_launch_groups; DROP TABLE claude_launch_group_members; DROP TABLE claude_launch_candidates; DROP TABLE claude_launch_staged_candidates;
+         DROP INDEX sessions_host_native; DROP INDEX source_cursors_tail;",
+    )
         .unwrap();
     let evidence = || {
         sql.prepare(
@@ -1889,7 +1991,7 @@ fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classif
     );
     tailer.stop();
     let store = home.store();
-    assert_eq!(store.schema_version().unwrap(), 6);
+    assert_eq!(store.schema_version().unwrap(), 23);
     assert_eq!(classified(&store), expected);
     assert_metadata_only(&store, A);
     let rows = store.records(A).unwrap();
@@ -1924,15 +2026,26 @@ fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classif
     assert_eq!(checkpoint(&store, &path).unwrap(), replayed);
     assert_eq!(classified(&store), expected);
     assert_eq!(evidence(), receipts);
+    // The person's message is the one input with a preview, filled by the
+    // replay the upgrade asked for.
+    let previews: Vec<(String, String)> = sql
+        .prepare("SELECT record_uuid,text FROM record_previews")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(previews, [(uuid(0), format!("{MARKER} prompt"))]);
     drop(store);
     drop(sql);
-    // No transcript content reached any index file, including WAL sidecars.
+    // No other transcript content reached any index file, including WAL
+    // sidecars.
     for entry in fs::read_dir(temp.path()).unwrap() {
         let path = entry.unwrap().path();
         if path.is_file() {
             let bytes = fs::read(&path).unwrap();
             assert!(
-                !bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()),
+                !bytes.windows(UNKEPT.len()).any(|w| w == UNKEPT.as_bytes()),
                 "{path:?} retained transcript content"
             );
         }

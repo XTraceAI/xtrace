@@ -63,6 +63,42 @@ impl Window {
         )
     }
 
+    /// The whole local days this window touches: from local midnight of its
+    /// first day to local midnight after its last day. The days are the same
+    /// dates [`Window::local_days`] reports, none of them clipped.
+    pub fn whole_local_days(self, zone: TimeZone) -> Result<Self> {
+        let first = Timestamp::from_millisecond(self.start_ms)?
+            .to_zoned(zone.clone())
+            .start_of_day()?;
+        let after_last = Timestamp::from_millisecond(self.end_ms - 1)?
+            .to_zoned(zone)
+            .start_of_day()?
+            .tomorrow()?
+            .start_of_day()?;
+        Self::new(
+            first.timestamp().as_millisecond(),
+            after_last.timestamp().as_millisecond(),
+        )
+    }
+
+    /// The same number of local days as this window touches, just before its
+    /// first local midnight; for a whole-day window, the previous period of
+    /// the same number of whole days. Calendar arithmetic keeps DST days whole.
+    pub fn previous_local_days(self, zone: TimeZone) -> Result<Self> {
+        let days = i64::try_from(self.local_days(zone.clone())?.len())
+            .map_err(|_| Error::InvalidWindow)?;
+        let first = Timestamp::from_millisecond(self.start_ms)?
+            .to_zoned(zone)
+            .start_of_day()?;
+        let start = first
+            .checked_sub(jiff::Span::new().days(days))?
+            .start_of_day()?;
+        Self::new(
+            start.timestamp().as_millisecond(),
+            first.timestamp().as_millisecond(),
+        )
+    }
+
     /// Split the selected interval at local calendar boundaries, clipping the
     /// first and final days. Callers supply the zone and now; no implicit clock.
     pub fn local_days(self, zone: TimeZone) -> Result<Vec<DayBucket>> {
@@ -95,4 +131,44 @@ impl Window {
         }
         Ok(buckets)
     }
+}
+
+/// Spread one half-open interval's already-measured duration across the ordered
+/// buckets a window was split into, adding each overlap into `totals`.
+///
+/// `ends` holds each bucket's exclusive end in the same units as the interval,
+/// in window order, and `totals` is the same length. The final bucket is open
+/// above: an interval that reaches past the last end — a selected leap-second
+/// event whose POSIX projection lands after the window's end — contributes the
+/// remainder to the last reported day rather than disappearing. That is an
+/// allocation of duration the metric already measured, not a new definition of
+/// elapsed time, so the buckets still sum to the window's total.
+///
+/// Anything before the first bucket's start is not this window's time and is
+/// dropped; the callers' queries already exclude it.
+pub(crate) fn allocate(
+    start_of_window: i128,
+    ends: &[i128],
+    interval: (i128, i128),
+    totals: &mut [i128],
+) -> Result<()> {
+    if ends.len() != totals.len() || ends.is_empty() {
+        return Err(Error::InvalidWindow);
+    }
+    let (start, end) = interval;
+    let mut cursor = start.max(start_of_window);
+    for (index, bucket_end) in ends.iter().enumerate() {
+        if cursor >= end {
+            break;
+        }
+        let last = index + 1 == ends.len();
+        let stop = if last { end } else { end.min(*bucket_end) };
+        if stop > cursor {
+            totals[index] = totals[index]
+                .checked_add(stop.checked_sub(cursor).ok_or(Error::CounterOverflow)?)
+                .ok_or(Error::CounterOverflow)?;
+            cursor = stop;
+        }
+    }
+    Ok(())
 }

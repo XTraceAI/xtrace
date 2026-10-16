@@ -1,13 +1,42 @@
+/*
+ * The Dashboard fits the window. The outlet is its viewport, and the page is a
+ * column of fixed blocks (heading, summary) around two rows that flex —
+ * Effort beside Overview, then Sessions. By default Sessions keeps room for
+ * eight lane rows, however few it lists, and the effort row takes the rest;
+ * a longer list shares any further height equally with the effort row, so a
+ * bigger window shows more rows, never more page.
+ * The boundary between the two rows and the one between Effort and
+ * Overview can be dragged (`SplitHandle`): the chosen share replaces the
+ * default and is kept, as a proportion, across window sizes and restarts.
+ * Every pane keeps its minimum either way.
+ * Nothing is clipped to fit: every further row scrolls inside its own list, and
+ * every further detail opens over the page. Each row's minimum is its content
+ * with its lists at three rows, so when a window is too short for that the
+ * outlet scrolls rather than a list losing rows.
+ */
 .xt-shell-outlet:has(> .xt-dashboard) {
+  display: flex;
+  flex-direction: column;
   padding: 0;
 }
 .xt-dashboard {
   container: dashboard / inline-size;
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 14px;
+  gap: 5px;
   min-width: 0;
-  padding: 13px 16px 28px;
+  min-height: 0;
+  padding: 8px 16px;
+}
+/* Fixed blocks keep their height; the two rows take the rest. Sessions'
+   own eight-row basis is set with its card, below. */
+.xt-dashboard > * {
+  flex: 0 0 auto;
+}
+.xt-dashboard > .xt-dash-main-row,
+.xt-dashboard > .xt-section-card {
+  flex: 1 1 auto;
 }
 .xt-dashboard h1 {
   margin: 0;
@@ -20,11 +49,11 @@
 .xt-dash-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: -8px 0 4px;
+  gap: 2px 14px;
+  margin: -4px 0 0;
   color: var(--secondary);
   font:
-    400 11px/1.6 'Geist Mono',
+    400 11px/16px 'Geist Mono',
     Menlo,
     monospace;
 }
@@ -46,6 +75,16 @@
   color: inherit;
   cursor: help;
 }
+/* The first read of a range: the animated mark in the space the report will fill. */
+.xt-dash-loading {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 240px;
+}
 .xt-dash-status {
   display: flex;
   flex-wrap: wrap;
@@ -58,40 +97,140 @@
 .xt-dash-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: 8px;
   align-items: stretch;
 }
-.xt-dash-hero-row {
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-}
+/* Effort, the column boundary's own 8px track, then Overview: 1.6 to 1 by
+   default, or the dragged share. Each keeps a minimum width that holds its
+   header on one line and a usable chart or two tiles side by side. */
 .xt-dash-main-row {
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  --effort-min: 480px;
+  --overview-min: 300px;
+  grid-template-columns:
+    minmax(var(--effort-min), 1.6fr) 8px
+    minmax(var(--overview-min), 1fr);
+  column-gap: 0;
 }
-.xt-dash-tiles {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-@container dashboard (max-width: 1040px) {
-  .xt-dash-tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.xt-dash-main-row[data-split-columns] {
+  grid-template-columns:
+    minmax(var(--effort-min), var(--columns-first)) 8px
+    minmax(var(--overview-min), var(--columns-second));
 }
 @container dashboard (max-width: 720px) {
+  /* Stacked, Effort over Overview: there is no column boundary to drag. */
   .xt-dash-row,
-  .xt-dash-hero-row,
-  .xt-dash-main-row {
+  .xt-dash-main-row,
+  .xt-dash-main-row[data-split-columns] {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .xt-split[data-axis='columns'] {
+    display: none;
   }
 }
 
-.xt-dash-card,
-.xt-dash-extra {
+/* A dragged row share: both rows flex from zero in its proportion, so a
+   resized window keeps it, and neither shrinks past its own minimum. */
+.xt-dashboard[data-split-rows] > .xt-dash-main-row {
+  flex: var(--rows-first) 1 0px;
+}
+.xt-dashboard[data-split-rows] > .xt-section-card {
+  flex: var(--rows-second) 1 0px;
+  max-height: none;
+}
+
+/* The boundaries. Each is a window splitter between its two panes: the row
+   boundary sits in the page's 5px gap, the column boundary in its own 8px
+   track, and each reaches a little into its panes so it is easy to grab. It
+   draws nothing until hovered, focused or dragged, then an accent line. */
+.xt-split {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  touch-action: none;
+  outline: none;
+}
+.xt-split[data-axis='rows'] {
+  height: 9px;
+  margin-block: -7px;
+  cursor: row-resize;
+}
+.xt-split[data-axis='columns'] {
+  margin-inline: -2px;
+  cursor: col-resize;
+}
+/* A short grip, always faintly drawn in the gap, so the boundary can be
+   found before it is hovered. */
+.xt-split::before {
+  position: absolute;
+  border-radius: 1.5px;
+  background: var(--meta);
+  content: '';
+  opacity: 0.35;
+}
+.xt-split[data-axis='rows']::before {
+  top: 3px;
+  left: calc(50% - 14px);
+  width: 28px;
+  height: 3px;
+}
+.xt-split[data-axis='columns']::before {
+  top: calc(50% - 14px);
+  left: 4.5px;
+  width: 3px;
+  height: 28px;
+}
+.xt-split::after {
+  position: absolute;
+  border-radius: 1px;
+  background: var(--accent);
+  content: '';
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.xt-split[data-axis='rows']::after {
+  top: 3.5px;
+  right: 12px;
+  left: 12px;
+  height: 2px;
+}
+.xt-split[data-axis='columns']::after {
+  top: 12px;
+  bottom: 12px;
+  left: 5px;
+  width: 2px;
+}
+.xt-split:hover::after {
+  opacity: 0.45;
+  transition-delay: 150ms;
+}
+.xt-split:focus-visible::after,
+.xt-split[data-dragging]::after {
+  opacity: 1;
+  transition-delay: 0s;
+}
+:root[data-xt-resizing='rows'],
+:root[data-xt-resizing='rows'] * {
+  cursor: row-resize !important;
+  user-select: none;
+}
+:root[data-xt-resizing='columns'],
+:root[data-xt-resizing='columns'] * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .xt-split::after {
+    transition: none;
+  }
+}
+
+.xt-dash-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
-  padding: 12px 16px;
+  min-height: 0;
+  padding: 6px 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
@@ -102,6 +241,7 @@
   align-items: center;
   gap: 4px 8px;
   min-width: 0;
+  min-height: 16px;
 }
 .xt-dash-card-header h2 {
   margin: 0;
@@ -113,62 +253,627 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-.xt-hero-line,
-.xt-hero-sub {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
-  margin: 0;
-  min-width: 0;
+.xt-dash-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
-.xt-hero-line {
-  gap: 2px 6px;
-}
-.xt-hero-value {
+/* Rolling digits (`RollingValue`). The value's text is one visually hidden
+   string; what is drawn is its characters, from their data, in an aria-hidden
+   face. Each digit's in-flow figure is invisible and gives the digit its width
+   and baseline; a column of the ten figures, one line each, is drawn over it,
+   clipped to the digit's own line box — the line height the value already has,
+   so no glyph is cut and nothing beside it moves — and moved to the digit. A
+   first value and a newly added digit start in place; a changed digit
+   transitions from wherever its column is, so a second change mid-roll simply
+   retargets. */
+.xt-roll,
+.xt-roll-face {
   display: inline-flex;
   align-items: baseline;
+}
+.xt-roll-char::before {
+  content: attr(data-char);
+}
+.xt-roll-digit {
+  position: relative;
+  display: inline-block;
+  clip-path: inset(0);
+}
+.xt-roll-digit::before {
+  content: attr(data-digit);
+  visibility: hidden;
+}
+.xt-roll-digit::after {
+  content: '0\A 1\A 2\A 3\A 4\A 5\A 6\A 7\A 8\A 9';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  white-space: pre;
+  transform: translateY(calc(var(--digit) * -10%));
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .xt-roll-digit::after {
+    transition: none;
+  }
+}
+.xt-hero-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.xt-hero-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px 8px;
+  flex: 0 0 auto;
+  max-width: 150px;
+  margin: 0;
+  color: var(--secondary);
+  font:
+    400 9.5px/12px 'Geist Mono',
+    Menlo,
+    monospace;
+  white-space: nowrap;
+}
+.xt-hero-legend > span {
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
+}
+.xt-hero-legend .xt-control-tone {
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--control-tone);
+}
+.xt-hero-legend small {
+  flex-basis: 100%;
+  color: var(--meta);
+  font-size: 9.5px;
+}
+/* Cap the drawing at a readable density per day, so a seven-day range is a
+   series rather than a handful of marks scattered across the card, and a
+   thirty-day range still shrinks to whatever width the card has. */
+.xt-hero-bars {
+  display: grid;
+  grid-template-columns: repeat(var(--days), minmax(0, 1fr));
+  gap: 0 3px;
+  flex: 0 1 auto;
+  width: calc(var(--days) * 24px);
+  min-width: 0;
+  height: 32px;
+  border-bottom: 1px solid var(--divider);
+}
+/* Each day is its own pair, so the two bars stay adjacent at any width. */
+.xt-hero-day {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  height: 100%;
+}
+.xt-hero-bar {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 7px;
+  min-height: 1px;
+  border-radius: 1.5px 1.5px 0 0;
+  background: var(--control-tone);
+}
+/* Three marks that cannot be confused: any positive keeps at least a pixel of
+   bar, a measured zero is flat on the axis, and an unmeasured estimate is a
+   dashed outline of the whole row rather than an absence. */
+.xt-hero-bar[data-zero='true'] {
+  min-height: 0;
+  height: 0;
+}
+.xt-hero-bar[data-state='unknown'] {
+  min-height: 0;
+  border: 1px dashed var(--meta);
+  border-bottom: 0;
+  background: transparent;
+  opacity: 0.55;
+}
+.xt-hero-range {
+  color: var(--meta);
+}
+.xt-dash-card-end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-left: auto;
+}
+
+/* The layered card, drawn as the kit SectionCard draws Sessions: the title row
+   on the canvas and the children inside the kit's inset surface panel, which
+   is the flex column that passes the card's height down. The band is Sessions'
+   36px whatever the header holds (the effort controls are 28px and a
+   failed read's header is 16px), so the two paired
+   panels start on one line, and the title takes the kit header's ink and
+   weight. The spacing at the minimum window is the flat card's, reallocated:
+   its 6px padding and 4px gap become the band's 5px and 3px and the panel's
+   own 4px, so the row's minimum at 1120×720 does not grow in the tightest
+   (output) state; every extra border and margin is counted in
+   `e2e/dashboard-viewport.spec.ts`. A taller window gives the panel's content
+   more room from its border, as the reference's panels have. */
+.xt-dash-card[data-layered] {
+  gap: 0;
+  padding: 0;
+  background: var(--canvas);
+}
+.xt-dash-card[data-layered] > .xt-dash-card-header {
+  min-height: 36px;
+  padding: 5px 16px 3px;
+}
+.xt-dash-card[data-layered] > .xt-dash-card-header h2 {
+  color: var(--ink);
+  font:
+    600 11px/14px 'Geist Mono',
+    Menlo,
+    monospace;
+  letter-spacing: 0.06em;
+}
+.xt-dash-card[data-layered] > .xt-section-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  padding: 4px 12px;
+}
+@media (min-height: 800px) {
+  .xt-dash-card[data-layered] > .xt-section-panel {
+    padding: 8px 12px 6px;
+  }
+}
+
+/* A detail that opens over the page: a compact text control in the link's
+   own type and colour, so a card's header or line carries it without a
+   button's height. */
+.xt-dash-link-button {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
   min-width: 0;
   max-width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ink);
+  color: var(--accent-ink);
+  font:
+    400 10.5px/16px 'Geist Mono',
+    Menlo,
+    monospace;
+  text-align: left;
+  cursor: pointer;
+}
+.xt-dash-link-button:hover {
+  text-decoration: underline;
+}
+.xt-dash-link-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+/* A panel's unresolved data (`IssueFlag`): a small triangle at the end of the
+   header, in the warning ink but light, the size of the definition beside the
+   title, so it marks the panel without a line or a banner. It is the last
+   item in the header's end group, so it sits at the panel's top right. */
+.xt-dash-link-button.xt-issue-flag {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--warning);
+  opacity: 0.8;
   cursor: help;
 }
-.xt-hero-line .xt-metric-cell {
-  font-weight: 600;
-  line-height: 30px;
+.xt-dash-link-button.xt-issue-flag:hover,
+.xt-dash-link-button.xt-issue-flag:focus-visible,
+.xt-dash-link-button.xt-issue-flag[aria-expanded='true'] {
+  opacity: 1;
 }
-.xt-hero-sep {
-  color: var(--meta);
-  font:
-    400 20px 'Geist Mono',
-    Menlo,
-    monospace;
+/* The tooltip's lines: the count and its scope first, then each scope's reasons. */
+.xt-issue-gist > span {
+  display: block;
 }
-.xt-hero-unit,
-.xt-hero-est,
-.xt-hero-sub {
-  color: var(--secondary);
-  font:
-    400 11px 'Geist Mono',
-    Menlo,
-    monospace;
-}
-.xt-hero-est {
-  color: var(--warning);
-}
-.xt-hero-sub .xt-metric-cell {
+.xt-issue-gist strong {
   color: var(--ink);
   font-weight: 600;
 }
-.xt-hero-sub > span {
+
+/* Effort: the range's total, then the chart — a gutter for the scale and
+   the marker count beside the plot of daily bars, and the merge markers with
+   their date ticks. Nothing follows the chart. Only the plot flexes. */
+.xt-effort {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+}
+.xt-effort .xt-dash-line,
+.xt-effort .xt-dash-note,
+.xt-effort .xt-dash-empty {
+  margin: 0;
+}
+/* The range's total in large tabular figures and at most one short note on
+   a single 22px row, 6px clear of the scale's top label. */
+.xt-effort-headline {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  height: 22px;
+  /* Clear space for the scale's top label, which is centred on the plot's
+     top line and so rises 6px above the plot. */
+  margin: 0 0 6px;
+  color: var(--meta);
+  font-size: 11px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+.xt-effort-headline strong {
+  color: var(--ink);
+  font:
+    600 20px/22px 'Geist Mono',
+    Menlo,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.xt-effort-headline small {
+  color: var(--secondary);
+  font-size: 11px;
+}
+/* A setting the headline's total depends on, at the row's right end. */
+.xt-effort-headline .xt-effort-headline-end {
+  margin-left: auto;
+}
+/* The composite is at least 82px — a 50px plot floor and the 29px axis with
+   3px between them — and more when the card has room, all of it to the plot.
+   `--days` is the range's day count, set by the chart;
+   `e2e/dashboard-viewport.spec.ts` measures the floor. */
+.xt-effort-chart {
+  --days: 1;
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-rows: minmax(50px, 1fr) 29px;
+  gap: 3px 6px;
+  height: 82px;
+  min-width: 0;
+  min-height: 0;
+}
+/* With nothing to plot, only the merge markers and their axis remain. */
+.xt-effort-chart[data-empty] {
+  flex: 0 0 auto;
+  grid-template-rows: 29px;
+  height: 29px;
+}
+.xt-effort-scale,
+.xt-effort-lane-label,
+.xt-effort-ticks {
+  color: var(--meta);
+  font:
+    400 9.5px/12px 'Geist Mono',
+    Menlo,
+    monospace;
+  white-space: nowrap;
+}
+/* The scale's labels are centred on the lines they name — the top, the middle
+   and the baseline — overhanging the row into the gaps beside it. */
+.xt-effort-scale {
+  position: relative;
+  min-width: 0;
+}
+.xt-effort-scale span {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+}
+.xt-effort-scale [data-at='top'] {
+  top: 0;
+}
+.xt-effort-scale [data-at='mid'] {
+  top: 50%;
+}
+.xt-effort-scale [data-at='zero'] {
+  top: 100%;
+}
+.xt-effort-plot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+/* The scale's lines and the 24 h reference, under the bars. */
+.xt-effort-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.xt-effort-gridline,
+.xt-effort-baseline,
+.xt-effort-reference {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 0;
+  border-top: 1px solid var(--divider);
+}
+.xt-effort-gridline {
+  border-top-style: dashed;
+}
+.xt-effort-gridline[data-at='top'] {
+  top: 0;
+}
+.xt-effort-gridline[data-at='mid'] {
+  top: 50%;
+}
+.xt-effort-baseline {
+  bottom: 0;
+}
+.xt-effort-reference {
+  border-top: 1px dashed var(--meta);
+}
+.xt-effort-reference small {
+  position: absolute;
+  right: 0;
+  bottom: 1px;
+  padding: 0 2px;
+  border-radius: 2px;
+  background: var(--surface);
+  color: var(--meta);
+  font:
+    400 9.5px/11px 'Geist Mono',
+    Menlo,
+    monospace;
+}
+/* The days, over the lines, each the width of its band: the whole column is
+   the day's hover and focus target, its bar the day's total. */
+.xt-effort-columns {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--days), minmax(0, 1fr));
+}
+.xt-effort-column {
+  position: relative;
+  min-width: 0;
+  border-radius: 2px;
+}
+.xt-effort-column:hover,
+.xt-effort-column[data-popup-open] {
+  background: var(--accent-tint);
+}
+.xt-effort-column:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.xt-effort-bar {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 62%;
+  max-width: 28px;
+  min-height: 1.5px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+  transform: translateX(-50%);
+}
+.xt-effort-column:hover .xt-effort-bar,
+.xt-effort-column[data-popup-open] .xt-effort-bar {
+  background: var(--accent-ink);
+}
+/* A priced subtotal that leaves some of the day's responses unpriced. */
+.xt-effort-plus {
+  position: absolute;
+  left: 50%;
+  margin-bottom: 1px;
+  color: var(--ink);
+  font:
+    600 10px/9px 'Geist Mono',
+    Menlo,
+    monospace;
+  transform: translateX(-50%);
+}
+.xt-effort-unmeasured {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--meta);
+  font:
+    400 10.5px/1.4 'Geist Mono',
+    Menlo,
+    monospace;
+  text-align: center;
+  pointer-events: none;
+}
+/* The day's card: the date and total, then every model with its amount and
+   share, then the day's notes. */
+.xt-rule-popover.xt-effort-tip {
+  display: grid;
+  gap: 3px;
+  min-width: 220px;
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: normal;
+}
+.xt-effort-tip-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 2px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--ink);
+  font-weight: 600;
+}
+.xt-effort-tip-head b,
+.xt-effort-tip-row b {
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.xt-effort-tip-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--secondary);
+}
+.xt-effort-tip-row span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.xt-effort-tip-row b {
+  color: var(--ink);
+  font-weight: 500;
+}
+.xt-effort-tip-row em {
+  min-width: 4ch;
+  color: var(--meta);
+  font:
+    400 10px 'Geist Mono',
+    Menlo,
+    monospace;
+  font-style: normal;
+  text-align: right;
+}
+.xt-effort-tip-note {
+  padding-top: 2px;
+  color: var(--secondary);
+  font-size: 10.5px;
+}
+.xt-effort-lane-label {
+  align-self: center;
+  text-align: right;
+}
+/* The markers on their lane under the baseline, then the date ticks, each
+   centred on its day from the same mapping as the bars. */
+.xt-effort-axis {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.xt-effort-lane {
+  position: relative;
+  height: 14px;
+}
+.xt-effort-marker {
+  position: absolute;
+  top: 0;
+  display: inline-grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--canvas);
+  font:
+    600 9px/1 'Geist Mono',
+    Menlo,
+    monospace;
+  transform: translateX(-50%);
+}
+.xt-effort-ticks {
+  position: relative;
+  height: 13px;
+  line-height: 13px;
+}
+.xt-effort-ticks span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+/* The Effort header's red ! (`PrRefresh`): drawn only when the pull-request
+   checks need the user, the size of the definition beside the title, so the
+   header keeps its height. While a batch runs it is quiet and turns. */
+/* The slot is always in the header but draws nothing of its own. */
+.xt-pr-attention-slot {
+  display: contents;
+}
+.xt-pr-attention {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+}
+.xt-pr-attention[data-state='running'],
+.xt-pr-attention[data-state='open'] {
   color: var(--meta);
 }
-.xt-reserved-card {
-  min-height: 132px;
+.xt-pr-attention[data-state='running'] svg {
+  animation: xt-pr-attention-turn 1.2s linear infinite;
+}
+.xt-pr-attention:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@keyframes xt-pr-attention-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .xt-pr-attention[data-state='running'] svg {
+    animation: none;
+  }
+}
+.xt-pr-refresh-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.xt-pr-refresh-list .xt-dash-list {
+  max-height: min(360px, calc(100vh - 320px));
+  overflow-y: auto;
+}
+.xt-pr-refresh-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+.xt-pr-refresh-option input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.xt-pr-refresh-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .xt-dash-note,
@@ -198,60 +903,51 @@
 }
 .xt-dash-link:focus-visible,
 .xt-dash-inline-metric:focus-visible,
-.xt-hero-value:focus-visible,
-.xt-dash-extra-details summary:focus-visible,
-.xt-lanes-scroll:focus-visible,
 .xt-dash-details summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.xt-dash-unavailable {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 0;
-  color: var(--secondary);
-  font-size: 12px;
-}
-.xt-reserved-card .xt-dash-unavailable {
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed var(--divider);
-  border-radius: 8px;
-}
-.xt-dash-extras {
+
+/* A measurement's dialog: the title, its definition and scope on one line,
+   then the same content the page used to expand in place. */
+.xt-dash-modal,
+.xt-env-modal {
   display: grid;
-  gap: 8px;
+  gap: 14px;
+  width: min(760px, calc(100vw - 16px));
 }
-.xt-dash-extra {
-  gap: 4px;
-  padding: 8px 16px;
-}
-.xt-dash-extra-meta {
+.xt-dash-modal-header,
+.xt-env-modal-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
   min-width: 0;
-  overflow-wrap: anywhere;
+}
+.xt-dash-modal-header h2,
+.xt-env-modal h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.xt-dash-modal-header > .xt-button,
+.xt-env-modal-header > .xt-button {
+  order: 1;
+  margin-left: auto;
+}
+.xt-dash-modal-meta {
+  min-width: 0;
   color: var(--meta);
   font:
     400 10.5px 'Geist Mono',
     Menlo,
     monospace;
+  overflow-wrap: anywhere;
 }
-.xt-dash-extra-details > summary {
-  width: max-content;
-  color: var(--accent-ink);
-  font:
-    400 10.5px 'Geist Mono',
-    Menlo,
-    monospace;
-  cursor: pointer;
-}
-.xt-dash-extra-body {
-  padding: 10px 0 4px;
-}
-.xt-dash-index {
-  margin: 0;
-  padding: 0 16px;
+.xt-dash-modal .xt-dash-note,
+.xt-dash-modal .xt-dash-line,
+.xt-dash-modal .xt-dash-facts {
+  margin-top: 0;
 }
 .xt-dash-facts {
   display: grid;
@@ -295,6 +991,10 @@
 .xt-dash-list li > span:last-child {
   color: var(--secondary);
 }
+.xt-cost {
+  display: grid;
+  gap: 8px;
+}
 .xt-cost-total {
   display: flex;
   align-items: baseline;
@@ -307,7 +1007,37 @@
   display: grid;
   gap: 16px;
 }
-.xt-coverage h3 {
+/* A further measurement inside a detail (tokens and cost in Effort's Details):
+   its own title, definition and scope on one line over its body, ruled off
+   from what precedes it. */
+.xt-dash-measure {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+}
+.xt-dash-measure-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.xt-dash-measure-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+/* Coverage's untimed history reads as one more section of the dialog, not a boxed notice. */
+.xt-coverage-untimed.xt-untimed {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.xt-coverage h3,
+.xt-coverage-untimed h3 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -401,6 +1131,14 @@
   margin-top: 8px;
   overflow: auto;
 }
+.xt-dash-modal > .xt-dash-table-scroll {
+  margin-top: 0;
+}
+/* The region is a tab stop: the ring is drawn inside its box, as the kit table's is. */
+.xt-dash-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .xt-dash-table {
   width: 100%;
   border-collapse: collapse;
@@ -426,66 +1164,290 @@
   font-weight: 400;
 }
 
+/* Sessions: the card and its panel pass their height down to the lane table,
+   whose rows scroll inside it. By default the card starts from eight rows
+   however few it lists, the spare rows blank inside its panel; a longer list
+   grows it with the other flexible row, never past its own content, and
+   beyond its share of the window its rows scroll. In a short window it gives
+   way down to its header and three rows before the page scrolls. A dragged
+   share replaces the eight-row start (above); the three-row minimum holds
+   either way.
+   The eight rows are the flex basis. The three rows are the card's height:
+   a flex item's automatic minimum is never more than its height, so the
+   card can shrink to three rows, and no min-height is set, which would stop
+   WebKit growing the card to its content. Each height is the 36px header,
+   the card's and the panel's 1px borders, the panel's 2px padding and 6px
+   margin (50px), and the table's header and rows. */
+.xt-dashboard > .xt-section-card {
+  --lanes-head: 24px;
+  --lanes-reserved: 8;
+  flex: 1 1 calc(50px + var(--lanes-head) + var(--lanes-reserved) * 23px - 1px);
+  height: calc(50px + var(--lanes-head) + 3 * 23px - 1px);
+  max-height: max-content;
+  overflow: visible;
+}
+/* Only the rows give way when the card is shorter than its content. */
+.xt-dashboard > .xt-section-card > .xt-section-header {
+  flex-shrink: 0;
+}
+.xt-dashboard > .xt-section-card > .xt-section-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
 .xt-lanes {
   display: grid;
-  gap: 6px;
+  flex: 1 1 auto;
+  grid-template-rows: minmax(
+    calc(var(--lanes-head) + var(--rows) * 23px - 1px),
+    calc(var(--lanes-head) + max(var(--count), var(--lanes-reserved)) * 23px - 1px)
+  );
+  align-content: start;
+  min-height: 0;
 }
-.xt-lanes-axis,
-.xt-lane {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
+/* At least `--rows` (three) 22px rows, each but the last followed by its 1px
+   rule, under the 24px header, however few it lists; more when the card has
+   room, up to the `--count`
+   rows it holds or the eight it reserves, whichever is more — which is also
+   the card's own content height. */
+.xt-lanes .xt-table-scroll {
+  min-height: 0;
 }
-.xt-lanes-ticks {
+.xt-lanes[data-empty] {
+  min-height: calc(var(--lanes-head) + var(--rows) * 23px - 1px);
+  grid-template-rows: minmax(
+    min-content,
+    calc(var(--lanes-head) + var(--lanes-reserved) * 23px - 1px)
+  );
+}
+/* A dragged share fills whatever height the card is given. */
+.xt-dashboard[data-split-rows] .xt-lanes {
+  grid-template-rows: minmax(calc(var(--lanes-head) + var(--rows) * 23px - 1px), 1fr);
+}
+.xt-dashboard[data-split-rows] .xt-lanes[data-empty] {
+  grid-template-rows: minmax(min-content, 1fr);
+}
+/* The same 24px band; the activity column's visible name and its tick row
+   share one line inside it. */
+.xt-lanes .xt-table-head {
+  height: var(--lanes-head);
+  padding: 2px 14px 1px;
+}
+/* The name and the ticks share one line. The ticks after the first are placed
+   against the whole cell, so they sit exactly over the spans beneath them; the
+   first, the start, follows the name in the line. The cell is the container
+   that decides how many ticks it can hold (below). */
+.xt-lanes-activity {
+  container: lanes-axis / inline-size;
   position: relative;
-  height: 14px;
-  color: var(--meta);
-  font:
-    400 9.5px 'Geist Mono',
-    Menlo,
-    monospace;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 10px;
+  line-height: 10px;
 }
-.xt-lanes-ticks > span {
+.xt-lanes-activity-label {
+  flex: none;
+  white-space: nowrap;
+}
+/* The axis lives in the track column's header cell and scrolls with the
+   table. */
+.xt-lanes-axis {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 10px;
+  line-height: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+/* The first child is the column's screen-reader name, so the five ticks are
+   children 2 through 6. */
+.xt-lanes-axis > span {
   position: absolute;
   top: 0;
   transform: translateX(-50%);
   white-space: nowrap;
 }
-.xt-lanes-ticks > span:first-child {
+.xt-lanes-axis > span:nth-child(2) {
+  position: static;
   transform: none;
 }
-.xt-lanes-ticks > span:last-child {
+.xt-lanes-axis > span:last-child {
   transform: translateX(-100%);
 }
-.xt-lanes-scroll {
-  max-height: 264px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+/* A collided axis reads as a wrong time, so a column too narrow for every
+   tick shows fewer, each still at its own instant. The live axis starts at an
+   unrounded instant, so the sizes are for its widest ticks in this monospace
+   type: a time such as `10:59 PM` (8ch) and the dated end `Sep 30 at 10:59 PM`
+   (18ch). The first stretch between shown instants must hold the name and its
+   gap (about 10ch), the start and half the next tick; the last, half a tick
+   and the dated end; each with 4px to spare: about 23ch. Quarters make four
+   such stretches, the midpoint two; the start and the dated end alone always
+   fit at the supported width. */
+@container lanes-axis (max-width: 92ch) {
+  .xt-lanes-axis > span:nth-child(3),
+  .xt-lanes-axis > span:nth-child(5) {
+    display: none;
+  }
 }
-.xt-lanes-list {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+@container lanes-axis (max-width: 46ch) {
+  .xt-lanes-axis > span:nth-child(4) {
+    display: none;
+  }
 }
-.xt-lane-label {
+.xt-lane-name {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: baseline;
   min-width: 0;
-  color: var(--secondary);
+  overflow: hidden;
+  color: var(--body);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+/* The session leads its row, as the reference does — its saved title or its
+   identity — with the work it ran against after it. The context gives way
+   first: it ends in an ellipsis rather than pushing the name out of the row,
+   and a long saved title gives way only beyond most of the cell. */
+.xt-lane-repo {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--meta);
+  font:
+    400 10.5px 'Geist Mono',
+    Menlo,
+    monospace;
+  text-overflow: ellipsis;
+}
+.xt-lane-dot,
+.xt-lane-name .xt-lane-find {
+  flex: none;
+}
+.xt-lane-dot {
+  padding: 0 5px;
+  color: var(--meta);
+}
+/* The session's name is the row's link to that session. It keeps the row's
+   own type and colour so the dense lane list does not turn into a column of
+   link chrome, and shows it is a link on hover and focus. */
+.xt-lane-find {
+  max-width: 75%;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: none;
+  text-overflow: ellipsis;
+}
+.xt-lane-find:hover {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+/* The lane name is clipped to its column, so an outset ring would be cut off
+   at the row's edges. Drawing it just inside the link keeps the whole ring
+   visible in a 22px row. */
+.xt-lane-find:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 3px;
+}
+/* A sub-session names its parent between its own name and its context. The
+   name keeps half the cell, the parent the next share, and the context and
+   its separator give way first, so the row stays one 22px line and the
+   columns beside it keep their width. */
+.xt-lane-name[data-subsession] {
+  container: subsession / inline-size;
+}
+.xt-lane-name[data-subsession] .xt-lane-find {
+  max-width: 50%;
+}
+.xt-lane-parent {
+  margin-left: 8px;
+  font-size: 10.5px;
+}
+.xt-lane-name[data-subsession] .xt-lane-dot,
+.xt-lane-name[data-subsession] .xt-lane-repo {
+  flex-shrink: 1000;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The lane's name keeps half the cell, so its words need a wider cell than a
+   Sessions row's; below that the mark stands for them. Where the cell cannot
+   hold the name, the parent and any context, the context gives way wholly
+   rather than leaving its separator behind; it stays in the row's
+   description and on the session's own page. */
+@container subsession (max-width: 399px) {
+  .xt-lane-parent .xt-subsession-words,
+  .xt-lane-name[data-subsession] .xt-lane-dot,
+  .xt-lane-name[data-subsession] .xt-lane-repo {
+    display: none;
+  }
+}
+/* A listed sub-session is indented under the row that opened it, inside its
+   own name cell, so every column beside it keeps its place. */
+.xt-lane-name {
+  padding-left: calc(var(--depth, 0) * 14px);
+}
+/* Beside a disclosure the name gives up the disclosure's width, so the
+   context keeps the share it has on any other row. */
+.xt-lane-toggle + .xt-lane-find {
+  max-width: calc(75% - 40px);
+}
+.xt-lane-name[data-subsession] .xt-lane-toggle + .xt-lane-find {
+  max-width: calc(50% - 40px);
+}
+/* An absent parent's row only names it: its words and its link, no context,
+   and blank cells beside it. The name is the part that gives way, to an
+   ellipsis; its link's name and tooltip carry it in full. */
+.xt-lane-name[data-group='absent'] .xt-lane-find {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+.xt-lane-group-words {
+  flex: none;
+  padding-right: 4px;
+  color: var(--meta);
   font:
     400 10.5px 'Geist Mono',
     Menlo,
     monospace;
 }
+.xt-lane-from,
+.xt-lane-prs {
+  display: block;
+  overflow: hidden;
+  color: var(--meta);
+  font:
+    400 10px 'Geist Mono',
+    Menlo,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A recorded-link count; the grey evidence dot says it includes inferred
+   links, exactly as Sessions marks an inferred link. */
+.xt-lane-prs {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  color: var(--ink);
+  font-size: 10.5px;
+}
+.xt-lane-prs-icon {
+  flex: none;
+}
+/* No recorded link: the icon and count fade, as the design shows. */
+.xt-lane-prs[data-empty] {
+  color: var(--meta);
+}
 .xt-lane-track {
   position: relative;
-  height: 18px;
-  border-radius: 4px;
-  background: var(--subtle);
+  display: block;
+  height: 14px;
+  border-bottom: 1px dashed var(--divider);
 }
 .xt-lane-track > i {
   position: absolute;
@@ -496,10 +1458,10 @@
 }
 .xt-lane-span {
   position: absolute;
-  top: 4px;
-  bottom: 4px;
+  top: 2px;
+  height: 9px;
   min-width: 3px;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--accent);
 }
 .xt-dash-line .xt-metric-cell,
@@ -509,7 +1471,8 @@
   overflow: visible;
 }
 .xt-dash-label,
-.xt-coverage h3 {
+.xt-coverage h3,
+.xt-coverage-untimed h3 {
   color: var(--meta);
   font:
     400 10px/12px 'Geist Mono',
@@ -518,22 +1481,14 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-/*
- * Dense values (mean, change and max) can exceed a quarter-width tile. Labels keep their full
- * natural width; the value row wraps below the label instead of truncating it.
- */
-.xt-dash-tiles .xt-stat-tile {
-  flex-wrap: wrap;
-  row-gap: 4px;
-  height: auto;
-  min-height: 52px;
+.xt-env-modal section {
+  display: grid;
+  gap: 4px;
 }
-.xt-dash-tiles .xt-stat-label-group {
-  flex-shrink: 0;
+.xt-env-modal .xt-dash-note,
+.xt-env-modal .xt-dash-list {
+  margin: 0;
 }
-.xt-dash-tiles .xt-stat-row {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  max-width: 100%;
-  margin-left: auto;
+.xt-env-lead {
+  color: var(--body);
 }

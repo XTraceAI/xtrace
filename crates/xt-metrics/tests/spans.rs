@@ -1,4 +1,4 @@
-use jiff::Timestamp;
+use jiff::{Timestamp, tz::TimeZone};
 use rusqlite::Connection;
 use serde_json::json;
 use std::path::PathBuf;
@@ -296,4 +296,260 @@ fn spans_open_rejects_incomplete_projection_until_writer_restores_it() {
         let _writer = xt_store::Store::open(db.path()).unwrap();
         assert_eq!(query(&db, window()), expected);
     }
+}
+
+/// Allocation is only ever a split of what the window already measured, so the
+/// buckets must add up to `active_ms` exactly, in integer milliseconds.
+fn by_day(report: &ActiveSpanReport, w: Window, zone: TimeZone) -> Vec<(String, u64)> {
+    let days = report.by_day(w, zone.clone()).unwrap();
+    assert_eq!(
+        days.iter().map(|d| d.active_ms).sum::<u64>(),
+        report.active_ms
+    );
+    let buckets = w.local_days(zone).unwrap();
+    assert_eq!(days.len(), buckets.len());
+    for (day, bucket) in days.iter().zip(&buckets) {
+        assert_eq!(
+            (day.date.as_str(), day.start_ms, day.end_ms),
+            (
+                bucket.date.to_string().as_str(),
+                bucket.window.start_ms(),
+                bucket.window.end_ms()
+            )
+        );
+    }
+    days.into_iter()
+        .map(|day| (day.date, day.active_ms))
+        .collect()
+}
+
+#[test]
+fn spans_by_day_splits_one_span_at_local_midnight_without_re_folding_it() {
+    let mut db = TempDb::empty().unwrap();
+    // One uninterrupted span either side of local midnight: the gap rule already
+    // kept it whole, and the split must not turn it into two shorter spans.
+    seed(
+        &mut db,
+        "crossing",
+        &[
+            record("a", "2026-09-02T23:50:00Z"),
+            record("b", "2026-09-03T00:05:00Z"),
+        ],
+    );
+    let report = query(&db, window());
+    assert_eq!(report.spans.len(), 1);
+    assert_eq!(report.active_ms, 15 * 60_000);
+    assert_eq!(
+        by_day(&report, window(), TimeZone::UTC),
+        [
+            ("2026-09-01".into(), 0),
+            ("2026-09-02".into(), 10 * 60_000),
+            ("2026-09-03".into(), 5 * 60_000),
+            ("2026-09-04".into(), 0),
+            ("2026-09-05".into(), 0),
+            ("2026-09-06".into(), 0),
+            ("2026-09-07".into(), 0),
+        ]
+    );
+    // The same span, cut in a zone whose midnight falls elsewhere, lands whole
+    // on one local date: the boundaries move, the measurement does not.
+    let pacific = TimeZone::get("America/Los_Angeles").unwrap();
+    let cut = by_day(&report, window(), pacific);
+    assert_eq!(
+        cut.iter()
+            .filter(|(_, ms)| *ms > 0)
+            .cloned()
+            .collect::<Vec<_>>(),
+        [("2026-09-02".into(), 15 * 60_000)]
+    );
+}
+
+#[test]
+fn spans_by_day_adds_parallel_sessions_and_reports_empty_and_partial_days() {
+    let mut db = TempDb::empty().unwrap();
+    // Two sessions overlapping the same wall-clock hour: M-05 adds them, and a
+    // day bucket must add them too rather than unioning the shared time away.
+    for (id, minutes) in [("a", [0, 10, 20]), ("b", [5, 15, 25])] {
+        let rows: Vec<_> = minutes
+            .iter()
+            .map(|minute| {
+                record(
+                    &format!("{id}{minute}"),
+                    &format!("2026-09-04T09:{minute:02}:00Z"),
+                )
+            })
+            .collect();
+        seed(&mut db, id, &rows);
+    }
+    let whole = query(&db, window());
+    assert_eq!(whole.active_ms, 40 * 60_000);
+    assert_eq!(
+        by_day(&whole, window(), TimeZone::UTC),
+        [
+            ("2026-09-01".into(), 0),
+            ("2026-09-02".into(), 0),
+            ("2026-09-03".into(), 0),
+            ("2026-09-04".into(), 40 * 60_000),
+            ("2026-09-05".into(), 0),
+            ("2026-09-06".into(), 0),
+            ("2026-09-07".into(), 0),
+        ]
+    );
+    // A clipped first day and a wholly empty last one: both are reported, and
+    // the clipped day carries only the part of each span the window selected.
+    let partial = Window::new(ms("2026-09-04T09:07:00Z"), ms("2026-09-06T00:00:00Z")).unwrap();
+    let report = query(&db, partial);
+    assert_eq!(report.active_ms, 20 * 60_000);
+    assert_eq!(
+        by_day(&report, partial, TimeZone::UTC),
+        [("2026-09-04".into(), 20 * 60_000), ("2026-09-05".into(), 0)]
+    );
+}
+
+#[test]
+fn spans_by_day_gives_a_leap_projection_past_the_window_end_to_the_last_day() {
+    let mut db = TempDb::empty().unwrap();
+    // Both events are inside the leap second of 2016-12-31, so both are members
+    // of a window that ends at the following midnight, while the POSIX axis
+    // projects them after it. The duration is M-05's, unchanged; only its
+    // allocation is decided here.
+    seed(
+        &mut db,
+        "leap",
+        &[
+            record("a", "2016-12-31T23:59:60.1Z"),
+            record("b", "2016-12-31T23:59:60.9Z"),
+        ],
+    );
+    let boundary = ms("2017-01-01T00:00:00Z");
+    let w = Window::new(boundary - 2 * 86_400_000, boundary).unwrap();
+    let report = query(&db, w);
+    assert_eq!(report.active_ms, 800);
+    assert_eq!(
+        (report.spans[0].start_ms, report.spans[0].end_ms),
+        (boundary + 100, boundary + 900)
+    );
+    assert!(report.spans[0].start_ms > w.end_ms());
+    assert_eq!(
+        by_day(&report, w, TimeZone::UTC),
+        [("2016-12-30".into(), 0), ("2016-12-31".into(), 800)]
+    );
+}
+
+#[test]
+fn spans_by_day_treats_a_short_and_a_long_dst_day_as_one_bucket_each() {
+    let zone = TimeZone::get("America/Los_Angeles").unwrap();
+    for (start, end, date, local) in [
+        (
+            "2026-03-08T08:00:00Z",
+            "2026-03-09T07:00:00Z",
+            "2026-03-08",
+            "2026-03-08T18:00:00Z",
+        ),
+        (
+            "2026-11-01T07:00:00Z",
+            "2026-11-02T08:00:00Z",
+            "2026-11-01",
+            "2026-11-01T18:00:00Z",
+        ),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        let after = Timestamp::from_millisecond(ms(local) + 60_000)
+            .unwrap()
+            .to_string();
+        seed(&mut db, "dst", &[record("a", local), record("b", &after)]);
+        let w = Window::new(ms(start), ms(end)).unwrap();
+        let report = query(&db, w);
+        assert_eq!(report.active_ms, 60_000);
+        // A 23- or 25-hour local date is still one reported day holding all of it.
+        assert_eq!(by_day(&report, w, zone.clone()), [(date.into(), 60_000)]);
+    }
+}
+
+#[test]
+fn spans_by_day_keeps_sub_millisecond_and_zero_duration_days_measured() {
+    let mut db = TempDb::empty().unwrap();
+    // Distinct instants inside one millisecond project onto the same POSIX
+    // millisecond: a real, measured zero for that day, not an unknown.
+    seed(
+        &mut db,
+        "sub",
+        &[
+            record("a", "2026-09-05T12:00:00.0000001Z"),
+            record("b", "2026-09-05T12:00:00.0009999Z"),
+        ],
+    );
+    let report = query(&db, window());
+    assert_eq!(report.active_ms, 0);
+    assert_eq!(report.spans.len(), 1);
+    let days = by_day(&report, window(), TimeZone::UTC);
+    assert_eq!(days.len(), 7);
+    assert!(days.iter().all(|(_, ms)| *ms == 0));
+    // One recorded millisecond is a tiny positive the day keeps as one.
+    seed(
+        &mut db,
+        "tiny",
+        &[
+            record("c", "2026-09-05T13:00:00.000Z"),
+            record("d", "2026-09-05T13:00:00.001Z"),
+        ],
+    );
+    let report = query(&db, window());
+    assert_eq!(
+        by_day(&report, window(), TimeZone::UTC)[4],
+        ("2026-09-05".into(), 1)
+    );
+}
+
+#[test]
+fn the_last_day_alone_matches_that_days_bar_in_a_longer_range() {
+    let mut db = TempDb::empty().unwrap();
+    // One span over midnight (23:50 → 00:10), a span that ends before
+    // midnight, and a span that starts exactly one gap before it.
+    seed(
+        &mut db,
+        "over",
+        &[
+            record("o1", "2026-09-07T23:50:00Z"),
+            record("o2", "2026-09-08T00:10:00Z"),
+        ],
+    );
+    seed(
+        &mut db,
+        "before",
+        &[
+            record("b1", "2026-09-07T23:00:00Z"),
+            record("b2", "2026-09-07T23:05:00Z"),
+        ],
+    );
+    seed(
+        &mut db,
+        "edge",
+        &[
+            record("e1", "2026-09-07T23:40:00Z"),
+            record("e2", "2026-09-08T00:00:00Z"),
+            record("e3", "2026-09-08T00:15:00Z"),
+        ],
+    );
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let now = ms("2026-09-08T09:00:00Z");
+    let today = Window::new(ms("2026-09-08T00:00:00Z"), now).unwrap();
+    let (day, spans) = metrics.active_last_day(today, TimeZone::UTC).unwrap();
+    // 10 minutes of "over" and 15 of "edge"; "before" ended before midnight.
+    assert_eq!(day.date, "2026-09-08");
+    assert_eq!((day.start_ms, day.end_ms), (today.start_ms(), now));
+    assert_eq!(day.active_ms, 25 * 60_000);
+    let mut sessions: Vec<_> = spans.iter().map(|s| s.session_id.as_str()).collect();
+    sessions.sort_unstable();
+    assert_eq!(sessions, ["edge", "over"]);
+    // The same day's bar in a seven-day range.
+    let range = Window::new(now - 7 * 86_400_000, now).unwrap();
+    let bar = metrics
+        .active_spans(range)
+        .unwrap()
+        .by_day(range, TimeZone::UTC)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(bar, day);
 }

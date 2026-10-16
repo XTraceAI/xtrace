@@ -1,28 +1,290 @@
 # Indexed Sessions browser
 
 The Sessions route reads the local index through a generated Rust DTO. It shows
-host, a shortened session ID, repository/branch, observed model, first recorded
-time, indexed record count and identity-conflict status. It does not read source
-transcripts or select stored content or titles.
+host, repository/branch, a shortened session ID, the model the session used
+most (with `+N more` when its work named other models), first recorded time,
+indexed record count and identity-conflict status. The model is the one the
+Dashboard's Effort card gives the session's hours to: one shared rule (most
+selected responses, then most output tokens, then the first name) picks it, so
+200 Opus responses and one Haiku title call read `Opus +1 more`, never
+"Multiple models"; a session whose work names no model reads `no model
+recorded`, the Effort card's words. A Claude session's `started` time is its
+own first event, the one sessions per day counts it on, never a record a fork
+copied from its parent; a fork with no work of its own yet shows no start and
+is ordered by its first recorded time. The list query does
+not read source transcripts or select stored content. The identity column leads with
+the repository's own name and, when it is known, the branch, because that is
+what names the work; the shortened session ID and the observed model follow on
+one meta line beneath them. No title is derived from transcript text to fill
+that line; a host's own title for the rows in view is read separately and never
+stored, as [session-titles.md](session-titles.md) describes. An unknown repository is named as such, and is named before a known
+branch so a branch never reads as a repository; an unknown branch is left to the
+cell's title rather than spending the row's width on saying so twice. The ID
+stays visible on every row, so two sessions in one repository can still be told
+apart, and the whole ID is on its title. `first recorded` is the earliest
+visible work record, counting copies inherited from a forked session; it is not
+the host's session start time, and no column claims to be.
 
-Search matches literal substrings in IDs, repository paths and branches. Host
+Search matches literal substrings in IDs, repository paths, branches and titles
+the index saved; a host title shown for display is not indexed and not searched. Host
 filters and descending time/ID pagination run in SQLite, with 50 rows per page.
 Unknown metadata remains unknown. Record counts are indexed user/assistant
 records, including tool-result carriers; they are not human-message counts.
-The current view does not include product time/token metrics, PR filtering or
-session-detail navigation. A PR-filter URL explicitly explains that limitation.
+The current view supports a With PRs filter and exact session-detail navigation.
+A legacy `pr` query parameter still explains that it is not the supported PR drilldown.
+
+## Filters in the address
+
+The search text (`q`), host filter (`host`) and selected range (`range`) live in
+the route's query string, so a link can open this list already searching and the
+browser's own Back and Forward restore what was filtered. Both directions are
+live: the list initializes from the address and follows it when it changes
+underneath, and editing a filter by hand writes it back. Filter edits replace
+the history entry rather than pushing one, so Back still means the previous
+page and a keystroke never lands in the back stack. Typing is debounced 200ms
+before it reaches the address, exactly as it reached the query before.
+
+Every value is validated before use, and an unusable one is ignored rather than
+sent to a query that would fail: a host outside the offered `claude`, `codex`
+and `cursor` is no filter at all, an unsupported range falls back to the last
+range chosen in this window, and a search longer than the 256 characters the
+store accepts is bounded. An invalid address therefore degrades to a working
+list whose controls still work by hand. Parameters this page does not own,
+including `pr`, are preserved untouched.
+
+The Shell derives the selected range from the address when it carries a
+supported one, so the TopBar presets, the report period and the measured columns
+always describe the same window. A range arrived at through a link also becomes
+the window's chosen range, so moving on to a page whose address carries none
+keeps it rather than reverting to the default. Choosing a range writes it back
+only to an address that already carries one, which keeps a plain `/sessions`
+link clean.
+
+Dashboard session links encode the full ID as one route segment and carry the
+validated host and range into the detail page's Back link. The "View sessions"
+link opens the list at the selected range. Shared helpers use `URLSearchParams`,
+so punctuation in an ID cannot split or truncate its carried search value.
+
+## Per-session measurements
+
+Each row also shows what its session contributed inside one explicit event
+window: human messages (M-02), the four-counter token total (M-04) and agent
+minutes (M-05). The window is the Shell's selected range, so the TopBar presets
+and report-period label appear on Sessions; the page reports that window with
+its bounds, zone and clock, exactly as the Dashboard does.
+
+The numbers come from the projections the Dashboard already reads. Global M-04
+response selection and copied-record deduplication happen inside those shared
+projections, before any session or window filter, so a row is a slice of the
+Dashboard's totals rather than a second definition of them. The metadata page
+and every row's measurements are read on the metrics connection inside one
+SQLite read transaction: the native index writes on its own connection, so a
+second read could otherwise pair a row with numbers taken after it changed.
+
+Each measured column states its own rule. The header label is a real button
+wrapped in the shared `RulePopover`, so hovering or focusing `msgs`, `tokens` or
+`agent` quotes M-02, M-04 or M-05 verbatim from the reviewed rule contract,
+and Escape dismisses it without moving focus. Those labels are abbreviated for
+density while the spoken column name stays whole, so the button is still reached
+as "Human messages, definition M-02" or "Agent time, definition M-05". Because the label
+itself is the trigger, no glyph is added and a measured column stays as narrow
+as an unmeasured one. Every cell beneath a header is tied to it by the grid's
+`columnheader`/`cell` roles, so no number is presented without its definition,
+and there is one tab stop per metric rather than one per cell. The unknown
+reason on a cell explains why that value is missing; it is not the definition.
+
+The `Records` column still counts records visible in that session, including
+copies inherited from a forked session; copied work is measured once under the
+session that owns it, so a copied session's measured columns are legitimately
+lower. The column header states this.
+
+Unknown, zero and missing stay distinct. A session with no events in the
+selected window reports a measured `0` for events, human messages and agent
+minutes, while its token counters stay unknown, because M-04 selected no
+response to measure. A session whose span is too short for the shown scale is
+distinct from both: two seconds of active span reads `<0.1`, not the idle
+window's `0` and not an unknown. An unmeasured human classification leaves that row's
+human-message count unknown without hiding its other numbers. An identifier
+no indexed session owns reports `missing` and no numbers at all. No metric
+definition, count or inferred surface is introduced here.
+
+## Summary above the list
+
+Four tiles follow the same search, host and With PRs filters as the table.
+Counts cover all matching indexed sessions, independent of the date range;
+messages and time measure only the selected range. The visible subtitle states
+this distinction.
+
+- **Sessions** shows checked main sessions, with known sub-sessions and sessions
+  still being checked shown separately. Known sub-sessions without a verified
+  parent are counted too, and the definition explains why they can be hidden
+  from the table. A parent outside the filters is not counted as a main match.
+- **Your input** sums the existing per-session M-02 answers, including matching
+  sub-sessions and sessions still being checked. The messages-per-main-session
+  ratio is computed in Rust. It stays unavailable while main-session checks are
+  pending, the denominator is zero, or message classification is incomplete.
+- **Agent working time** sums the existing per-session M-05 milliseconds.
+  Parallel sessions add together, as the visible caption says. The definition
+  makes clear that this is active agent time, not time saved.
+- **Sessions with PRs** counts each matching indexed session with at least one
+  valid stored PR link once, including inferred links. It makes no merge-state
+  claim. Output tokens remain available in each session's row and details.
+
+The first `sessions_list` page carries a Rust summary over every matching page,
+read in the same snapshot as its rows. Later pages and PR drilldowns omit it.
+Pagination never becomes the denominator. Metric and display classifications
+reuse the existing stored answers; the time calculation is unchanged.
+
+The browser fixture selects a Rust-exported answer by exact matching session
+IDs and range. A selection that was not exported shows an unavailable summary,
+never unfiltered totals or a JavaScript sum. The native app supports arbitrary
+valid filters.
+
+A loading or failed summary shows no invented zeros. A failure measuring a
+later matching session withholds the summary while returning valid first-page
+rows. Retry rereads the page. A failed refresh withholds old summary values and
+preserves loaded rows; a failed load-more preserves the first page's summary
+and offers a retry. No backend error text is shown.
+
+Every tile uses the existing `StatTile` and accessible `RulePopover`, with a
+plain definition describing this particular filtered measurement. Labels and
+captions stay whole in both themes; captions wrap on their own line.
+
+The `agent` column states the row's M-05 `agent_ms` as hours and the
+minutes that remain, as the design does: 192 minutes reads `3h12m`, 124
+minutes `2h04m`, 47 minutes `0h47m` and 192.8 minutes `3h12.8m`. The local
+helper `agent-duration.ts` rounds once, with the scale above, to whole tenths
+of a minute and only then splits, so a value the scale shows as 60 minutes
+reads `1h00m`, never `0h60m`, and no tenth the column showed before is lost. A
+positive span under the scale reads `<0.1m`, a measured zero `0h00m`, and an
+unindexed session keeps its reason. The compact text is drawn for the eye; a
+screen reader hears the value in words with the exact millisecond measurement
+(`3 hours 12.8 minutes, exactly 11,568,000 ms`), which is also the cell's
+tooltip and an "Agent time" line in the row's keyboard-reachable details. A
+single session's spans never overlap, so a row reads at most just under
+`720h` in a 30-day range; `719h59.9m` fits the unchanged 64px column. The
+summary tiles, hands-off and the session detail's timeline durations keep
+their own formats.
+
+## Session ordering
+
+The All sessions table offers **Started** (the existing default) and
+**Recently active**. Both orders are applied in SQLite before the 50-row page
+bound and share every host, search and pull-request filter. Recently active
+uses the latest timed own work record, with the same work-record predicate as
+session events; metadata and inherited fork copies cannot make a conversation
+recent. A conversation resumed today can therefore appear on the first page
+although its start is older than every previously loaded page. Activity is
+across indexed history, independent of the selected measurement window.
+Undated activity comes last, with session ID descending breaking every tie.
+The cursor names its sort and is rejected for another order; old cursors and
+requests with no sort keep Started behavior.
+
+The sort is carried in the list address, session links and the detail page's
+Back link. Changing it starts from the first page; browser Back/Forward reads
+the same selection. The summary follows table filters; changing sort leaves
+its totals unchanged. There is no separate recent-activity panel.
+
+## Sub-sessions in All sessions
+
+All sessions groups the rows it has loaded with the same Dashboard helpers.
+Each 50-row page keeps its query, filters, cursor and row measurements.
+The list can fetch further matching pages to fill the visible table. Returned
+parent context supports groups whose parent is outside the current page. A verified sub-session is collapsed under
+its parent's own row when that row is loaded, and the group sits where its
+newest loaded member does in the list's order. A parent on a later page or
+outside the filters is only named, on a row that says "Main session not loaded
+here: on a later page or outside these filters"; it has no measurement, start,
+PR, live state, compactions or details, and its link opens the parent's page
+with the list's address. When the parent's own row arrives on a later page it
+takes that row's place, and the group stays open or closed as it was.
+
+A known sub-session whose creator is not verified is not listed, even when
+searched for, nor any loaded session under it, nor a branch whose parent is not
+loaded and whose page context (`referenced_parents`) says that parent is such a
+session. Only the direct parent's own context is read; no further ancestor.
+Parents are matched by exact host and identity. An ordinary session with no
+title or parent is listed as before.
+
+The caption keeps the raw loaded count and adds how many loaded sub-sessions are
+grouped under main sessions and how many are hidden because their main session
+is unknown. Group disclosures are separate from each row's details. Only drawn
+rows are read for host titles, live state and compactions; a collapsed or hidden
+row, or a row only naming a parent, is not. Refresh and next-page scroll
+anchoring follow the drawn row by its group, so a parent that replaces the row
+naming it keeps its place. Groups are not kept open across routes; Back returns
+to the same list with its groups collapsed.
 
 ## Verification and expected results
 
 - `cargo test -p xt-store --test session_list --locked`: page through more than
   two pages with tied/unknown dates without duplicates or omissions; verify host
   and literal-substring filters, unknown metadata and rejected invalid filters.
+- `cargo test -p xt-metrics --test session --locked`: F1's single session
+  matches its goldens (5 human messages, 1,100 tokens, 1,380,000 active ms);
+  F2's three overlapping lanes partition the global totals; F3 proves the window
+  boundary, an existing empty window and a missing identifier stay distinct; an
+  unclassified record keeps only the human-message count unknown; and the
+  metadata page and its measurements share one read snapshot.
 - `cargo test -p xtrace-desktop --test fixture_mode --all-features --locked`:
-  the native fixture export and committed browser fixture agree on session rows.
+  the native fixture export and committed browser fixture agree on session rows
+  and their measurements, for all three window presets; the listed row's numbers
+  equal the Dashboard tiles for the same window, and an invalid range fails.
 - `pnpm check`: typed DataSource contract, metadata rendering, host/search resets,
-  load-more, import-event refresh and query-error recovery pass.
-- `pnpm e2e --grep 'indexed Sessions'`: fixture metadata and filters render in
-  Chromium and WebKit, in light and dark themes.
+  load-more, import-event refresh and query-error recovery pass. Focused summary
+  tests cover filtered Rust answers, empty matches, the supplied ratio, range
+  changes, incomplete message counts, loading, retry, failed refreshes and
+  first-page totals preserved across load-more failures. Three focused
+  tests open the M-02, M-04 and M-05 definitions from their headers by keyboard
+  focus, assert the quoted rule text and `aria-describedby`, and check Escape
+  closes the definition while focus stays on the header. One test covers the
+  identity column against known, partly known and wholly unknown
+  repository/branch metadata. `src/app/session-search.test.ts` covers the link
+  contract: the whole canonical ID, the reported host, the selected range, an
+  encoded ID, a dropped unsupported host and every validated host, range and
+  search bound. `src/app/SessionNavigation.test.tsx` follows a lane link from
+  the Dashboard into a search over the carried range, restores that search with
+  the router's own Back and Forward, replaces it by typing, reports no match
+  without selecting a row, and ignores an unusable host and range.
+- `pnpm e2e --grep 'indexed Sessions'`: fixture metadata, measured columns and
+  filters render in Chromium and WebKit, in light and dark themes; each metric
+  definition opens from keyboard focus on its header and closes on Escape.
+- `pnpm e2e --grep 'Sessions summary tiles'` (`e2e/sessions-summary.spec.ts`):
+  at 1440x900 and 1120x720, in light and dark, the four tiles report F1's range,
+  no label, value or aside is clipped or leaves its tile, the page gains no
+  horizontal scroll, and the session list is still shown beneath them.
+- `pnpm e2e --grep 'Sessions rows scroll inside the list'`
+  (`e2e/design-alignment.spec.ts`): as in the reference, the list takes the
+  page's remaining height rather than a viewport cap, so at 1440x900 and
+  1120x720, in light and dark, with 60 synthetic rows the page itself does not
+  scroll, the rows scroll inside their own focusable region, End reaches the
+  last row with the sticky header unmoved, and Load more stays under the rows
+  outside their scroll. A window too short to leave the list a usable height
+  keeps a minimum list height and scrolls the page instead of losing rows.
+- `pnpm e2e --grep 'below the shown scale'` (same file): a synthetic export
+  served in place of F1 renders two seconds of agent working time as `<1 m`,
+  the messages-per-main ratio as `<0.1`, and missing input as unmeasured.
+  `e2e/sessions-agent-time.spec.ts` also checks the full `254 h 27 m` summary
+  with its parallel-time caption at all three supported widths in both themes.
+- `pnpm e2e --grep 'agent time fits'` (`e2e/sessions.spec.ts`): at 1120x720,
+  in light and dark, in Chromium and WebKit, rows served at `719h59.9m`,
+  `3h12.8m`, `<0.1m` and `0h00m` fit the 64px column under its header without
+  page scroll, the cell's tooltip is the exact millisecond value, and the row's
+  details opened with Enter state it.
+- `pnpm e2e --grep 'Sessions, by keyboard'` and `--grep 'carries the selected
+range'` (`e2e/session-navigation.spec.ts`): in Chromium and WebKit, a lane
+  link is focused and followed with Enter with its focus ring measured inside
+  the clipped lane name, the list shows the search it ran, real browser Back and
+  Forward restore it, a typed search updates the address, and a 30d selection
+  travels into Sessions and measures that window.
+- `pnpm e2e e2e/compact-diagnostics.spec.ts`: over test-only synthetic data
+  with an incomplete index, untimed history, partial output, an unresolved
+  session at once, in Chromium and
+  WebKit, light and dark, at 1440×900 and 1120×720: the Sessions limits share
+  one line when closed, each disclosure (and the Settings link) is reached by
+  keyboard with a visible focus ring, opened explanations stay inside their row
+  and the viewport, the rows keep their own scroll, and the Dashboard's effort
+  method opens by keyboard inside its card. A healthy F1 page shows only the compact scope.
 - Local native validation: `pnpm check:native --base <reviewed-base-sha>`.
   In a normal native launch, Sessions must display the existing local index,
   show incomplete coverage when reported by the indexer, and load subsequent
