@@ -167,7 +167,8 @@ function buildColumns(
     {
       key: 'pull-request',
       header: 'pull request',
-      width: 'minmax(112px, 1.6fr)',
+      // Keep the grid's minimum total while leaving room for full metric headers.
+      width: 'minmax(108px, 1.6fr)',
       render: (row) => (
         <div className="xt-pr-name">
           {row.title === null ? (
@@ -230,7 +231,7 @@ function buildColumns(
       header: (
         <MetricHeader label="sessions" name="Linked sessions, active in range" ruleId="M-11" />
       ),
-      width: '52px',
+      width: '55px',
       align: 'right',
       render: (row) => (
         <button
@@ -309,7 +310,7 @@ function buildColumns(
       header: (
         <MetricHeader label="hands-off" name="Hands-off, pooled median minutes" ruleId="M-12a" />
       ),
-      width: '60px',
+      width: '61px',
       align: 'right',
       render: (row) => {
         const { value, text } = rowHandsOff(row);
