@@ -17,8 +17,8 @@ use std::{
     time::Duration,
 };
 
-/// The probe folder's own name. The session index skips Claude projects whose
-/// encoded folder name ends with `-` followed by this name.
+/// The probe folder's own name. The native index receives this exact cwd and
+/// excludes only transcripts whose own bounded metadata proves that cwd.
 pub(super) const PROBE_DIR_NAME: &str = "xtrace-claude-usage-probe";
 const LAST_READING_FILE: &str = "claude-usage-last.json";
 /// Claude Code's config can hold many projects; anything larger is not read.

@@ -47,20 +47,6 @@ fn unreadable(path: &Path) -> ReaderDiagnostic {
     }
 }
 
-/// XTrace Desktop reads Claude usage by running Claude Code in a dedicated
-/// folder named `xtrace-claude-usage-probe`. Claude Code names a project
-/// folder after its working directory with every non-alphanumeric character
-/// replaced by `-`, so that folder's project ends with this suffix. Those
-/// probe runs are not the user's sessions and are never indexed.
-pub const USAGE_PROBE_PROJECT_SUFFIX: &str = "-xtrace-claude-usage-probe";
-
-fn is_usage_probe_project(project: &Path) -> bool {
-    project
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(USAGE_PROBE_PROJECT_SUFFIX))
-}
-
 /// Every main transcript and sidechain file under the projects root, newest
 /// first, plus a diagnostic for each project or entry that could not be
 /// listed; the other projects still enumerate. `memory/` trees and non-JSONL
@@ -84,9 +70,6 @@ pub fn enumerate(projects: &Path) -> std::io::Result<(Vec<ClaudeFile>, Vec<Reade
                 diagnostics.push(unreadable(&project));
                 continue;
             }
-        }
-        if is_usage_probe_project(&project) {
-            continue;
         }
         let Ok(entries) = fs::read_dir(&project) else {
             diagnostics.push(unreadable(&project));
@@ -155,6 +138,159 @@ pub fn enumerate(projects: &Path) -> std::io::Result<(Vec<ClaudeFile>, Vec<Reade
             .then_with(|| a.path.cmp(&b.path))
     });
     Ok((files, diagnostics))
+}
+
+const PROBE_MAX_BYTES: u64 = 64 * 1024;
+const PROBE_MAX_LINES: usize = 256;
+const PROBE_MAX_LINE_BYTES: usize = 8 * 1024;
+
+/// Only the app supplies this exact owned cwd. Encoded names narrow reads;
+/// they never establish ownership because different working directories collide.
+pub(super) struct UsageProbe {
+    cwds: Vec<String>,
+    projects: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProbeMetadata {
+    cwd: Option<String>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    native_session_id: Option<String>,
+    conversation_id: Option<String>,
+    source_platform: Option<String>,
+    // Derived fields reject duplicate known keys, including null values.
+    #[serde(rename = "type")]
+    _kind: Option<String>,
+    #[serde(rename = "uuid")]
+    _uuid: Option<String>,
+}
+
+impl UsageProbe {
+    pub(super) fn new(directory: &Path) -> Option<Self> {
+        if !directory.is_absolute() {
+            return None;
+        }
+        let mut cwds = vec![directory.to_str()?.to_owned()];
+        // The app's data directory exists before its probe subdirectory does.
+        if let (Some(parent), Some(name)) = (directory.parent(), directory.file_name())
+            && let Ok(parent) = fs::canonicalize(parent)
+            && let Some(real) = parent.join(name).to_str()
+            && !cwds.iter().any(|cwd| cwd == real)
+        {
+            cwds.push(real.to_owned());
+        }
+        let projects = cwds
+            .iter()
+            .map(|cwd| {
+                cwd.encode_utf16()
+                    .map(|unit| {
+                        char::from_u32(u32::from(unit))
+                            .filter(char::is_ascii_alphanumeric)
+                            .unwrap_or('-')
+                    })
+                    .collect()
+            })
+            .collect();
+        Some(Self { cwds, projects })
+    }
+
+    pub(super) fn excludes(&self, file: &ClaudeFile) -> bool {
+        // Main transcripts and nested sidechains both identify their project
+        // by the direct child of the projects root, not by an arbitrary ancestor.
+        let project = if file.sidechain {
+            file.path
+                .ancestors()
+                .find(|p| p.file_name().is_some_and(|n| n == "subagents"))
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+        } else {
+            file.path.parent()
+        };
+        if project
+            .and_then(Path::file_name)
+            .and_then(|p| p.to_str())
+            .is_none_or(|p| !self.projects.iter().any(|expected| expected == p))
+        {
+            return false;
+        }
+        self.confirm(file).unwrap_or(false)
+    }
+
+    fn confirm(&self, file: &ClaudeFile) -> std::io::Result<bool> {
+        let (mut source, identity) = open_source(&file.path, file.observed())?;
+        if !identity.known || identity.len > PROBE_MAX_BYTES {
+            return Ok(false);
+        }
+        // Copy only the bounded observed length, even if the file grows.
+        let snapshot = copy_snapshot(&mut source, identity.len)?;
+        if FileIdentity::of(&source.metadata()?) != identity {
+            return Ok(false);
+        }
+        let mut reader = BufReader::new(snapshot);
+        let mut line = Vec::new();
+        let mut records = 0;
+        let mut lines = 0;
+        loop {
+            line.clear();
+            let read = (&mut reader)
+                .take(PROBE_MAX_LINE_BYTES as u64 + 1)
+                .read_until(b'\n', &mut line)?;
+            if read == 0 {
+                break;
+            }
+            lines += 1;
+            if lines > PROBE_MAX_LINES || read > PROBE_MAX_LINE_BYTES || !line.ends_with(b"\n") {
+                return Ok(false);
+            }
+            let Ok(text) = std::str::from_utf8(&line) else {
+                return Ok(false);
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let Ok(raw) = serde_json::from_str::<ProbeMetadata>(text) else {
+                return Ok(false);
+            };
+            if raw.cwd.as_ref().is_some_and(|cwd| !self.cwds.contains(cwd))
+                || [
+                    raw.session_id.as_deref(),
+                    raw.native_session_id.as_deref(),
+                    raw.conversation_id.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|id| id != file.session_id)
+                || raw
+                    .source_platform
+                    .as_deref()
+                    .is_some_and(|host| host != "claude")
+            {
+                return Ok(false);
+            }
+            match parse_with_context(text, &context(&file.session_id)) {
+                Ok(Parsed::Record(_))
+                    if raw.cwd.is_some() && raw.session_id.as_deref() == Some(&file.session_id) =>
+                {
+                    records += 1
+                }
+                Ok(Parsed::Inert) => {}
+                _ => return Ok(false),
+            }
+        }
+        // A rename/replacement can leave our open descriptor unchanged. Verify
+        // the path again after classification, as well as the original handle.
+        Ok(records > 0 && same_probe_revision(file, &source, identity)?)
+    }
+}
+
+fn same_probe_revision(
+    file: &ClaudeFile,
+    source: &fs::File,
+    identity: FileIdentity,
+) -> std::io::Result<bool> {
+    let (_, current) = open_source(&file.path, file.observed())?;
+    Ok(identity.known && current == identity && FileIdentity::of(&source.metadata()?) == identity)
 }
 
 pub(super) fn collect_jsonl(
@@ -1151,22 +1287,299 @@ mod snapshot_tests {
 #[cfg(test)]
 mod usage_probe_tests {
     use super::*;
+    use serde_json::json;
+    use std::io::Write;
+
+    const SID: &str = "00000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "00000000-0000-4000-8000-000000000002";
+
+    fn record(id: &str, cwd: &Path, sid: &str) -> String {
+        json!({"uuid":id,"type":"user","sessionId":sid,"cwd":cwd,
+            "message":{"role":"user","content":"synthetic"}})
+        .to_string()
+            + "\n"
+    }
+
+    struct Fixture {
+        _root: tempfile::TempDir,
+        home: PathBuf,
+        cwd: PathBuf,
+        project: PathBuf,
+        path: PathBuf,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path().join("home");
+            let cwd = root
+                .path()
+                .join("Application Support/xtrace-claude-usage-probe");
+            fs::create_dir_all(cwd.parent().unwrap()).unwrap();
+            let probe = UsageProbe::new(&cwd).unwrap();
+            let project = home.join(".claude/projects").join(&probe.projects[0]);
+            fs::create_dir_all(&project).unwrap();
+            let path = project.join(format!("{SID}.jsonl"));
+            Self {
+                _root: root,
+                home,
+                cwd,
+                project,
+                path,
+            }
+        }
+        fn files(&self) -> Vec<ClaudeFile> {
+            let (files, diagnostics) = enumerate(&self.home.join(".claude/projects")).unwrap();
+            assert!(diagnostics.is_empty());
+            files
+        }
+        fn excluded(&self, text: &str) -> bool {
+            fs::write(&self.path, text).unwrap();
+            UsageProbe::new(&self.cwd)
+                .unwrap()
+                .excludes(&self.files()[0])
+        }
+        fn scan(
+            &self,
+            store: &mut Store,
+            configured: bool,
+            mode: ScanMode,
+        ) -> super::super::ImportReport {
+            use super::super::{ImportRequest, ProducerSource, session_creation, session_titles};
+            let producer = ProducerSource::Checkout {
+                pin: self.home.join("unused"),
+                plugin_root: None,
+            };
+            let request = ImportRequest {
+                home: &self.home,
+                hosts: &[Host::Claude],
+                producer: &producer,
+                python: None,
+                observed_at: 1_790_000_000_000,
+                cancel: None,
+            };
+            super::super::scan_native_continued_with_probe(
+                store,
+                &request,
+                mode,
+                &mut |_| {},
+                &mut session_creation::SpawnBacklog::default(),
+                session_titles::TitleLimits::default(),
+                configured.then_some(self.cwd.as_path()),
+            )
+        }
+    }
 
     #[test]
-    fn usage_probe_project_is_never_enumerated() {
-        let root = tempfile::tempdir().unwrap();
-        let projects = root.path();
-        let probe = projects.join(
-            "-Users-someone-Library-Application-Support-ai-xtrace-desktop-xtrace-claude-usage-probe",
+    fn usage_probe_collision_keeps_users_and_excludes_only_proven_file_before_writes() {
+        let f = Fixture::new();
+        let collision = f
+            ._root
+            .path()
+            .join("Application-Support/xtrace-claude-usage-probe");
+        assert_eq!(
+            UsageProbe::new(&collision).unwrap().projects[0],
+            UsageProbe::new(&f.cwd).unwrap().projects[0]
         );
-        let user = projects.join("-Users-someone-repo");
-        for dir in [&probe, &user] {
-            fs::create_dir_all(dir).unwrap();
-            fs::write(dir.join("s.jsonl"), "{}\n").unwrap();
+        fs::write(&f.path, record("probe", &f.cwd, SID)).unwrap();
+        fs::write(
+            f.project.join(format!("{OTHER}.jsonl")),
+            record("user", &collision, OTHER),
+        )
+        .unwrap();
+        let mut store = Store::open_in_memory().unwrap();
+        let report = f.scan(&mut store, true, ScanMode::Resume);
+        assert!(report.complete(), "{report:?}");
+        assert_eq!(report.hosts[0].sessions.len(), 1);
+        assert_eq!(store.counts().unwrap().sessions, 1);
+        assert!(store.session(SID).unwrap().is_none());
+        assert_eq!(store.records(OTHER).unwrap().len(), 1);
+        assert!(
+            store
+                .discovered_sessions(Host::Claude)
+                .unwrap()
+                .iter()
+                .all(|row| row.native_session_id != SID)
+        );
+        assert!(
+            store
+                .native_checkpoint(SessionSource::Transcript, &checkpoint::file_key(&f.path))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .source_cursor(SessionSource::Transcript, &checkpoint::file_key(&f.path))
+                .unwrap()
+                .is_none()
+        );
+        // Replay is still excluded without acquiring a discovery/cursor/checkpoint.
+        assert_eq!(
+            f.scan(&mut store, true, ScanMode::Replay).hosts[0]
+                .sessions
+                .len(),
+            1
+        );
+        assert!(store.session(SID).unwrap().is_none());
+        // An ordinary caller with no configured ownership path imports both.
+        assert_eq!(
+            f.scan(&mut store, false, ScanMode::Resume).hosts[0]
+                .sessions
+                .len(),
+            2
+        );
+        assert!(store.session(SID).unwrap().is_some());
+    }
+
+    #[test]
+    fn usage_probe_underscore_suffix_folder_is_ordinary_history() {
+        let f = Fixture::new();
+        let cwd = f
+            ._root
+            .path()
+            .join("Application Support/xtrace_claude_usage_probe");
+        assert_eq!(
+            UsageProbe::new(&cwd).unwrap().projects[0],
+            UsageProbe::new(&f.cwd).unwrap().projects[0]
+        );
+        assert!(!f.excluded(&record("user", &cwd, SID)));
+        let mut store = Store::open_in_memory().unwrap();
+        assert!(f.scan(&mut store, true, ScanMode::Resume).complete());
+        assert_eq!(store.records(SID).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn usage_probe_accepts_only_the_configured_or_resolved_parent_spelling() {
+        let f = Fixture::new();
+        let real = fs::canonicalize(f.cwd.parent().unwrap())
+            .unwrap()
+            .join(f.cwd.file_name().unwrap());
+        let probe = UsageProbe::new(&f.cwd).unwrap();
+        let project = f
+            .home
+            .join(".claude/projects")
+            .join(probe.projects.last().unwrap());
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join(format!("{SID}.jsonl")),
+            record("probe", &real, SID),
+        )
+        .unwrap();
+        assert!(probe.excludes(&f.files()[0]));
+        assert!(UsageProbe::new(Path::new("relative/probe")).is_none());
+    }
+
+    #[test]
+    fn usage_probe_missing_conflicting_and_duplicate_metadata_never_excludes() {
+        let f = Fixture::new();
+        let good = record("probe", &f.cwd, SID);
+        assert!(f.excluded(&good));
+        for changed in [
+            good.replace(&format!("\"cwd\":{},", json!(f.cwd)), ""),
+            good.replace(&format!("\"sessionId\":\"{SID}\","), ""),
+            good.replace(SID, OTHER),
+            format!("{good}{}", record("later", Path::new("/ordinary"), SID)),
+            format!("{good}{{\"type\":\"summary\",\"cwd\":\"/ordinary\"}}\n"),
+            good.replacen('{', "{\"cwd\":\"/ordinary\",", 1),
+            good.replacen('{', &format!("{{\"sessionId\":\"{OTHER}\","), 1),
+            good.replacen('{', "{\"cwd\":null,", 1),
+            good.replacen('{', &format!("{{\"native_session_id\":\"{OTHER}\","), 1),
+            good.replacen('{', &format!("{{\"conversation_id\":\"{OTHER}\","), 1),
+            good.replacen('{', "{\"source_platform\":\"codex\",", 1),
+            format!("{good}{{broken\n"),
+            good.trim_end().to_owned(),
+        ] {
+            assert!(!f.excluded(&changed), "{changed}");
         }
-        let (files, diagnostics) = enumerate(projects).unwrap();
-        assert!(diagnostics.is_empty());
-        assert_eq!(files.len(), 1);
-        assert!(files[0].path.starts_with(&user));
+        assert!(!f.excluded("{\"type\":\"summary\"}\n"));
+        assert!(!f.excluded(""));
+    }
+
+    #[test]
+    fn usage_probe_bounds_fall_back_to_ordinary_import() {
+        let f = Fixture::new();
+        let good = record("probe", &f.cwd, SID);
+        assert!(!f.excluded(&(good.clone() + &" ".repeat(PROBE_MAX_BYTES as usize))));
+        assert!(!f.excluded(&(good.clone() + &"\n".repeat(PROBE_MAX_LINES))));
+        let long = good.replace("synthetic", &"x".repeat(PROBE_MAX_LINE_BYTES));
+        assert!(!f.excluded(&long));
+        let mut store = Store::open_in_memory().unwrap();
+        assert!(f.scan(&mut store, true, ScanMode::Resume).complete());
+        assert_eq!(store.records(SID).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn usage_probe_sidechains_need_their_own_evidence() {
+        let f = Fixture::new();
+        let dir = f.project.join(SID).join("subagents/nested");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("agent.jsonl"), record("probe-child", &f.cwd, SID)).unwrap();
+        let probe = UsageProbe::new(&f.cwd).unwrap();
+        assert!(probe.excludes(&f.files()[0]));
+        fs::write(
+            dir.join("agent.jsonl"),
+            record("user-child", Path::new("/ordinary"), SID),
+        )
+        .unwrap();
+        assert!(!probe.excludes(&f.files()[0]));
+    }
+
+    #[test]
+    fn usage_probe_appends_and_rewrites_are_reconsidered_without_a_cache() {
+        let f = Fixture::new();
+        assert!(f.excluded(&record("probe", &f.cwd, SID)));
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&f.path)
+            .unwrap()
+            .write_all(record("user", Path::new("/ordinary"), SID).as_bytes())
+            .unwrap();
+        let mut store = Store::open_in_memory().unwrap();
+        assert!(f.scan(&mut store, true, ScanMode::Resume).complete());
+        assert_eq!(store.records(SID).unwrap().len(), 2);
+        fs::write(&f.path, record("rewritten", Path::new("/ordinary"), SID)).unwrap();
+        assert!(f.scan(&mut store, true, ScanMode::Resume).complete());
+        assert!(
+            store
+                .records(SID)
+                .unwrap()
+                .iter()
+                .any(|r| r.uuid == "rewritten")
+        );
+    }
+
+    #[test]
+    fn usage_probe_final_revision_check_refuses_replacement_growth_and_unknown_identity() {
+        let f = Fixture::new();
+        fs::write(&f.path, record("probe", &f.cwd, SID)).unwrap();
+        let file = f.files().remove(0);
+        let (source, identity) = open_source(&f.path, file.observed()).unwrap();
+        assert!(same_probe_revision(&file, &source, identity).unwrap());
+        assert!(
+            !same_probe_revision(
+                &file,
+                &source,
+                FileIdentity {
+                    known: false,
+                    ..identity
+                }
+            )
+            .unwrap()
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&f.path)
+            .unwrap()
+            .write_all(b"\n")
+            .unwrap();
+        assert!(!same_probe_revision(&file, &source, identity).unwrap());
+        fs::rename(&f.path, f.project.join("old.txt")).unwrap();
+        fs::write(&f.path, record("replacement", &f.cwd, SID)).unwrap();
+        assert!(same_probe_revision(&file, &source, identity).is_err());
+        #[cfg(unix)]
+        {
+            fs::remove_file(&f.path).unwrap();
+            std::os::unix::fs::symlink(f.project.join("old.txt"), &f.path).unwrap();
+            assert!(same_probe_revision(&file, &source, identity).is_err());
+        }
     }
 }

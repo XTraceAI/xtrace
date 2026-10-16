@@ -219,6 +219,7 @@ fn a_tailer_shut_down_during_a_hung_initial_scan_stops_within_its_bound() {
     let tailer = Tailer::start(
         store,
         WatchConfig {
+            usage_probe_dir: None,
             home: home.clone(),
             hosts: vec![Host::Codex],
             producer: bundle(),
@@ -258,6 +259,7 @@ fn cancel_then_a_graceful_stop_does_not_wait_for_the_hung_reader() {
     let tailer = Tailer::start(
         store,
         WatchConfig {
+            usage_probe_dir: None,
             home: home.clone(),
             hosts: vec![Host::Codex],
             producer: bundle(),

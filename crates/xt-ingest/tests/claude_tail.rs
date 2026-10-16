@@ -135,6 +135,7 @@ impl Home {
         let tailer = Tailer::start(
             self.store(),
             WatchConfig {
+                usage_probe_dir: None,
                 home: self.root.clone(),
                 hosts: vec![Host::Claude],
                 producer: ProducerSource::Checkout {
@@ -1140,6 +1141,7 @@ fn claude_tail_reports_a_watcher_failure_as_degraded_never_silent_ready() {
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: absent.clone(),
             hosts: vec![Host::Claude],
             producer: ProducerSource::Checkout {
@@ -1283,6 +1285,7 @@ fn claude_tail_watches_the_cursor_parent_so_a_sibling_root_is_seen_when_it_appea
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: root.clone(),
             hosts: vec![Host::Cursor],
             producer: ProducerSource::Checkout {
@@ -1349,6 +1352,7 @@ fn claude_tail_watches_the_cursor_hook_state_pins_so_a_pin_change_is_reconciled(
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: root.clone(),
             hosts: vec![Host::Cursor],
             producer: ProducerSource::Checkout {
@@ -1402,6 +1406,7 @@ fn cursor_ide_appearance_recreation_and_wal_changes_are_watched_without_alias_du
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: home.clone(),
             hosts: vec![Host::Cursor],
             producer: ProducerSource::Checkout {
@@ -1719,6 +1724,7 @@ fn claude_tail_follows_an_accepted_symlinked_home_for_the_fallback_watch() {
     let tailer = Tailer::start(
         Store::open(temp.path().join("index.sqlite")).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: alias.clone(),
             hosts: vec![Host::Claude],
             producer: ProducerSource::Checkout {

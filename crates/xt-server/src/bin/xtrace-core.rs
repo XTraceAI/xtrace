@@ -318,6 +318,7 @@ fn watch_native(args: std::iter::Skip<std::env::ArgsOs>) -> Result<(), &'static 
     let tailer = Tailer::start(
         store,
         WatchConfig {
+            usage_probe_dir: None,
             home: options.home.clone(),
             hosts: options.hosts.clone(),
             producer: ProducerSource::Checkout {

@@ -179,6 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tailer = Tailer::start(
             Store::open(&db)?,
             WatchConfig {
+                usage_probe_dir: None,
                 home: home.clone(),
                 hosts: vec![Host::Claude, Host::Codex, Host::Cursor],
                 producer: ProducerSource::Checkout {

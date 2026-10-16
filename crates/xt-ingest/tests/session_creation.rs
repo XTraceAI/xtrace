@@ -1687,6 +1687,7 @@ fn the_worker_finishes_an_interrupted_bootstrap_without_a_source_event() {
     let tailer = Tailer::start(
         Store::open(&database).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: home.clone(),
             hosts: vec![Host::Codex],
             producer: bundle(),
@@ -1777,6 +1778,7 @@ fn worker(
     let tailer = Tailer::start(
         Store::open(database).unwrap(),
         WatchConfig {
+            usage_probe_dir: None,
             home: home.to_path_buf(),
             hosts: vec![Host::Codex],
             producer: bundle(),

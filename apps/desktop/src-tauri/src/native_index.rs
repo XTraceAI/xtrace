@@ -304,6 +304,7 @@ impl NativeIndex {
         let tailer = Tailer::start(
             store,
             WatchConfig {
+                usage_probe_dir: options.db.parent().and_then(usage_probe_directory),
                 home: options.home,
                 hosts: HOSTS.to_vec(),
                 producer,
@@ -380,6 +381,13 @@ impl NativeIndex {
         }
         ended
     }
+}
+
+/// The same data directory that creates the app's usage-reader paths.
+fn usage_probe_directory(data_dir: &std::path::Path) -> Option<PathBuf> {
+    std::path::absolute(data_dir)
+        .ok()
+        .map(|dir| dir.join(crate::account_usage_claude_local::PROBE_DIR_NAME))
 }
 
 /// Whether a host's last scan leaves the local index short of that host: the
@@ -910,6 +918,43 @@ mod tests {
                 forks_not_searched: 11,
                 unfinished_line_skipped: 2,
             }
+        );
+    }
+
+    #[test]
+    fn probe_filter_uses_the_same_explicit_data_directory_as_the_usage_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let overridden_data = root.path().join("chosen data");
+        let home = root.path().join("synthetic home");
+        let paths =
+            crate::account_usage_claude_local::ClaudeUsagePaths::new(&overridden_data, &home, None);
+        let database = overridden_data.join(crate::state::DATABASE_FILE);
+        assert_eq!(
+            usage_probe_directory(database.parent().unwrap()),
+            Some(paths.probe_dir)
+        );
+    }
+
+    #[test]
+    fn probe_filter_anchors_supported_relative_data_directories() {
+        let relative = PathBuf::from("chosen-data");
+        let options = crate::state::StartupOptions {
+            data_dir: Some(relative.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            options.data_folder(|| panic!("explicit override")).unwrap(),
+            crate::state::DataFolder::Chosen(relative.clone())
+        );
+        let paths = crate::account_usage_claude_local::ClaudeUsagePaths::new(
+            &relative,
+            std::path::Path::new("synthetic-home"),
+            None,
+        );
+        let database = relative.join(crate::state::DATABASE_FILE);
+        assert_eq!(
+            usage_probe_directory(database.parent().unwrap()),
+            Some(std::path::absolute(&paths.probe_dir).unwrap())
         );
     }
 

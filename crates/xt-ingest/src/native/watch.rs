@@ -36,7 +36,7 @@ use super::{
     CancelToken, HostReport, HostStatus, ImportReport, ImportRequest, ProducerSource, ScanMode,
     SessionOutcome, all_imported,
     claude_launch::SearchGaps,
-    scan_native_continued,
+    scan_native_continued_with_probe,
     session_creation::{SpawnBacklog, SpawnProgress, continue_codex_spawns_into},
     session_titles::TitleLimits,
 };
@@ -68,6 +68,8 @@ const SPAWN_RETRY_MIN: Duration = Duration::from_millis(10);
 
 pub struct WatchConfig {
     pub home: PathBuf,
+    /// Exact app-owned Claude usage-probe cwd; absent callers exclude no files.
+    pub usage_probe_dir: Option<PathBuf>,
     pub hosts: Vec<Host>,
     /// Where the pinned producer's sources are, for the reader hosts.
     pub producer: ProducerSource,
@@ -1029,13 +1031,14 @@ impl Worker {
             observed_at: now_ms(),
             cancel: Some(&self.cancel),
         };
-        let report = scan_native_continued(
+        let report = scan_native_continued_with_probe(
             &mut self.store,
             &request,
             ScanMode::Resume,
             observer,
             &mut self.spawns,
             self.config.spawn_limits,
+            self.config.usage_probe_dir.as_deref(),
         );
         self.spawn_retry = spawn_retry_base(&self.config);
         report
@@ -1785,6 +1788,7 @@ mod tests {
         use notify::{Event, EventKind, event::*};
         let home = PathBuf::from("/h");
         let config = WatchConfig {
+            usage_probe_dir: None,
             home: home.clone(),
             hosts: vec![Host::Claude],
             producer: ProducerSource::Checkout {
@@ -1947,6 +1951,7 @@ mod tests {
         let relative = "Library/Application Support/Cursor/User/globalStorage";
         let global = home.join(relative);
         let config = WatchConfig {
+            usage_probe_dir: None,
             home: home.to_path_buf(),
             hosts: vec![Host::Cursor],
             producer: ProducerSource::Checkout {

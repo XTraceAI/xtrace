@@ -1756,6 +1756,7 @@ fn the_watcher_links_a_saved_launch_without_a_new_event() {
     let tailer = Tailer::start(
         home.store(),
         WatchConfig {
+            usage_probe_dir: None,
             home: home.home.clone(),
             hosts: vec![Host::Codex, Host::Claude],
             producer: bundle(),

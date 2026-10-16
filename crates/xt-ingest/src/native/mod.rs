@@ -286,6 +286,18 @@ pub fn scan_native_continued(
     spawns: &mut session_creation::SpawnBacklog,
     limits: session_titles::TitleLimits,
 ) -> ImportReport {
+    scan_native_continued_with_probe(store, request, mode, observer, spawns, limits, None)
+}
+
+pub(super) fn scan_native_continued_with_probe(
+    store: &mut Store,
+    request: &ImportRequest<'_>,
+    mode: ScanMode,
+    observer: &mut dyn FnMut(&Path),
+    spawns: &mut session_creation::SpawnBacklog,
+    limits: session_titles::TitleLimits,
+    usage_probe_dir: Option<&Path>,
+) -> ImportReport {
     let home = match anchor(request.home) {
         Ok(home) => home,
         Err(error) => {
@@ -317,7 +329,7 @@ pub fn scan_native_continued(
                 "scan cancelled before this host was read",
             ),
             Host::Claude => {
-                let report = import_claude(store, request, mode, observer);
+                let report = import_claude(store, request, mode, observer, usage_probe_dir);
                 // A scan is a source change: sessions still checking are
                 // looked at, and own reads that failed are made again.
                 spawns.checks.wake();
@@ -705,6 +717,7 @@ fn import_claude(
     request: &ImportRequest<'_>,
     mode: ScanMode,
     observer: &mut dyn FnMut(&Path),
+    usage_probe_dir: Option<&Path>,
 ) -> HostReport {
     // A completed Claude row whose indexed own transcript disappeared must
     // stop drawing before Ready/Reconciled, even when enumeration cannot see
@@ -805,9 +818,21 @@ fn import_claude(
             );
         }
     };
+    let usage_probe = usage_probe_dir.and_then(claude_fs::UsageProbe::new);
     let mut sessions = Vec::new();
     let mut interrupted = false;
     for file in files {
+        if cancelled(request) {
+            interrupted = true;
+            break;
+        }
+        if usage_probe
+            .as_ref()
+            .is_some_and(|probe| probe.excludes(&file))
+        {
+            observer(&file.path);
+            continue;
+        }
         if cancelled(request) {
             interrupted = true;
             break;
