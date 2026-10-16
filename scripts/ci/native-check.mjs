@@ -3,16 +3,20 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { installAbout, installSyft } from '../supply-chain/install-tools.mjs';
 
 export async function checkNative({
   base,
   release = false,
+  fixtureSmoke = false,
   repo = process.cwd(),
   platform = process.platform,
   run = spawnSync,
   install = async () => [await installSyft(), await installAbout()],
 } = {}) {
+  if (release && fixtureSmoke)
+    throw new Error('--fixture-smoke cannot be combined with --release.');
   if (platform !== 'darwin' || !/^[a-f0-9]{40}$/.test(base ?? ''))
     throw new Error('Native checks require macOS and --base with a full reviewed commit SHA.');
   const env = { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' };
@@ -63,11 +67,37 @@ export async function checkNative({
     execute('pnpm', ['sbom']);
     execute('pnpm', ['notices:check']);
     execute('node', ['scripts/security/scan-secrets.mjs', '--content', 'artifacts/sbom.cdx.json']);
-    execute('pnpm', ['tauri', 'build', '--debug', '--bundles', 'app']);
-    execute('node', [
-      'scripts/ci/debug-bundle.mjs',
-      'target/debug/bundle/macos/XTrace Desktop.app',
-    ]);
+    if (fixtureSmoke) {
+      // Compile the test identity into Tauri's singleton too. Copy the cache,
+      // then build normal code before building and launching only fixed F1.
+      const identifier = `ai.xtrace.app.test.${randomUUID()}`;
+      const testTarget = join(trusted, 'smoke-target.noindex');
+      execute('cp', ['-c', '-R', join(repo, 'target'), testTarget]);
+      env.CARGO_TARGET_DIR = testTarget;
+      const build = [
+        'tauri',
+        'build',
+        '--debug',
+        '--bundles',
+        'app',
+        '--config',
+        JSON.stringify({ identifier }),
+      ];
+      execute('pnpm', build);
+      execute('pnpm', [...build, '--features', 'fixtures']);
+      execute('node', [
+        'scripts/ci/debug-bundle.mjs',
+        join(testTarget, 'debug/bundle/macos/XTrace Desktop.app'),
+        identifier,
+        '--fixture-smoke',
+      ]);
+    } else {
+      execute('pnpm', ['tauri', 'build', '--debug', '--bundles', 'app']);
+      execute('node', [
+        'scripts/ci/debug-bundle.mjs',
+        'target/debug/bundle/macos/XTrace Desktop.app',
+      ]);
+    }
     if (release) {
       execute('pnpm', ['tauri', 'build', '--bundles', 'app']);
       execute('node', [
@@ -78,7 +108,13 @@ export async function checkNative({
     if (git('rev-parse', 'HEAD') !== head)
       throw new Error('Source changed during native validation.');
     requireClean();
-    return { head, base, macOS: version, release };
+    return {
+      head,
+      base,
+      macOS: version,
+      release,
+      ...(fixtureSmoke ? { smokeMode: 'fixture-f1' } : {}),
+    };
   } finally {
     await rm(trusted, { recursive: true, force: true });
   }
@@ -87,11 +123,20 @@ export async function checkNative({
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const base = args[0] === '--base' ? args[1] : undefined;
-  if (!base || args.length > 3 || (args[2] && args[2] !== '--release')) {
-    console.error('Usage: pnpm check:native --base FULL_COMMIT_SHA [--release]');
+  const flags = args.slice(2);
+  if (
+    !base ||
+    new Set(flags).size !== flags.length ||
+    flags.some((flag) => !['--release', '--fixture-smoke'].includes(flag))
+  ) {
+    console.error('Usage: pnpm check:native --base FULL_COMMIT_SHA [--release | --fixture-smoke]');
     process.exitCode = 1;
   } else {
-    checkNative({ base, release: args[2] === '--release' })
+    checkNative({
+      base,
+      release: flags.includes('--release'),
+      fixtureSmoke: flags.includes('--fixture-smoke'),
+    })
       .then((result) => console.log('Native validation passed: ' + JSON.stringify(result)))
       .catch((error) => {
         console.error(error.message);
