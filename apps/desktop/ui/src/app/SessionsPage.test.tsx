@@ -247,7 +247,8 @@ it('loads the next page, refreshes after import and resets pages for a host filt
   expect(list).toHaveBeenLastCalledWith({ ...all, hosts: ['cursor'] }, null, 7);
 });
 
-it('starts at page one on both deliberate sort changes but keeps pages through detail Back', async () => {
+/** Both sorts have two full pages, so returning to a cached sort can expose stale pages. */
+function twoPageSessionSource() {
   const source = new FixtureDataSource(fixture as FixtureExport);
   const base = (fixture as FixtureExport).sessions[0];
   const list = vi.spyOn(source, 'sessionsList').mockImplementation(async (filter, after) => ({
@@ -259,6 +260,28 @@ it('starts at page one on both deliberate sort changes but keeps pages through d
       title: after ? `Second page ${i}` : `${filter.sort} first page ${i}`,
     })),
   }));
+  return { source, list };
+}
+
+it('keeps both 50-row pages through session detail Back', async () => {
+  const { source } = twoPageSessionSource();
+  mountRoutes(source, '/sessions?range=7d');
+  await screen.findByRole('link', {
+    name: 'Open session started first page 0, started-page-one-0',
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Load more sessions' }));
+  const secondPage = await screen.findByRole('link', {
+    name: 'Open session Second page 0, page-two-0',
+  });
+  expect(screen.getAllByRole('link', { name: /^Open session / })).toHaveLength(100);
+  fireEvent.click(secondPage);
+  fireEvent.click(await screen.findByRole('link', { name: '← All sessions' }));
+  await screen.findByRole('link', { name: 'Open session Second page 0, page-two-0' });
+  expect(screen.getAllByRole('link', { name: /^Open session / })).toHaveLength(100);
+});
+
+it('resets both deliberate sort changes after warming both second pages in one client', async () => {
+  const { source, list } = twoPageSessionSource();
   mountRoutes(source, '/sessions?range=7d');
   await screen.findByRole('link', {
     name: 'Open session started first page 0, started-page-one-0',
@@ -266,9 +289,6 @@ it('starts at page one on both deliberate sort changes but keeps pages through d
   fireEvent.click(screen.getByRole('button', { name: 'Load more sessions' }));
   await screen.findByRole('link', { name: 'Open session Second page 0, page-two-0' });
   expect(screen.getAllByRole('link', { name: /^Open session / })).toHaveLength(100);
-  fireEvent.click(screen.getByRole('link', { name: 'Open session Second page 0, page-two-0' }));
-  fireEvent.click(await screen.findByRole('link', { name: '← All sessions' }));
-  await screen.findByRole('link', { name: 'Open session Second page 0, page-two-0' });
   fireEvent.change(screen.getByRole('combobox', { name: 'Sort sessions' }), {
     target: { value: 'recently_active' },
   });
@@ -280,6 +300,7 @@ it('starts at page one on both deliberate sort changes but keeps pages through d
   expect(screen.queryByRole('link', { name: 'Open session Second page 0, page-two-0' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Load more sessions' }));
   await screen.findByRole('link', { name: 'Open session Second page 0, page-two-0' });
+  expect(screen.getAllByRole('link', { name: /^Open session / })).toHaveLength(100);
   fireEvent.change(screen.getByRole('combobox', { name: 'Sort sessions' }), {
     target: { value: 'started' },
   });

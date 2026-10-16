@@ -653,7 +653,7 @@ it('shows a complete total, measured zeros and hands-off exclusions', async () =
   expect(none.getAttribute('data-state')).toBe('none');
 });
 
-it('discloses truncated lanes and renders every day of a 30-day range', async () => {
+it('keeps all 200 returned lanes when the report marks 205 lanes as truncated', async () => {
   const source = nativeSource((days) =>
     synthetic((report) => {
       const base = report.lane_end_ms - 3_600_000;
@@ -671,6 +671,13 @@ it('discloses truncated lanes and renders every day of a 30-day range', async ()
   await loaded();
   expect(laneRows()).toHaveLength(200);
   expect(screen.queryByTestId('lanes-disclosure')).toBeNull();
+});
+
+it('renders every day of a 30-day range in the daily chart dialog', async () => {
+  // The 200-lane boundary is checked above; date selection and the daily chart
+  // do not depend on the number of rows in the separate sessions table.
+  mount(nativeSource((days) => f1(days)));
+  await loaded();
   fireEvent.click(screen.getByRole('radio', { name: '30d' }));
   await waitFor(() => expect(period()).toMatch(PERIOD['30d']));
   // The daily chart follows the range, one dialog away.

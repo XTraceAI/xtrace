@@ -540,18 +540,34 @@ it('stays explicitly unavailable in a browser preview and reads nothing', async 
 
 // --- local filter and a large cached list ----------------------------------------
 
-it('filters the rows already read by title, repository or number, without another read', async () => {
+// Count accessible body rows without walking all five cells of every row.
+const cachedRowCount = () => within(table()).getAllByRole('row').length - 1;
+
+it('focuses and resets the 600 cached pull requests without another read', async () => {
   const source = trappedSource(async () => ({ rows: manyPrRows(600) }));
   mount(source);
   await loaded('feat: milestone 0');
-  expect(cells()).toHaveLength(600);
+  expect(cachedRowCount()).toBe(600);
   expect(meta()).toContain('600 pull requests indexed');
   const box = screen.getByRole('searchbox', { name: 'Filter pull requests' });
-  const filter = (value: string) => fireEvent.change(box, { target: { value } });
-  // The Shell's search shortcut reaches it, so the list is filtered from the keyboard.
   fireEvent.keyDown(window, { key: 'k', metaKey: true });
   expect(document.activeElement).toBe(box);
-  filter('  MILESTONE 5 ');
+  fireEvent.change(box, { target: { value: 'no such pull request' } });
+  expect(cells()).toEqual([['No pull request matches this filter.']]);
+  expect(meta()).toContain('0 of 600 shown');
+  fireEvent.change(box, { target: { value: '' } });
+  expect(cachedRowCount()).toBe(600);
+  expect(source.pullRequests).toHaveBeenCalledOnce();
+  expectLocalReadsOnly(source);
+});
+
+it('trims and folds a title filter across 600 cached pull requests without another read', async () => {
+  const source = trappedSource(async () => ({ rows: manyPrRows(600) }));
+  mount(source);
+  await loaded('feat: milestone 0');
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Filter pull requests' }), {
+    target: { value: '  MILESTONE 5 ' },
+  });
   expect(names()).toEqual([
     'feat: milestone 50octo-org/tools#1050',
     'feat: milestone 500xtrace/app#1500',
@@ -560,17 +576,36 @@ it('filters the rows already read by title, repository or number, without anothe
   expect(meta()).toBe(
     '3 of 600 shown · cached facts · lifetime link counts · by repo, then number',
   );
-  filter('octo-org/');
-  expect(cells()).toHaveLength(300);
-  filter('#1599');
+  expect(source.pullRequests).toHaveBeenCalledOnce();
+  expectLocalReadsOnly(source);
+});
+
+it.each([
+  ['repository', 'octo-org/', 300],
+  ['repository and number', 'tools#12', 100],
+] as const)(
+  'filters 600 cached pull requests by %s without another read',
+  async (_, filter, count) => {
+    const source = trappedSource(async () => ({ rows: manyPrRows(600) }));
+    mount(source);
+    await loaded('feat: milestone 0');
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter pull requests' }), {
+      target: { value: filter },
+    });
+    expect(cachedRowCount()).toBe(count);
+    expect(source.pullRequests).toHaveBeenCalledOnce();
+    expectLocalReadsOnly(source);
+  },
+);
+
+it('filters 600 cached pull requests by number without another read', async () => {
+  const source = trappedSource(async () => ({ rows: manyPrRows(600) }));
+  mount(source);
+  await loaded('feat: milestone 0');
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Filter pull requests' }), {
+    target: { value: '#1599' },
+  });
   expect(names()).toEqual(['Title not cachedxtrace/app#1599']);
-  filter('tools#12');
-  expect(cells()).toHaveLength(100);
-  filter('no such pull request');
-  expect(cells()).toEqual([['No pull request matches this filter.']]);
-  expect(meta()).toContain('0 of 600 shown');
-  filter('');
-  expect(cells()).toHaveLength(600);
   expect(source.pullRequests).toHaveBeenCalledOnce();
   expectLocalReadsOnly(source);
 });
