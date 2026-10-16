@@ -52,11 +52,22 @@ pub(super) fn read_local(paths: &ClaudeUsagePaths) -> AccountProviderUsage {
     let Some(binary) = resolve_claude() else {
         return unavailable(AccountUsageIssue::SourceUnavailable);
     };
+    read_with_probe(paths, || {
+        run_probe(&binary, &paths.probe_dir, &paths.config_file)
+    })
+}
+
+fn read_with_probe(
+    paths: &ClaudeUsagePaths,
+    probe: impl FnOnce() -> ProbeOutcome,
+) -> AccountProviderUsage {
     if prepare_probe_dir(&paths.probe_dir).is_err() {
         return failed(AccountUsageIssue::SourceUnavailable);
     }
-    let outcome = run_probe(&binary, &paths.probe_dir, &paths.config_file);
-    remove_probe_transcripts(&paths.projects_dir, &paths.probe_dir);
+    let outcome = probe();
+    // Claude's encoded project path is not unique to this directory. Leave
+    // every host transcript in place: neither a matching path nor a file
+    // appearing during this read proves that this probe owns it.
     result_from(outcome, read_cached_usage(&paths.config_file))
 }
 
@@ -135,54 +146,6 @@ fn prepare_probe_dir(dir: &Path) -> std::io::Result<()> {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
-}
-
-/// Claude Code's project folder name for a working directory: every
-/// character other than an ASCII letter or digit becomes `-`.
-pub(super) fn encoded_project_name(dir: &Path) -> String {
-    // One `-` per UTF-16 unit, as Claude Code's JavaScript replacement does
-    // for characters outside the Basic Multilingual Plane.
-    let mut name = String::new();
-    for c in dir.to_string_lossy().chars() {
-        if c.is_ascii_alphanumeric() {
-            name.push(c);
-        } else {
-            name.extend(std::iter::repeat_n('-', c.len_utf16()));
-        }
-    }
-    name
-}
-
-/// Deletes conversation files Claude Code may have saved for the probe
-/// folder, only directly inside that one project folder.
-pub(super) fn remove_probe_transcripts(projects_dir: &Path, probe_dir: &Path) {
-    let mut spellings = vec![probe_dir.to_path_buf()];
-    if let Ok(real) = std::fs::canonicalize(probe_dir) {
-        spellings.push(real);
-    }
-    for spelling in spellings {
-        let name = encoded_project_name(&spelling);
-        if !name.ends_with(&format!("-{PROBE_DIR_NAME}")) {
-            continue;
-        }
-        let folder = projects_dir.join(name);
-        let Ok(meta) = std::fs::symlink_metadata(&folder) else {
-            continue;
-        };
-        if !meta.is_dir() {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(&folder) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
-            if is_file && path.extension().is_some_and(|ext| ext == "jsonl") {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
-    }
 }
 
 fn resolve_claude() -> Option<PathBuf> {
@@ -680,6 +643,19 @@ mod tests {
     use super::*;
     use crate::account_usage_dto::AccountUsageState;
 
+    // Reproduce the host's lossy encoding only to construct collision fixtures.
+    fn encoded_project_name(dir: &Path) -> String {
+        let mut name = String::new();
+        for c in dir.to_string_lossy().chars() {
+            if c.is_ascii_alphanumeric() {
+                name.push(c);
+            } else {
+                name.extend(std::iter::repeat_n('-', c.len_utf16()));
+            }
+        }
+        name
+    }
+
     fn window(percent: f64) -> AccountUsageWindow {
         AccountUsageWindow {
             bucket_key: "seven_day".into(),
@@ -709,32 +685,102 @@ mod tests {
     }
 
     #[test]
-    fn removes_only_probe_folder_transcripts() {
+    fn probe_reads_preserve_colliding_concurrent_and_unrelated_files() {
         let root = tempfile::tempdir().unwrap();
-        let projects = root.path().join("projects");
-        let probe = root.path().join("data").join(PROBE_DIR_NAME);
-        std::fs::create_dir_all(&probe).unwrap();
-        let probe_project = projects.join(encoded_project_name(&probe));
-        let real_project = projects.join(encoded_project_name(
-            &std::fs::canonicalize(&probe).unwrap(),
-        ));
-        let other = projects.join("-Users-someone-repo");
-        for dir in [&probe_project, &real_project, &other] {
-            std::fs::create_dir_all(dir.join("memory")).unwrap();
-            std::fs::write(dir.join("s.jsonl"), "{}").unwrap();
-            std::fs::write(dir.join("notes.txt"), "keep").unwrap();
-            std::fs::write(dir.join("memory").join("m.jsonl"), "{}").unwrap();
+        let home = root.path().join("home");
+        let paths = ClaudeUsagePaths::new(&root.path().join("Application Support"), &home, None);
+        let other_working_dir = root.path().join("Application-Support").join(PROBE_DIR_NAME);
+        assert_ne!(paths.probe_dir, other_working_dir);
+        assert_eq!(
+            encoded_project_name(&paths.probe_dir),
+            encoded_project_name(&other_working_dir)
+        );
+        let projects = home.join(".claude/projects");
+        let collision = projects.join(encoded_project_name(&other_working_dir));
+        let other_project = projects.join("-unrelated-project");
+        std::fs::create_dir_all(collision.join("memory")).unwrap();
+        std::fs::create_dir_all(&other_project).unwrap();
+        let originals = [
+            (
+                collision.join("history.jsonl"),
+                "preexisting real conversation",
+            ),
+            (collision.join("notes.txt"), "unrelated notes"),
+            (collision.join("memory/nested.jsonl"), "nested conversation"),
+            (other_project.join("other.jsonl"), "different project"),
+        ];
+        for (path, content) in &originals {
+            std::fs::write(path, content).unwrap();
         }
-        remove_probe_transcripts(&projects, &probe);
-        for dir in [&probe_project, &real_project] {
-            assert!(!dir.join("s.jsonl").exists());
-            assert!(dir.join("notes.txt").exists());
-            assert!(dir.join("memory").join("m.jsonl").exists());
+        #[cfg(unix)]
+        let (linked, target) = {
+            let target = root.path().join("outside.jsonl");
+            std::fs::write(&target, "linked unrelated conversation").unwrap();
+            let linked = collision.join("linked.jsonl");
+            std::os::unix::fs::symlink(&target, &linked).unwrap();
+            (linked, target)
+        };
+        for succeeds in [true, false] {
+            let concurrent = collision.join(format!("concurrent-{succeeds}.jsonl"));
+            let own = collision.join(format!("probe-{succeeds}.jsonl"));
+            let usage = read_with_probe(&paths, || {
+                assert!(paths.probe_dir.is_dir());
+                let other_session = concurrent.clone();
+                std::thread::spawn(move || {
+                    std::fs::write(other_session, "concurrent unrelated conversation").unwrap();
+                })
+                .join()
+                .unwrap();
+                std::fs::write(&own, "probe-created artifact").unwrap();
+                outcome(
+                    succeeds.then(|| Panel {
+                        text:
+                            "Current session\n██ 30% used\nCurrent week (all models)\n██ 41% used"
+                                .into(),
+                        at: Timestamp::from_millisecond(PANEL_MS).unwrap(),
+                    }),
+                    (!succeeds).then_some(AccountUsageIssue::Timeout),
+                )
+            });
+            for (path, content) in &originals {
+                assert_eq!(std::fs::read_to_string(path).unwrap(), *content);
+            }
+            assert_eq!(
+                std::fs::read_to_string(&concurrent).unwrap(),
+                "concurrent unrelated conversation"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&own).unwrap(),
+                "probe-created artifact"
+            );
+            #[cfg(unix)]
+            {
+                assert!(
+                    std::fs::symlink_metadata(&linked)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink()
+                );
+                assert_eq!(std::fs::read_link(&linked).unwrap(), target);
+                assert_eq!(
+                    std::fs::read_to_string(&target).unwrap(),
+                    "linked unrelated conversation"
+                );
+            }
+            if succeeds {
+                assert_eq!(usage.state, AccountUsageState::Available);
+                assert_eq!(usage.checked_at, Some(PANEL_MS / 1000));
+                assert!(
+                    usage
+                        .windows
+                        .iter()
+                        .any(|window| window.used_percent == 41.0)
+                );
+            } else {
+                assert_eq!(usage.state, AccountUsageState::Failed);
+                assert_eq!(usage.issue, Some(AccountUsageIssue::Timeout));
+            }
         }
-        assert!(other.join("s.jsonl").exists());
-        // A folder of a different name is never touched.
-        remove_probe_transcripts(&projects, &root.path().join("repo"));
-        assert!(other.join("s.jsonl").exists());
     }
 
     fn panel(text: &str, at_ms: i64) -> Option<Panel> {
@@ -983,7 +1029,6 @@ mod tests {
         let binary = resolve_claude().expect("claude is installed");
         prepare_probe_dir(&paths.probe_dir).unwrap();
         let outcome = run_probe(&binary, &paths.probe_dir, &paths.config_file);
-        remove_probe_transcripts(&paths.projects_dir, &paths.probe_dir);
         println!(
             "elapsed: {:?}, issue: {:?}",
             started.elapsed(),
@@ -1000,18 +1045,5 @@ mod tests {
         }
         let usage = result_from(outcome, read_cached_usage(&paths.config_file));
         println!("{}", serde_json::to_string_pretty(&usage).unwrap());
-        let project = paths
-            .projects_dir
-            .join(encoded_project_name(&paths.probe_dir));
-        println!(
-            "probe project folder {} exists: {}",
-            project.display(),
-            project.exists()
-        );
-        if let Ok(entries) = std::fs::read_dir(&project) {
-            for entry in entries.flatten() {
-                println!("  left in project folder: {}", entry.path().display());
-            }
-        }
     }
 }

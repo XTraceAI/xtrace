@@ -38,26 +38,20 @@ pub struct ClaudeUsagePaths {
     pub(super) history: PathBuf,
     /// Claude Code's global config (`~/.claude.json`), read only.
     pub(super) config_file: PathBuf,
-    /// Claude Code's transcript folders (`~/.claude/projects`).
-    pub(super) projects_dir: PathBuf,
 }
 
 impl ClaudeUsagePaths {
     pub fn new(app_data_dir: &Path, home: &Path, claude_config_dir: Option<PathBuf>) -> Self {
         let claude_config_dir = claude_config_dir.filter(|dir| dir.is_absolute());
-        let (config_file, projects_dir) = match claude_config_dir {
-            Some(dir) => (dir.join(".claude.json"), dir.join("projects")),
-            None => (
-                home.join(".claude.json"),
-                home.join(".claude").join("projects"),
-            ),
+        let config_file = match claude_config_dir {
+            Some(dir) => dir.join(".claude.json"),
+            None => home.join(".claude.json"),
         };
         Self {
             probe_dir: app_data_dir.join(PROBE_DIR_NAME),
             last_reading: app_data_dir.join(LAST_READING_FILE),
             history: app_data_dir.join(crate::account_usage_history::HISTORY_FILE),
             config_file,
-            projects_dir,
         }
     }
 }
@@ -879,11 +873,9 @@ mod tests {
         let data = Path::new("/data");
         let default = ClaudeUsagePaths::new(data, home, None);
         assert_eq!(default.config_file, home.join(".claude.json"));
-        assert_eq!(default.projects_dir, home.join(".claude/projects"));
         assert_eq!(default.probe_dir, data.join(PROBE_DIR_NAME));
         let custom = ClaudeUsagePaths::new(data, home, Some("/cfg".into()));
         assert_eq!(custom.config_file, Path::new("/cfg/.claude.json"));
-        assert_eq!(custom.projects_dir, Path::new("/cfg/projects"));
         let relative = ClaudeUsagePaths::new(data, home, Some("cfg".into()));
         assert_eq!(relative.config_file, home.join(".claude.json"));
     }
