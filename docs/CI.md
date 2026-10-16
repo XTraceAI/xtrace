@@ -161,8 +161,8 @@ waiver of macOS 14 QA, final-byte acceptance or publication checks. Changes to
 source or packaging invalidate the relevant release evidence.
 
 Final signed launch from `/Applications` on a Mac that has never run the app
-requires separate acceptance. The 0.1.5 testing release does not yet claim that
-check.
+requires separate acceptance for each release. Its release notes must identify
+the checks actually completed; a source version bump does not establish that check.
 
 `macos-14` is scheduled for retirement on November 2, 2026. Before retirement,
 replace it with a runner that preserves actual macOS 14 floor testing. Building
