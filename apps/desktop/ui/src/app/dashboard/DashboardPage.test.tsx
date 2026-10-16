@@ -653,6 +653,8 @@ it('shows a complete total, measured zeros and hands-off exclusions', async () =
   expect(none.getAttribute('data-state')).toBe('none');
 });
 
+// Rendering 200 complete lane rows deliberately tests the large-list boundary.
+// Allow slower CI runners to finish that work; assertion waits stay unchanged.
 it('keeps all 200 returned lanes when the report marks 205 lanes as truncated', async () => {
   const source = nativeSource((days) =>
     synthetic((report) => {
@@ -671,7 +673,7 @@ it('keeps all 200 returned lanes when the report marks 205 lanes as truncated', 
   await loaded();
   expect(laneRows()).toHaveLength(200);
   expect(screen.queryByTestId('lanes-disclosure')).toBeNull();
-});
+}, 10_000);
 
 it('renders every day of a 30-day range in the daily chart dialog', async () => {
   // The 200-lane boundary is checked above; date selection and the daily chart

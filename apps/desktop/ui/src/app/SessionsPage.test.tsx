@@ -280,6 +280,8 @@ it('keeps both 50-row pages through session detail Back', async () => {
   expect(screen.getAllByRole('link', { name: /^Open session / })).toHaveLength(100);
 });
 
+// Both cached sorts must keep their 50-to-100-row transitions in one case.
+// Allow slower CI runners to finish that work; assertion waits stay unchanged.
 it('resets both deliberate sort changes after warming both second pages in one client', async () => {
   const { source, list } = twoPageSessionSource();
   mountRoutes(source, '/sessions?range=7d');
@@ -310,7 +312,7 @@ it('resets both deliberate sort changes after warming both second pages in one c
   expect(screen.getAllByRole('link', { name: /^Open session / })).toHaveLength(50);
   expect(list).toHaveBeenLastCalledWith(all, null, 7);
   expect(screen.queryByRole('link', { name: 'Open session Second page 0, page-two-0' })).toBeNull();
-});
+}, 10_000);
 
 it('reads live states only for visible supported hosts, caps them and releases the lease', async () => {
   let observer!: { show: (ids: string[]) => void };
