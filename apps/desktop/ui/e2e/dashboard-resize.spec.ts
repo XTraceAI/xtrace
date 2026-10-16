@@ -78,6 +78,8 @@ async function open(page: Page, body: FixtureExport, width: number, height: numb
 }
 
 type Layout = {
+  /** Accessibility values captured with the drawn pane dimensions. */
+  rowSplit: { now: number; min: number; max: number };
   main: number;
   sessions: number;
   effort: { top: number; width: number; height: number; left: number };
@@ -113,7 +115,13 @@ function measure(): Layout {
   };
   const effort = card('Effort');
   const overview = card('Overview');
+  const rows = document.querySelector('[role="separator"][data-axis="rows"]')!;
   return {
+    rowSplit: {
+      now: Number(rows.getAttribute('aria-valuenow')),
+      min: Number(rows.getAttribute('aria-valuemin')),
+      max: Number(rows.getAttribute('aria-valuemax')),
+    },
     main: box(document.querySelector('.xt-dash-main-row')!).height,
     sessions: box(card('Sessions')).height,
     effort: rect(effort),
@@ -320,11 +328,21 @@ test('the boundaries move from the keyboard and say where they are', async ({ pa
   await expect(rows).toHaveAttribute('tabindex', '0');
   const value = async (handle: Locator, name: string) =>
     Number(await handle.getAttribute(`aria-${name}`));
-  const before = await layout(page);
-  const now = await value(rows, 'valuenow');
+  // Fonts can be ready before ResizeObserver's frame updates the spoken value.
+  // Compare one atomic sample and keep that matching layout as the key-move baseline.
+  let before = await layout(page);
+  await expect
+    .poll(async () => {
+      before = await layout(page);
+      return (
+        before.rowSplit.now === Math.round((before.main / (before.main + before.sessions)) * 100)
+      );
+    })
+    .toBe(true);
+  const now = before.rowSplit.now;
   expect(now).toBe(Math.round((before.main / (before.main + before.sessions)) * 100));
-  expect(await value(rows, 'valuemin')).toBeLessThan(now);
-  expect(await value(rows, 'valuemax')).toBeGreaterThan(now);
+  expect(before.rowSplit.min).toBeLessThan(now);
+  expect(before.rowSplit.max).toBeGreaterThan(now);
 
   // Focused, each arrow moves it 16px, Shift 64px, and every move is
   // stored at once.
