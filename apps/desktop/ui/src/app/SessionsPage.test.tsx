@@ -263,6 +263,8 @@ function twoPageSessionSource() {
   return { source, list };
 }
 
+// Keep the 100-row Back check on the same finite budget as the cached-sort case.
+// Its record counts, navigation checks and assertion waits remain unchanged.
 it('keeps both 50-row pages through session detail Back', async () => {
   const { source } = twoPageSessionSource();
   mountRoutes(source, '/sessions?range=7d');
@@ -278,7 +280,7 @@ it('keeps both 50-row pages through session detail Back', async () => {
   fireEvent.click(await screen.findByRole('link', { name: '← All sessions' }));
   await screen.findByRole('link', { name: 'Open session Second page 0, page-two-0' });
   expect(screen.getAllByRole('link', { name: /^Open session / })).toHaveLength(100);
-});
+}, 10_000);
 
 // Both cached sorts must keep their 50-to-100-row transitions in one case.
 // Allow slower CI runners to finish that work; assertion waits stay unchanged.

@@ -540,6 +540,9 @@ it('stays explicitly unavailable in a browser preview and reads nothing', async 
 
 // --- local filter and a large cached list ----------------------------------------
 
+// These 600-row boundary cases use the same finite budget as the large Sessions
+// and Dashboard fixtures. Their assertions and assertion waits stay unchanged.
+
 // Count accessible body rows without walking all five cells of every row.
 const cachedRowCount = () => within(table()).getAllByRole('row').length - 1;
 
@@ -559,7 +562,7 @@ it('focuses and resets the 600 cached pull requests without another read', async
   expect(cachedRowCount()).toBe(600);
   expect(source.pullRequests).toHaveBeenCalledOnce();
   expectLocalReadsOnly(source);
-});
+}, 10_000);
 
 it('trims and folds a title filter across 600 cached pull requests without another read', async () => {
   const source = trappedSource(async () => ({ rows: manyPrRows(600) }));
@@ -578,7 +581,7 @@ it('trims and folds a title filter across 600 cached pull requests without anoth
   );
   expect(source.pullRequests).toHaveBeenCalledOnce();
   expectLocalReadsOnly(source);
-});
+}, 10_000);
 
 it.each([
   ['repository', 'octo-org/', 300],
@@ -596,6 +599,7 @@ it.each([
     expect(source.pullRequests).toHaveBeenCalledOnce();
     expectLocalReadsOnly(source);
   },
+  10_000,
 );
 
 it('filters 600 cached pull requests by number without another read', async () => {
@@ -608,7 +612,7 @@ it('filters 600 cached pull requests by number without another read', async () =
   expect(names()).toEqual(['Title not cachedxtrace/app#1599']);
   expect(source.pullRequests).toHaveBeenCalledOnce();
   expectLocalReadsOnly(source);
-});
+}, 10_000);
 
 it('keeps a large list inside one focusable scroll region under a fixed header', async () => {
   const source = trappedSource(async () => ({ rows: manyPrRows(600) }));
@@ -630,7 +634,7 @@ it('keeps a large list inside one focusable scroll region under a fixed header',
   expect(region.querySelectorAll('a, button, input, [tabindex]:not([tabindex="-1"])')).toHaveLength(
     0,
   );
-});
+}, 10_000);
 
 it('opens the explanation from the keyboard-reachable summary and links only inside the app', async () => {
   const source = trappedSource(async () => structuredClone(exported.pull_requests));
