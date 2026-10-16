@@ -96,7 +96,9 @@ describe('spanDuration', () => {
 });
 
 it('opens a bubble on hover with the span’s name, length, start, tool, output and prompt', async () => {
-  const { read, bar } = setup();
+  // DataProvider mounts the lanes after its async subscription setup. Flush
+  // that mount's effects so the native mouseenter listener is ready to hover.
+  const { read, bar } = await act(async () => setup());
   const span = await waitFor(bar);
   // The bar is a named mark with no native title doubling the bubble.
   expect(span.getAttribute('title')).toBeNull();
