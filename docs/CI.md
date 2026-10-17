@@ -418,7 +418,8 @@ distinct from the fixed released source `bab5673759993dc8970a846a8e37625def989d2
 The Node runner and both Swift tools also reject unauthorized or non-hosted use.
 
 This job anonymously downloads the pinned public 0.1.6 DMG and checks its size,
-SHA-256 and public source tag. It verifies strict signatures, the expected
+SHA-256 and public source tag, resolving its single annotation layer when present.
+It verifies strict signatures, the expected
 Developer ID team, stapled tickets and Gatekeeper acceptance for the app and DMG.
 It checks all 79 app paths, bytes, sizes and modes against a pinned canonical
 inventory before copying the app to the VM's `/Applications`, after copying it,
