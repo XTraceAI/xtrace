@@ -129,3 +129,24 @@ export async function verifyTag(tag, readAnnotation) {
     throw new Error('Public release tag no longer identifies the pinned source commit');
   return release.source;
 }
+
+// One strict verifier for both released-app modes, always after confirmed exit.
+export async function verifyHostedDatabase(source, directory, checked) {
+  const result = JSON.parse(
+    await checked('database', '/opt/homebrew/bin/python3', [
+      '-I',
+      join(source, 'hosted-database.py'),
+      join(directory, 'xtrace.db'),
+    ]),
+  );
+  if (
+    result.status !== 'passed' ||
+    result.mode !== 'ro' ||
+    result.mainDatabaseUnchanged !== true ||
+    JSON.stringify(result.integrity) !== '["ok"]' ||
+    result.sessions !== 0 ||
+    result.records !== 0
+  )
+    throw new Error('Database checker did not confirm intact unchanged empty data');
+  return result;
+}

@@ -10,6 +10,7 @@ import {
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
   verifyAppInventory,
+  verifyHostedDatabase,
   executionBudget,
 } from './hosted-release.mjs';
 import {
@@ -382,12 +383,7 @@ async function main() {
     for (const id of ['ai.xtrace.app', 'ai.xtrace.desktop'])
       if (await exists(join(homedir(), 'Library/Application Support', id, 'xtrace.db')))
         throw new Error('App wrote a database outside the owned data directory');
-    const database = await checked('database', '/usr/bin/sqlite3', [
-      '-readonly',
-      join(env.XTRACE_DATA_DIR, 'xtrace.db'),
-      'PRAGMA integrity_check; SELECT count(*) FROM sessions; SELECT count(*) FROM records;',
-    ]);
-    if (database !== 'ok\n0\n0') throw new Error('Synthetic database is not intact and empty');
+    report.database = await verifyHostedDatabase(source, env.XTRACE_DATA_DIR, checked);
     report.nativeDatabaseVerified = true;
   } catch (error) {
     if (error.message.startsWith('Production feed prerequisite unmet:'))

@@ -511,3 +511,10 @@ fails; a missing/ambiguous successor never authorizes broad process killing or
 removal. Work has a twelve-minute deadline and a separate two-minute cleanup
 reserve inside a fifteen-minute execution step and twenty-five-minute job.
 Adding this harness is not evidence that the hosted update has passed.
+
+Both released-app modes use the existing isolated Homebrew Python SQLite reader
+with `mode=ro` for the same integrity and empty-table checks. Main database bytes
+must stay unchanged; SQLite may create or update WAL/SHM bookkeeping. Engine
+versions and before/after file metadata are retained, and the Apple CLI result
+is recorded before Python as diagnostic evidence only. No reader fallback or
+database repair is performed.

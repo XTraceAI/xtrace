@@ -151,7 +151,7 @@ test('update ordering verifies old files before one press, adopts before inspect
     "'stop-successor'",
     "'all-exited'",
     'report.sentinelRetained',
-    'PRAGMA integrity_check',
+    'await verifyHostedDatabase(',
   ];
   let prior = -1;
   for (const needle of ordered) {
