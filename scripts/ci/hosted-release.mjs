@@ -105,11 +105,22 @@ export async function verifyAppInventory(bundle) {
   return inventory;
 }
 
-export function verifyTag(tag) {
-  if (
-    tag.ref !== `refs/tags/${release.tag}` ||
-    tag.object?.type !== 'commit' ||
-    tag.object?.sha !== release.source
-  )
+export async function verifyTag(tag, readAnnotation) {
+  if (tag?.ref !== `refs/tags/${release.tag}` || !/^[0-9a-f]{40}$/.test(tag.object?.sha))
+    throw new Error('Public release tag has an unexpected ref or object identity');
+  let target = tag.object;
+  if (target.type === 'tag') {
+    // The published tag has one annotation layer. Never follow an API-supplied
+    // URL or recursively peel an unexpected annotation chain.
+    if (typeof readAnnotation !== 'function') throw new Error('Tag annotation lookup is required');
+    const annotation = await readAnnotation(
+      `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/tags/${target.sha}`,
+    );
+    if (annotation?.sha !== target.sha || annotation.tag !== release.tag)
+      throw new Error('Tag annotation identity or name does not match its ref');
+    target = annotation.object;
+  }
+  if (target?.type !== 'commit' || target.sha !== release.source)
     throw new Error('Public release tag no longer identifies the pinned source commit');
+  return release.source;
 }

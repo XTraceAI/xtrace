@@ -131,18 +131,75 @@ test('first launch adds fresh provider, preference and current/old WebKit baseli
     assert.equal(key in env, false);
 });
 
-test('download and release-tag checks reject different bytes, size or source identity', () => {
+test('download and lightweight-tag checks reject different bytes, size or source identity', async () => {
   assert.throws(() => verifyDownload(Buffer.alloc(0)));
   assert.throws(() => verifyDownload(Buffer.alloc(release.bytes)));
   const tag = { ref: `refs/tags/${release.tag}`, object: { type: 'commit', sha: release.source } };
-  assert.doesNotThrow(() => verifyTag(tag));
+  assert.equal(
+    await verifyTag(tag, () => assert.fail('Lightweight tags need no lookup')),
+    release.source,
+  );
   for (const changed of [
     { ...tag, ref: 'refs/tags/v0.1.5' },
     { ...tag, object: { type: 'commit', sha } },
-    { ...tag, object: { type: 'tag', sha: release.source } },
+    { ...tag, object: { type: 'tree', sha: release.source } },
     {},
   ])
-    assert.throws(() => verifyTag(changed));
+    await assert.rejects(verifyTag(changed));
+});
+
+test('real-shaped annotated release tag resolves once through a fixed repository URL', async () => {
+  const annotationSHA = '82efaf3c16bbcd38a1d45ae7393e5df567179569';
+  const ref = {
+    ref: 'refs/tags/v0.1.6',
+    object: { type: 'tag', sha: annotationSHA, url: 'https://untrusted.invalid/tag' },
+  };
+  const annotation = {
+    sha: annotationSHA,
+    tag: 'v0.1.6',
+    object: { type: 'commit', sha: release.source, url: 'https://untrusted.invalid/commit' },
+  };
+  const requests = [];
+  assert.equal(
+    await verifyTag(ref, async (url) => {
+      requests.push(url);
+      return annotation;
+    }),
+    release.source,
+  );
+  assert.deepEqual(requests, [
+    `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/tags/${annotationSHA}`,
+  ]);
+  for (const changed of [
+    { ...ref, ref: 'refs/tags/v0.1.5' },
+    { ...ref, object: { type: 'tree', sha: annotationSHA } },
+    { ...ref, object: { type: 'tag', sha: '../other-repository' } },
+    { ...ref, object: { type: 'tag', sha: 'A'.repeat(40) } },
+  ])
+    await assert.rejects(verifyTag(changed, () => assert.fail('Invalid refs must not be fetched')));
+  for (const changed of [
+    { ...annotation, sha: 'b'.repeat(40) },
+    { ...annotation, tag: 'v0.1.5' },
+    { ...annotation, object: { type: 'commit', sha: 'b'.repeat(40) } },
+    { ...annotation, object: { type: 'tag', sha: annotationSHA } },
+    { ...annotation, object: { type: 'blob', sha: release.source } },
+    {},
+  ]) {
+    let calls = 0;
+    await assert.rejects(
+      verifyTag(ref, async () => {
+        calls++;
+        return changed;
+      }),
+    );
+    assert.equal(calls, 1, 'Nested or invalid annotations must not trigger another lookup');
+  }
+  await assert.rejects(
+    verifyTag(ref, async () => {
+      throw new Error('API unavailable');
+    }),
+    /API unavailable/,
+  );
 });
 
 test('canonical inventory binds every path, byte, size, directory and mode and rejects links', async () => {

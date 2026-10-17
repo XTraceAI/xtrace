@@ -185,29 +185,44 @@ async function main() {
         120_000,
         env,
       );
-    const tagText = await checked(
-      'release-tag',
-      '/usr/bin/curl',
-      [
-        '--fail',
-        '--silent',
-        '--show-error',
-        '--proto',
-        '=https',
-        '--max-time',
-        '60',
-        '--max-filesize',
-        '65536',
+    const readTagMetadata = async (name, url) =>
+      JSON.parse(
+        await checked(
+          name,
+          '/usr/bin/curl',
+          [
+            '--disable',
+            '--noproxy',
+            '*',
+            '--fail',
+            '--silent',
+            '--show-error',
+            '--proto',
+            '=https',
+            '--max-time',
+            '60',
+            '--max-filesize',
+            '65536',
+            url,
+          ],
+          65_000,
+        ),
+      );
+    report.tagSource = await verifyTag(
+      await readTagMetadata(
+        'release-tag',
         `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/ref/tags/${release.tag}`,
-      ],
-      65_000,
+      ),
+      (url) => readTagMetadata('release-tag-annotation', url),
     );
-    verifyTag(JSON.parse(tagText));
     const dmg = join(owned, release.dmg);
     await checked(
       'download',
       '/usr/bin/curl',
       [
+        '--disable',
+        '--noproxy',
+        '*',
         '--fail',
         '--location',
         '--silent',
