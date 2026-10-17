@@ -319,8 +319,8 @@ test(
         .join('\n')
         .split('// END UPDATE UI POLICY')[0];
       const controls = `
-func record(_ pid: Int32, _ date: Double, _ id: String = "ai.xtrace.app", _ path: String = "/Applications/XTrace Desktop.app") -> Receipt {
-  Receipt(pid: pid, launchDate: date, bundle: path, executable: path + "/Contents/MacOS/xtrace-desktop", identifier: id)
+func record(_ pid: Int32, _ start: UInt64, _ id: String = "ai.xtrace.app", _ path: String = "/Applications/XTrace Desktop.app") -> Receipt {
+  Receipt(pid: pid, startTime: start, bundle: path, executable: path + "/Contents/MacOS/xtrace-desktop", identifier: id)
 }
 let old = record(10, 100), next = record(11, 201)
 let t = Transition(original: old, armedAt: 200)
@@ -328,9 +328,15 @@ assert(try! successor(t, [old], originalAlive: true) == nil)
 assert(try! successor(t, [old, next], originalAlive: true) == nil)
 assert(try! successor(t, [], originalAlive: false) == nil)
 assert(try! successor(t, [next], originalAlive: false)?.pid == 11)
+// Original absent from AppKit candidates is still alive if its kernel identity exists.
+assert(try! successor(t, [next], originalAlive: kernelIsAlive(expected: 100, observed: 100, missingProcess: false)) == nil)
+assert(try! !kernelIsAlive(expected: 100, observed: nil, missingProcess: true))
+for (observed, missing): (UInt64?, Bool) in [(nil, false), (101, false), (101, true)] {
+  do { _ = try kernelIsAlive(expected: 100, observed: observed, missingProcess: missing); fatalError("Lost kernel identity accepted") } catch {}
+}
 for bad in [[record(10, 201)], [record(11, 199)], [next, record(12, 202)], [next, next],
             [record(11, 201, "ai.xtrace.desktop")], [record(11, 201, "ai.xtrace.app", "/other")],
-            [Receipt(pid: 11, launchDate: 201, bundle: old.bundle, executable: "/wrong", identifier: old.identifier)]] {
+            [Receipt(pid: 11, startTime: 201, bundle: old.bundle, executable: "/wrong", identifier: old.identifier)]] {
   do { _ = try successor(t, bad, originalAlive: false); fatalError("Accepted invalid successor") } catch {}
 }
 func text(_ value: String) -> [String: String] { [kAXValueAttribute: value] }

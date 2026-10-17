@@ -31,7 +31,7 @@ let environmentURL = URL(fileURLWithPath: CommandLine.arguments[3])
 
 struct Receipt: Codable {
     let pid: Int32
-    let launchDate: Double
+    let startTime: UInt64
     let bundle: String
     let executable: String
     let identifier: String
@@ -39,7 +39,7 @@ struct Receipt: Codable {
 // BEGIN TRANSITION POLICY: compiled directly by offline value-only controls.
 struct Transition: Codable {
     let original: Receipt
-    let armedAt: Double
+    let armedAt: UInt64
 }
 enum TransitionError: Error { case unexpectedIdentity }
 func successor(_ transition: Transition, _ candidates: [Receipt], originalAlive: Bool) throws -> Receipt? {
@@ -49,31 +49,65 @@ func successor(_ transition: Transition, _ candidates: [Receipt], originalAlive:
         candidate.executable == "/Applications/XTrace Desktop.app/Contents/MacOS/xtrace-desktop" &&
         candidate.identifier == "ai.xtrace.app"
     }
-    guard fixed(old), old.launchDate.isFinite, transition.armedAt.isFinite,
-          transition.armedAt >= old.launchDate else { throw TransitionError.unexpectedIdentity }
+    guard fixed(old), old.startTime > 0, transition.armedAt >= old.startTime else { throw TransitionError.unexpectedIdentity }
     guard Set(candidates.map { $0.pid }).count == candidates.count else { throw TransitionError.unexpectedIdentity }
     var replacements: [Receipt] = []
     for candidate in candidates {
-        guard fixed(candidate), candidate.launchDate.isFinite else { throw TransitionError.unexpectedIdentity }
+        guard fixed(candidate), candidate.startTime > 0 else { throw TransitionError.unexpectedIdentity }
         if candidate.pid == old.pid {
-            guard originalAlive, candidate.launchDate == old.launchDate else { throw TransitionError.unexpectedIdentity }
+            guard originalAlive, candidate.startTime == old.startTime else { throw TransitionError.unexpectedIdentity }
         } else {
-            guard candidate.launchDate >= transition.armedAt else { throw TransitionError.unexpectedIdentity }
+            guard candidate.startTime >= transition.armedAt else { throw TransitionError.unexpectedIdentity }
             replacements.append(candidate)
         }
     }
     guard replacements.count <= 1 else { throw TransitionError.unexpectedIdentity }
     return originalAlive ? nil : replacements.first
 }
+func kernelIsAlive(expected: UInt64, observed: UInt64?, missingProcess: Bool) throws -> Bool {
+    guard expected > 0 else { throw TransitionError.unexpectedIdentity }
+    if let observed {
+        guard observed == expected else { throw TransitionError.unexpectedIdentity }
+        return true
+    }
+    guard missingProcess else { throw TransitionError.unexpectedIdentity }
+    return false
+}
 // END TRANSITION POLICY
 let transitionURL = URL(fileURLWithPath: receiptURL.path + ".transition.json")
 let successorURL = URL(fileURLWithPath: receiptURL.path + ".successor.json")
+// AppKit launchDate is absent for direct-spawn restarts. Kernel birth time is
+// required for every receipt, including the initial LaunchServices process.
+func processStart(_ pid: Int32) -> UInt64? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+          info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0,
+          info.pbi_start_tvsec < UInt64.max / 1_000_000, info.pbi_start_tvusec < 1_000_000 else { return nil }
+    return info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
+}
+var diagnosedCandidates = Set<Int32>()
 func candidates() -> [Receipt] {
     NSWorkspace.shared.runningApplications.filter { !$0.isTerminated &&
         ($0.bundleIdentifier == identity || canonical($0.bundleURL) == bundle.path ||
          canonical($0.executableURL) == executable.path) }.map { app in
-        guard hasIdentity(app), let date = app.launchDate else { fail("Unexpected update process identity") }
-        return Receipt(pid: app.processIdentifier, launchDate: date.timeIntervalSince1970,
+        let start = processStart(app.processIdentifier)
+        // At most four matched candidate snapshots per invocation; no unrelated
+        // processes or environment values enter the diagnostic.
+        if command == "adopt-update", diagnosedCandidates.count < 4,
+           diagnosedCandidates.insert(app.processIdentifier).inserted {
+            let detail: [String: Any] = ["pid": app.processIdentifier,
+                "identifier": String((app.bundleIdentifier ?? "<missing>").prefix(512)),
+                "bundle": String((canonical(app.bundleURL) ?? "<missing>").prefix(512)),
+                "executable": String((canonical(app.executableURL) ?? "<missing>").prefix(512)),
+                "finishedLaunching": app.isFinishedLaunching, "appKitLaunchDateAvailable": app.launchDate != nil,
+                "kernelStartAvailable": start != nil, "kernelStartMicros": start ?? 0]
+            if let data = try? JSONSerialization.data(withJSONObject: detail, options: [.sortedKeys]) {
+                FileHandle.standardOutput.write(data); print("")
+            }
+        }
+        guard hasIdentity(app), let start else { fail("Unexpected update process identity or missing kernel start time") }
+        return Receipt(pid: app.processIdentifier, startTime: start,
                        bundle: bundle.path, executable: executable.path, identifier: identity)
     }
 }
@@ -87,13 +121,18 @@ func requireNoLegacyProcess() {
     app.bundleIdentifier == identity && canonical(app.bundleURL) == bundle.path &&
         canonical(app.executableURL) == executable.path
 }
-func owned(_ receipt: Receipt) -> NSRunningApplication? {
+func kernelAlive(_ receipt: Receipt) -> Bool {
     guard receipt.bundle == bundle.path, receipt.executable == executable.path,
           receipt.identifier == identity, receipt.pid > 0 else { fail("Invalid ownership receipt") }
-    guard let app = NSRunningApplication(processIdentifier: receipt.pid), !app.isTerminated else { return nil }
-    guard hasIdentity(app), app.launchDate?.timeIntervalSince1970 == receipt.launchDate else {
-        fail("Process identity or launch date differs from receipt")
-    }
+    let start = processStart(receipt.pid)
+    let missing = start == nil && kill(receipt.pid, 0) == -1 && errno == ESRCH
+    do { return try kernelIsAlive(expected: receipt.startTime, observed: start, missingProcess: missing) }
+    catch { fail("Kernel process identity is missing or differs from receipt") }
+}
+func owned(_ receipt: Receipt) -> NSRunningApplication? {
+    guard kernelAlive(receipt) else { return nil }
+    guard let app = NSRunningApplication(processIdentifier: receipt.pid), !app.isTerminated,
+          hasIdentity(app) else { fail("Live owned kernel process has no matching AppKit identity") }
     return app
 }
 func wait(_ seconds: Double, until condition: () -> Bool) -> Bool {
@@ -154,12 +193,12 @@ do {
         NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { app, error in
             DispatchQueue.main.async {
                 defer { done = true }
-                guard let app, hasIdentity(app), let date = app.launchDate else {
+                guard let app, hasIdentity(app), let start = processStart(app.processIdentifier) else {
                     launchError = error?.localizedDescription ?? "LaunchServices returned no owned process"
                     return
                 }
                 do {
-                    let receipt = Receipt(pid: app.processIdentifier, launchDate: date.timeIntervalSince1970,
+                    let receipt = Receipt(pid: app.processIdentifier, startTime: start,
                                           bundle: bundle.path, executable: executable.path, identifier: identity)
                     try JSONEncoder().encode(receipt).write(to: receiptURL, options: .atomic)
                 } catch { launchError = "Cannot save launch ownership receipt" }
@@ -175,31 +214,31 @@ do {
             guard owned(receipt) != nil, candidates().count == 1,
                   !FileManager.default.fileExists(atPath: transitionURL.path),
                   !FileManager.default.fileExists(atPath: successorURL.path) else { fail("Cannot arm update ownership") }
-            let transition = Transition(original: receipt, armedAt: Date().timeIntervalSince1970)
+            let transition = Transition(original: receipt, armedAt: UInt64(Date().timeIntervalSince1970 * 1_000_000))
             try JSONEncoder().encode(transition).write(to: transitionURL, options: .withoutOverwriting)
             print("Update transition armed while original process is owned")
         } else if command == "adopt-update" {
             let transition = try JSONDecoder().decode(Transition.self, from: Data(contentsOf: transitionURL))
             guard transition.original.pid == receipt.pid,
-                  transition.original.launchDate == receipt.launchDate,
+                  transition.original.startTime == receipt.startTime,
                   !FileManager.default.fileExists(atPath: successorURL.path) else { fail("Invalid or already adopted transition") }
             let deadline = Date().addingTimeInterval(55)
             while Date() < deadline {
                 requireNoLegacyProcess()
-                let oldAlive = owned(receipt) != nil
+                let oldAlive = kernelAlive(receipt)
                 if let next = try successor(transition, candidates(), originalAlive: oldAlive) {
                     // Save ownership before environment/UI checks, so failed checks can still stop it.
-                    guard owned(next) != nil, owned(receipt) == nil else { fail("Update identity changed during adoption") }
+                    guard owned(next) != nil, !kernelAlive(receipt) else { fail("Update identity changed during adoption") }
                     try JSONEncoder().encode(next).write(to: successorURL, options: .withoutOverwriting)
                     print("Original exited; distinct successor receipt saved")
                     exit(0)
                 }
                 RunLoop.current.run(until: Date().addingTimeInterval(0.1))
             }
-            fail("No distinct owned successor after original exit; no manual relaunch attempted")
+            fail("Original exit and distinct owned successor were not confirmed; no manual relaunch attempted")
         } else if command == "absent" {
             requireNoLegacyProcess()
-            guard owned(receipt) == nil, candidates().isEmpty else { fail("XTrace process remains after cleanup") }
+            guard !kernelAlive(receipt), candidates().isEmpty else { fail("XTrace process remains after cleanup") }
             print("No current or legacy XTrace process remains")
         } else if command == "inspect" {
             guard owned(receipt) != nil else { fail("Owned application exited before inspection") }
@@ -218,10 +257,10 @@ do {
         } else {
             if let app = owned(receipt) {
                 _ = app.terminate()
-                if !wait(10, until: { app.isTerminated }) {
+                if !wait(10, until: { !kernelAlive(receipt) }) {
                     print("Graceful exit did not finish; terminating the exact owned process")
                     if let stillOwned = owned(receipt) { _ = stillOwned.forceTerminate() }
-                    guard wait(5, until: { app.isTerminated }) else { fail("Owned process exit unconfirmed") }
+                    guard wait(5, until: { !kernelAlive(receipt) }) else { fail("Owned process exit unconfirmed") }
                 }
             }
             print("Owned process exit confirmed")

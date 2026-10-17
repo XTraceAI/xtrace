@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
-import subprocess
 import sys
 
 
@@ -29,14 +28,6 @@ def digest(path):
     return value.hexdigest()
 
 
-def apple_diagnostic(arguments):
-    try:
-        result = subprocess.run(['/usr/bin/sqlite3', '-init', '/dev/null', *arguments], capture_output=True, text=True, timeout=5)
-        return dict(exit=result.returncode, stdout=result.stdout[:1024], stderr=result.stderr[:1024])
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return dict(error=type(error).__name__)
-
-
 def check(path):
     report = dict(status='failed', python=sys.version.split()[0], sqlite=sqlite3.sqlite_version, mode='ro')
     paths = dict(parent=path.parent, database=path, wal=Path(str(path) + '-wal'), shm=Path(str(path) + '-shm'))
@@ -58,12 +49,6 @@ def check(path):
                                 pageSizeField=int.from_bytes(header[16:18], 'big'),
                                 writeVersion=header[18] if len(header) > 18 else None,
                                 readVersion=header[19] if len(header) > 19 else None)
-        # These diagnostics run on the original sidecar state. They never decide
-        # acceptance or trigger a fallback/repair; Python is always the verifier.
-        report['appleVersion'] = apple_diagnostic(['--version'])
-        report['appleCheck'] = apple_diagnostic(['-readonly', str(path),
-            'PRAGMA integrity_check; SELECT count(*) FROM sessions; SELECT count(*) FROM records;'])
-        report['filesBeforePython'] = {key: metadata(value) for key, value in paths.items()}
         report['stage'] = 'open'
         connection = sqlite3.connect(path.absolute().as_uri() + '?mode=ro', uri=True, timeout=5)
         report['stage'] = 'integrity'

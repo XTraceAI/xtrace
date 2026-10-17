@@ -450,7 +450,7 @@ them. Any unexpected process keys are reported together by name, never value.
 The external AX driver requires a real Welcome screen, completed native scan,
 verified bundled readers and version 0.1.6, with no native query error. It presses
 Open Dashboard and requires the loaded empty-report result, Dashboard heading
-and version. After stopping the exact PID/bundle/executable/launch-date receipt,
+and version. After stopping the exact PID/bundle/executable/kernel-start-time receipt,
 the runner verifies the owned database's integrity and empty sessions/records,
 and checks that neither default current/old app directory received a database.
 It unregisters and removes only its owned app and staging files after confirmed
@@ -496,7 +496,7 @@ manual relaunch or automatic prompt approval can produce a passing result.
 
 A saved transition binds the original process before the action. The helper
 requires its exit and one distinct successor at the same exact bundle/executable
-and app ID, with a fresh launch date. It saves a separate ownership receipt and
+and app ID, with a fresh kernel process start time. It saves a separate ownership receipt and
 checks the successor's inherited synthetic environment. The native 0.1.6
 Dashboard must load without Welcome returning; all 79 updated entries and the
 signature must match. After stopping the exact successor, it checks the retained
@@ -515,6 +515,5 @@ Adding this harness is not evidence that the hosted update has passed.
 Both released-app modes use the existing isolated Homebrew Python SQLite reader
 with `mode=ro` for the same integrity and empty-table checks. Main database bytes
 must stay unchanged; SQLite may create or update WAL/SHM bookkeeping. Engine
-versions and before/after file metadata are retained, and the Apple CLI result
-is recorded before Python as diagnostic evidence only. No reader fallback or
+versions and before/after file metadata are retained. No reader fallback or
 database repair is performed.
