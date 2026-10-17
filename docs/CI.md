@@ -441,6 +441,8 @@ process's environment without logging values, confirms those paths and rejects
 unexpected keys. LaunchServices can add system variables; `HOME`, if supplied
 by the system, must remain the actual VM user's home. WebKit and preferences may
 write under that fresh VM home; this is not a test of migrating existing data.
+The launch configuration explicitly sets `SSH_AUTH_SOCK` to an empty string,
+and the process check requires that exact empty value before UI testing.
 
 The external AX driver requires a real Welcome screen, completed native scan,
 verified bundled readers and version 0.1.6, with no native query error. It presses
