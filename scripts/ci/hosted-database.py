@@ -31,7 +31,7 @@ def digest(path):
 
 def apple_diagnostic(arguments):
     try:
-        result = subprocess.run(['/usr/bin/sqlite3', *arguments], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(['/usr/bin/sqlite3', '-init', '/dev/null', *arguments], capture_output=True, text=True, timeout=5)
         return dict(exit=result.returncode, stdout=result.stdout[:1024], stderr=result.stderr[:1024])
     except (OSError, subprocess.TimeoutExpired) as error:
         return dict(error=type(error).__name__)
