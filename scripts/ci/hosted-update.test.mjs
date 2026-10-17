@@ -287,6 +287,13 @@ test('update workflow leaves cleanup/upload time and denies wrong authorization 
   }
 });
 
+test('first-launch and update checks share the scoped displayed-version predicate', () => {
+  assert.equal((driver.match(/displayedVersion\(last, "0\.1\.6"\)/g) || []).length, 2);
+  assert.equal((driver.match(/displayedVersion\(last, "0\.1\.5"\)/g) || []).length, 1);
+  assert.match(driver, /displayedVersion\(rows, version\)/);
+  assert.doesNotMatch(driver, /hasText\([^\n]*"v(?:0\.1\.[56]|" \+ version)/);
+});
+
 // Compile the actual pure Swift decisions, not a JS copy of those decisions.
 // This never runs the launch helper or queries a process/Accessibility API.
 test(
@@ -327,8 +334,31 @@ for bad in [[record(10, 201)], [record(11, 199)], [next, record(12, 202)], [next
   do { _ = try successor(t, bad, originalAlive: false); fatalError("Accepted invalid successor") } catch {}
 }
 func text(_ value: String) -> [String: String] { [kAXValueAttribute: value] }
+func versionRow(_ value: String, _ parent: String = "footer", _ position: Int = 0,
+                _ workspace: Bool = true) -> [String: String] {
+  [kAXRoleAttribute: "AXStaticText", kAXValueAttribute: value, "captureParent": parent,
+   "captureChildIndex": String(position), "captureWorkspace": workspace ? "true" : "false"]
+}
+// Captured hosted AXStaticText values were "v" and "0.1.6". Relationships
+// below are synthetic: the old flat capture did not record their parent IDs.
+let splitVersion = [versionRow("v", "footer", 4), versionRow("0.1.6", "footer", 5)]
+assert(displayedVersion(splitVersion, "0.1.6"))
+assert(displayedVersion([versionRow("v0.1.6")], "0.1.6"))
+for invalid in [
+  [versionRow("v", "footer", 4), versionRow("0.1.6", "other-pane", 5)],
+  [versionRow("v", "footer", 4), versionRow("0.1.6", "footer", 6)],
+  [versionRow("0.1.6", "footer", 4), versionRow("v", "footer", 5)],
+  [versionRow("v", "footer", 4), versionRow("0.1.5", "footer", 5)],
+  [versionRow("v", "footer", 4, false), versionRow("0.1.6", "footer", 5)],
+  [versionRow("v", "footer", 4), versionRow("0.1.6", "footer", 5, false)],
+  [versionRow("v0.1.6", "main-pane", 0, false)],
+  [versionRow("Update 0.1.6 is ready. Your local data stays on this Mac.")],
+  [versionRow("v0.1.5"), versionRow("0.1.6", "update-banner", 1)],
+  [text("v0.1.6")],
+  [[kAXRoleAttribute: "AXButton", kAXValueAttribute: "v0.1.6", "captureWorkspace": "true"]]
+] { assert(!displayedVersion(invalid, "0.1.6")) }
 let rows: [[String: String]] = [[kAXRoleAttribute: kAXWindowRole], [kAXRoleAttribute: "AXWebArea"],
-  text("v0.1.5"), text("What your agents did"),
+  versionRow("v0.1.5"), text("What your agents did"),
   text("No agent activity was recorded in this range. Measured zeros are shown as 0."),
   text("Update 0.1.6 is ready. Your local data stays on this Mac."),
   [kAXRoleAttribute: kAXButtonRole, kAXTitleAttribute: "Restart to update"]]
@@ -339,8 +369,13 @@ assert(!updateReady(rows + [text("Welcome to XTrace")]))
 assert(!updateReady(rows + [[kAXRoleAttribute: "AXAlert"]]))
 assert(!updateReady(rows + [[kAXSubroleAttribute: "AXDialog"]]))
 assert(!updateReady(rows + [text("Dashboard metrics could not be loaded.")]))
-let updated = rows.map { $0 == text("v0.1.5") ? text("v0.1.6") : $0 }
+let updated = rows.map { $0 == versionRow("v0.1.5") ? versionRow("v0.1.6") : $0 }
 assert(!updateReady(updated)); assert(updateDashboard(updated, "0.1.6"))
+let splitDashboard = updated.filter { $0 != versionRow("v0.1.6") } + splitVersion
+assert(updateDashboard(splitDashboard, "0.1.6"))
+let splitOldDashboard = rows.filter { $0 != versionRow("v0.1.5") } +
+    [versionRow("v", "footer", 4), versionRow("0.1.5", "footer", 5)]
+assert(updateReady(splitOldDashboard))
 assert(!updateDashboard(updated + [text("Welcome to XTrace")], "0.1.6"))
 let wrongTarget = rows.map { $0 == rows[5] ? text("Update 0.1.7 is ready. Your local data stays on this Mac.") : $0 }
 assert(!updateReady(wrongTarget))

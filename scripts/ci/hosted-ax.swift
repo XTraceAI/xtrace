@@ -53,18 +53,30 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
 
 func snapshot(_ root: AXUIElement) -> [(AXUIElement, [String: String])] {
     var result: [(AXUIElement, [String: String])] = []
-    var queue: [(AXUIElement, Int)] = [(root, 0)]
+    // Parent IDs and sibling positions describe this snapshot only. Keep original
+    // child positions even when the existing traversal limits truncate a branch.
+    var queue: [(AXUIElement, Int, String, Int, Bool)] = [(root, 0, "", 0, false)]
     var offset = 0
     while offset < queue.count && result.count < 1000 {
-        let (element, depth) = queue[offset]
+        let nodeID = String(offset)
+        let (element, depth, parentID, childIndex, inheritedWorkspace) = queue[offset]
         offset += 1
         var row: [String: String] = [:]
         for name in [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
             if let value = attribute(element, name) as? String { row[name] = String(value.prefix(300)) }
         }
+        let inWorkspace = inheritedWorkspace ||
+            (row[kAXRoleAttribute] == "AXGroup" && row[kAXSubroleAttribute] == "AXLandmarkComplementary" &&
+             row[kAXDescriptionAttribute] == "Workspace")
+        row["captureNode"] = nodeID
+        row["captureParent"] = parentID
+        row["captureChildIndex"] = String(childIndex)
+        row["captureWorkspace"] = inWorkspace ? "true" : "false"
         result.append((element, row))
         if depth < 20, let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
-            queue.append(contentsOf: children.prefix(1000 - queue.count).map { ($0, depth + 1) })
+            queue.append(contentsOf: children.enumerated().prefix(1000 - queue.count).map {
+                ($0.element, depth + 1, nodeID, $0.offset, inWorkspace)
+            })
         }
     }
     return result
@@ -73,6 +85,21 @@ func snapshot(_ root: AXUIElement) -> [(AXUIElement, [String: String])] {
 // BEGIN UPDATE UI POLICY: offline controls call these with synthetic rows.
 func hasText(_ rows: [[String: String]], _ text: String) -> Bool {
     rows.contains { $0.values.contains(text) }
+}
+// WebKit may expose v{version} as one text item or two adjacent siblings.
+// Only the Workspace sidebar's displayed static text can establish app version.
+func displayedVersion(_ rows: [[String: String]], _ version: String) -> Bool {
+    for row in rows where row[kAXRoleAttribute] == "AXStaticText" && row["captureWorkspace"] == "true" {
+        if row[kAXValueAttribute] == "v" + version { return true }
+        guard row[kAXValueAttribute] == "v", let parent = row["captureParent"], !parent.isEmpty,
+              let position = Int(row["captureChildIndex"] ?? ""), position >= 0, position < 1000 else { continue }
+        if rows.contains(where: {
+            $0[kAXRoleAttribute] == "AXStaticText" && $0["captureWorkspace"] == "true" &&
+                $0["captureParent"] == parent && $0["captureChildIndex"] == String(position + 1) &&
+                $0[kAXValueAttribute] == version
+        }) { return true }
+    }
+    return false
 }
 func isButton(_ row: [String: String], _ title: String) -> Bool {
     row[kAXRoleAttribute] == kAXButtonRole &&
@@ -90,7 +117,7 @@ func nativeError(_ rows: [[String: String]]) -> Bool {
 func updateDashboard(_ rows: [[String: String]], _ version: String) -> Bool {
     !nativeError(rows) && rows.contains { $0[kAXRoleAttribute] == kAXWindowRole } &&
         rows.contains { $0[kAXRoleAttribute] == "AXWebArea" } &&
-        hasText(rows, "v" + version) && !hasText(rows, "Welcome to XTrace") &&
+        displayedVersion(rows, version) && !hasText(rows, "Welcome to XTrace") &&
         hasText(rows, "What your agents did") &&
         hasText(rows, "No agent activity was recorded in this range. Measured zeros are shown as 0.")
 }
@@ -146,7 +173,7 @@ while Date() < deadline {
                 finish(0, "Pressed real Restart to update once for target 0.1.6", last)
             } else if mode == "update-ready", sawWindow, sawWebContent, !pressed,
                       hasText("Welcome to XTrace"), hasText("The initial scan finished."),
-                      hasText("Bundled readers verified"), hasText("v0.1.5"),
+                      hasText("Bundled readers verified"), displayedVersion(last, "0.1.5"),
                       hasText("In the local database now"),
                       !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
                 let buttons = elements.filter { isButton($0.1, "Open Dashboard") }
@@ -167,7 +194,7 @@ while Date() < deadline {
             }) { finish(6, "The released app displayed a startup or native-data error", last) }
             if sawWindow, sawWebContent, !pressed, let button,
                hasText("Welcome to XTrace"), hasText("The initial scan finished."),
-               hasText("Bundled readers verified"), hasText("v0.1.6"),
+               hasText("Bundled readers verified"), displayedVersion(last, "0.1.6"),
                hasText("In the local database now"),
                !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
                 guard ownedApplication() != nil else { finish(5, "Identity changed before press", last) }
@@ -176,7 +203,7 @@ while Date() < deadline {
                     finish(6, "Open Dashboard AXPress failed", last)
                 }
                 pressed = true
-            } else if sawWindow, sawWebContent, pressed, hasText("v0.1.6"),
+            } else if sawWindow, sawWebContent, pressed, displayedVersion(last, "0.1.6"),
                       !hasText("Welcome to XTrace"), hasText("What your agents did"),
                       hasText("No agent activity was recorded in this range. Measured zeros are shown as 0.") {
                 finish(0, "Observed native-ready Welcome, Open Dashboard action and usable 0.1.6 Dashboard",
