@@ -18,6 +18,11 @@ guard authorization["ALLOW_RELEASE_IDENTITY"] == "true",
 #if !arch(arm64)
 fail("Requires arm64")
 #endif
+// LaunchServices can inherit the caller's environment in addition to the
+// configured app values. Consume these helper-only markers before using it.
+for key in ["ALLOW_RELEASE_IDENTITY", "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "GITHUB_EVENT_NAME"] {
+    guard unsetenv(key) == 0, getenv(key) == nil else { fail("Could not remove helper marker: \(key)") }
+}
 guard CommandLine.arguments.count == 4,
       ["launch", "inspect", "stop", "arm-update", "adopt-update", "absent"].contains(CommandLine.arguments[1]) else { fail("Invalid command") }
 let command = CommandLine.arguments[1]
@@ -204,8 +209,9 @@ do {
             if let home = actual["HOME"], home != NSHomeDirectory() { fail("Unexpected HOME override") }
             let systemKeys: Set<String> = ["HOME", "USER", "LOGNAME", "SHELL", "__CF_USER_TEXT_ENCODING",
                 "XPC_SERVICE_NAME", "XPC_FLAGS", "COMMAND_MODE", "SECURITYSESSIONID", "__CFBundleIdentifier"]
-            for key in actual.keys where env[key] == nil && !systemKeys.contains(key) {
-                fail("Unexpected process environment key: \(key)")
+            let unexpected = actual.keys.filter { env[$0] == nil && !systemKeys.contains($0) }.sorted()
+            if !unexpected.isEmpty {
+                fail("Unexpected process environment keys: \(unexpected.joined(separator: ", "))")
             }
             guard owned(receipt) != nil else { fail("Identity lost while reading environment") }
             print("Owned process has required synthetic paths; no unexpected environment keys")
