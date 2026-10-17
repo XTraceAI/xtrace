@@ -26,8 +26,8 @@ export function requireFirstLaunchHost(input) {
 }
 
 export const firstLaunchBudget = Object.freeze({ workMs: 8 * 60_000, cleanupMs: 2 * 60_000 });
-export function executionBudget(now = () => performance.now()) {
-  let deadline = now() + firstLaunchBudget.workMs;
+export function executionBudget(now = () => performance.now(), limits = firstLaunchBudget) {
+  let deadline = now() + limits.workMs;
   let cleaning = false;
   return {
     remaining(requestedMs) {
@@ -39,14 +39,19 @@ export function executionBudget(now = () => performance.now()) {
     beginCleanup() {
       if (!cleaning) {
         cleaning = true;
-        deadline = now() + firstLaunchBudget.cleanupMs;
+        deadline = now() + limits.cleanupMs;
       }
     },
   };
 }
 
 export function firstLaunchEnvironment(directory) {
-  return { ...probeEnvironment(directory), GH_CONFIG_DIR: join(directory, 'gh') };
+  // LaunchServices may add this key; the process inspector requires it to stay empty.
+  return {
+    ...probeEnvironment(directory),
+    GH_CONFIG_DIR: join(directory, 'gh'),
+    SSH_AUTH_SOCK: '',
+  };
 }
 
 export function firstLaunchBaselinePaths(home) {
@@ -123,4 +128,25 @@ export async function verifyTag(tag, readAnnotation) {
   if (target?.type !== 'commit' || target.sha !== release.source)
     throw new Error('Public release tag no longer identifies the pinned source commit');
   return release.source;
+}
+
+// One strict verifier for both released-app modes, always after confirmed exit.
+export async function verifyHostedDatabase(source, directory, checked) {
+  const result = JSON.parse(
+    await checked('database', '/opt/homebrew/bin/python3', [
+      '-I',
+      join(source, 'hosted-database.py'),
+      join(directory, 'xtrace.db'),
+    ]),
+  );
+  if (
+    result.status !== 'passed' ||
+    result.mode !== 'ro' ||
+    result.mainDatabaseUnchanged !== true ||
+    JSON.stringify(result.integrity) !== '["ok"]' ||
+    result.sessions !== 0 ||
+    result.records !== 0
+  )
+    throw new Error('Database checker did not confirm intact unchanged empty data');
+  return result;
 }

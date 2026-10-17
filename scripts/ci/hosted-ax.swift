@@ -17,7 +17,8 @@ guard CommandLine.arguments.count == 5,
 let bundle = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL.resolvingSymlinksInPath()
 let identifier = CommandLine.arguments[3]
 let mode = CommandLine.arguments[4]
-let releaseMode = mode == "first-launch"
+let updateMode = ["update-ready", "update-press", "updated-dashboard"].contains(mode)
+let releaseMode = mode == "first-launch" || updateMode
 let authorization = ProcessInfo.processInfo.environment
 let releaseAuthorized = releaseMode && identifier == "ai.xtrace.app" &&
     bundle.path == "/Applications/XTrace Desktop.app" &&
@@ -52,26 +53,84 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
 
 func snapshot(_ root: AXUIElement) -> [(AXUIElement, [String: String])] {
     var result: [(AXUIElement, [String: String])] = []
-    var queue: [(AXUIElement, Int)] = [(root, 0)]
+    // Parent IDs and sibling positions describe this snapshot only. Keep original
+    // child positions even when the existing traversal limits truncate a branch.
+    var queue: [(AXUIElement, Int, String, Int, Bool)] = [(root, 0, "", 0, false)]
     var offset = 0
     while offset < queue.count && result.count < 1000 {
-        let (element, depth) = queue[offset]
+        let nodeID = String(offset)
+        let (element, depth, parentID, childIndex, inheritedWorkspace) = queue[offset]
         offset += 1
         var row: [String: String] = [:]
-        for name in [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
+        for name in [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
             if let value = attribute(element, name) as? String { row[name] = String(value.prefix(300)) }
         }
+        let inWorkspace = inheritedWorkspace ||
+            (row[kAXRoleAttribute] == "AXGroup" && row[kAXSubroleAttribute] == "AXLandmarkComplementary" &&
+             row[kAXDescriptionAttribute] == "Workspace")
+        row["captureNode"] = nodeID
+        row["captureParent"] = parentID
+        row["captureChildIndex"] = String(childIndex)
+        row["captureWorkspace"] = inWorkspace ? "true" : "false"
         result.append((element, row))
         if depth < 20, let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
-            queue.append(contentsOf: children.prefix(1000 - queue.count).map { ($0, depth + 1) })
+            queue.append(contentsOf: children.enumerated().prefix(1000 - queue.count).map {
+                ($0.element, depth + 1, nodeID, $0.offset, inWorkspace)
+            })
         }
     }
     return result
 }
 
+// BEGIN UPDATE UI POLICY: offline controls call these with synthetic rows.
+func hasText(_ rows: [[String: String]], _ text: String) -> Bool {
+    rows.contains { $0.values.contains(text) }
+}
+// WebKit may expose v{version} as one text item or two adjacent siblings.
+// Only the Workspace sidebar's displayed static text can establish app version.
+func displayedVersion(_ rows: [[String: String]], _ version: String) -> Bool {
+    for row in rows where row[kAXRoleAttribute] == "AXStaticText" && row["captureWorkspace"] == "true" {
+        if row[kAXValueAttribute] == "v" + version { return true }
+        guard row[kAXValueAttribute] == "v", let parent = row["captureParent"], !parent.isEmpty,
+              let position = Int(row["captureChildIndex"] ?? ""), position >= 0, position < 1000 else { continue }
+        if rows.contains(where: {
+            $0[kAXRoleAttribute] == "AXStaticText" && $0["captureWorkspace"] == "true" &&
+                $0["captureParent"] == parent && $0["captureChildIndex"] == String(position + 1) &&
+                $0[kAXValueAttribute] == version
+        }) { return true }
+    }
+    return false
+}
+func isButton(_ row: [String: String], _ title: String) -> Bool {
+    row[kAXRoleAttribute] == kAXButtonRole &&
+        [row[kAXTitleAttribute], row[kAXDescriptionAttribute]].contains(title)
+}
+func nativeError(_ rows: [[String: String]]) -> Bool {
+    let errors = ["Local index status and database counts could not be read.",
+        "Local index status could not be read.", "Database counts could not be read.",
+        "Dashboard metrics could not be loaded.", "The local index has stopped."]
+    return rows.contains { row in
+        row[kAXRoleAttribute] == "AXAlert" || row[kAXSubroleAttribute] == "AXDialog" ||
+        row.values.contains { text in errors.contains { text.contains($0) } }
+    }
+}
+func updateDashboard(_ rows: [[String: String]], _ version: String) -> Bool {
+    !nativeError(rows) && rows.contains { $0[kAXRoleAttribute] == kAXWindowRole } &&
+        rows.contains { $0[kAXRoleAttribute] == "AXWebArea" } &&
+        displayedVersion(rows, version) && !hasText(rows, "Welcome to XTrace") &&
+        hasText(rows, "What your agents did") &&
+        hasText(rows, "No agent activity was recorded in this range. Measured zeros are shown as 0.")
+}
+func updateReady(_ rows: [[String: String]]) -> Bool {
+    updateDashboard(rows, "0.1.5") &&
+        hasText(rows, "Update 0.1.6 is ready. Your local data stays on this Mac.") &&
+        rows.filter { isButton($0, "Restart to update") }.count == 1
+}
+// END UPDATE UI POLICY
+
 let root = AXUIElementCreateApplication(pid)
 AXUIElementSetMessagingTimeout(root, 0.5)
-let deadline = Date().addingTimeInterval(releaseMode ? 90 : 25)
+let deadline = Date().addingTimeInterval(mode == "update-ready" ? 180 : mode == "update-press" ? 10 : releaseMode ? 90 : 25)
 let title = releaseMode ? "Open Dashboard" : mode == "press" ? "Confirm AX action" : "This control must not exist"
 var pressed = false
 var sawWindow = false
@@ -96,7 +155,36 @@ while Date() < deadline {
             $0.1[kAXRoleAttribute] == kAXButtonRole &&
                 [$0.1[kAXTitleAttribute], $0.1[kAXDescriptionAttribute]].contains(title)
         })?.0
-        if releaseMode {
+        if updateMode {
+            if nativeError(last) { finish(6, "Released app displayed an error or dialog", last) }
+            if mode == "updated-dashboard" {
+                if updateDashboard(last, "0.1.6") {
+                    finish(0, "Observed usable native 0.1.6 Dashboard and retained completed Welcome", last)
+                }
+            } else if updateReady(last) {
+                if mode == "update-ready" {
+                    finish(0, "Observed usable 0.1.5 Dashboard and target 0.1.6 ready", last)
+                }
+                let restart = elements.filter { isButton($0.1, "Restart to update") }
+                guard restart.count == 1, ownedApplication() != nil else { finish(5, "Identity or restart control changed", last) }
+                guard AXUIElementPerformAction(restart[0].0, kAXPressAction as CFString) == .success else {
+                    finish(6, "Restart to update AXPress failed", last)
+                }
+                finish(0, "Pressed real Restart to update once for target 0.1.6", last)
+            } else if mode == "update-ready", sawWindow, sawWebContent, !pressed,
+                      hasText("Welcome to XTrace"), hasText("The initial scan finished."),
+                      hasText("Bundled readers verified"), displayedVersion(last, "0.1.5"),
+                      hasText("In the local database now"),
+                      !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
+                let buttons = elements.filter { isButton($0.1, "Open Dashboard") }
+                guard buttons.count == 1, ownedApplication() != nil else { finish(5, "Welcome action identity changed", last) }
+                welcomeEvidence = last
+                guard AXUIElementPerformAction(buttons[0].0, kAXPressAction as CFString) == .success else {
+                    finish(6, "Open Dashboard AXPress failed", last)
+                }
+                pressed = true
+            }
+        } else if releaseMode {
             let errors = ["Local index status and database counts could not be read.",
                 "Local index status could not be read.", "Database counts could not be read.",
                 "Dashboard metrics could not be loaded.", "The local index has stopped."]
@@ -106,7 +194,7 @@ while Date() < deadline {
             }) { finish(6, "The released app displayed a startup or native-data error", last) }
             if sawWindow, sawWebContent, !pressed, let button,
                hasText("Welcome to XTrace"), hasText("The initial scan finished."),
-               hasText("Bundled readers verified"), hasText("v0.1.6"),
+               hasText("Bundled readers verified"), displayedVersion(last, "0.1.6"),
                hasText("In the local database now"),
                !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
                 guard ownedApplication() != nil else { finish(5, "Identity changed before press", last) }
@@ -115,7 +203,7 @@ while Date() < deadline {
                     finish(6, "Open Dashboard AXPress failed", last)
                 }
                 pressed = true
-            } else if sawWindow, sawWebContent, pressed, hasText("v0.1.6"),
+            } else if sawWindow, sawWebContent, pressed, displayedVersion(last, "0.1.6"),
                       !hasText("Welcome to XTrace"), hasText("What your agents did"),
                       hasText("No agent activity was recorded in this range. Measured zeros are shown as 0.") {
                 finish(0, "Observed native-ready Welcome, Open Dashboard action and usable 0.1.6 Dashboard",
