@@ -17,10 +17,22 @@ guard CommandLine.arguments.count == 5,
 let bundle = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL.resolvingSymlinksInPath()
 let identifier = CommandLine.arguments[3]
 let mode = CommandLine.arguments[4]
-guard identifier.range(of: #"^ai\.xtrace\.app\.test\.[a-f0-9-]+$"#,
-                       options: .regularExpression) != nil,
-      bundle.lastPathComponent == "Hosted AX Probe.app",
-      mode == "missing-control" || mode == "press" else { finish(2, "Unsupported identity or mode") }
+let releaseMode = mode == "first-launch"
+let authorization = ProcessInfo.processInfo.environment
+let releaseAuthorized = releaseMode && identifier == "ai.xtrace.app" &&
+    bundle.path == "/Applications/XTrace Desktop.app" &&
+    authorization["ALLOW_RELEASE_IDENTITY"] == "true" &&
+    authorization["GITHUB_ACTIONS"] == "true" &&
+    authorization["GITHUB_EVENT_NAME"] == "workflow_dispatch" &&
+    authorization["RUNNER_ENVIRONMENT"] == "github-hosted" &&
+    ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14
+let probeAuthorized = identifier.range(of: #"^ai\.xtrace\.app\.test\.[a-f0-9-]+$"#,
+                       options: .regularExpression) != nil &&
+    bundle.lastPathComponent == "Hosted AX Probe.app" && (mode == "missing-control" || mode == "press")
+guard releaseAuthorized || probeAuthorized else { finish(2, "Unsupported identity or mode") }
+#if !arch(arm64)
+if releaseMode { finish(2, "Release mode requires arm64") }
+#endif
 guard AXIsProcessTrusted() else { finish(4, "Accessibility is unavailable; no permission changes attempted") }
 
 func ownedApplication() -> NSRunningApplication? {
@@ -28,7 +40,7 @@ func ownedApplication() -> NSRunningApplication? {
           app.bundleIdentifier == identifier,
           app.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == bundle,
           app.executableURL?.standardizedFileURL.resolvingSymlinksInPath() ==
-              bundle.appendingPathComponent("Contents/MacOS/HostedAXProbe") else { return nil }
+              bundle.appendingPathComponent(releaseMode ? "Contents/MacOS/xtrace-desktop" : "Contents/MacOS/HostedAXProbe") else { return nil }
     return app
 }
 
@@ -46,7 +58,7 @@ func snapshot(_ root: AXUIElement) -> [(AXUIElement, [String: String])] {
         let (element, depth) = queue[offset]
         offset += 1
         var row: [String: String] = [:]
-        for name in [kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
+        for name in [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
             if let value = attribute(element, name) as? String { row[name] = String(value.prefix(300)) }
         }
         result.append((element, row))
@@ -59,13 +71,14 @@ func snapshot(_ root: AXUIElement) -> [(AXUIElement, [String: String])] {
 
 let root = AXUIElementCreateApplication(pid)
 AXUIElementSetMessagingTimeout(root, 0.5)
-let deadline = Date().addingTimeInterval(25)
-let title = mode == "press" ? "Confirm AX action" : "This control must not exist"
+let deadline = Date().addingTimeInterval(releaseMode ? 90 : 25)
+let title = releaseMode ? "Open Dashboard" : mode == "press" ? "Confirm AX action" : "This control must not exist"
 var pressed = false
 var sawWindow = false
 var sawIdentity = false
 var negativeSince: Date?
 var last: [[String: String]] = []
+var welcomeEvidence: [[String: String]] = []
 while Date() < deadline {
     guard let app = ownedApplication() else {
         if sawIdentity { finish(5, "Owned process identity was lost", last) }
@@ -83,7 +96,33 @@ while Date() < deadline {
             $0.1[kAXRoleAttribute] == kAXButtonRole &&
                 [$0.1[kAXTitleAttribute], $0.1[kAXDescriptionAttribute]].contains(title)
         })?.0
-        if mode == "missing-control" {
+        if releaseMode {
+            let errors = ["Local index status and database counts could not be read.",
+                "Local index status could not be read.", "Database counts could not be read.",
+                "Dashboard metrics could not be loaded.", "The local index has stopped."]
+            if last.contains(where: { row in
+                row[kAXRoleAttribute] == "AXAlert" || row[kAXSubroleAttribute] == "AXDialog" ||
+                    row.values.contains(where: { text in errors.contains(where: { text.contains($0) }) })
+            }) { finish(6, "The released app displayed a startup or native-data error", last) }
+            if sawWindow, sawWebContent, !pressed, let button,
+               hasText("Welcome to XTrace"), hasText("The initial scan finished."),
+               hasText("Bundled readers verified"), hasText("v0.1.6"),
+               hasText("In the local database now"),
+               !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
+                guard ownedApplication() != nil else { finish(5, "Identity changed before press", last) }
+                welcomeEvidence = last
+                guard AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else {
+                    finish(6, "Open Dashboard AXPress failed", last)
+                }
+                pressed = true
+            } else if sawWindow, sawWebContent, pressed, hasText("v0.1.6"),
+                      !hasText("Welcome to XTrace"), hasText("What your agents did"),
+                      hasText("No agent activity was recorded in this range. Measured zeros are shown as 0.") {
+                finish(0, "Observed native-ready Welcome, Open Dashboard action and usable 0.1.6 Dashboard",
+                       [["evidence": "Welcome before action"]] + welcomeEvidence +
+                       [["evidence": "Dashboard after action"]] + last)
+            }
+        } else if mode == "missing-control" {
             guard button == nil else { finish(6, "Negative control unexpectedly exists", last) }
             if sawWindow, sawWebContent, hasText("Awaiting AX action"), !hasText("AX action confirmed") {
                 if negativeSince == nil { negativeSince = Date() }

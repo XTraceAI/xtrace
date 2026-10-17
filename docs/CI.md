@@ -403,9 +403,62 @@ The `hosted-ui-probe-<run>-<attempt>` artifact retains the summary and bounded A
 snapshots/logs, including failed probes. This proves only the fixture interaction
 on the allocated image. It does not prove XTrace's WKWebView, signed first launch,
 browser-download quarantine behavior, or update/restart. No released app is
-downloaded, installed or launched by probe mode. `first-launch` and `update` are
-currently rejected, even with an `ALLOW_RELEASE_IDENTITY` environment variable.
-After observing hosted capability, prepare and review the exact-artifact and
-real-UI stages separately; any exception for launching the released app's real
-identity must be explicit before that run. Actual updater evidence additionally
-requires the production feed to offer the target release.
+downloaded, installed or launched by probe mode. The probe command still rejects
+released-app modes. The separate first-launch job below requires its own explicit
+opt-in; `update` remains unsupported.
+
+## Signed 0.1.6 first launch on a hosted Mac
+
+After reviewing the harness and explicitly authorizing the released app's real
+identity on a fresh hosted VM, dispatch `delivery_mode=first-launch` with
+`allow_release_identity=true`. The boolean defaults to false, and the job fails
+before checkout if it is absent or false. Use the exact reviewed harness SHA as
+`candidate_sha` on the default branch or its matching reviewed tag. That is
+distinct from the fixed released source `bab5673759993dc8970a846a8e37625def989d2b`.
+The Node runner and both Swift tools also reject unauthorized or non-hosted use.
+
+This job anonymously downloads the pinned public 0.1.6 DMG and checks its size,
+SHA-256 and public source tag, resolving its single annotation layer when present.
+It verifies strict signatures, the expected
+Developer ID team, stapled tickets and Gatekeeper acceptance for the app and DMG.
+It checks all 79 app paths, bytes, sizes and modes against a pinned canonical
+inventory before copying the app to the VM's `/Applications`, after copying it,
+and after the test exits. It never rebuilds, re-signs or edits the product.
+
+The download uses curl. Quarantine metadata is recorded on the DMG, mounted app
+and installed app; the harness neither adds nor removes it. LaunchServices opens
+the installed app under normal system policy. Security prompts are not approved
+automatically; a blocking prompt or uncertain launch fails the check. This tests
+signed first launch on the allocated hosted image, **not a browser-quarantined
+download's first Open confirmation**.
+
+Fresh-host checks reject existing current/old XTrace data, WebKit storage,
+preferences, provider configs, provider CLI paths and Claude's account Keychain
+item. No credential value is requested or logged. The launch receives owned
+`XTRACE_DATA_DIR`, `XTRACE_NATIVE_HOME`, `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR` and
+temporary paths with a short system PATH. The helper then reads the owned
+process's environment without logging values, confirms those paths and rejects
+unexpected keys. LaunchServices can add system variables; `HOME`, if supplied
+by the system, must remain the actual VM user's home. WebKit and preferences may
+write under that fresh VM home; this is not a test of migrating existing data.
+
+The external AX driver requires a real Welcome screen, completed native scan,
+verified bundled readers and version 0.1.6, with no native query error. It presses
+Open Dashboard and requires the loaded empty-report result, Dashboard heading
+and version. After stopping the exact PID/bundle/executable/launch-date receipt,
+the runner verifies the owned database's integrity and empty sessions/records,
+and checks that neither default current/old app directory received a database.
+It unregisters and removes only its owned app and staging files after confirmed
+exit. Missing ownership or unconfirmed exit retains the copy and fails.
+
+The `hosted-first-launch-<run>-<attempt>` artifact contains the launch receipt,
+AX snapshots, signature/assessment logs, quarantine observations and result.
+It does not contain the app environment or database. This workflow never
+publishes/promotes a release or exercises the updater. Actual update/restart
+evidence remains separate and requires the production feed to offer the target.
+
+The runner caps work commands against an eight-minute shared deadline, then
+reserves two minutes for cleanup. Individual command and UI limits stay strict.
+Its workflow step allows eleven minutes; the separately bounded preflight,
+checkout, setup, tests, run and upload steps total nineteen minutes inside the
+twenty-minute job limit, leaving time to retain failure evidence.
