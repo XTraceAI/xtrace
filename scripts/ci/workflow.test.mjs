@@ -79,7 +79,12 @@ test('routine CI is Linux-only and native work is explicit release preparation',
   );
   assert.doesNotMatch(releaseJobs.native, /secrets\.|environment:/);
   assert.match(release, /persist-credentials: false/);
-  assert.deepEqual(Object.keys(jobsOf(release)), ['native', 'package']);
+  assert.deepEqual(Object.keys(jobsOf(release)), [
+    'validate-mode',
+    'native',
+    'package',
+    'ui-capability-probe',
+  ]);
   assert.match(release, /^permissions:\n {2}contents: read\n\n/m);
   assert.doesNotMatch(jobsOf(release).native, /^\s+permissions:/m);
   for (const action of release.matchAll(/uses: (\S+)/g)) assert.match(action[1], /@[a-f0-9]{40}$/);
@@ -325,11 +330,16 @@ test('release validation explicitly uses verified vendored producer conformance'
 });
 
 test('only the signing step of the packaging job sees Apple values, after validation passes', () => {
-  assert.deepEqual(Object.keys(releaseJobs), ['native', 'package']);
+  assert.deepEqual(Object.keys(releaseJobs), [
+    'validate-mode',
+    'native',
+    'package',
+    'ui-capability-probe',
+  ]);
   const job = releaseJobs.package;
   assert.ok(
     job.includes(
-      "    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+      "    if: (inputs.delivery_mode == 'native' || inputs.delivery_mode == '') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
     ),
     'packaging runs only on the default branch and skips reviewed tag validation',
   );

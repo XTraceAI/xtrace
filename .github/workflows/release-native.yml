@@ -7,6 +7,14 @@ on:
         description: Full commit SHA of the merged or reviewed tagged release candidate
         required: true
         type: string
+      delivery_mode:
+        description: Native release validation or harmless hosted UI capability probe
+        required: true
+        default: native
+        type: choice
+        options:
+          - native
+          - probe
 
 permissions:
   contents: read
@@ -16,7 +24,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-mode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Reject unsupported modes before running candidate code
+        env:
+          DELIVERY_MODE: ${{ inputs.delivery_mode }}
+        run: |
+          case "$DELIVERY_MODE" in
+            native|probe|'') ;;
+            *) echo 'Unsupported delivery mode' >&2; exit 1 ;;
+          esac
+
   native:
+    if: inputs.delivery_mode == 'native' || inputs.delivery_mode == ''
+    needs: validate-mode
     runs-on: macos-14
     timeout-minutes: 60
     steps:
@@ -94,7 +117,7 @@ jobs:
   # Signing runs only after the credential-free validation above passes, in the
   # protected macos-signing environment. Only the step that signs sees Apple values.
   package:
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: (inputs.delivery_mode == 'native' || inputs.delivery_mode == '') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     needs: native
     runs-on: macos-14
     timeout-minutes: 150
@@ -148,4 +171,68 @@ jobs:
           name: dmg-${{ inputs.candidate_sha }}
           path: artifacts/release/
           if-no-files-found: error
+          retention-days: 14
+
+  # This job proves only fixture WKWebView Accessibility on the allocated image.
+  # It never downloads/launches XTrace, validates a release or enters signing.
+  ui-capability-probe:
+    if: inputs.delivery_mode == 'probe'
+    needs: validate-mode
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Require the reviewed workflow identity and hosted macOS 14 arm64
+        env:
+          DELIVERY_MODE: ${{ inputs.delivery_mode }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_TYPE: ${{ github.ref_type }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$DELIVERY_MODE" = probe
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
+          test "$SOURCE_SHA" = "$CANDIDATE_SHA"
+          if test "$WORKFLOW_REF" = "refs/heads/$DEFAULT_BRANCH"; then
+            test "$WORKFLOW_REF_TYPE" = branch
+          else
+            test "$WORKFLOW_REF_TYPE" = tag
+            NUMBER='(0|[1-9][0-9]*)'
+            PRERELEASE='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+            TAG_PATTERN="^refs/tags/v$NUMBER\\.$NUMBER\\.$NUMBER(-$PRERELEASE(\\.$PRERELEASE)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+            [[ "$WORKFLOW_REF" =~ $TAG_PATTERN ]] || exit 1
+          fi
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          [[ "$(sw_vers -productVersion)" == 14.* ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Test guards and exercise the harmless offline WKWebView fixture
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_TYPE: ${{ github.ref_type }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          node --test scripts/ci/hosted-validation.test.mjs
+          node scripts/ci/hosted-validation.mjs probe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: hosted-ui-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/hosted-validation/*.json
+            artifacts/hosted-validation/*.log
+          if-no-files-found: warn
           retention-days: 14
