@@ -198,14 +198,18 @@ test('workflow keeps native as default and puts probe outside native validation 
   assert.match(jobs['ui-capability-probe'], /node scripts\/ci\/hosted-validation.mjs probe/);
 });
 
-test('actual mode allowlist shell accepts defined modes and rejects updater or unknown modes', () => {
+test('actual mode allowlist shell accepts defined modes and rejects unknown modes', () => {
   const script = jobs['validate-mode'].split('        run: |\n')[1].replace(/^ {10}/gm, '');
   for (const mode of ['', 'native', 'probe', 'first-launch', 'update', 'anything']) {
     const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-c', script], {
       env: { PATH: '/usr/bin:/bin', DELIVERY_MODE: mode },
       encoding: 'utf8',
     });
-    assert.equal(result.status === 0, ['', 'native', 'probe', 'first-launch'].includes(mode), mode);
+    assert.equal(
+      result.status === 0,
+      ['', 'native', 'probe', 'first-launch', 'update'].includes(mode),
+      mode,
+    );
   }
 });
 

@@ -19,7 +19,7 @@ guard authorization["ALLOW_RELEASE_IDENTITY"] == "true",
 fail("Requires arm64")
 #endif
 guard CommandLine.arguments.count == 4,
-      ["launch", "inspect", "stop"].contains(CommandLine.arguments[1]) else { fail("Invalid command") }
+      ["launch", "inspect", "stop", "arm-update", "adopt-update", "absent"].contains(CommandLine.arguments[1]) else { fail("Invalid command") }
 let command = CommandLine.arguments[1]
 let receiptURL = URL(fileURLWithPath: CommandLine.arguments[2])
 let environmentURL = URL(fileURLWithPath: CommandLine.arguments[3])
@@ -30,6 +30,52 @@ struct Receipt: Codable {
     let bundle: String
     let executable: String
     let identifier: String
+}
+// BEGIN TRANSITION POLICY: compiled directly by offline value-only controls.
+struct Transition: Codable {
+    let original: Receipt
+    let armedAt: Double
+}
+enum TransitionError: Error { case unexpectedIdentity }
+func successor(_ transition: Transition, _ candidates: [Receipt], originalAlive: Bool) throws -> Receipt? {
+    let old = transition.original
+    func fixed(_ candidate: Receipt) -> Bool {
+        candidate.pid > 0 && candidate.bundle == "/Applications/XTrace Desktop.app" &&
+        candidate.executable == "/Applications/XTrace Desktop.app/Contents/MacOS/xtrace-desktop" &&
+        candidate.identifier == "ai.xtrace.app"
+    }
+    guard fixed(old), old.launchDate.isFinite, transition.armedAt.isFinite,
+          transition.armedAt >= old.launchDate else { throw TransitionError.unexpectedIdentity }
+    guard Set(candidates.map { $0.pid }).count == candidates.count else { throw TransitionError.unexpectedIdentity }
+    var replacements: [Receipt] = []
+    for candidate in candidates {
+        guard fixed(candidate), candidate.launchDate.isFinite else { throw TransitionError.unexpectedIdentity }
+        if candidate.pid == old.pid {
+            guard originalAlive, candidate.launchDate == old.launchDate else { throw TransitionError.unexpectedIdentity }
+        } else {
+            guard candidate.launchDate >= transition.armedAt else { throw TransitionError.unexpectedIdentity }
+            replacements.append(candidate)
+        }
+    }
+    guard replacements.count <= 1 else { throw TransitionError.unexpectedIdentity }
+    return originalAlive ? nil : replacements.first
+}
+// END TRANSITION POLICY
+let transitionURL = URL(fileURLWithPath: receiptURL.path + ".transition.json")
+let successorURL = URL(fileURLWithPath: receiptURL.path + ".successor.json")
+func candidates() -> [Receipt] {
+    NSWorkspace.shared.runningApplications.filter { !$0.isTerminated &&
+        ($0.bundleIdentifier == identity || canonical($0.bundleURL) == bundle.path ||
+         canonical($0.executableURL) == executable.path) }.map { app in
+        guard hasIdentity(app), let date = app.launchDate else { fail("Unexpected update process identity") }
+        return Receipt(pid: app.processIdentifier, launchDate: date.timeIntervalSince1970,
+                       bundle: bundle.path, executable: executable.path, identifier: identity)
+    }
+}
+func requireNoLegacyProcess() {
+    guard NSRunningApplication.runningApplications(withBundleIdentifier: "ai.xtrace.desktop").isEmpty else {
+        fail("An unexpected legacy XTrace process exists")
+    }
 }
 @Sendable func canonical(_ url: URL?) -> String? { url?.standardizedFileURL.resolvingSymlinksInPath().path }
 @Sendable func hasIdentity(_ app: NSRunningApplication) -> Bool {
@@ -119,7 +165,38 @@ do {
         print("LaunchServices returned the owned application; receipt saved")
     } else {
         let receipt = try JSONDecoder().decode(Receipt.self, from: Data(contentsOf: receiptURL))
-        if command == "inspect" {
+        if command == "arm-update" {
+            requireNoLegacyProcess()
+            guard owned(receipt) != nil, candidates().count == 1,
+                  !FileManager.default.fileExists(atPath: transitionURL.path),
+                  !FileManager.default.fileExists(atPath: successorURL.path) else { fail("Cannot arm update ownership") }
+            let transition = Transition(original: receipt, armedAt: Date().timeIntervalSince1970)
+            try JSONEncoder().encode(transition).write(to: transitionURL, options: .withoutOverwriting)
+            print("Update transition armed while original process is owned")
+        } else if command == "adopt-update" {
+            let transition = try JSONDecoder().decode(Transition.self, from: Data(contentsOf: transitionURL))
+            guard transition.original.pid == receipt.pid,
+                  transition.original.launchDate == receipt.launchDate,
+                  !FileManager.default.fileExists(atPath: successorURL.path) else { fail("Invalid or already adopted transition") }
+            let deadline = Date().addingTimeInterval(55)
+            while Date() < deadline {
+                requireNoLegacyProcess()
+                let oldAlive = owned(receipt) != nil
+                if let next = try successor(transition, candidates(), originalAlive: oldAlive) {
+                    // Save ownership before environment/UI checks, so failed checks can still stop it.
+                    guard owned(next) != nil, owned(receipt) == nil else { fail("Update identity changed during adoption") }
+                    try JSONEncoder().encode(next).write(to: successorURL, options: .withoutOverwriting)
+                    print("Original exited; distinct successor receipt saved")
+                    exit(0)
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            fail("No distinct owned successor after original exit; no manual relaunch attempted")
+        } else if command == "absent" {
+            requireNoLegacyProcess()
+            guard owned(receipt) == nil, candidates().isEmpty else { fail("XTrace process remains after cleanup") }
+            print("No current or legacy XTrace process remains")
+        } else if command == "inspect" {
             guard owned(receipt) != nil else { fail("Owned application exited before inspection") }
             let actual = processEnvironment(receipt.pid)
             for (key, value) in env where actual[key] != value { fail("Required process environment differs: \(key)") }

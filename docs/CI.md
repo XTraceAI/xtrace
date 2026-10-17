@@ -405,7 +405,7 @@ on the allocated image. It does not prove XTrace's WKWebView, signed first launc
 browser-download quarantine behavior, or update/restart. No released app is
 downloaded, installed or launched by probe mode. The probe command still rejects
 released-app modes. The separate first-launch job below requires its own explicit
-opt-in; `update` remains unsupported.
+opt-in; the update job described below has the same explicit opt-in.
 
 ## Signed 0.1.6 first launch on a hosted Mac
 
@@ -453,7 +453,7 @@ exit. Missing ownership or unconfirmed exit retains the copy and fails.
 
 The `hosted-first-launch-<run>-<attempt>` artifact contains the launch receipt,
 AX snapshots, signature/assessment logs, quarantine observations and result.
-It does not contain the app environment or database. This workflow never
+It does not contain the app environment or database. This mode never
 publishes/promotes a release or exercises the updater. Actual update/restart
 evidence remains separate and requires the production feed to offer the target.
 
@@ -469,3 +469,40 @@ disposable staging; cookies, authorization and redirect headers are not retained
 Non-2xx, incomplete, oversized or invalid JSON responses fail before tag checking
 or app download. These requests remain anonymous with no automatic retry or
 credential fallback; a 403 alone does not establish its cause.
+
+## Signed 0.1.5 to 0.1.6 update on a hosted Mac
+
+`delivery_mode=update` uses the same fresh GitHub-hosted macOS 14 arm64 guard,
+exact harness SHA and `allow_release_identity=true` requirement. Review the
+harness and first-launch evidence before dispatch. The fixed production endpoint
+must already serve the exact reviewed 0.1.6 manifest. Promotion is a separate
+release-owner action that makes the update available to production users; this
+job never changes the feed, publishes a release or substitutes an endpoint.
+A different feed fails the prerequisite before any app launch.
+
+The job downloads the exact signed public 0.1.5 archive anonymously, checks its
+pinned bytes, installs it on the disposable VM and verifies all 79 entries plus
+Developer ID, stapling and Gatekeeper. It reuses the synthetic environment and
+fresh-host checks above. Through external Accessibility it completes Welcome
+if present, observes a usable native 0.1.5 Dashboard and the target-specific
+0.1.6 ready message, then rechecks that the installed app is still 0.1.5.
+It presses the real Restart to update button once. No injected product code,
+manual relaunch or automatic prompt approval can produce a passing result.
+
+A saved transition binds the original process before the action. The helper
+requires its exit and one distinct successor at the same exact bundle/executable
+and app ID, with a fresh launch date. It saves a separate ownership receipt and
+checks the successor's inherited synthetic environment. The native 0.1.6
+Dashboard must load without Welcome returning; all 79 updated entries and the
+signature must match. After stopping the exact successor, it checks the retained
+synthetic sentinel, SQLite integrity, empty sessions/records and absence of a
+database in either default app directory. This tests empty synthetic data, not
+migration of real histories or browser-download quarantine prompts.
+
+The `hosted-update-<run>-<attempt>` artifact retains receipts, AX observations,
+feed and file identities, signature checks, quarantine metadata and cleanup
+results. An uncertain restart stops the known original but retains the copy and
+fails; a missing/ambiguous successor never authorizes broad process killing or
+removal. Work has a twelve-minute deadline and a separate two-minute cleanup
+reserve inside a fifteen-minute execution step and twenty-five-minute job.
+Adding this harness is not evidence that the hosted update has passed.

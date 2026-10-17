@@ -1,0 +1,10 @@
+{
+  "version": "0.1.6",
+  "notes": "Beta 0.1.6 fixes Dashboard keyboard scrolling and report dates, preserves real conversations during Claude usage checks, improves repeated-event and capture-coverage handling, and updates setup and privacy instructions. This is a testing beta for Apple Silicon Macs on macOS 14 or newer.",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "https://github.com/XTraceAI/xtrace-desktop/releases/download/v0.1.6/XTrace-Desktop-0.1.6-macos-arm64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRY000TkV4UllHTzVlaURRWW4rOEpJKzBDV2g1bVkyUGd6V28zTGNSaTlKbnRhZTAvb253N3hwQThSZ29ZcnZjaFRrUys0cDIzL3FHQy9Lb1NIV1JSTWlNT2VMWUkvNXdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTkzMzU3CWZpbGU6WFRyYWNlLURlc2t0b3AtMC4xLjYtbWFjb3MtYXJtNjQuYXBwLnRhci5negl2ZXJzaW9uOjAuMS42CmRYWE9QWHhGWUttMzBYR1FIWUJSNjZqWU9qTS93QnhaWVJaWnk4dUVkLytRUGdNdzJxS0hUcmlPTjMrT05NbzRkT2t6SXRKZkQxSUY2WFhRVlh3ckNnPT0K"
+    }
+  }
+}

@@ -243,7 +243,7 @@ const workflow = await readFile(
   new URL('../../.github/workflows/release-native.yml', import.meta.url),
   'utf8',
 );
-const job = workflow.split('  signed-first-launch:\n')[1];
+const job = workflow.split('  signed-first-launch:\n')[1].split('  signed-update:\n')[0];
 
 test('work deadlines cap remaining commands and reserve cleanup independently without resets', () => {
   let clock = 0;

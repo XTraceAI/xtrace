@@ -26,8 +26,8 @@ export function requireFirstLaunchHost(input) {
 }
 
 export const firstLaunchBudget = Object.freeze({ workMs: 8 * 60_000, cleanupMs: 2 * 60_000 });
-export function executionBudget(now = () => performance.now()) {
-  let deadline = now() + firstLaunchBudget.workMs;
+export function executionBudget(now = () => performance.now(), limits = firstLaunchBudget) {
+  let deadline = now() + limits.workMs;
   let cleaning = false;
   return {
     remaining(requestedMs) {
@@ -39,7 +39,7 @@ export function executionBudget(now = () => performance.now()) {
     beginCleanup() {
       if (!cleaning) {
         cleaning = true;
-        deadline = now() + firstLaunchBudget.cleanupMs;
+        deadline = now() + limits.cleanupMs;
       }
     },
   };
