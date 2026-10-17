@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireFreshBaseline } from './hosted-validation.mjs';
 import { signatureProblems, notarizedByGatekeeper } from './release-dmg.mjs';
+import { inspectMetadataResponse, readMetadataCapture, metadataLimit } from './hosted-metadata.mjs';
 import {
   release,
   firstLaunchBaselinePaths,
@@ -185,29 +186,48 @@ async function main() {
         120_000,
         env,
       );
-    const readTagMetadata = async (name, url) =>
-      JSON.parse(
-        await checked(
-          name,
-          '/usr/bin/curl',
-          [
-            '--disable',
-            '--noproxy',
-            '*',
-            '--fail',
-            '--silent',
-            '--show-error',
-            '--proto',
-            '=https',
-            '--max-time',
-            '60',
-            '--max-filesize',
-            '65536',
-            url,
-          ],
-          65_000,
-        ),
+    await checked('curl-version', '/usr/bin/curl', ['--disable', '--version']);
+    const readTagMetadata = async (name, url) => {
+      const headers = join(owned, `${name}-headers`);
+      const body = join(owned, `${name}-body`);
+      const result = run(
+        '/usr/bin/curl',
+        [
+          '--disable',
+          '--noproxy',
+          '*',
+          '--fail-with-body',
+          '--silent',
+          '--show-error',
+          '--proto',
+          '=https',
+          '--max-time',
+          '60',
+          '--max-filesize',
+          String(metadataLimit),
+          '--dump-header',
+          headers,
+          '--output',
+          body,
+          '--write-out',
+          '%{http_code}',
+          url,
+        ],
+        65_000,
       );
+      const response = inspectMetadataResponse(
+        result,
+        await readMetadataCapture(headers),
+        await readMetadataCapture(body),
+      );
+      await writeFile(
+        join(output, `${name}-http.json`),
+        `${JSON.stringify(response.diagnostic, null, 2)}\n`,
+      );
+      if (response.failure) throw new Error(`${name}: ${response.failure}; see ${name}-http.json`);
+      await writeFile(join(output, `${name}.json`), `${JSON.stringify(response.value, null, 2)}\n`);
+      return response.value;
+    };
     report.tagSource = await verifyTag(
       await readTagMetadata(
         'release-tag',
