@@ -364,3 +364,48 @@ arm64. Each later release needs a new exact-source result. Live queue evidence
 is required before queue activation.
 
 Native Rust tests and Clippy enable all debug features so fixture-mode tests cannot silently disappear behind an optional feature. Production packaging uses its normal feature set and must still exclude debug fixture assets.
+
+## Hosted UI capability probe
+
+`Release native validation` also accepts `delivery_mode=probe`. Its default
+`native` mode (including older dispatches that omit the input) keeps the existing
+native validation and protected packaging flow. Probe mode runs a separate
+`ui-capability-probe` job and cannot enter either of those jobs. Unsupported modes
+fail before candidate code runs.
+
+The probe can run from the default branch or a reviewed SemVer tag. For this
+mode, `candidate_sha`, the workflow commit, the event source commit and the
+checkout must all match. This permits reviewing and testing a tagged harness
+before merging it. A probe tag is harness source; it is not a downloadable app
+release and does not validate the candidate's native product code.
+
+On a fresh GitHub-hosted macOS 14 arm64 image, the harness records OS/image
+identity and the console user, rejects existing XTrace installations, data or
+processes, and rejects provider tools in the app's discovery paths. It compiles
+a harmless AppKit fixture with a unique `ai.xtrace.app.test.<UUID>` identity and
+a nonpersistent WKWebView displaying fixed offline HTML. The page has no external
+resources or product code; its ordinary button handler changes the visible text.
+The fixture receives only a small environment allowlist with its own data,
+native-home, Claude-config and temporary directories. It receives no inherited
+account or Actions credentials and does not override `HOME`.
+
+An external Swift Accessibility driver checks the exact process, executable,
+bundle path and test ID. It must observe a window and readable web content, time
+out on a deliberately missing control while the fixture remains unchanged for
+three seconds after the page becomes readable, press the real test button,
+and observe the visible label change. A window alone, missing Accessibility,
+failed press, process exit or timeout is a failure. The harness never changes
+TCC, requests permissions, disables Gatekeeper or injects product commands.
+It stops only its own child, confirms exit, unregisters its fixture and removes
+the temporary staging directory. Cleanup failure also fails the run.
+
+The `hosted-ui-probe-<run>-<attempt>` artifact retains the summary and bounded AX
+snapshots/logs, including failed probes. This proves only the fixture interaction
+on the allocated image. It does not prove XTrace's WKWebView, signed first launch,
+browser-download quarantine behavior, or update/restart. No released app is
+downloaded, installed or launched by probe mode. `first-launch` and `update` are
+currently rejected, even with an `ALLOW_RELEASE_IDENTITY` environment variable.
+After observing hosted capability, prepare and review the exact-artifact and
+real-UI stages separately; any exception for launching the released app's real
+identity must be explicit before that run. Actual updater evidence additionally
+requires the production feed to offer the target release.
