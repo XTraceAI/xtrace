@@ -117,6 +117,7 @@ test('first launch adds fresh provider, preference and current/old WebKit baseli
     assert.ok(paths.includes(join('/home/runner', path)), path);
   const env = firstLaunchEnvironment('/owned');
   assert.equal(env.GH_CONFIG_DIR, '/owned/gh');
+  assert.equal(env.SSH_AUTH_SOCK, '');
   assert.equal(env.XTRACE_DATA_DIR, '/owned/data');
   assert.equal(env.XTRACE_NATIVE_HOME, '/owned/home');
   assert.equal(env.CLAUDE_CONFIG_DIR, '/owned/claude');

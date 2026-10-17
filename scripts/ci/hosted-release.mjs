@@ -46,7 +46,12 @@ export function executionBudget(now = () => performance.now(), limits = firstLau
 }
 
 export function firstLaunchEnvironment(directory) {
-  return { ...probeEnvironment(directory), GH_CONFIG_DIR: join(directory, 'gh') };
+  // LaunchServices may add this key; the process inspector requires it to stay empty.
+  return {
+    ...probeEnvironment(directory),
+    GH_CONFIG_DIR: join(directory, 'gh'),
+    SSH_AUTH_SOCK: '',
+  };
 }
 
 export function firstLaunchBaselinePaths(home) {
