@@ -64,14 +64,19 @@ func successor(_ transition: Transition, _ candidates: [Receipt], originalAlive:
     guard replacements.count <= 1 else { throw TransitionError.unexpectedIdentity }
     return originalAlive ? nil : replacements.first
 }
-func kernelIsAlive(expected: UInt64, observed: UInt64?, missingProcess: Bool) throws -> Bool {
-    guard expected > 0 else { throw TransitionError.unexpectedIdentity }
+func liveCandidateStart(_ observed: UInt64?, missingProcess: Bool) throws -> UInt64? {
     if let observed {
-        guard observed == expected else { throw TransitionError.unexpectedIdentity }
-        return true
+        guard observed > 0 else { throw TransitionError.unexpectedIdentity }
+        return observed
     }
     guard missingProcess else { throw TransitionError.unexpectedIdentity }
-    return false
+    return nil
+}
+func kernelIsAlive(expected: UInt64, observed: UInt64?, missingProcess: Bool) throws -> Bool {
+    guard expected > 0 else { throw TransitionError.unexpectedIdentity }
+    guard let live = try liveCandidateStart(observed, missingProcess: missingProcess) else { return false }
+    guard live == expected else { throw TransitionError.unexpectedIdentity }
+    return true
 }
 // END TRANSITION POLICY
 let transitionURL = URL(fileURLWithPath: receiptURL.path + ".transition.json")
@@ -90,8 +95,9 @@ var diagnosedCandidates = Set<Int32>()
 func candidates() -> [Receipt] {
     NSWorkspace.shared.runningApplications.filter { !$0.isTerminated &&
         ($0.bundleIdentifier == identity || canonical($0.bundleURL) == bundle.path ||
-         canonical($0.executableURL) == executable.path) }.map { app in
+         canonical($0.executableURL) == executable.path) }.compactMap { app -> Receipt? in
         let start = processStart(app.processIdentifier)
+        let missing = start == nil && kill(app.processIdentifier, 0) == -1 && errno == ESRCH
         // At most four matched candidate snapshots per invocation; no unrelated
         // processes or environment values enter the diagnostic.
         if command == "adopt-update", diagnosedCandidates.count < 4,
@@ -101,14 +107,19 @@ func candidates() -> [Receipt] {
                 "bundle": String((canonical(app.bundleURL) ?? "<missing>").prefix(512)),
                 "executable": String((canonical(app.executableURL) ?? "<missing>").prefix(512)),
                 "finishedLaunching": app.isFinishedLaunching, "appKitLaunchDateAvailable": app.launchDate != nil,
-                "kernelStartAvailable": start != nil, "kernelStartMicros": start ?? 0]
+                "kernelStartAvailable": start != nil, "kernelStartMicros": start ?? 0, "kernelProcessMissing": missing]
             if let data = try? JSONSerialization.data(withJSONObject: detail, options: [.sortedKeys]) {
                 FileHandle.standardOutput.write(data); print("")
             }
         }
-        guard hasIdentity(app), let start else { fail("Unexpected update process identity or missing kernel start time") }
-        return Receipt(pid: app.processIdentifier, startTime: start,
-                       bundle: bundle.path, executable: executable.path, identifier: identity)
+        do {
+            // AppKit can retain a terminated process. Only kernel ESRCH permits
+            // skipping it; an inaccessible or live unidentifiable PID still fails.
+            guard let live = try liveCandidateStart(start, missingProcess: missing) else { return nil }
+            guard hasIdentity(app) else { fail("Unexpected update process identity") }
+            return Receipt(pid: app.processIdentifier, startTime: live,
+                           bundle: bundle.path, executable: executable.path, identifier: identity)
+        } catch { fail("Candidate kernel process identity is unavailable") }
     }
 }
 func requireNoLegacyProcess() {

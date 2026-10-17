@@ -331,6 +331,22 @@ assert(try! successor(t, [next], originalAlive: false)?.pid == 11)
 // Original absent from AppKit candidates is still alive if its kernel identity exists.
 assert(try! successor(t, [next], originalAlive: kernelIsAlive(expected: 100, observed: 100, missingProcess: false)) == nil)
 assert(try! !kernelIsAlive(expected: 100, observed: nil, missingProcess: true))
+// The actual candidate-start decision drops only kernel-confirmed stale entries.
+func retainedCandidates(_ observations: [(Receipt, UInt64?, Bool)]) throws -> [Receipt] {
+  try observations.compactMap { receipt, observed, missing in
+    guard try liveCandidateStart(observed, missingProcess: missing) != nil else { return nil }
+    return receipt
+  }
+}
+let afterExit = try! retainedCandidates([(old, nil, true), (next, 201, false)])
+assert(afterExit.count == 1)
+assert(try! successor(t, afterExit, originalAlive: false)?.pid == next.pid)
+let staleOnly = try! retainedCandidates([(old, nil, true)])
+assert(staleOnly.isEmpty) // The same empty candidate list is used by the absent check.
+assert(try! successor(t, staleOnly, originalAlive: false) == nil)
+for (observed, missing): (UInt64?, Bool) in [(nil, false), (0, false), (0, true)] {
+  do { _ = try retainedCandidates([(old, observed, missing)]); fatalError("Unknown or invalid live candidate was skipped") } catch {}
+}
 for (observed, missing): (UInt64?, Bool) in [(nil, false), (101, false), (101, true)] {
   do { _ = try kernelIsAlive(expected: 100, observed: observed, missingProcess: missing); fatalError("Lost kernel identity accepted") } catch {}
 }
