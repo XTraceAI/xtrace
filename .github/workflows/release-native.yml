@@ -15,6 +15,12 @@ on:
         options:
           - native
           - probe
+          - first-launch
+      allow_release_identity:
+        description: Explicitly allow the unchanged signed app identity on this fresh hosted VM
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -33,7 +39,7 @@ jobs:
           DELIVERY_MODE: ${{ inputs.delivery_mode }}
         run: |
           case "$DELIVERY_MODE" in
-            native|probe|'') ;;
+            native|probe|first-launch|'') ;;
             *) echo 'Unsupported delivery mode' >&2; exit 1 ;;
           esac
 
@@ -234,5 +240,78 @@ jobs:
           path: |
             artifacts/hosted-validation/*.json
             artifacts/hosted-validation/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # This opt-in runs the fixed public artifact. It never rebuilds, signs, updates or publishes.
+  signed-first-launch:
+    if: inputs.delivery_mode == 'first-launch'
+    needs: validate-mode
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - name: Require the reviewed workflow identity and hosted macOS 14 arm64
+        timeout-minutes: 1
+        env:
+          DELIVERY_MODE: ${{ inputs.delivery_mode }}
+          ALLOW_RELEASE_IDENTITY: ${{ inputs.allow_release_identity }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_TYPE: ${{ github.ref_type }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$DELIVERY_MODE" = first-launch
+          test "$ALLOW_RELEASE_IDENTITY" = true
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
+          test "$SOURCE_SHA" = "$CANDIDATE_SHA"
+          if test "$WORKFLOW_REF" = "refs/heads/$DEFAULT_BRANCH"; then
+            test "$WORKFLOW_REF_TYPE" = branch
+          else
+            test "$WORKFLOW_REF_TYPE" = tag
+            NUMBER='(0|[1-9][0-9]*)'
+            PRERELEASE='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+            TAG_PATTERN="^refs/tags/v$NUMBER\\.$NUMBER\\.$NUMBER(-$PRERELEASE(\\.$PRERELEASE)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+            [[ "$WORKFLOW_REF" =~ $TAG_PATTERN ]] || exit 1
+          fi
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          [[ "$(sw_vers -productVersion)" == 14.* ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 2
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 2
+        with:
+          node-version-file: .node-version
+      - name: Test first-launch guards
+        timeout-minutes: 1
+        run: node --test scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs
+      - name: Validate the unchanged signed 0.1.6 first launch
+        timeout-minutes: 11
+        env:
+          ALLOW_RELEASE_IDENTITY: ${{ inputs.allow_release_identity }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_TYPE: ${{ github.ref_type }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          node scripts/ci/hosted-first-launch.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        timeout-minutes: 2
+        if: always()
+        with:
+          name: hosted-first-launch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/hosted-first-launch/*.json
+            artifacts/hosted-first-launch/*.log
           if-no-files-found: warn
           retention-days: 14
