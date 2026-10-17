@@ -292,7 +292,7 @@ jobs:
           node-version-file: .node-version
       - name: Test first-launch guards
         timeout-minutes: 1
-        run: node --test scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs
+        run: node --test scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-metadata.test.mjs
       - name: Validate the unchanged signed 0.1.6 first launch
         timeout-minutes: 11
         env:

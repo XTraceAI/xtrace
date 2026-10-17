@@ -462,3 +462,10 @@ reserves two minutes for cleanup. Individual command and UI limits stay strict.
 Its workflow step allows eleven minutes; the separately bounded preflight,
 checkout, setup, tests, run and upload steps total nineteen minutes inside the
 twenty-minute job limit, leaving time to retain failure evidence.
+
+Public tag-metadata requests retain the curl version, HTTP status, selected
+response headers and a bounded error-body excerpt. Raw response headers stay in
+disposable staging; cookies, authorization and redirect headers are not retained.
+Non-2xx, incomplete, oversized or invalid JSON responses fail before tag checking
+or app download. These requests remain anonymous with no automatic retry or
+credential fallback; a 403 alone does not establish its cause.
