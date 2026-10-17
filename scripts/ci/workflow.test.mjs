@@ -84,6 +84,7 @@ test('routine CI is Linux-only and native work is explicit release preparation',
     'native',
     'package',
     'ui-capability-probe',
+    'signed-first-launch',
   ]);
   assert.match(release, /^permissions:\n {2}contents: read\n\n/m);
   assert.doesNotMatch(jobsOf(release).native, /^\s+permissions:/m);
@@ -335,6 +336,7 @@ test('only the signing step of the packaging job sees Apple values, after valida
     'native',
     'package',
     'ui-capability-probe',
+    'signed-first-launch',
   ]);
   const job = releaseJobs.package;
   assert.ok(
