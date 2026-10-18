@@ -43,15 +43,16 @@ Mac, spread across thousands of transcript files. XTrace reads it and answers:
 ### Dashboard
 
 Daily agent hours and cost, leverage, concurrency, hands-off time and merged pull
-requests for the last 7, 14 or 30 days. Every number has a definition that explains
-how it is counted and what is missing. Values the app could not measure show as
-a dash, not zero.
+requests for the last 7, 14 or 30 days. Definitions explain how each number is
+counted and what is missing. Values the app could not measure show as a dash, not
+zero.
 
 ### Sessions
 
-Every Claude Code, Codex and Cursor session in one list. Find a session by ID,
-repo or branch, filter by tool, open it to see its timeline, and read Claude
-transcripts straight from the original files.
+Your indexed Claude Code, Codex and Cursor sessions in one list. Find a session
+by ID, repo or branch, filter by tool, open it to see its timeline, and read
+Claude transcripts straight from the original files. A sub-session whose parent
+session can't be confirmed is left out of the list.
 
 ### Pull requests
 
