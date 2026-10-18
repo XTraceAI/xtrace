@@ -471,9 +471,9 @@ fn an_interpreter_probe_that_never_answers_is_bounded_and_cancellable() {
 /// A fake interpreter that is a launcher: it starts the real work in a
 /// child it waits for, without replacing itself, so a plain kill of the
 /// launcher would leave the descendant holding the reader's stream. Records
-/// both process IDs under `root`; as the reader the worker streams one
-/// session then hangs, as the probe the launcher answers itself.
-fn launcher_python(root: &Path) -> PathBuf {
+/// both process IDs under `root`; the worker optionally streams one complete
+/// session before hanging, while the probe is answered by the launcher itself.
+fn launcher_python(root: &Path, stream_session: bool) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let worker = root.join("launcher-worker.sh");
     let lines = [
@@ -485,6 +485,7 @@ fn launcher_python(root: &Path) -> PathBuf {
     .iter()
     .map(|line| format!("printf '%s\\n' '{line}'\n"))
     .collect::<String>();
+    let lines = if stream_session { lines } else { String::new() };
     fs::write(
         &worker,
         format!(
@@ -510,10 +511,20 @@ fn launcher_python(root: &Path) -> PathBuf {
 
 #[test]
 fn cancelling_a_reader_launcher_takes_the_descendant_holding_the_stream_with_it() {
+    cancel_reader_launcher(true);
+}
+
+#[test]
+fn cancelling_a_reader_launcher_before_it_streams_a_session_kills_the_descendant() {
+    cancel_reader_launcher(false);
+}
+
+fn cancel_reader_launcher(after_commit: bool) {
     let temp = tempfile::TempDir::new().unwrap();
-    let python = launcher_python(temp.path());
+    let python = launcher_python(temp.path(), after_commit);
     let home = codex_home(temp.path());
-    let mut store = Store::open(temp.path().join("index.sqlite")).unwrap();
+    let db = temp.path().join("index.sqlite");
+    let mut store = Store::open(&db).unwrap();
     let producer = bundle();
     let cancel = CancelToken::new();
     let (report, launcher, worker) = std::thread::scope(|scope| {
@@ -533,6 +544,9 @@ fn cancelling_a_reader_launcher_takes_the_descendant_holding_the_stream_with_it(
         let launcher = pid_at(&temp.path().join("launcher.pid"));
         let worker = pid_at(&temp.path().join("worker.pid"));
         assert!(alive(launcher) && alive(worker));
+        if after_commit {
+            committed(&db, 2);
+        }
         let started = Instant::now();
         cancel.cancel();
         let report = scan.join().unwrap();
@@ -564,8 +578,15 @@ fn cancelling_a_reader_launcher_takes_the_descendant_holding_the_stream_with_it(
     }
     let codex = &report.hosts[0];
     assert_eq!(codex.status, HostStatus::Cancelled, "{report:?}");
-    assert!(matches!(
-        codex.sessions[0].outcome,
-        SessionOutcome::Imported { records_new: 2, .. }
-    ));
+    if after_commit {
+        assert_eq!(codex.sessions.len(), 2, "{codex:?}");
+        assert!(matches!(
+            codex.sessions[0].outcome,
+            SessionOutcome::Imported { records_new: 2, .. }
+        ));
+        assert_eq!(store.counts().unwrap().records, 2);
+    } else {
+        assert!(codex.sessions.is_empty(), "{codex:?}");
+        assert_eq!(store.counts().unwrap().records, 0);
+    }
 }
