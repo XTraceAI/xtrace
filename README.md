@@ -20,7 +20,7 @@ read from the Claude Code, Codex and Cursor history already on your Mac.
 
 <img src="docs/images/readme/dashboard-dark.png" alt="XTrace Desktop Dashboard showing a week of agent hours, leverage, concurrency, merged pull requests and recent sessions" width="100%">
 
-<sub>Screenshots use made-up sample projects, not real work.</sub>
+<sub>The screenshot uses made-up sample projects, not real work.</sub>
 
 </div>
 
@@ -28,14 +28,15 @@ read from the Claude Code, Codex and Cursor history already on your Mac.
 
 You run three agents at once, switch between Claude Code and Codex, and by Friday
 you can't say where the week went. The history to answer that is already on your
-Mac, spread across thousands of transcript files. XTrace reads it and answers:
+Mac, spread across many transcript files. XTrace reads it and answers:
 
-- **How much did my agents work, and how much did I?** Agent hours next to your
-  own active time, and the ratio between them.
+- **How much did my agents work, and how much did I?** Agent hours next to an
+  estimate of your own time, based on when you sent messages, and the ratio
+  between them.
 - **What would this cost at API prices?** Per session and per day, estimated from
   published API rates (not your subscription bill).
-- **Is it shipping?** Which sessions ended in a merged pull request, and how much
-  agent time went into each one.
+- **Is it shipping?** Which merged pull requests your sessions are linked to, and
+  the agent time of those linked sessions.
 - **Am I about to hit a limit?** Claude and Codex account usage, right in the sidebar.
 
 ## Features
@@ -56,8 +57,9 @@ session can't be confirmed is left out of the list.
 
 ### Pull requests
 
-Merged pull requests with the sessions behind them: tokens, your messages, agent
-time and hands-off time per PR. Pull request details come from GitHub's
+Merged pull requests with the effort of their linked sessions: tokens, your
+messages, agent time and hands-off time. A session linked to several pull requests
+counts in full toward each of them. Pull request details come from GitHub's
 command-line tool (`gh`) when it is installed and signed in. XTrace never posts
 to GitHub.
 
