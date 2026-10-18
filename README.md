@@ -65,8 +65,8 @@ to GitHub.
 - **Menu bar:** today's activity one click away.
 - **Usage:** Claude and Codex account limits, where your local tools can report them.
 - **Rulebook:** recorded activity from your local agent rules.
-- **Settings:** light, dark or system appearance, typing speed, index status and
-  storage controls.
+- **Settings:** light, dark or system appearance, typing speed, index status,
+  storage controls and the telemetry switch.
 
 ## Install
 
@@ -80,23 +80,35 @@ conversations kept only in the Cursor app's own database are not read. The app
 downloads signed updates and installs them when you click **Restart to update**.
 See the [setup guide](docs/SETUP.md) for first launch and troubleshooting.
 
-## Private by default
+## Your data
 
 - **Reads your history, no transcript upload.** XTrace reads the history files
   your agents already save and does not edit them. There is no cloud transcript
-  upload and no telemetry collector.
+  upload.
 - **Metrics, not full transcripts.** By default the local database keeps metrics,
   repository paths, IDs and a preview (up to 280 characters) of each message you
   sent and of each recognized Claude Code background-task summary. Previews can't
-  be turned off. Full transcripts are saved only if you turn
-  that on. Settings can delete saved text; anything imported afterwards,
-  including older messages, gets new previews.
-- **Network use is limited.** The app contacts the network only for account
-  usage readings, GitHub pull request checks and app updates. Claude usage
-  checks run your local Claude Code about every ten minutes, which adds small
-  entries to Claude Code's own settings and history.
+  be turned off. Full transcripts are saved only if you turn that on. Settings
+  can delete saved text; anything imported afterwards, including older messages,
+  gets new previews.
+- **Network use is limited.** The app contacts the network only for anonymous
+  usage telemetry (see [Telemetry](#telemetry)), account usage readings, GitHub
+  pull request checks and app updates. Claude usage checks run your local Claude
+  Code about every ten minutes, which adds small entries to Claude Code's own
+  settings and history.
 
 The full details are in [data and network](docs/SETUP.md#data-and-network).
+
+## Telemetry
+
+XTrace Desktop sends a few anonymous usage events, such as when the app is opened
+and roughly how often it is used, with the app version, the macOS version, which
+coding agents have history on this Mac and a random ID. It never sends repository
+names, file paths, prompts or other conversation text, pull-request links, token
+counts or costs. Telemetry is on by default, and nothing is sent until the app has
+shown a notice about it. Turn it off with **Turn off** in that notice, the switch in
+Settings, or by starting the app with `XTRACE_TELEMETRY=0`. [TELEMETRY.md](TELEMETRY.md)
+lists every event and property.
 
 ## Status
 
