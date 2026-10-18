@@ -1,0 +1,1 @@
+- Correct parent links and Human input counts for agent launches built with JavaScript replacement strings.

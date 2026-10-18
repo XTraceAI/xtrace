@@ -35,7 +35,7 @@ use rusqlite::{Connection, params};
 /// versions is a check still to run.
 macro_rules! child_check_versions {
     () => {
-        "check1.spawn2.scan10.claude6.cli1.bash2"
+        "check1.spawn2.scan11.claude6.cli1.bash2"
     };
 }
 pub(crate) use child_check_versions;
@@ -46,7 +46,7 @@ pub const DETECTOR_VERSIONS: &str = child_check_versions!();
 /// The Codex history scan version (`CLAUDE_LAUNCH_VALIDATION_VERSION` of the
 /// native reader) that [`DETECTOR_VERSIONS`] names. The reader asserts they
 /// agree.
-pub const LAUNCH_VALIDATION_VERSION: u32 = 10;
+pub const LAUNCH_VALIDATION_VERSION: u32 = 11;
 
 /// Sessions one [`Store::open_child_checks`] page holds at most.
 pub const MAX_OPEN_CHECKS: usize = 512;

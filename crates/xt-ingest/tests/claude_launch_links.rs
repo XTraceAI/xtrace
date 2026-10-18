@@ -449,6 +449,129 @@ fn shown_parent(store: &Store, child: &str) -> Option<(String, ParentEvidence)> 
         .map(|parent| (parent.session_id, parent.evidence))
 }
 
+/// A literal command and its JavaScript replacement spelling describe the
+/// same launch. Both child user messages must count as agent input.
+#[test]
+fn dollar_replacement_and_literal_launches_have_the_same_ownership() {
+    for replacement in [false, true] {
+        let home = Home::new();
+        let mut rows = launch_rows(&home.claude(), CHILD, exit(0, ""));
+        rows[1]["payload"]["input"] = json!(dollar_launch_cell(&home, replacement));
+        let files = write_history(&home, &[rows]);
+        write_child(&home, &child_rows(4203, "a$b"));
+        let mut store = home.store();
+        index_parent(&mut store, &files[0]);
+        scan_claude(&home, &mut store, &mut SpawnBacklog::default());
+        let child = child_session(&store).unwrap();
+        assert_eq!(eligible(&home.db, &child), 2);
+        settle(&home, &mut store, &mut SpawnBacklog::starting());
+        assert_eq!(
+            shown_parent(&store, &child).map(|p| p.0),
+            Some(format!("codex-{PARENT}")),
+            "replacement={replacement}"
+        );
+        assert_eq!(
+            store
+                .child_facts(&child)
+                .unwrap()
+                .iter()
+                .filter(|f| f.1)
+                .count(),
+            1
+        );
+        assert_eq!(eligible(&home.db, &child), 0, "replacement={replacement}");
+    }
+}
+
+fn dollar_launch_cell(home: &Home, replacement: bool) -> String {
+    let prefix = format!("{} --session-id {CHILD} -p '", home.claude());
+    if replacement {
+        format!(
+            r#"const p="a'b";text(await tools.exec_command({{cmd:{}+p.replace(/'/g,"$$")+"'",workdir:"/w"}}));"#,
+            js(&prefix)
+        )
+    } else {
+        format!(
+            r#"text(await tools.exec_command({{cmd:{},workdir:"/w"}}));"#,
+            js(&format!("{prefix}a$b'"))
+        )
+    }
+}
+
+/// Seed the exact old decision: the source was valid, but replacing an
+/// apostrophe with "$$" was read as two dollars and the child was rejected.
+/// Once seeded, neither history changes across the two simulated restarts.
+#[test]
+fn a_completed_dollar_replacement_rejection_is_repaired_once_after_upgrade() {
+    use std::os::unix::fs::MetadataExt;
+    let home = Home::new();
+    let mut rows = launch_rows(&home.claude(), CHILD, exit(0, ""));
+    // Produce the old candidate and its completed rejection through normal
+    // readers, using the command version 10 mistakenly reconstructed.
+    rows[1]["payload"]["input"] = json!(dollar_launch_cell(&home, false).replace("a$b", "a$$b"));
+    let files = write_history(&home, &[rows.clone()]);
+    let child_file = write_child(&home, &child_rows(4203, "a$b"));
+    let mut store = home.store();
+    index_parent(&mut store, &files[0]);
+    scan_claude(&home, &mut store, &mut SpawnBacklog::default());
+    settle(&home, &mut store, &mut SpawnBacklog::starting());
+    let child = child_session(&store).unwrap();
+    assert_eq!(shown_parent(&store, &child), None);
+    assert_eq!(eligible(&home.db, &child), 2);
+    let conn = rusqlite::Connection::open(&home.db).unwrap();
+    let rejection: (String, String, i64) = conn
+        .query_row(
+            "SELECT source_verdict,child_state,child_check_complete FROM claude_launch_candidates",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(rejection, ("valid".into(), "rejected".into(), 1));
+    // Store the real recorded expression and its generation alongside that
+    // old decision, as the previous reader would have published it.
+    rows[1]["payload"]["input"] = json!(dollar_launch_cell(&home, true));
+    write_history(&home, &[rows]);
+    let meta = fs::symlink_metadata(&files[0]).unwrap();
+    conn.execute(
+        "UPDATE claude_launch_group_members SET segment_device=?1,segment_inode=?2,segment_length=?3,segment_mtime_ns=?4,segment_ctime_ns=?5,scanned_length=?3",
+        rusqlite::params![meta.dev() as i64,meta.ino() as i64,meta.len() as i64,
+            meta.mtime()*1_000_000_000+meta.mtime_nsec(),meta.ctime()*1_000_000_000+meta.ctime_nsec()],
+    ).unwrap();
+    conn.execute("UPDATE claude_launch_groups SET validator_version=10", [])
+        .unwrap();
+    conn.execute(
+        "UPDATE session_child_checks SET detector_versions='check1.spawn2.scan10.claude6.cli1.bash2' WHERE completed_generation IS NOT NULL", [],
+    ).unwrap();
+    let source = fs::read(&files[0]).unwrap();
+    let transcript = fs::read(&child_file).unwrap();
+    drop(conn);
+    drop(store);
+    let mut store = home.store();
+    let first = totals(&settle(&home, &mut store, &mut SpawnBacklog::starting()));
+    assert_eq!((first.files_read, first.linked), (1, 1), "{first:?}");
+    assert_eq!(
+        shown_parent(&store, &child).map(|p| p.0),
+        Some(format!("codex-{PARENT}"))
+    );
+    assert_eq!(
+        store
+            .child_facts(&child)
+            .unwrap()
+            .iter()
+            .filter(|f| f.1)
+            .count(),
+        1
+    );
+    assert_eq!(eligible(&home.db, &child), 0);
+    drop(store);
+    let mut store = home.store();
+    let again = totals(&settle(&home, &mut store, &mut SpawnBacklog::starting()));
+    assert_eq!((again.files_read, again.linked), (0, 0), "{again:?}");
+    assert_eq!(eligible(&home.db, &child), 0);
+    assert_eq!(fs::read(&files[0]).unwrap(), source);
+    assert_eq!(fs::read(&child_file).unwrap(), transcript);
+}
+
 /// Parent indexed, child indexed, then one ordinary start: the launch in the
 /// latest unindexed continuation is linked, the resume is not a second
 /// creation, a restart changes nothing and reads no history again, and the

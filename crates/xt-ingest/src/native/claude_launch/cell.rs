@@ -324,6 +324,72 @@ pub(super) const MAX_OPERATIONS: usize = 32;
 /// itself being the first: 16 nested arrays, or 15 around a scalar.
 pub(super) const MAX_DEPTH: usize = 16;
 
+/// Maximum UTF-8 bytes in one evaluated string, matching the default history
+/// row limit (`LaunchLimits::max_line`, 16 MiB). This is a parser-local ceiling,
+/// not a total memory budget: replacement and concatenation may not amplify
+/// a small recorded expression beyond it, including in opaque operations.
+const MAX_EVALUATED_STRING_BYTES: usize = 16 << 20;
+
+fn string_length(current: usize, more: usize) -> Result<usize, ()> {
+    current
+        .checked_add(more)
+        .filter(|&len| len <= MAX_EVALUATED_STRING_BYTES)
+        .ok_or(())
+}
+
+/// JavaScript's GetSubstitution for the only admitted pattern, /'/g. There
+/// are no captures: $1, $01, $99 and $<name> remain literal. Scan replacement
+/// text once per match; inserted text is never interpreted again. Byte
+/// offsets are safe here because the matched apostrophe is ASCII.
+fn replacement_parts<'a>(
+    input: &'a str,
+    with: &'a str,
+    mut emit: impl FnMut(&'a str) -> Result<(), ()>,
+) -> Result<(), ()> {
+    let mut end = 0;
+    for (at, _) in input.match_indices('\'') {
+        emit(&input[end..at])?;
+        let mut rest = with;
+        while let Some(dollar) = rest.find('$') {
+            emit(&rest[..dollar])?;
+            rest = &rest[dollar..];
+            let substitution = match rest.as_bytes().get(1) {
+                Some(b'$') => Some("$"),
+                Some(b'&') => Some("'"),
+                Some(b'`') => Some(&input[..at]),
+                Some(b'\'') => Some(&input[at + 1..]),
+                _ => None,
+            };
+            if let Some(text) = substitution {
+                emit(text)?;
+                rest = &rest[2..];
+            } else {
+                emit("$")?;
+                rest = &rest[1..];
+            }
+        }
+        emit(rest)?;
+        end = at + 1;
+    }
+    emit(&input[end..])
+}
+
+fn replace_apostrophes(input: &str, with: &str) -> Result<String, ()> {
+    let mut len = 0;
+    replacement_parts(input, with, |part| {
+        len = string_length(len, part.len())?;
+        Ok(())
+    })?;
+    // Refuse oversized output before allocating any of it. Both passes use
+    // the same pieces so sizing and JavaScript substitution cannot drift.
+    let mut output = String::with_capacity(len);
+    replacement_parts(input, with, |part| {
+        output.push_str(part);
+        Ok(())
+    })?;
+    Ok(output)
+}
+
 /// The one operation of a cell, or `Err` for anything outside the grammar or
 /// a cell of several operations.
 #[cfg(test)]
@@ -523,6 +589,7 @@ pub(super) fn parse_loaded(source: &str, key: &str, value: &str) -> Result<Vec<C
     }
     p.expect(")")?;
     p.expect(";")?;
+    string_length(0, value.len())?;
     p.strings.insert(name, value.to_owned());
     let mut cells = if prefix {
         vec![Cell {
@@ -683,6 +750,7 @@ impl Parser {
     fn string(&mut self) -> Result<String, ()> {
         match self.peek() {
             Some(Tok::Str(value)) => {
+                string_length(0, value.len())?;
                 let value = value.clone();
                 self.at += 1;
                 Ok(value)
@@ -792,7 +860,10 @@ impl Parser {
         };
         while self.eat("+") {
             match self.term()? {
-                Value::Str(more) => text.push_str(&more),
+                Value::Str(more) => {
+                    string_length(text.len(), more.len())?;
+                    text.push_str(&more);
+                }
                 Value::Num(_) | Value::Bool(_) => return Err(()),
             }
         }
@@ -802,6 +873,9 @@ impl Parser {
     /// A string, number or boolean literal, a constant, or
     /// `<constant>.replace(/'/g, "<string>")`.
     fn term(&mut self) -> Result<Value, ()> {
+        if let Some(Tok::Str(value)) = self.peek() {
+            string_length(0, value.len())?;
+        }
         match self.peek().cloned() {
             Some(Tok::Str(value)) => {
                 self.at += 1;
@@ -817,7 +891,9 @@ impl Parser {
             }
             Some(Tok::Ident(name)) => {
                 self.at += 1;
-                let bound = self.strings.get(&name).cloned().ok_or(())?;
+                let bound = self.strings.get(&name).ok_or(())?;
+                string_length(0, bound.len())?;
+                let bound = bound.clone();
                 if !self.eat(".") {
                     return Ok(Value::Str(bound));
                 }
@@ -830,7 +906,7 @@ impl Parser {
                 self.expect(",")?;
                 let with = self.string()?;
                 self.expect(")")?;
-                Ok(Value::Str(bound.replace('\'', &with)))
+                Ok(Value::Str(replace_apostrophes(&bound, &with)?))
             }
             _ => Err(()),
         }
@@ -840,6 +916,117 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_dollars_match_javascript_without_captures_or_recursion() {
+        for (with, expected) in [
+            ("$$", "é$😀$z"),
+            ("$&", "é'😀'z"),
+            ("$`", "éé😀é'😀z"),
+            ("$'", "é😀'z😀zz"),
+            ("$1$01$99$<name>", "é$1$01$99$<name>😀$1$01$99$<name>z"),
+            ("$", "é$😀$z"),
+            ("$$&", "é$&😀$&z"),
+            ("'\\''", "é'\\''😀'\\''z"),
+            ("", "é😀z"),
+        ] {
+            assert_eq!(
+                replace_apostrophes("é'😀'z", with).unwrap(),
+                expected,
+                "{with}"
+            );
+            let source = format!(
+                "const p=\"é'😀'z\";text(await tools.exec_command({{cmd:p.replace(/'/g,{})}}))",
+                serde_json::to_string(with).unwrap()
+            );
+            assert_eq!(parse_cell(&source).unwrap().str("cmd"), Some(expected));
+        }
+        assert_eq!(replace_apostrophes("é😀", "$&$`$'").unwrap(), "é😀");
+        // A dollar copied from the input is not replacement syntax either.
+        assert_eq!(replace_apostrophes("$&'$'", "$`").unwrap(), "$&$&$$&'$");
+    }
+
+    #[test]
+    fn replacement_and_concatenation_share_a_checked_output_limit() {
+        let exact = "é".repeat(MAX_EVALUATED_STRING_BYTES / 2);
+        assert_eq!(replace_apostrophes("'", &exact).unwrap(), exact);
+        assert!(replace_apostrophes("''", &exact).is_err());
+        assert!(replace_apostrophes("'", &(exact.clone() + "a")).is_err());
+        assert_eq!(
+            string_length(MAX_EVALUATED_STRING_BYTES, 0),
+            Ok(MAX_EVALUATED_STRING_BYTES)
+        );
+        assert!(string_length(usize::MAX, 1).is_err());
+        // Small inputs whose repeated prefix/suffix output would exceed 16 MiB.
+        let many_quotes = "'".repeat(8192);
+        assert!(replace_apostrophes(&many_quotes, "$`").is_err());
+        assert!(replace_apostrophes(&many_quotes, "$'").is_err());
+        for token in ["$`", "$'"] {
+            let input = "'".repeat(4096);
+            assert!(replace_apostrophes(&input, token).is_ok());
+            let term = format!("p.replace(/'/g,{})", serde_json::to_string(token).unwrap());
+            let source = format!(
+                "const p={};text(await tools.note({term}+{term}+{term}))",
+                serde_json::to_string(&input).unwrap()
+            );
+            assert!(parse_operations(&source).is_err());
+        }
+        // Repeating individually valid terms cannot bypass the expression bound.
+        let half = "x".repeat(MAX_EVALUATED_STRING_BYTES / 2);
+        let mut p = Parser {
+            tokens: tokenize("p+p").unwrap(),
+            at: 0,
+            strings: BTreeMap::from([("p".into(), half.clone())]),
+            results: vec![],
+        };
+        assert!(
+            matches!(p.expression(), Ok(Value::Str(s)) if s.len() == MAX_EVALUATED_STRING_BYTES)
+        );
+        p.tokens = tokenize("p+p+p").unwrap();
+        p.at = 0;
+        assert!(p.expression().is_err());
+        // The bound is checked before cloning literal or loaded values.
+        p.tokens = vec![Tok::Str(exact.clone() + "x")];
+        p.at = 0;
+        assert!(p.term().is_err());
+        assert!(p.string().is_err());
+        assert!(
+            parse_loaded(
+                "const p=load(\"k\");text(await tools.note(p))",
+                "k",
+                &(exact + "x")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn loaded_and_opaque_operations_use_the_same_bounded_replacement() {
+        let ops = parse_loaded(
+            r#"const p=load("k");text(await tools.exec_command({cmd:p.replace(/'/g,"$$")}))"#,
+            "k",
+            "a'b",
+        )
+        .unwrap();
+        assert_eq!(ops[0].str("cmd"), Some("a$b"));
+        let too_large = format!(
+            "const p={};text(await tools.note(p.replace(/'/g,\"$`\")))",
+            serde_json::to_string(&"'".repeat(8192)).unwrap()
+        );
+        assert!(parse_operations(&too_large).is_err());
+        assert!(
+            parse_loaded(
+                r#"const p=load("k");text(await tools.note(p.replace(/'/g,"$'")))"#,
+                "k",
+                &"'".repeat(8192),
+            )
+            .is_err()
+        );
+        assert!(
+            parse_operations(r#"const p="a'b";text(await tools.note(p.replace(/'/g,"$$")))"#)
+                .is_ok()
+        );
+    }
 
     #[test]
     fn large_punctuation_and_regex_prefixes_use_bounded_lookahead() {
