@@ -87,7 +87,8 @@ See the [setup guide](docs/SETUP.md) for first launch and troubleshooting.
   upload and no telemetry collector.
 - **Metrics, not full transcripts.** By default the local database keeps metrics,
   repository paths, IDs and a preview (up to 280 characters) of each message you
-  sent. Previews can't be turned off. Full transcripts are saved only if you turn
+  sent and of each recognized Claude Code background-task summary. Previews can't
+  be turned off. Full transcripts are saved only if you turn
   that on. Settings can delete saved text; anything imported afterwards,
   including older messages, gets new previews.
 - **Network use is limited.** The app contacts the network only for account
