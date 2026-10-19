@@ -14,10 +14,11 @@ use std::{
 };
 use xt_fixtures::TempDb;
 use xt_ingest::native::{
-    HostStatus,
+    HostStatus, ImportRequest, ProducerSource, ScanMode,
     codex_pr_links::{PrBacklog, PrProgress, codex_pr_witness, continue_codex_pr_links},
     import_reader_lines,
-    readers_cli::ReaderOutcome,
+    readers_cli::{ReaderOutcome, read_pin},
+    scan_native_continued,
     session_creation::{SpawnBacklog, continue_codex_spawns, spawn_limits},
     session_titles::TitleLimits,
 };
@@ -489,4 +490,191 @@ fn a_watcher_run_sweeps_every_indexed_thread_and_announces_new_links_once() {
     // A new link is a change the lists show.
     assert!(progress.shown_changes() >= 1);
     assert_eq!(db.store().all_pr_links().unwrap().len(), 2);
+}
+
+fn repo() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// A scan through the pinned reader only queues the threads it indexed; the
+/// watcher's background pass that follows reads them and links the session.
+#[test]
+fn a_scan_only_queues_threads_and_the_next_background_pass_links_them() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let path = rollout_path(&home, OPENER);
+    let opening = json!({"timestamp": "2026-09-07T12:00:00.000Z", "type": "session_meta",
+        "payload": {"id": OPENER, "originator": "codex_cli_rs", "cwd": "/repo/fixture",
+                    "source": "cli", "instructions": "synthetic instructions"}});
+    let request = json!({"timestamp": "2026-09-07T12:00:01.000Z", "type": "response_item",
+        "payload": {"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "Synthetic request"}]}});
+    let reply = json!({"timestamp": "2026-09-07T12:00:02.000Z", "type": "response_item",
+        "payload": {"type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Synthetic reply"}]}});
+    write(&path, &[opening, request, reply, witness(OPENER, SEEN)]);
+    let mut db = TempDb::empty().unwrap();
+    let mut spawns = SpawnBacklog::default();
+    let report = scan_native_continued(
+        db.store_mut(),
+        &ImportRequest {
+            home: &home,
+            hosts: &[Host::Codex],
+            producer: &ProducerSource::Bundle {
+                pin: read_pin(&repo().join(".plugin-pin")).unwrap(),
+                root: repo().join("vendor/agent-plugins"),
+            },
+            python: None,
+            observed_at: T,
+            cancel: None,
+        },
+        ScanMode::Resume,
+        &mut |_| {},
+        &mut spawns,
+        spawn_limits(),
+    );
+    assert_eq!(report.hosts[0].status, HostStatus::Complete, "{report:?}");
+    // Queued, not read: nothing linked, and a later pass is wanted.
+    assert_eq!(spawns.prs.threads(), 1);
+    assert!(spawns.pending());
+    assert!(db.store().all_pr_links().unwrap().is_empty());
+
+    let progress =
+        continue_codex_spawns(db.store_mut(), &home, &mut spawns, spawn_limits(), None, T).unwrap();
+    let prs = progress.prs.expect("the background pass reads the queue");
+    assert_eq!((prs.decided, prs.witnesses, prs.changed), (1, 1, 1));
+    assert_eq!(prs.bytes_read, fs::metadata(&path).unwrap().len());
+    assert_eq!(spawns.prs.threads(), 0);
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
+}
+
+/// What is left of a pass smaller than the next line it would read starts
+/// no read of it: nothing is read twice, and the thread is read whole by the
+/// next pass, behind which later threads are read too.
+#[test]
+fn a_pass_with_less_room_than_one_line_leaves_the_file_for_the_next_pass() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let small = rollout_path(&home, OPENER);
+    let large = rollout_path(&home, MERGER);
+    let after = rollout_path(&home, LATE);
+    write(&small, &[header(OPENER), witness(OPENER, SEEN), prompt()]);
+    let padded = witness_with(MERGER, LATER, |item| {
+        item["result"]["content"][0]["text"] = "p".repeat(1_500).into();
+    });
+    write(&large, &[header(MERGER), padded]);
+    write(&after, &[header(LATE), witness(LATE, SEEN)]);
+    let mut db = TempDb::empty().unwrap();
+    index(
+        db.store_mut(),
+        &[(OPENER, &small), (MERGER, &large), (LATE, &after)],
+    );
+    let (small_len, large_len) = (
+        fs::metadata(&small).unwrap().len(),
+        fs::metadata(&large).unwrap().len(),
+    );
+    // Room for the small file whole, then less than the large file's long
+    // line; a whole pass has room for the large file.
+    let limits = TitleLimits {
+        max_batch_bytes: large_len + 100,
+        max_line_bytes: 4_096,
+        deadline: Duration::from_secs(5),
+        ..TitleLimits::default()
+    };
+    let left = limits.max_batch_bytes - small_len;
+    assert!(left < large_len && left <= limits.max_line_bytes as u64);
+    let mut backlog = PrBacklog::default();
+    backlog.add([OPENER, MERGER, LATE]);
+    let first =
+        continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false).unwrap();
+    assert_eq!((first.decided, first.bytes_read), (1, small_len));
+    assert_eq!(backlog.threads(), 2);
+    let second =
+        continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false).unwrap();
+    assert_eq!((second.decided, second.bytes_read), (1, large_len));
+    let third =
+        continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false).unwrap();
+    assert_eq!(third.decided, 1);
+    assert_eq!(backlog.threads(), 0);
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [
+            link(OPENER, SEEN_MS, SEEN_MS),
+            link(MERGER, LATER_MS, LATER_MS),
+            link(LATE, SEEN_MS, SEEN_MS),
+        ]
+    );
+}
+
+/// A rollout replaced by another file (a new inode) at the same name is read
+/// from its start, even when it is longer than where the old one was read to.
+#[test]
+fn a_replaced_rollout_is_read_again_from_its_start() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let path = rollout_path(&home, OPENER);
+    write(&path, &[header(OPENER), prompt()]);
+    let mut db = TempDb::empty().unwrap();
+    index(db.store_mut(), &[(OPENER, &path)]);
+    let mut backlog = PrBacklog::default();
+    let first = pass(db.store_mut(), &home, &mut backlog, &[OPENER]);
+    assert_eq!(first.witnesses, 0);
+
+    // Same name, new inode, the witness early in the file.
+    let staged = temp.path().join("staged.jsonl");
+    write(
+        &staged,
+        &[header(OPENER), witness(OPENER, SEEN), prompt(), prompt()],
+    );
+    let old_inode = {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(&path).unwrap().ino()
+    };
+    fs::rename(&staged, &path).unwrap();
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_ne!(fs::metadata(&path).unwrap().ino(), old_inode);
+    }
+    let replaced = pass(db.store_mut(), &home, &mut backlog, &[OPENER]);
+    assert_eq!(replaced.witnesses, 1);
+    assert_eq!(replaced.bytes_read, fs::metadata(&path).unwrap().len());
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
+}
+
+/// A witness written in two parts is read once its second part and newline
+/// arrive, at its own time, and its first part is never parsed alone.
+#[test]
+fn a_half_written_witness_is_linked_once_its_line_is_complete() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let path = rollout_path(&home, OPENER);
+    write(&path, &[header(OPENER)]);
+    let line = witness(OPENER, SEEN).to_string();
+    let (head, tail) = line.split_at(line.len() / 2);
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(head.as_bytes()).unwrap();
+    let mut db = TempDb::empty().unwrap();
+    index(db.store_mut(), &[(OPENER, &path)]);
+    let mut backlog = PrBacklog::default();
+
+    let half = pass(db.store_mut(), &home, &mut backlog, &[OPENER]);
+    assert_eq!(half.witnesses, 0);
+    assert!(db.store().all_pr_links().unwrap().is_empty());
+
+    file.write_all(tail.as_bytes()).unwrap();
+    file.write_all(b"\n").unwrap();
+    let whole = pass(db.store_mut(), &home, &mut backlog, &[OPENER]);
+    assert_eq!(whole.witnesses, 1);
+    // Only the line itself is read again: the header is not.
+    assert_eq!(whole.bytes_read, line.len() as u64 + 1);
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
 }

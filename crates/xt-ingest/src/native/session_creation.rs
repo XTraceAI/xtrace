@@ -328,8 +328,9 @@ pub struct SpawnBacklog {
     /// ([`super::claude_launch::check`]): in the watcher's passes.
     pub checks: CheckBacklog,
     /// Exact pull-request links of Codex threads
-    /// ([`super::codex_pr_links`]): queued threads in every pass, the sweep
-    /// in the watcher's passes only, last in each.
+    /// ([`super::codex_pr_links`]): a scan only queues threads; they and the
+    /// sweep are read in the watcher's passes only, last in each, so they
+    /// never lengthen a scan.
     pub prs: PrBacklog,
 }
 
@@ -664,9 +665,10 @@ fn continue_within(
         progress.checks = Some(checks);
         result?;
     }
-    // Codex pull-request links last, within what is left again: catching up
-    // on every indexed history after a restart reads the most.
-    if backlog.prs.pending() {
+    // Codex pull-request links last, in the watcher's passes only, within
+    // what is left again: catching up on every indexed history after a
+    // restart reads the most, so a scan only queues threads for them.
+    if sweep && backlog.prs.pending() {
         let (bytes, time) = batch.remaining();
         let spent = progress
             .launches

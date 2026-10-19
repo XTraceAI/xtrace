@@ -610,8 +610,9 @@ impl<'a> Batch<'a> {
     /// its newline is never handed on and is read again then. A complete
     /// line longer than the line bound is dropped unparsed, and a read that
     /// ends inside one resumes after what it read, dropping the rest of that
-    /// line. As much as the budget allows is read: what is left is left to a
-    /// later read, and the reason is returned beside the mark (the budget,
+    /// line. As much as the budget allows is read, but nothing when what is
+    /// left of it is less than the rest and less than one line may be: what is
+    /// left is left to a later read, and the reason is returned beside the mark (the budget,
     /// the deadline or a cancel); lines handed on before a cancel are the
     /// caller's to discard. A file that shrank or could not be read is an
     /// error, and its mark should be dropped.
@@ -655,7 +656,13 @@ impl<'a> Batch<'a> {
             return Ok((start, None));
         }
         let slice = want.min(self.limits.max_batch_bytes.saturating_sub(self.charged));
-        if slice == 0 {
+        // Less than the rest, and less than one line may be: a read could end
+        // inside the next line, resume at its start and advance nothing. Wait
+        // for a pass with room; a whole pass's budget always has it.
+        let room = (self.limits.max_line_bytes as u64)
+            .saturating_add(1)
+            .min(self.limits.max_batch_bytes);
+        if slice < want && slice < room {
             return Ok((start, Some(Untitled::Budget)));
         }
         if let Some(why) = self.stop.stopped() {

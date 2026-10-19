@@ -29,9 +29,11 @@
 //! ([`title_sources`]), reached as the title read reaches them. Threads are
 //! queued in a [`PrBacklog`] by every Codex scan that indexed them, and by a
 //! sweep over every indexed Codex locator that each watcher run makes once,
-//! from the first. A thread whose session is not indexed yet is dropped from
-//! the queue without reading anything; the scan that indexes it queues it
-//! again, so its witnesses are read then.
+//! from the first. A scan only queues: the threads are read in the watcher's
+//! background passes that follow it, so reading never lengthens a scan. A
+//! thread whose session is not indexed yet is dropped from the queue without
+//! reading anything; the scan that indexes it queues it again, so its
+//! witnesses are read then.
 //!
 //! Each file is read incrementally: the backlog keeps, in memory, where the
 //! last read of each file ended, and a later read starts there, so a growing
@@ -39,7 +41,15 @@
 //! restart the sweep reads every indexed rollout once again, and the link
 //! write's idempotence makes that re-read change nothing. Reading is bounded
 //! by the pass's byte budget, deadline and cancel; a file larger than what
-//! is left is read in parts across passes.
+//! is left is read in parts across passes, and a file is not started when
+//! what is left of a pass is smaller than one line may be, so it waits for a
+//! pass with room and never re-reads the same line start pass after pass.
+//!
+//! A mark is trusted while the file keeps its device and inode and is at
+//! least as long as the mark. Codex only appends to a rollout; a file
+//! rewritten in place under the same inode that grows past the mark would be
+//! resumed mid-file, possibly mid-line, until the next app launch, whose
+//! sweep reads every file from its start again and records anything missed.
 
 use super::readers_cli::CancelToken;
 use super::session_source::host_roots;
