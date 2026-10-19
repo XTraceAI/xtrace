@@ -678,3 +678,62 @@ fn a_half_written_witness_is_linked_once_its_line_is_complete() {
         [link(OPENER, SEEN_MS, SEEN_MS)]
     );
 }
+
+/// Earlier work in every pass leaves the same small remainder, below the line
+/// bound and below each file: no pass reads any part of either file, none
+/// reports progress, both threads keep their places, and the first pass with
+/// a normal budget links both.
+#[test]
+fn a_remainder_below_the_line_bound_reads_nothing_pass_after_pass() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let first = rollout_path(&home, OPENER);
+    let second = rollout_path(&home, MERGER);
+    write(&first, &[header(OPENER), prompt(), witness(OPENER, SEEN)]);
+    write(&second, &[header(MERGER), prompt(), witness(MERGER, LATER)]);
+    let mut db = TempDb::empty().unwrap();
+    index(db.store_mut(), &[(OPENER, &first), (MERGER, &second)]);
+    // The first two lines and 40 bytes: the reviewer's remainder.
+    let two_lines = (body(&[header(OPENER), prompt()]).len() + 40) as u64;
+    assert!(two_lines < fs::metadata(&first).unwrap().len());
+    let small = TitleLimits {
+        max_batch_bytes: two_lines,
+        ..TitleLimits::default()
+    };
+    let mut backlog = PrBacklog::default();
+    backlog.add([OPENER, MERGER]);
+    for _ in 0..20 {
+        let progress =
+            continue_codex_pr_links(db.store_mut(), &home, &mut backlog, small, None, false)
+                .unwrap();
+        assert_eq!(progress.bytes_read, 0, "{progress:?}");
+        assert_eq!(progress.decided, 0);
+        assert!(!progress.advanced, "{progress:?}");
+        assert!(backlog.pending());
+        assert_eq!(backlog.threads(), 2);
+    }
+    assert!(db.store().all_pr_links().unwrap().is_empty());
+
+    let normal = continue_codex_pr_links(
+        db.store_mut(),
+        &home,
+        &mut backlog,
+        spawn_limits(),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!((normal.decided, normal.witnesses), (2, 2));
+    assert_eq!(
+        normal.bytes_read,
+        fs::metadata(&first).unwrap().len() + fs::metadata(&second).unwrap().len()
+    );
+    assert!(!backlog.pending());
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [
+            link(OPENER, SEEN_MS, SEEN_MS),
+            link(MERGER, LATER_MS, LATER_MS),
+        ]
+    );
+}

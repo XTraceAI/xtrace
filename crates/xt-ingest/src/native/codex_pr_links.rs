@@ -41,9 +41,14 @@
 //! restart the sweep reads every indexed rollout once again, and the link
 //! write's idempotence makes that re-read change nothing. Reading is bounded
 //! by the pass's byte budget, deadline and cancel; a file larger than what
-//! is left is read in parts across passes, and a file is not started when
-//! what is left of a pass is smaller than one line may be, so it waits for a
-//! pass with room and never re-reads the same line start pass after pass.
+//! is left is read in parts across passes. No part of a file is read when
+//! what is left of a pass is less than the rest of the file and no more than
+//! the line bound (1 MiB): such a pass reads nothing and reports no
+//! progress, the thread keeps its place, and a later pass with more left
+//! reads on. Any other part read is either the whole rest of the file or
+//! longer than the bound, so it holds a line end or lies inside a line
+//! longer than the bound, whose rest is skipped: it moves the mark, unless
+//! all it holds is the file's unfinished last line.
 //!
 //! A mark is trusted while the file keeps its device and inode and is at
 //! least as long as the mark. Codex only appends to a rollout; a file
@@ -310,6 +315,7 @@ fn read_thread(
     };
     for candidate in &candidates {
         let from = backlog.marks.get(&candidate.path).copied();
+        let before = batch.bytes_read();
         // Each pull request once, with its earliest and latest witness.
         let mut seen = BTreeMap::<PrIdentity, (i64, i64)>::new();
         let read = batch.appended(candidate, from, &mut |line| {
@@ -345,7 +351,9 @@ fn read_thread(
                 Err(error) => return Err(error),
             }
         }
-        if from != Some(mark) {
+        // Progress only when bytes were read and the mark moved: a read that
+        // was not started, or that ended where it began, is none.
+        if batch.bytes_read() > before && from != Some(mark) {
             progress.advanced = true;
         }
         backlog.remember(candidate.path.clone(), mark);
