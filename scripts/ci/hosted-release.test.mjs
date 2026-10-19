@@ -272,7 +272,8 @@ test('work deadlines cap remaining commands and reserve cleanup independently wi
 test('workflow step budgets leave time for cleanup and evidence before the job ceiling', () => {
   const jobMinutes = Number(job.match(/^ {4}timeout-minutes: (\d+)$/m)[1]);
   const stepMinutes = [...job.matchAll(/^ {8}timeout-minutes: (\d+)$/gm)].map((m) => Number(m[1]));
-  assert.deepEqual(stepMinutes, [1, 2, 2, 1, 11, 2]);
+  assert.deepEqual(stepMinutes, [1, 2, 2, 3, 11, 2]);
+  assert.equal(jobMinutes, 22);
   assert.ok(stepMinutes.reduce((sum, minutes) => sum + minutes, 0) < jobMinutes);
   assert.ok((firstLaunchBudget.workMs + firstLaunchBudget.cleanupMs) / 60_000 < stepMinutes[4]);
 });

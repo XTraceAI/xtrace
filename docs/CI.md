@@ -488,6 +488,19 @@ and checks that neither default current/old app directory received a database.
 It unregisters and removes only its owned app and staging files after confirmed
 exit. Missing ownership or unconfirmed exit retains the copy and fails.
 
+Stopping first requires strict kernel and app ownership. After a stop request, a
+zero-byte process query with ESRCH while kill-zero still succeeds remains pending
+within the existing ten-second graceful wait or five-second forced wait. It is
+neither life nor exit evidence. Only the existing missing-start plus kill-zero
+ESRCH check confirms absence; invalid PID/UID/start fields, a changed birth time
+or permission failures still fail. Force termination requires a fresh strict
+owner check. Bounded diagnostics identify the stop phase and owned-process facts.
+
+Both signed jobs run the actual Swift stop decisions with controlled clocks and
+actions, plus harmless owned command-line children. Those controls verify finite
+waits, no signal on unknown ownership and reaping of their children; they do not
+establish a signed-app shutdown result or the cause of an earlier hosted failure.
+
 The `hosted-first-launch-<run>-<attempt>` artifact contains the launch receipt,
 AX snapshots, signature/assessment logs, quarantine observations and result.
 It does not contain the app environment or database. This mode never
@@ -497,8 +510,10 @@ evidence remains separate and requires the production feed to offer the target.
 The runner caps work commands against an eight-minute shared deadline, then
 reserves two minutes for cleanup. Individual command and UI limits stay strict.
 Its workflow step allows eleven minutes; the separately bounded preflight,
-checkout, setup, tests, run and upload steps total nineteen minutes inside the
-twenty-minute job limit, leaving time to retain failure evidence.
+checkout, setup, tests, run and upload steps total twenty-one minutes inside the
+twenty-two-minute job limit, leaving time to retain failure evidence. The offline
+compiler/test step allows three minutes; the app execution and cleanup limits
+are unchanged.
 
 Public tag-metadata requests retain the curl version, HTTP status, selected
 response headers and a bounded error-body excerpt. Raw response headers stay in
@@ -545,7 +560,8 @@ feed and file identities, signature checks, quarantine metadata and cleanup
 results. An uncertain restart stops the known original but retains the copy and
 fails; a missing/ambiguous successor never authorizes broad process killing or
 removal. Work has a twelve-minute deadline and a separate two-minute cleanup
-reserve inside a fifteen-minute execution step and twenty-five-minute job.
+reserve inside a fifteen-minute execution step and twenty-six-minute job. The
+offline compiler/test step allows three minutes without extending app runtime.
 Adding this harness is not evidence that the hosted update has passed.
 
 Both released-app modes use the existing isolated Homebrew Python SQLite reader

@@ -250,7 +250,8 @@ test('update workflow leaves cleanup/upload time and denies wrong authorization 
   );
   assert.match(job, /if: always\(\)/);
   const minutes = [...job.matchAll(/^ {8}timeout-minutes: (\d+)$/gm)].map((m) => Number(m[1]));
-  assert.deepEqual(minutes, [1, 2, 2, 2, 15, 2]);
+  assert.deepEqual(minutes, [1, 2, 2, 3, 15, 2]);
+  assert.equal(Number(job.match(/^ {4}timeout-minutes: (\d+)$/m)[1]), 26);
   assert.ok(
     minutes.reduce((a, b) => a + b, 0) < Number(job.match(/^ {4}timeout-minutes: (\d+)$/m)[1]),
   );

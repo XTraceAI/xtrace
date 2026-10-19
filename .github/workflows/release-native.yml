@@ -258,7 +258,7 @@ jobs:
     if: inputs.delivery_mode == 'first-launch'
     needs: validate-mode
     runs-on: macos-14
-    timeout-minutes: 20
+    timeout-minutes: 22
     steps:
       - name: Require the reviewed workflow identity and hosted macOS 14 arm64
         timeout-minutes: 1
@@ -301,8 +301,8 @@ jobs:
         with:
           node-version-file: .node-version
       - name: Test first-launch guards
-        timeout-minutes: 1
-        run: node --test scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-metadata.test.mjs scripts/ci/hosted-database.test.mjs
+        timeout-minutes: 3
+        run: node --test scripts/ci/hosted-stop.test.mjs scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-metadata.test.mjs scripts/ci/hosted-database.test.mjs
       - name: Validate the unchanged signed 0.1.7 first launch
         timeout-minutes: 11
         env:
@@ -331,7 +331,7 @@ jobs:
     if: inputs.delivery_mode == 'update'
     needs: validate-mode
     runs-on: macos-14
-    timeout-minutes: 25
+    timeout-minutes: 26
     steps:
       - name: Require the reviewed workflow identity and hosted macOS 14 arm64
         timeout-minutes: 1
@@ -374,8 +374,8 @@ jobs:
         with:
           node-version-file: .node-version
       - name: Test update and first-launch guards
-        timeout-minutes: 2
-        run: node --test scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-update.test.mjs scripts/ci/hosted-metadata.test.mjs scripts/ci/hosted-database.test.mjs
+        timeout-minutes: 3
+        run: node --test scripts/ci/hosted-stop.test.mjs scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-update.test.mjs scripts/ci/hosted-metadata.test.mjs scripts/ci/hosted-database.test.mjs
       - name: Validate the real signed 0.1.6 to 0.1.7 update and restart
         timeout-minutes: 15
         env:
