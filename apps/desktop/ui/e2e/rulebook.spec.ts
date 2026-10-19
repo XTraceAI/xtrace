@@ -73,10 +73,10 @@ test('fits every Rulebook address in both themes on the fixture’s own answer',
       await page.goto(path);
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
       await expect(page.locator('html')).toHaveAttribute('data-theme', scheme);
-      await expect(page.getByRole('button', { name: 'Rulebook', exact: true })).toHaveAttribute(
-        'aria-current',
-        'page',
-      );
+      // The sidebar row is a disabled "soon" row, still marked as the open page.
+      const row = page.getByRole('button', { name: /Rulebook/ });
+      await expect(row).toBeDisabled();
+      await expect(row).toHaveAttribute('aria-current', 'page');
       await expect(page.getByText('This view is coming next.')).toHaveCount(0);
       const root = page.locator('.xt-rulebook');
       await expect(root).toHaveAttribute('data-view', view);
@@ -492,7 +492,8 @@ test('fits the reference window too', async ({ page }) => {
 test('keeps direct addresses and Back navigation working', async ({ page }) => {
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('What your agents did');
-  await page.getByRole('button', { name: 'Rulebook', exact: true }).click();
+  // The sidebar row is a disabled "soon" row, so the address is typed.
+  await page.goto('/rulebook');
   await expect(page).toHaveURL(/\/rulebook$/);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rulebook');
   await page.goBack();

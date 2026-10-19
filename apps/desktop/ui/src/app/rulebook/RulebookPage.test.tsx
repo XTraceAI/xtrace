@@ -162,7 +162,7 @@ it('reads the fixture’s unconfigured source on opening and says so, never as z
   await mount('/rulebook');
   const root = page();
   expect(screen.getByRole('heading', { level: 1, name: 'Rulebook' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Rulebook' }).getAttribute('aria-current')).toBe(
+  expect(screen.getByRole('button', { name: /Rulebook/ }).getAttribute('aria-current')).toBe(
     'page',
   );
   expect(crumb().getByText('rulebook')).toBeTruthy();
@@ -519,7 +519,7 @@ it('shows the fires address as the same bounded timeline with a way back', async
   await mount('/rulebook/fires', sourceWith(answering(synthetic.truncated())));
   const root = page();
   expect(crumb().getByText('fires')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Rulebook' }).getAttribute('aria-current')).toBe(
+  expect(screen.getByRole('button', { name: /Rulebook/ }).getAttribute('aria-current')).toBe(
     'page',
   );
   await waitFor(() => expect(dataRows('Recorded timeline')).toHaveLength(100));
