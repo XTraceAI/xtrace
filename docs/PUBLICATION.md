@@ -132,10 +132,17 @@ Add `--content /path/to/outbound.md` to scan a prepared outbound text file.
 `--diff` and `--content` can be repeated for multiple inputs. These scans do not
 inspect image contents, image metadata or GitHub edit history.
 
-The scan fails if it exceeds 20,000 commits, 50,000 prepared inputs, 32 MiB per
-input or 256 MiB in total. Inputs include commit metadata, ref names, unique Git paths, file versions, diffs
-and supplied outbound text. Reaching a limit is an incomplete scan, not a clean
-result; unsupported repository entries, including submodules, also fail.
+The scan fails if it exceeds 20,000 commits or 32 MiB per input. All inputs are
+scanned in complete batches of at most 50,000 inputs and 256 MiB of logical
+content, including the final partial batch. Each input's opaque alias and optional
+original-path alias stay together, so prepared files use at most twice those
+batch limits. Completed batches are removed before preparing the next batch;
+any scanner or report error fails the whole scan, even after earlier findings.
+Batching does not change which refs, history or current files are scanned. Inputs
+include commit metadata, ref names, unique Git paths, file versions, diffs and
+supplied outbound text. Exceeding the per-input or history limit is an incomplete
+scan, not a clean result; unsupported repository entries, including submodules,
+also fail.
 
 Git LFS pointer blobs are rejected with an unsupported-object error, including
 historical versions and direct blob refs. Detection includes leading whitespace,

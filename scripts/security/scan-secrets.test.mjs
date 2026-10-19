@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { scanFiles } from './gitleaks.mjs';
+import { scanFiles, verifiedScanner } from './gitleaks.mjs';
+import { ScanBatches } from './scan-secrets.mjs';
 
 const cli = fileURLToPath(new URL('./scan-secrets.mjs', import.meta.url));
 
@@ -435,5 +436,118 @@ test('noncanonical LFS headers accepted by the upstream parser remain unsupporte
         assert.match(result.output, /git-lfs-object-unsupported/);
       });
     }
+  }
+});
+
+async function batchFixture(t, limits) {
+  const scratch = await mkdtemp(join(tmpdir(), 'xtrace-scan-batches-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const binary = await verifiedScanner(join(scratch, 'unused-repo'), scratch);
+  return { scratch, batches: new ScanBatches(binary, scratch, limits) };
+}
+
+async function batchDirectories(scratch) {
+  return (await readdir(scratch)).filter((name) => name.startsWith('batch-'));
+}
+
+test('complete batches retain historical, path-sensitive and final outbound findings', async (t) => {
+  const { scratch, batches } = await batchFixture(t, { maxItems: 1 });
+  const historical = marker();
+  const password = randomBytes(12).toString('hex');
+  const outbound = marker();
+  await batches.add(Buffer.from(historical + '\n'), 'git-blob', 'pnpm-lock.yaml');
+  await batches.add(
+    Buffer.from(`<add key="Password" value="${password}" />\n`),
+    'worktree',
+    'private-settings/nuget.config',
+  );
+  await batches.add(Buffer.from(outbound + '\n'), 'outbound');
+  const findings = await batches.finish();
+  for (const [rule, path] of [
+    ['github-pat', 'git-blob[1]'],
+    ['nuget-config-password', 'worktree[2]'],
+    ['github-pat', 'outbound[3]'],
+  ])
+    assert.ok(findings.some((finding) => finding.rule === rule && finding.path === path));
+  for (const value of [historical, password, outbound, scratch, 'private-settings'])
+    assert.ok(!JSON.stringify(findings).includes(value));
+  assert.deepEqual(await batchDirectories(scratch), []);
+});
+
+test('byte and item boundaries keep whole inputs and both aliases in one bounded batch', async (t) => {
+  for (const boundary of ['bytes', 'items']) {
+    await t.test(boundary, async (t) => {
+      const { scratch, batches } = await batchFixture(
+        t,
+        boundary === 'bytes' ? { maxBytes: 100, maxItems: 10 } : { maxBytes: 1000, maxItems: 2 },
+      );
+      const content = Buffer.from('clean synthetic data\n'.padEnd(50, ' '));
+      await batches.add(content, 'git-blob', 'first.txt');
+      await batches.add(content, 'git-blob', 'second.txt');
+      const first = (await batchDirectories(scratch))[0];
+      const sources = join(scratch, first, 'sources');
+      assert.deepEqual(await readdir(sources), ['1', '2']);
+      for (const [sequence, path] of [
+        ['1', 'first.txt'],
+        ['2', 'second.txt'],
+      ]) {
+        assert.deepEqual(await readFile(join(sources, sequence, 'content.txt')), content);
+        assert.deepEqual(await readFile(join(sources, sequence, 'original', path)), content);
+      }
+      await batches.add(content, 'outbound');
+      const remaining = await batchDirectories(scratch);
+      assert.equal(remaining.length, 1);
+      assert.notEqual(remaining[0], first);
+      assert.deepEqual(await readdir(join(scratch, remaining[0], 'sources')), ['3']);
+      assert.deepEqual(await batches.finish(), []);
+      assert.deepEqual(await batchDirectories(scratch), []);
+    });
+  }
+});
+
+test('oversized individual inputs still fail instead of being split into batches', async (t) => {
+  const { scratch, batches } = await batchFixture(t);
+  await assert.rejects(batches.add(Buffer.alloc(32 * 1024 * 1024 + 1), 'git-blob'), {
+    message: 'scan-file-size-limit',
+  });
+  assert.deepEqual(await batchDirectories(scratch), []);
+});
+
+test('a later scanner or report failure rejects the entire scan and removes the batch', async (t) => {
+  for (const failure of ['execution', 'missing-report', 'unknown-path']) {
+    await t.test(failure, async (t) => {
+      const { scratch, batches } = await batchFixture(t, { maxItems: 1 });
+      const secret = marker();
+      await batches.add(Buffer.from(secret + '\n'), 'git-blob');
+      await batches.add(Buffer.from('clean final input\n'), 'outbound');
+      assert.ok(batches.result.size > 0, 'The first batch must have real detections.');
+      const binary = join(scratch, 'later-failing-scanner');
+      const script =
+        failure === 'unknown-path'
+          ? `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--report-path" ]; then
+    shift
+    printf '%s' '[{"File":"unknown-file","StartLine":1,"RuleID":"github-pat"}]' > "$1"
+  fi
+  shift
+done
+exit 17
+`
+          : `#!/bin/sh\nexit ${failure === 'execution' ? 2 : 0}\n`;
+      await writeFile(binary, script, { mode: 0o700 });
+      batches.binary = binary;
+      const category = {
+        execution: 'scanner-execution-failed',
+        'missing-report': 'scanner-report-invalid',
+        'unknown-path': 'scanner-report-path-invalid',
+      }[failure];
+      await assert.rejects(batches.finish(), (error) => {
+        assert.equal(error.message, category);
+        assert.ok(!String(error.stack).includes(secret));
+        return true;
+      });
+      assert.deepEqual(await batchDirectories(scratch), []);
+    });
   }
 });

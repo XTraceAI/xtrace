@@ -22,7 +22,7 @@ pub(super) fn run_to_exit(
     max_output: usize,
     group: bool,
 ) -> Result<Vec<u8>, ProcessFailure> {
-    // Put every provider subprocess in its own group. If a bounded helper
+    // Put outer provider helpers in their own group. If a bounded helper
     // times out, its curl child must end with it rather than outlive XTrace.
     #[cfg(unix)]
     if group {
@@ -35,9 +35,13 @@ pub(super) fn run_to_exit(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| ProcessFailure::Spawn)?;
-    let stdout = child.stdout.take().ok_or(ProcessFailure::Spawn)?;
+    let Some(stdout) = child.stdout.take() else {
+        kill_tree(&mut child, group);
+        let _ = child.wait();
+        return Err(ProcessFailure::Spawn);
+    };
     let (tx, rx) = mpsc::channel();
-    let reader = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut stdout = stdout;
         let mut chunk = [0u8; 4096];
@@ -66,60 +70,88 @@ pub(super) fn run_to_exit(
     {
         kill_tree(&mut child, group);
         let _ = child.wait();
-        let _ = reader.join();
+        let _ = rx.recv_timeout(Duration::from_secs(1));
         return Err(ProcessFailure::Exit);
     }
     let deadline = Instant::now() + timeout;
-    let mut status = None;
-    let mut early_output = None;
-    while Instant::now() < deadline {
+    let mut output = None;
+    let failure = loop {
         if let Ok(result) = rx.try_recv() {
-            if result.is_err() {
-                kill_tree(&mut child, group);
-                let _ = child.wait();
-                let _ = reader.join();
-                return result;
-            }
-            early_output = Some(result);
+            output = Some(result);
         }
-        match child.try_wait() {
-            Ok(Some(exit)) => {
-                status = Some(exit);
-                break;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => break,
+        if matches!(output, Some(Err(_))) {
+            break None;
         }
-    }
-    if status.is_none() {
-        kill_tree(&mut child, group);
-        let _ = child.wait();
-        let _ = reader.join();
-        return Err(ProcessFailure::Timeout);
-    }
-    let output = match early_output {
-        Some(result) => result?,
-        None => rx
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| ProcessFailure::Exit)??,
+        // Do not reap the leader before signalling its group. Even after
+        // exit, its reserved PID keeps the group identity safe to use.
+        #[cfg(unix)]
+        let exited = if group {
+            exited_unreaped(&child)
+        } else {
+            child.try_wait().map(|status| status.is_some())
+        };
+        #[cfg(not(unix))]
+        let exited = child.try_wait().map(|status| status.is_some());
+        match exited {
+            Ok(true) => break None,
+            Err(_) => break Some(ProcessFailure::Exit),
+            Ok(false) => {}
+        }
+        if Instant::now() >= deadline {
+            break Some(ProcessFailure::Timeout);
+        }
+        std::thread::sleep(Duration::from_millis(20));
     };
-    let _ = reader.join();
-    if !status.unwrap().success() && output.is_empty() {
+    // Every completion, including a successful leader exit, owns this
+    // cleanup. Descendants must not continue a finished helper's work.
+    kill_tree(&mut child, group);
+    let status = child.wait();
+    if output.is_none() {
+        // A descendant that escaped the group may retain stdout; never
+        // join its drain thread without a bound.
+        output = rx.recv_timeout(Duration::from_secs(1)).ok();
+    }
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
+    let output = output.ok_or(ProcessFailure::Exit)??;
+    let status = status.map_err(|_| ProcessFailure::Exit)?;
+    if !status.success() && output.is_empty() {
         return Err(ProcessFailure::Exit);
     }
     Ok(output)
 }
 
+#[cfg(unix)]
+fn exited_unreaped(child: &std::process::Child) -> std::io::Result<bool> {
+    // SAFETY: siginfo is a valid zeroed out-parameter. waitid inspects only
+    // our child and WNOWAIT keeps its PID reserved until group cleanup.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id(),
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let exited = unsafe { info.si_pid() } != 0;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let exited = info.si_pid != 0;
+    Ok(exited)
+}
+
 fn kill_tree(child: &mut std::process::Child, group: bool) {
     #[cfg(unix)]
-    if group {
+    if group && let Ok(pid) = i32::try_from(child.id()) {
+        // SAFETY: grouped children are never reaped before this call; the
+        // unreaped leader reserves the group ID against reuse.
         unsafe {
-            unsafe extern "C" {
-                fn kill(pid: i32, signal: i32) -> i32;
-            }
-            if let Ok(pid) = i32::try_from(child.id()) {
-                let _ = kill(-pid, 9);
-            }
+            libc::kill(-pid, libc::SIGKILL);
         }
     }
     let _ = child.kill();
@@ -128,6 +160,69 @@ fn kill_tree(child: &mut std::process::Child, group: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn early_leader_exit_cleans_descendants_with_inherited_and_private_pipes() {
+        for private_pipes in [false, true] {
+            for output in ["", "partial result"] {
+                let root = tempfile::tempdir().unwrap();
+                let pid_file = root.path().join("child.pid");
+                let mut command = Command::new("python3");
+                command
+                    .args([
+                        "-c",
+                        r#"
+import os, pathlib, subprocess, sys
+child = subprocess.Popen(
+    [sys.executable, '-c', 'import time; time.sleep(10)'],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE if sys.argv[2] == 'true' else None,
+    stderr=subprocess.DEVNULL)
+pathlib.Path(sys.argv[1]).write_text(str(child.pid))
+print(sys.argv[3], end='', flush=True)
+os._exit(1)
+"#,
+                    ])
+                    .arg(&pid_file)
+                    .arg(private_pipes.to_string())
+                    .arg(output);
+                let started = Instant::now();
+                let result = run_to_exit(&mut command, b"", Duration::from_secs(2), 1024, true);
+                if output.is_empty() {
+                    assert!(matches!(result, Err(ProcessFailure::Exit)), "{result:?}");
+                } else {
+                    // Existing helper behavior accepts useful output even
+                    // when the helper's exit status is unsuccessful.
+                    assert_eq!(result.unwrap(), output.as_bytes());
+                }
+                assert!(started.elapsed() < Duration::from_secs(2));
+                let pid: i32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+                let deadline = Instant::now() + Duration::from_secs(2);
+                // SAFETY: signal zero only checks the synthetic child's PID.
+                while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert_ne!(
+                    unsafe { libc::kill(pid, 0) },
+                    0,
+                    "descendant survived cleanup: {pid}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stalled_helper_is_timed_out() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("10");
+        let started = Instant::now();
+        assert!(matches!(
+            run_to_exit(&mut command, b"", Duration::from_millis(100), 1024, true),
+            Err(ProcessFailure::Timeout)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn bounded_reader_accepts_small_output_and_rejects_large_output() {

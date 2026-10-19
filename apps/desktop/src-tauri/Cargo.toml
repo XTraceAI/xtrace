@@ -53,5 +53,5 @@ rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled
 # window's close request and ends its run loop without a window server.
 tauri = { version = "=2.11.5", features = ["test"] }
 
-[target.'cfg(unix)'.dev-dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "=0.2.189"

@@ -102,7 +102,7 @@ export async function checkNative({
     // A test identity must be compiled into Tauri, including its singleton
     // socket. A plist-only change cannot isolate it from the installed app.
     const testIdentifier = `ai.xtrace.app.test.${randomUUID()}`;
-    const testTarget = join(trusted, fixtureSmoke ? 'smoke-target.noindex' : 'smoke-target');
+    const testTarget = join(trusted, 'smoke-target.noindex');
     // APFS clones reuse our completed build cache without writable links back
     // to it. All test build outputs are disposable and separate from source.
     execute('cp', ['-c', '-R', join(repo, 'target'), testTarget]);

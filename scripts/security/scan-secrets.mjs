@@ -107,6 +107,98 @@ export function parseArguments(args) {
   return options;
 }
 
+// Limits apply to complete logical inputs in each batch. The original-path alias
+// can double prepared bytes/files; inputs are never split or skipped. The CLI
+// always uses these defaults; smaller limits let tests exercise real boundaries.
+export class ScanBatches {
+  constructor(binary, scratch, { maxBytes = MAX_BYTES, maxItems = MAX_VERSIONS } = {}) {
+    if (
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes < 1 ||
+      maxBytes > MAX_BYTES ||
+      !Number.isSafeInteger(maxItems) ||
+      maxItems < 1 ||
+      maxItems > MAX_VERSIONS
+    )
+      throw new ScanFailure('invalid-batch-limits');
+    this.binary = binary;
+    this.scratch = scratch;
+    this.maxBytes = maxBytes;
+    this.maxItems = maxItems;
+    this.batch = null;
+    this.bytes = 0;
+    this.items = 0;
+    this.sequence = 0;
+    this.labels = new Map();
+    this.result = new Map();
+  }
+
+  async add(data, kind, path) {
+    if (
+      !/^(?:git-ref|ref-target|git-path|git-blob|worktree|tag|tag-target|commit|diff|outbound)$/.test(
+        kind,
+      )
+    )
+      throw new ScanFailure('invalid-source-kind');
+    // LFS pointers publish external bytes that this Git-object scanner cannot verify.
+    if (
+      ['git-blob', 'worktree', 'ref-target', 'tag-target'].includes(kind) &&
+      lfsPointerHeader(data)
+    )
+      throw new ScanFailure('git-lfs-object-unsupported');
+    if (data.length > MAX_FILE_BYTES || data.length > this.maxBytes)
+      throw new ScanFailure('scan-file-size-limit');
+    if (this.bytes + data.length > this.maxBytes || this.items === this.maxItems)
+      await this.flush();
+    if (!this.batch) {
+      this.batch = await mkdtemp(join(this.scratch, 'batch-'));
+      await mkdir(join(this.batch, 'sources'), { mode: 0o700 });
+    }
+    this.bytes += data.length;
+    this.items++;
+    this.sequence++;
+    const base = join(this.batch, 'sources', String(this.sequence));
+    // Preserve path-sensitive rules, and also scan an opaque text alias so default path
+    // exclusions cannot hide credentials in lockfiles, generated files or fixture names.
+    const destinations = [join(base, 'content.txt')];
+    if (path) {
+      if (isAbsolute(path) || path.split('/').some((part) => part === '..' || part === ''))
+        throw new ScanFailure('unsafe-git-path');
+      destinations.push(join(base, 'original', path));
+    }
+    for (const destination of destinations) {
+      await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+      await writeFile(destination, data, { mode: 0o600, flag: 'wx' });
+      // Paths may contain credentials of any shape; never derive public labels from them.
+      this.labels.set(destination, `${kind}[${this.sequence}]`);
+    }
+  }
+
+  async flush() {
+    if (!this.batch) return;
+    try {
+      const findings = await scanFiles(this.binary, join(this.batch, 'sources'), this.batch);
+      for (const finding of findings) {
+        const path = this.labels.get(finding.file);
+        if (!path) throw new ScanFailure('scanner-report-path-invalid');
+        const diagnostic = { rule: finding.rule, path, line: finding.line };
+        this.result.set(JSON.stringify(diagnostic), diagnostic);
+      }
+    } finally {
+      await rm(this.batch, { recursive: true, force: true });
+    }
+    this.batch = null;
+    this.labels.clear();
+    this.bytes = 0;
+    this.items = 0;
+  }
+
+  async finish() {
+    await this.flush();
+    return [...this.result.values()];
+  }
+}
+
 export async function scanRepository(options) {
   const repo = await realpath(options.repo);
   if (git(repo, ['rev-parse', '--is-shallow-repository']).toString().trim() !== 'false') {
@@ -119,46 +211,11 @@ export async function scanRepository(options) {
     throw new ScanFailure('temporary-directory-inside-repository');
   const scratch = await mkdtemp(join(temporaryRoot, 'xtrace-secret-scan-'));
   try {
-    const targets = join(scratch, 'sources');
-    await mkdir(targets, { mode: 0o700 });
-    const labels = new Map();
+    const binary = await verifiedScanner(repo, scratch);
+    const batches = new ScanBatches(binary, scratch);
+    const add = (data, kind, path) => batches.add(data, kind, path);
     const versions = new Set();
     const paths = new Set();
-    let bytes = 0;
-    let count = 0;
-    async function add(data, kind, path) {
-      if (
-        !/^(?:git-ref|ref-target|git-path|git-blob|worktree|tag|tag-target|commit|diff|outbound)$/.test(
-          kind,
-        )
-      )
-        throw new ScanFailure('invalid-source-kind');
-      // LFS pointers publish external bytes that this Git-object scanner cannot verify.
-      if (
-        ['git-blob', 'worktree', 'ref-target', 'tag-target'].includes(kind) &&
-        lfsPointerHeader(data)
-      )
-        throw new ScanFailure('git-lfs-object-unsupported');
-      bytes += data.length;
-      count++;
-      if (data.length > MAX_FILE_BYTES || bytes > MAX_BYTES || count > MAX_VERSIONS)
-        throw new ScanFailure('scan-size-limit');
-      const base = join(targets, String(count));
-      // Preserve path-sensitive rules, and also scan an opaque text alias so default path
-      // exclusions cannot hide credentials in lockfiles, generated files or fixture names.
-      const destinations = [join(base, 'content.txt')];
-      if (path) {
-        if (isAbsolute(path) || path.split('/').some((part) => part === '..' || part === ''))
-          throw new ScanFailure('unsafe-git-path');
-        destinations.push(join(base, 'original', path));
-      }
-      for (const destination of destinations) {
-        await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-        await writeFile(destination, data, { mode: 0o600, flag: 'wx' });
-        // Paths may contain credentials of any shape; never derive public labels from them.
-        labels.set(destination, `${kind}[${count}]`);
-      }
-    }
     async function blob(oid, path) {
       // A Git filename is published data even when its blob is empty. Scan it
       // as opaque text; Gitleaks otherwise uses paths only for filtering/reporting.
@@ -289,16 +346,7 @@ export async function scanRepository(options) {
         throw new ScanFailure('outbound-content-unsupported');
       await add(await readFile(path), 'outbound');
     }
-    const binary = await verifiedScanner(repo, scratch);
-    const findings = await scanFiles(binary, targets, scratch);
-    const result = new Map();
-    for (const finding of findings) {
-      const path = labels.get(finding.file);
-      if (!path) throw new ScanFailure('scanner-report-path-invalid');
-      const diagnostic = { rule: finding.rule, path, line: finding.line };
-      result.set(JSON.stringify(diagnostic), diagnostic);
-    }
-    return [...result.values()];
+    return await batches.finish();
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

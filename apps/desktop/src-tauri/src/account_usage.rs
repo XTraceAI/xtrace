@@ -61,6 +61,31 @@ pub struct AccountUsageService {
     history: Mutex<Option<UsageHistory>>,
 }
 
+/// Releases the single Claude-read slot on success and on unwind. A probe
+/// panic must not leave subsequent refreshes waiting forever.
+struct ClaudeRefreshCompletion<'a> {
+    service: &'a AccountUsageService,
+    active: bool,
+}
+
+impl ClaudeRefreshCompletion<'_> {
+    fn finish(&mut self, state: &mut ReadState) {
+        state.claude_generation = state.claude_generation.wrapping_add(1);
+        state.claude_refreshing = false;
+        self.active = false;
+        self.service.finished.notify_all();
+    }
+}
+
+impl Drop for ClaudeRefreshCompletion<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let service = self.service;
+            self.finish(&mut service.lock());
+        }
+    }
+}
+
 struct ReadState {
     codex_running: bool,
     codex_generation: u64,
@@ -260,6 +285,10 @@ impl AccountUsageService {
             .and_then(|good| good.checked_at);
         state.claude_refreshing = true;
         drop(state);
+        let mut completion = ClaudeRefreshCompletion {
+            service: self,
+            active: true,
+        };
 
         let modified = std::fs::metadata(&paths.config_file)
             .and_then(|meta| meta.modified())
@@ -287,9 +316,7 @@ impl AccountUsageService {
             })
             .unwrap_or(TICK)
             .clamp(Duration::from_secs(1), TICK);
-        state.claude_generation = state.claude_generation.wrapping_add(1);
-        state.claude_refreshing = false;
-        self.finished.notify_all();
+        completion.finish(&mut state);
         drop(state);
         if let Some(reading) = save {
             let _ = save_last_reading(&paths.last_reading, &reading);
@@ -305,6 +332,20 @@ impl AccountUsageService {
         if cfg!(feature = "fixtures") {
             return fixture_result();
         }
+        self.refresh_claude_with(|helper_blocked| {
+            std::thread::scope(|scope| {
+                let codex = scope.spawn(|| self.read_codex());
+                let claude = self.manual_claude_read(helper_blocked);
+                let _ = codex.join();
+                claude
+            })
+        })
+    }
+
+    fn refresh_claude_with(
+        &self,
+        read: impl FnOnce(bool) -> (AccountProviderUsage, bool),
+    ) -> AccountUsage {
         let clicked = Instant::now();
         let mut state = self.lock();
         while state.claude_refreshing {
@@ -326,12 +367,11 @@ impl AccountUsageService {
             .is_some_and(|until| Instant::now() < until);
         state.claude_refreshing = true;
         drop(state);
-        let (claude, helper_ran) = std::thread::scope(|scope| {
-            let codex = scope.spawn(|| self.read_codex());
-            let claude = self.manual_claude_read(helper_blocked);
-            let _ = codex.join();
-            claude
-        });
+        let mut completion = ClaudeRefreshCompletion {
+            service: self,
+            active: true,
+        };
+        let (claude, helper_ran) = read(helper_blocked);
         let mut state = self.lock();
         if helper_ran {
             state.claude_retry_after = (claude.issue == Some(AccountUsageIssue::RateLimited))
@@ -342,9 +382,7 @@ impl AccountUsageService {
             claude: state.claude_snapshot(),
             codex: state.codex.clone(),
         };
-        state.claude_generation = state.claude_generation.wrapping_add(1);
-        state.claude_refreshing = false;
-        self.finished.notify_all();
+        completion.finish(&mut state);
         drop(state);
         if let Some(reading) = save {
             if let Some(paths) = &self.claude_local {
@@ -1275,6 +1313,63 @@ mod tests {
             "utilization": {"seven_day": {"utilization": percent, "resets_at": null}}
         }});
         std::fs::write(&paths.config_file, config.to_string()).unwrap();
+    }
+
+    #[test]
+    fn automatic_probe_panic_releases_refresh_and_wakes_waiter() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = live_paths(root.path());
+        let service = AccountUsageService::with_claude_local(paths.clone());
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+            let service = &service;
+            let waiter = scope.spawn(move || {
+                started_rx.recv().unwrap();
+                let state = service.lock();
+                assert!(state.claude_refreshing);
+                waiting_tx.send(()).unwrap();
+                let (state, timeout) = service
+                    .finished
+                    .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                        state.claude_refreshing
+                    })
+                    .unwrap();
+                assert!(
+                    !timeout.timed_out(),
+                    "panic did not wake the refresh waiter"
+                );
+                assert!(!state.claude_refreshing);
+            });
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                service.automatic_claude_tick_with(&paths, |_| {
+                    started_tx.send(()).unwrap();
+                    waiting_rx.recv().unwrap();
+                    panic!("synthetic provider panic");
+                });
+            }));
+            assert!(panicked.is_err());
+            waiter.join().unwrap();
+        });
+        service.automatic_claude_tick_with(&paths, |_| available(vec![week(37.0)]));
+        assert_eq!(
+            service.lock().claude_snapshot().state,
+            AccountUsageState::Available
+        );
+        assert_eq!(service.lock().claude_generation, 2);
+    }
+
+    #[test]
+    fn manual_probe_panic_releases_refresh_for_a_retry() {
+        let service = AccountUsageService::default();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            service.refresh_claude_with(|_| panic!("synthetic provider panic"));
+        }));
+        assert!(panicked.is_err());
+        assert!(!service.lock().claude_refreshing);
+        let result = service.refresh_claude_with(|_| (available(vec![week(37.0)]), false));
+        assert_eq!(result.claude.state, AccountUsageState::Available);
+        assert_eq!(service.lock().claude_generation, 2);
     }
 
     #[test]
