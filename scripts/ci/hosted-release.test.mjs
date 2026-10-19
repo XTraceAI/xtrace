@@ -94,6 +94,11 @@ test('actual first-launch entrypoint fails without opt-in before staging or app 
     const report = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'));
     assert.equal(report.status, 'failed');
     assert.equal(report.releasedAppLaunched, false);
+    assert.deepEqual(report.validationLimits, {
+      launchConfiguration: 'synthetic data with telemetry disabled',
+      defaultTelemetryNoticeValidated: false,
+      defaultTelemetryBehaviorValidated: false,
+    });
     assert.match(report.error, /explicit hosted real-identity exception/);
   } finally {
     await rm(temporary, { recursive: true, force: true });
@@ -121,6 +126,7 @@ test('first launch adds fresh provider, preference and current/old WebKit baseli
   assert.equal(env.XTRACE_DATA_DIR, '/owned/data');
   assert.equal(env.XTRACE_NATIVE_HOME, '/owned/home');
   assert.equal(env.CLAUDE_CONFIG_DIR, '/owned/claude');
+  assert.equal(env.XTRACE_TELEMETRY, '0');
   for (const key of [
     'HOME',
     'GITHUB_TOKEN',
@@ -149,15 +155,15 @@ test('download and lightweight-tag checks reject different bytes, size or source
     await assert.rejects(verifyTag(changed));
 });
 
-test('real-shaped annotated release tag resolves once through a fixed repository URL', async () => {
-  const annotationSHA = '82efaf3c16bbcd38a1d45ae7393e5df567179569';
+test('synthetic annotated release tag resolves once through a fixed repository URL', async () => {
+  const annotationSHA = 'c'.repeat(40);
   const ref = {
-    ref: 'refs/tags/v0.1.6',
+    ref: 'refs/tags/v0.1.7',
     object: { type: 'tag', sha: annotationSHA, url: 'https://untrusted.invalid/tag' },
   };
   const annotation = {
     sha: annotationSHA,
-    tag: 'v0.1.6',
+    tag: 'v0.1.7',
     object: { type: 'commit', sha: release.source, url: 'https://untrusted.invalid/commit' },
   };
   const requests = [];

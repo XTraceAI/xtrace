@@ -7,6 +7,7 @@ import { requireFreshBaseline } from './hosted-validation.mjs';
 import { signatureProblems, notarizedByGatekeeper } from './release-dmg.mjs';
 import {
   release,
+  signedLaunchLimits,
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
   verifyAppInventory,
@@ -43,6 +44,7 @@ async function main() {
     status: 'failed',
     mode: 'update',
     release,
+    validationLimits: signedLaunchLimits,
     releasedAppLaunched: false,
     commandBudget: updateBudget,
   };
@@ -310,7 +312,7 @@ async function main() {
       'update-ready',
       ownership.pid,
       185_000,
-      'Observed usable 0.1.5 Dashboard and target 0.1.6 ready',
+      'Observed usable 0.1.6 Dashboard and target 0.1.7 ready',
     );
     // Ready means verified download, not installation. Prove old bytes remain
     // immediately before asking the shipped UI to install and restart itself.
@@ -327,7 +329,7 @@ async function main() {
       'update-press',
       ownership.pid,
       15_000,
-      'Pressed real Restart to update once for target 0.1.6',
+      'Pressed real Restart to update once for target 0.1.7',
     );
     report.restartPressed = true;
     await checked(
@@ -351,7 +353,7 @@ async function main() {
       'updated-dashboard',
       successor.pid,
       95_000,
-      'Observed usable native 0.1.6 Dashboard and retained completed Welcome',
+      'Observed usable native 0.1.7 Dashboard and retained completed Welcome',
     );
     report.updatedInventory = await verifyAppInventory(release.bundle);
     await validateSignature(release.bundle, 'updated-app');
@@ -454,7 +456,7 @@ async function main() {
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (failure) throw failure;
   console.log(
-    'Pinned signed 0.1.5 updated through its real UI to 0.1.6; distinct restart, retained sentinel and empty native database verified.',
+    'Pinned signed 0.1.6 updated through its real UI to 0.1.7 with synthetic data and telemetry disabled; distinct restart, retained sentinel and empty native database verified. The default telemetry notice and default telemetry behavior were not validated.',
   );
 }
 

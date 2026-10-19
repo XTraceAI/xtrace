@@ -8,6 +8,7 @@ import { signatureProblems, notarizedByGatekeeper } from './release-dmg.mjs';
 import { inspectMetadataResponse, readMetadataCapture, metadataLimit } from './hosted-metadata.mjs';
 import {
   release,
+  signedLaunchLimits,
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
   requireFirstLaunchHost,
@@ -37,6 +38,7 @@ async function main() {
     status: 'failed',
     mode: 'first-launch',
     release,
+    validationLimits: signedLaunchLimits,
     releasedAppLaunched: false,
     commandBudget: firstLaunchBudget,
   };
@@ -353,7 +355,7 @@ async function main() {
     if (
       evidence.code !== 0 ||
       evidence.reason !==
-        'Observed native-ready Welcome, Open Dashboard action and usable 0.1.6 Dashboard'
+        'Observed native-ready Welcome, Open Dashboard action and usable 0.1.7 Dashboard'
     )
       throw new Error('Driver returned no required first-launch evidence');
     await writeFile(join(output, 'ui.json'), `${JSON.stringify(evidence, null, 2)}\n`);
@@ -418,7 +420,7 @@ async function main() {
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (failure) throw failure;
   console.log(
-    'Pinned signed 0.1.6 passed hosted first-launch UI and empty native database checks. Updater was not tested.',
+    'Pinned signed 0.1.7 passed hosted first-launch UI and empty native database checks with synthetic data and telemetry disabled. The default telemetry notice and default telemetry behavior were not validated. Updater was not tested.',
   );
 }
 

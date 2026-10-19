@@ -425,17 +425,31 @@ downloaded, installed or launched by probe mode. The probe command still rejects
 released-app modes. The separate first-launch job below requires its own explicit
 opt-in; the update job described below has the same explicit opt-in.
 
-## Signed 0.1.6 first launch on a hosted Mac
+## Signed 0.1.7 first launch on a hosted Mac
+
+The exact updater-enabled 0.1.7 artifacts have passed independent static signature,
+notarization, archive and full app-inventory checks. These harness pins prepare
+future validation; they do not establish public availability or runtime success.
+At preparation, 0.1.7 remains unpublished and both hosted checks remain unrun.
+First launch requires its exact public source tag and DMG. The update check also
+requires the exact prospective feed to be promoted through a separate authorized
+release action. The harness itself must reach an allowed reviewed workflow ref.
+
+Both released-app jobs use synthetic data and explicitly set `XTRACE_TELEMETRY=0`.
+That override disables telemetry and suppresses the default 0.1.7 telemetry notice.
+A passing result therefore covers a telemetry-disabled synthetic launch, not the
+default telemetry notice or default telemetry behavior. Each report records these
+limits in `validationLimits`, and the success output states the same limits.
 
 After reviewing the harness and explicitly authorizing the released app's real
 identity on a fresh hosted VM, dispatch `delivery_mode=first-launch` with
 `allow_release_identity=true`. The boolean defaults to false, and the job fails
 before checkout if it is absent or false. Use the exact reviewed harness SHA as
 `candidate_sha` on the default branch or its matching reviewed tag. That is
-distinct from the fixed released source `bab5673759993dc8970a846a8e37625def989d2b`.
+distinct from the fixed product source `e743e900fb40d32bdbe90709bd54b7d9bde32540`.
 The Node runner and both Swift tools also reject unauthorized or non-hosted use.
 
-This job anonymously downloads the pinned public 0.1.6 DMG and checks its size,
+This job anonymously downloads the pinned public 0.1.7 DMG and checks its size,
 SHA-256 and public source tag, resolving its single annotation layer when present.
 It verifies strict signatures, the expected
 Developer ID team, stapled tickets and Gatekeeper acceptance for the app and DMG.
@@ -466,7 +480,7 @@ from its own environment before calling LaunchServices. The app must not inherit
 them. Any unexpected process keys are reported together by name, never value.
 
 The external AX driver requires a real Welcome screen, completed native scan,
-verified bundled readers and version 0.1.6, with no native query error. It presses
+verified bundled readers and version 0.1.7, with no native query error. It presses
 Open Dashboard and requires the loaded empty-report result, Dashboard heading
 and version. After stopping the exact PID/bundle/executable/kernel-start-time receipt,
 the runner verifies the owned database's integrity and empty sessions/records,
@@ -493,29 +507,33 @@ Non-2xx, incomplete, oversized or invalid JSON responses fail before tag checkin
 or app download. These requests remain anonymous with no automatic retry or
 credential fallback; a 403 alone does not establish its cause.
 
-## Signed 0.1.5 to 0.1.6 update on a hosted Mac
+## Signed 0.1.6 to 0.1.7 update on a hosted Mac
 
 `delivery_mode=update` uses the same fresh GitHub-hosted macOS 14 arm64 guard,
 exact harness SHA and `allow_release_identity=true` requirement. Review the
 harness and first-launch evidence before dispatch. The fixed production endpoint
-must already serve the exact reviewed 0.1.6 manifest. Promotion is a separate
+must already serve the exact reviewed 0.1.7 manifest. Promotion is a separate
 release-owner action that makes the update available to production users; this
 job never changes the feed, publishes a release or substitutes an endpoint.
 A different feed fails the prerequisite before any app launch.
 
-The job downloads the exact signed public 0.1.5 archive anonymously, checks its
+The previous app and its 0.1.7 successor both keep `XTRACE_TELEMETRY=0` and synthetic
+data. Even a successful real update/restart does not validate the default telemetry
+notice or default telemetry behavior; those require separate validation.
+
+The job downloads the exact signed public 0.1.6 archive anonymously, checks its
 pinned bytes, installs it on the disposable VM and verifies all 79 entries plus
 Developer ID, stapling and Gatekeeper. It reuses the synthetic environment and
 fresh-host checks above. Through external Accessibility it completes Welcome
-if present, observes a usable native 0.1.5 Dashboard and the target-specific
-0.1.6 ready message, then rechecks that the installed app is still 0.1.5.
+if present, observes a usable native 0.1.6 Dashboard and the target-specific
+0.1.7 ready message, then rechecks that the installed app is still 0.1.6.
 It presses the real Restart to update button once. No injected product code,
 manual relaunch or automatic prompt approval can produce a passing result.
 
 A saved transition binds the original process before the action. The helper
 requires its exit and one distinct successor at the same exact bundle/executable
 and app ID, with a fresh kernel process start time. It saves a separate ownership receipt and
-checks the successor's inherited synthetic environment. The native 0.1.6
+checks the successor's inherited synthetic environment. The native 0.1.7
 Dashboard must load without Welcome returning; all 79 updated entries and the
 signature must match. After stopping the exact successor, it checks the retained
 synthetic sentinel, SQLite integrity, empty sessions/records and absence of a

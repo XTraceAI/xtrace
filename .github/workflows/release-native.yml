@@ -303,7 +303,7 @@ jobs:
       - name: Test first-launch guards
         timeout-minutes: 1
         run: node --test scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-metadata.test.mjs scripts/ci/hosted-database.test.mjs
-      - name: Validate the unchanged signed 0.1.6 first launch
+      - name: Validate the unchanged signed 0.1.7 first launch
         timeout-minutes: 11
         env:
           ALLOW_RELEASE_IDENTITY: ${{ inputs.allow_release_identity }}
@@ -376,7 +376,7 @@ jobs:
       - name: Test update and first-launch guards
         timeout-minutes: 2
         run: node --test scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-update.test.mjs scripts/ci/hosted-metadata.test.mjs scripts/ci/hosted-database.test.mjs
-      - name: Validate the real signed 0.1.5 to 0.1.6 update and restart
+      - name: Validate the real signed 0.1.6 to 0.1.7 update and restart
         timeout-minutes: 15
         env:
           ALLOW_RELEASE_IDENTITY: ${{ inputs.allow_release_identity }}

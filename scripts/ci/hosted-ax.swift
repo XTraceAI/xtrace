@@ -122,8 +122,8 @@ func updateDashboard(_ rows: [[String: String]], _ version: String) -> Bool {
         hasText(rows, "No agent activity was recorded in this range. Measured zeros are shown as 0.")
 }
 func updateReady(_ rows: [[String: String]]) -> Bool {
-    updateDashboard(rows, "0.1.5") &&
-        hasText(rows, "Update 0.1.6 is ready. Your local data stays on this Mac.") &&
+    updateDashboard(rows, "0.1.6") &&
+        hasText(rows, "Update 0.1.7 is ready. Your local data stays on this Mac.") &&
         rows.filter { isButton($0, "Restart to update") }.count == 1
 }
 // END UPDATE UI POLICY
@@ -158,22 +158,22 @@ while Date() < deadline {
         if updateMode {
             if nativeError(last) { finish(6, "Released app displayed an error or dialog", last) }
             if mode == "updated-dashboard" {
-                if updateDashboard(last, "0.1.6") {
-                    finish(0, "Observed usable native 0.1.6 Dashboard and retained completed Welcome", last)
+                if updateDashboard(last, "0.1.7") {
+                    finish(0, "Observed usable native 0.1.7 Dashboard and retained completed Welcome", last)
                 }
             } else if updateReady(last) {
                 if mode == "update-ready" {
-                    finish(0, "Observed usable 0.1.5 Dashboard and target 0.1.6 ready", last)
+                    finish(0, "Observed usable 0.1.6 Dashboard and target 0.1.7 ready", last)
                 }
                 let restart = elements.filter { isButton($0.1, "Restart to update") }
                 guard restart.count == 1, ownedApplication() != nil else { finish(5, "Identity or restart control changed", last) }
                 guard AXUIElementPerformAction(restart[0].0, kAXPressAction as CFString) == .success else {
                     finish(6, "Restart to update AXPress failed", last)
                 }
-                finish(0, "Pressed real Restart to update once for target 0.1.6", last)
+                finish(0, "Pressed real Restart to update once for target 0.1.7", last)
             } else if mode == "update-ready", sawWindow, sawWebContent, !pressed,
                       hasText("Welcome to XTrace"), hasText("The initial scan finished."),
-                      hasText("Bundled readers verified"), displayedVersion(last, "0.1.5"),
+                      hasText("Bundled readers verified"), displayedVersion(last, "0.1.6"),
                       hasText("In the local database now"),
                       !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
                 let buttons = elements.filter { isButton($0.1, "Open Dashboard") }
@@ -194,7 +194,7 @@ while Date() < deadline {
             }) { finish(6, "The released app displayed a startup or native-data error", last) }
             if sawWindow, sawWebContent, !pressed, let button,
                hasText("Welcome to XTrace"), hasText("The initial scan finished."),
-               hasText("Bundled readers verified"), displayedVersion(last, "0.1.6"),
+               hasText("Bundled readers verified"), displayedVersion(last, "0.1.7"),
                hasText("In the local database now"),
                !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
                 guard ownedApplication() != nil else { finish(5, "Identity changed before press", last) }
@@ -203,10 +203,10 @@ while Date() < deadline {
                     finish(6, "Open Dashboard AXPress failed", last)
                 }
                 pressed = true
-            } else if sawWindow, sawWebContent, pressed, displayedVersion(last, "0.1.6"),
+            } else if sawWindow, sawWebContent, pressed, displayedVersion(last, "0.1.7"),
                       !hasText("Welcome to XTrace"), hasText("What your agents did"),
                       hasText("No agent activity was recorded in this range. Measured zeros are shown as 0.") {
-                finish(0, "Observed native-ready Welcome, Open Dashboard action and usable 0.1.6 Dashboard",
+                finish(0, "Observed native-ready Welcome, Open Dashboard action and usable 0.1.7 Dashboard",
                        [["evidence": "Welcome before action"]] + welcomeEvidence +
                        [["evidence": "Dashboard after action"]] + last)
             }

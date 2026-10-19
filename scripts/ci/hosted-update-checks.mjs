@@ -1,26 +1,26 @@
 import { release, sha256, appInventory } from './hosted-release.mjs';
 import { requireProbeHost } from './hosted-validation.mjs';
 
-// Retained canonical public archives and all 79 paths/bytes/modes were checked
-// independently. Runtime needs only these fixed digests, not a copy of the maps.
+// The public 0.1.6 archive and its own 79 paths/bytes/modes were checked
+// independently. Keep its inventory count separate from the candidate target.
 export const previousRelease = Object.freeze({
   identifier: release.identifier,
   bundle: release.bundle,
   team: release.team,
-  inventoryEntries: release.inventoryEntries,
-  version: '0.1.5',
-  tag: 'v0.1.5',
-  source: 'b9e82894ea6fa34c183f82b8b400693c200b9683',
-  archive: 'XTrace-Desktop-0.1.5-macos-arm64.app.tar.gz',
-  bytes: 11255927,
-  sha256: '45f1762cf36081e7554ef087ecea5cff089869a71257aff2a2ec083f47a87f5d',
-  inventorySha256: 'a76724e86f6b2f9a1e9a85d148310f4871844e4fc2f7df880e4ed33c3e82e203',
+  inventoryEntries: 79,
+  version: '0.1.6',
+  tag: 'v0.1.6',
+  source: 'bab5673759993dc8970a846a8e37625def989d2b',
+  archive: 'XTrace-Desktop-0.1.6-macos-arm64.app.tar.gz',
+  bytes: 10997217,
+  sha256: '8a3b9708bb1342ae73fdd646672597e795ca66b87706669bb72bcbe2e330bc8c',
+  inventorySha256: '70a1cbcff0208976fca09e8557e08d93bb75b19dcc0262666cf555e85d59cdaa',
 });
 export const updateBudget = Object.freeze({ workMs: 12 * 60_000, cleanupMs: 2 * 60_000 });
 export const productionFeed =
   'https://github.com/XTraceAI/xtrace-desktop/releases/latest/download/latest.json';
 export const sentinel =
-  'Owned hosted update check: retain this synthetic file across 0.1.5 to 0.1.6.\n';
+  'Owned hosted update check: retain this synthetic file across 0.1.6 to 0.1.7.\n';
 
 export function requireUpdateHost(input) {
   if (input.mode !== 'update' || input.allowReleaseIdentity !== 'true')
@@ -30,7 +30,7 @@ export function requireUpdateHost(input) {
 
 export function verifyPreviousDownload(bytes) {
   if (bytes.length !== previousRelease.bytes || sha256(bytes) !== previousRelease.sha256)
-    throw new Error('Old archive does not match the pinned public 0.1.5 release');
+    throw new Error('Old archive does not match the pinned public 0.1.6 release');
 }
 
 export async function verifyPreviousInventory(bundle) {
@@ -39,16 +39,18 @@ export async function verifyPreviousInventory(bundle) {
     inventory.entries !== previousRelease.inventoryEntries ||
     inventory.sha256 !== previousRelease.inventorySha256
   )
-    throw new Error('Old app paths, bytes or modes differ from the signed 0.1.5 release');
+    throw new Error('Old app paths, bytes or modes differ from the signed 0.1.6 release');
   return inventory;
 }
 
+// Exact prospective feed bytes; the current production endpoint must match
+// before any app is extracted or launched. This check never promotes the feed.
 export function verifyProductionFeed(bytes) {
   if (
-    bytes.length !== 985 ||
-    sha256(bytes) !== 'b8dcc5a2b8349c1af5e85b520648182c46972cf59f08999d6eb043e11b5753b6'
+    bytes.length !== 1751 ||
+    sha256(bytes) !== 'c2bf25a08febff2ddeda03cfaceb04d75d553d6c15ecb9f0aaa85ac07180c02d'
   )
-    throw new Error('Production feed prerequisite unmet: canonical 0.1.6 is not available');
+    throw new Error('Production feed prerequisite unmet: canonical 0.1.7 is not available');
   return { bytes: bytes.length, sha256: sha256(bytes), version: JSON.parse(bytes).version };
 }
 
