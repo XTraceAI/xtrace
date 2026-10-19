@@ -60,10 +60,11 @@ export interface TranscriptProps {
  * with everything they carried: what is duplicated is a name, not a turn, and
  * hiding one would shorten somebody's session to tidy up an identifier.
  *
- * There is no jump API here yet. When one is built, it must require its match
- * to be **unique** and say so otherwise, rather than taking the first node
- * that answers to the name — which is the same rule the adapter already
- * applies to a call identifier used more than once.
+ * `timeline-jump.ts` requires exactly one tool block at the recorded position
+ * before returning a target. `transcript-reveal.ts` carries that target to the
+ * owning row; it does not select the first DOM node with this id. Ambiguous
+ * identities stay unavailable, as do call identifiers used more than once
+ * in this adapter.
  */
 export const blockId = (record: string, index: number) => `${record}:${index}`;
 

@@ -6,7 +6,7 @@ persisted by opening it: no store row, no cache, no copy of the bytes on disk,
 no log of what the session said. The source is opened for reading only, and the
 records live in memory until the caller drops them.
 
-`xt_ingest::native::session_source::load_session_source` answers one of two
+`xt_ingest::native::session_source::load_session_source_with` answers one of two
 things: the session's records, or the one reason they may not be shown. The
 measurements the index already holds are never affected by that answer — an
 unavailable source means the text is unavailable, not that the work is in
@@ -71,7 +71,7 @@ canonical shape, never a real conversation.
 
 ## Reading only what was verified
 
-Each file of the session is read in this order, and the order is the contract:
+Each Claude file is read in this order, and the order is the contract:
 
 1. Open it the way the importer does — a regular file, no alias followed, still
    the entry that was observed — and capture its device, inode, length and
@@ -79,7 +79,8 @@ Each file of the session is read in this order, and the order is the contract:
 2. Charge the session's cumulative **byte ceiling** from that captured length,
    **before** anything is allocated for the file and before its generation is
    proven. An oversized session costs a stat, not a read.
-3. Prove the generation against the checkpoint the index recorded.
+3. Verify the measured prefix against an identifiable recorded checkpoint,
+   or report the generation as `unrecorded` when that link is unavailable.
 4. Read exactly the captured length into memory, in bounded chunks a cancel can
    interrupt. A read that ends early means the file shrank under it.
 5. Observe both the **descriptor and the name** again. The descriptor must
@@ -172,9 +173,9 @@ components it renders through.
 
 ## Limits of this stage
 
-- Codex and Cursor have no detail source here at all. Serving them would need a
-  reader that streams without staging disk copies; that is not this stage's to
-  add, and the existing import path for them is unchanged.
+- Codex and Cursor JSONL detail reads require the verified pinned reader and a
+  compatible interpreter. A selected Cursor SQLite store returns
+  `store_unsupported`; no substitute transcript is read in its place.
 - Structural hook summaries and PR witnesses are counted as non-record lines,
   not rendered as turns.
 - A session is held whole in memory, which is what a detail view needs and what
@@ -203,6 +204,10 @@ under one of the host's anchored roots (`~/.codex/sessions`;
 `~/.cursor/chats`, `~/.cursor/projects`, each as spelled or where a symlinked
 root led before the read). A cancel after the last parsed line, and after
 translation, still returns nothing.
+
+Codex and Cursor detail output is not compared with indexed checkpoints. Its
+generation is `unrecorded`: the current transcript can differ from the source
+used for the saved measurements.
 
 | Case                                                                                                                                      | Answer                                                         |
 | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |

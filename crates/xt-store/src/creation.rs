@@ -19,11 +19,11 @@
 //! of them.
 //!
 //! A relation is a navigation projection. It never moves or copies work: the
-//! child keeps its own row, identity, detail route and every measurement, and
-//! no metric, span, search or page-membership query reads this table. The
-//! Human input view does read it, for every kind alike: the user messages of
-//! a session with an accepted creation relation are taken as sent by the
-//! agent that created it, not typed by a person.
+//! child keeps its own row, identity and detail route. For every kind alike,
+//! the Human input view and human-message measurements exclude the user
+//! messages of a session with an accepted creation relation: those messages
+//! are taken as sent by the agent that created it, not typed by a person.
+//! No individual message confirmations are written by a creation relation.
 //!
 //! The store refuses what it cannot tie to one child: a child that is not
 //! exactly one indexed user session with the named native identity, a parent
@@ -167,8 +167,9 @@ pub struct SessionCreationProof {
 /// - the child's first input is exactly, and uniquely, what the launch
 ///   submitted, compared in memory and never kept.
 ///
-/// This is lineage only. It confirms nothing about who typed an input: no
-/// human-input classification, confirmation or measurement reads it.
+/// Like every accepted creation relation, this excludes the child's user
+/// messages from the Human input view and human-message measurements. It
+/// neither moves work to the parent nor writes individual message confirmations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CliArtifactCreationProof {
     /// The created Claude session's canonical identity.
@@ -208,9 +209,12 @@ pub struct CliArtifactCreationProof {
 /// with this canonical and native identity. The scan must have proven,
 /// before submitting, that:
 ///
-/// - the launch operation is one literal create-mode `claude -p` command with
-///   JSON output, one literal inline prompt and `--session-id` naming the
-///   child, with no resume, continue, fork, substitution or other option;
+/// - the launch operation is one supported create-mode `claude -p` command
+///   with `--session-id` naming the child (a literal UUID or the version-5
+///   one-use printed UUID binding). Version 6 accepts text, JSON or streaming
+///   JSON output, the shared option map's neutral options, verbose logging
+///   and standard-error redirection. The prompt is inline or supplied through
+///   a supported redirected path; resume, continue and fork are refused;
 /// - the launch lies in the parent's own rows of the physical history file
 ///   `segment_rollout_id`, at `launch_ordinal` when that history is
 ///   paginated, and its acknowledgment lies in the same file;
@@ -220,9 +224,10 @@ pub struct CliArtifactCreationProof {
 ///   (`acknowledgment_operation_index`) the operation's own process result —
 ///   any exit code, or the running process's `process_session_id`. Nothing
 ///   after it, not the job's later success or failure, is part of the proof;
-/// - the child is a fresh session whose first input is exactly what the
-///   launch submitted, dated at or after the launch, compared in memory and
-///   never kept.
+/// - the child is a fresh session whose first input is dated at or after the
+///   launch. An inline prompt must match that input exactly, compared in
+///   memory and never kept. A redirected prompt path is never opened or
+///   compared; the named child and the remaining structural checks bind it.
 ///
 /// The creation anchor is the child, the parent, the child's first input, the
 /// launch operation, its history file and its row: a proof of the same anchor
