@@ -47,11 +47,19 @@ export function phasePill(status: NativeIndexStatus): { label: string; tone: Con
  * starts only when that history changes or XTrace opens, so reopening is the
  * step that always works.
  */
-const nextSteps: Record<NativeHostState, (needsAttention: boolean) => string | null> = {
-  pending: (needsAttention) => (needsAttention ? 'Reopen XTrace to scan again.' : null),
+type HostFacts = Pick<
+  NativeHostStatus,
+  'state' | 'needs_attention' | 'sessions_imported' | 'sessions_partial'
+>;
+const nextSteps: Record<NativeHostState, (host: HostFacts) => string | null> = {
+  pending: (host) => (host.needs_attention ? 'Reopen XTrace to scan again.' : null),
   complete: () => null,
-  incomplete: (needsAttention) =>
-    needsAttention ? 'No session could be read. See Details for the reason.' : null,
+  // A flagged gap says no session was read only when that is so: sessions
+  // that were read are counted instead.
+  incomplete: (host) =>
+    host.needs_attention && host.sessions_imported + host.sessions_partial === 0
+      ? 'No session could be read. See Details for the reason.'
+      : null,
   missing_source: () => null,
   missing_runtime: () => 'Install Python 3.10 or newer, then reopen XTrace to read this history.',
   pin_mismatch: () => 'See Details for the reason, or Settings → Native index.',
@@ -77,13 +85,8 @@ const sessionsRead = ({
  * One source's line on the welcome page: its next step, else how many
  * sessions were read, else nothing (its label says it all).
  */
-export const hostSummary = (
-  host: Pick<
-    NativeHostStatus,
-    'state' | 'needs_attention' | 'sessions_imported' | 'sessions_partial'
-  >,
-): string | null =>
-  nextSteps[host.state](host.needs_attention) ??
+export const hostSummary = (host: HostFacts): string | null =>
+  nextSteps[host.state](host) ??
   (host.state === 'complete' || host.state === 'incomplete' ? sessionsRead(host) : null);
 
 /** The host states each check is the cause of: Python, or the bundled readers. */
@@ -120,6 +123,5 @@ export const welcomeTour: readonly { path: string; icon: IconName; description: 
     description: 'Hours, tokens and trends across your agents.',
   },
   { path: '/sessions', icon: 'sessions', description: 'Every conversation, one row each.' },
-  { path: '/scores', icon: 'scores', description: 'Grades for the projects on this Mac.' },
   { path: '/prs', icon: 'prs', description: 'The agent effort behind each pull request.' },
 ];

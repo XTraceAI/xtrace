@@ -11,6 +11,7 @@ import { events } from '../../data/ipc-names';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
 import { welcomeStorageKey } from './welcome-completion';
+import { hostSummary } from './welcome-text';
 
 const exported = fixture as FixtureExport;
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
@@ -495,7 +496,7 @@ it('keeps technical details closed until Details is opened, and closes them agai
   expect(toggle.getAttribute('aria-expanded')).toBe('true');
   expect(region.hidden).toBe(false);
   expect(within(region).getByTestId('welcome-freshness').textContent).toBe(
-    'Live: new activity is added as it happens',
+    'Live: changes are reconciled as they happen',
   );
   expect(within(region).getByText('Found at /usr/bin/python3')).toBeTruthy();
   fireEvent.click(toggle);
@@ -508,7 +509,7 @@ it('names each page it points to by its own title, as plain text', async () => {
   const step = (await screen.findByRole('heading', { level: 2, name: "What you'll find" })).closest(
     'section',
   )!;
-  for (const title of ['Dashboard', 'Sessions', 'Scores', 'Pull requests'])
+  for (const title of ['Dashboard', 'Sessions', 'Pull requests'])
     expect(within(step).getByText(title, { exact: true })).toBeTruthy();
   expect(within(step).queryAllByRole('link')).toHaveLength(0);
   expect(
@@ -595,4 +596,17 @@ it('colours a missing Python or unverified readers as a warning only while a sou
         host('cursor', { state, needs_attention: true }),
       ]),
     ).toEqual([null, 'warning']);
+});
+
+it('says no session could be read only when none was, even for a flagged gap', () => {
+  const gap = { state: 'incomplete', needs_attention: true } as const;
+  expect(hostSummary({ ...gap, sessions_imported: 0, sessions_partial: 0 })).toBe(
+    'No session could be read. See Details for the reason.',
+  );
+  expect(hostSummary({ ...gap, sessions_imported: 40, sessions_partial: 2 })).toBe(
+    '40 sessions, 2 more partly read',
+  );
+  expect(hostSummary({ ...gap, sessions_imported: 0, sessions_partial: 3 })).toBe(
+    '3 sessions, partly read',
+  );
 });
