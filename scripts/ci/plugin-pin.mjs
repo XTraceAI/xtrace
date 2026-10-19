@@ -171,10 +171,17 @@ export function describeFreshness(result) {
   const paths = result.differing
     .map(({ path, missing }) => (missing ? `${path} (no longer present)` : path))
     .join(', ');
+  const fix = 'refresh vendor/agent-plugins with scripts/vendor-readers.sh and update .plugin-pin.';
+  const versions = [pinned, result.latest].map((version) => version.split('.').map(Number));
+  if (compareVersions(...versions) >= 0)
+    return (
+      `The bundled plugin readers differ from ${plugin} ${result.latest}, the latest release, ` +
+      `even though .plugin-pin names ${plugin} ${pinned}. These reader paths differ: ${paths}. ` +
+      `Check that the pinned commit is the released one; to match the release, ${fix}`
+    );
   return (
     `The bundled plugin readers are from ${plugin} ${pinned}, but the latest release is ` +
-    `${plugin} ${result.latest}. These reader paths changed: ${paths}. To update, refresh ` +
-    'vendor/agent-plugins with scripts/vendor-readers.sh and update .plugin-pin.'
+    `${plugin} ${result.latest}. These reader paths changed: ${paths}. To update, ${fix}`
   );
 }
 

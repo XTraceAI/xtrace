@@ -326,11 +326,16 @@ test('a local producer checkout answers from its own tags', async () => {
 test('the command warns but exits zero on lookup failure and rejects bad usage or pins', async () => {
   const script = new URL('./plugin-pin.mjs', import.meta.url).pathname;
   const directory = await mkdtemp(join(tmpdir(), 'xtrace-pin-cli-'));
+  // The child must not write real annotations or summary lines when this
+  // suite itself runs inside GitHub Actions.
+  const childEnv = { ...process.env };
+  for (const name of Object.keys(childEnv))
+    if (name.startsWith('GITHUB_') || name === 'CI') delete childEnv[name];
   const run = (args) =>
     spawnSync(process.execPath, [script, ...args], {
       cwd: directory,
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_ACTIONS: '' },
+      env: childEnv,
     });
   try {
     await writeFile(join(directory, '.plugin-pin'), JSON.stringify(valid));
@@ -360,4 +365,35 @@ test('the command warns but exits zero on lookup failure and rejects bad usage o
   assert.deepEqual(parseFreshnessArgs(['--checkout', '../agent-plugins']), {
     checkout: '../agent-plugins',
   });
+});
+
+test('differing readers read correctly when the pin names the latest or a newer version', () => {
+  const differing = {
+    'memhub--v0.133.0': { ...readerPin.reader_sources, 'plugins/memhub/scripts': 'd'.repeat(40) },
+  };
+  for (const pinned of ['0.133.0', '0.140.0', '1.0.0']) {
+    const result = checkFreshness(
+      { ...readerPin, plugin_version: pinned },
+      fakeSource(['memhub--v0.133.0'], differing),
+    );
+    assert.equal(result.state, 'stale');
+    const lines = [];
+    const message = reportFreshness(result, { env: {}, log: (line) => lines.push(line) });
+    assert.equal(
+      message,
+      `The bundled plugin readers differ from memhub 0.133.0, the latest release, even though .plugin-pin names memhub ${pinned}. ` +
+        'These reader paths differ: plugins/memhub/scripts. Check that the pinned commit is the released one; ' +
+        'to match the release, refresh vendor/agent-plugins with scripts/vendor-readers.sh and update .plugin-pin.',
+    );
+    assert.doesNotMatch(message, /but the latest release is/);
+    assert.deepEqual(lines, [`Warning: ${message}`]);
+  }
+  const behind = checkFreshness(
+    { ...readerPin, plugin_version: '0.124.9' },
+    fakeSource(['memhub--v0.133.0'], differing),
+  );
+  assert.match(
+    reportFreshness(behind, { env: {}, log: () => {} }),
+    /from memhub 0\.124\.9, but the latest release is memhub 0\.133\.0/,
+  );
 });

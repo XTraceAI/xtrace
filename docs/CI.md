@@ -173,7 +173,8 @@ and notarized downloadable bytes. Signing, notarization, universal builds,
 Gatekeeper behavior and update delivery are not certified by this unsigned app
 launch. Tag validation is source validation only, not disclosure approval or a
 waiver of macOS 14 QA, final-byte acceptance or publication checks. Changes to
-source or packaging invalidate the relevant release evidence.
+source or packaging invalidate the relevant release evidence. First read the
+plugin-reader warning, if any, from the `pnpm check:plugin-pin` step.
 
 Final signed launch from `/Applications` on a Mac that has never run the app
 requires separate acceptance for each release. Its release notes must identify
