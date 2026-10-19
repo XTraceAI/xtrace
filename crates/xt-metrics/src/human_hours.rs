@@ -13,10 +13,10 @@
 //! Your hours cover whole local days (M-08): from local midnight of the
 //! selected range's first local day through the end of its last, and the
 //! previous period is the same number of whole local days just before. Each
-//! read also takes the messages of up to one break length before a period, so
-//! a stretch that began before its first midnight keeps its part after
-//! midnight instead of being lost; the two periods share one timeline, so a
-//! stretch over their boundary is split between them, never dropped by both.
+//! read also takes messages up to one break length before and after a period,
+//! so stretches crossing its first or final midnight keep the part inside it.
+//! The two periods share one timeline, so a stretch over their boundary is
+//! split between them, never dropped by both.
 //!
 //! No message text is read and nothing is filtered by content: which messages
 //! are a person's is the ingest owner's classification, as for every Human
@@ -139,7 +139,11 @@ impl MetricsDb {
             .start_ms()
             .checked_sub(gap)
             .ok_or(Error::InvalidWindow)?;
-        let read = Window::new(read_from, current.end_ms())?;
+        let read_until = current
+            .end_ms()
+            .checked_add(gap)
+            .ok_or(Error::InvalidWindow)?;
+        let read = Window::new(read_from, read_until)?;
         let start = InstantKey::from_millisecond(read.start_ms());
         let end = InstantKey::from_millisecond(read.end_ms());
         let mut times = Vec::new();

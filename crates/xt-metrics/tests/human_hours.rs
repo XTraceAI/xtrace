@@ -488,3 +488,124 @@ fn an_unknown_message_within_a_break_after_a_period_makes_it_unknown() {
     assert_eq!(report.previous.messages, None);
     assert_eq!(report.current.active_ms, None);
 }
+
+#[test]
+fn final_historical_day_keeps_only_its_part_of_an_after_midnight_stretch() {
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        "late",
+        &[
+            event("before", "2026-09-03T23:50:00Z", true),
+            event("after", "2026-09-04T00:10:00Z", true),
+        ],
+    );
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let historical = Window::new(ms("2026-09-03T00:00:00Z"), ms("2026-09-04T00:00:00Z")).unwrap();
+    let report = metrics
+        .human_hours(historical, BreakLength::new(30).unwrap(), TimeZone::UTC)
+        .unwrap();
+    assert_eq!(report.current.active_ms, Some(600_000));
+    assert_eq!(report.current.messages, Some(1));
+    assert_eq!(
+        report.current.by_day[0].stretches[0].end_ms,
+        historical.end_ms()
+    );
+    assert_eq!(report.previous.active_ms, Some(0));
+    // The current Dashboard presets still include both pieces exactly once.
+    let now = ms("2026-09-04T00:20:00Z");
+    for days in [7, 14, 30] {
+        let selected = Window::new(now - days * 86_400_000, now).unwrap();
+        let current = metrics
+            .human_hours(selected, BreakLength::new(30).unwrap(), TimeZone::UTC)
+            .unwrap()
+            .current;
+        assert_eq!(current.active_ms, Some(1_200_000));
+        assert_eq!(current.messages, Some(2));
+    }
+}
+
+#[test]
+fn final_day_unknown_lookahead_is_bounded_by_one_break_length() {
+    for (timestamp, expected) in [
+        ("2026-09-04T00:10:00Z", None),
+        ("2026-09-04T00:30:00Z", Some(0)),
+        ("2026-09-04T00:30:00.0000000001Z", Some(0)),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        seed(
+            &mut db,
+            "late",
+            &[
+                event("before", "2026-09-03T23:50:00Z", true),
+                event("unknown", timestamp, true),
+            ],
+        );
+        Connection::open(db.path())
+            .unwrap()
+            .execute("UPDATE records SET is_human=NULL WHERE uuid='unknown'", [])
+            .unwrap();
+        let report = MetricsDb::open(db.path())
+            .unwrap()
+            .human_hours(
+                Window::new(ms("2026-09-03T00:00:00Z"), ms("2026-09-04T00:00:00Z")).unwrap(),
+                BreakLength::new(30).unwrap(),
+                TimeZone::UTC,
+            )
+            .unwrap();
+        assert_eq!(report.current.active_ms, expected, "{timestamp}");
+        assert_eq!(report.previous.active_ms, Some(0));
+    }
+}
+
+#[test]
+fn final_dst_day_keeps_the_stretch_before_its_local_midnight() {
+    for (start, end, before, after, hours) in [
+        (
+            "2026-03-08T08:00:00Z",
+            "2026-03-09T07:00:00Z",
+            "2026-03-09T06:50:00Z",
+            "2026-03-09T07:10:00Z",
+            23,
+        ),
+        (
+            "2026-11-01T07:00:00Z",
+            "2026-11-02T08:00:00Z",
+            "2026-11-02T07:50:00Z",
+            "2026-11-02T08:10:00Z",
+            25,
+        ),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        seed(
+            &mut db,
+            "dst",
+            &[event("before", before, true), event("after", after, true)],
+        );
+        let report = MetricsDb::open(db.path())
+            .unwrap()
+            .human_hours(
+                Window::new(ms(start), ms(end)).unwrap(),
+                BreakLength::new(30).unwrap(),
+                TimeZone::get("America/Los_Angeles").unwrap(),
+            )
+            .unwrap()
+            .current;
+        assert_eq!(report.end_ms - report.start_ms, hours * 3_600_000);
+        assert_eq!(report.active_ms, Some(600_000));
+        assert_eq!(report.messages, Some(1));
+        assert_eq!(report.by_day.len(), 1);
+    }
+}
+
+#[test]
+fn lookahead_past_the_supported_timestamp_range_returns_an_error() {
+    let db = TempDb::empty().unwrap();
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let selected = Window::new(ms("9999-12-29T00:00:00Z"), ms("9999-12-30T00:00:00Z")).unwrap();
+    assert!(
+        metrics
+            .human_hours(selected, BreakLength::new(u32::MAX).unwrap(), TimeZone::UTC)
+            .is_err()
+    );
+}
