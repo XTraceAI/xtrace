@@ -115,6 +115,20 @@ It does not launch the final signed public bundle.
 The validation job uploads the validated, secret-scanned SBOM and has no signing
 values.
 
+Before validating, the job runs `pnpm check:plugin-pin`. It finds the highest
+`memhub--vX.Y.Z` release tag in the pinned `agent-plugins` repository and
+compares each reader path listed in `.plugin-pin` with that release. It prints
+either that the bundled readers are up to date with that release or a warning
+naming the pinned version, the latest version and the reader paths that
+changed. If it cannot look up the release, it also warns; it never reports up
+to date without checking. It only warns: the release continues, and only a
+malformed pin fails it. To act on a warning, refresh the bundled copy with
+`scripts/vendor-readers.sh` and update `.plugin-pin` (see the pinned plugin
+section below). Locally, `pnpm check:plugin-pin --checkout PATH` reads the
+tags of an existing `agent-plugins` checkout instead of the network. A
+candidate older than this check has no such script; the step then warns that
+its bundled readers were not checked and the release continues.
+
 On default-branch dispatches, only after validation passes does the `package`
 job build the signed disk image. Reviewed tag dispatches skip this job. It runs
 in the `macos-signing` GitHub environment. It compiles the release app without
@@ -161,7 +175,8 @@ and notarized downloadable bytes. Signing, notarization, universal builds,
 Gatekeeper behavior and update delivery are not certified by this unsigned app
 launch. Tag validation is source validation only, not disclosure approval or a
 waiver of macOS 14 QA, final-byte acceptance or publication checks. Changes to
-source or packaging invalidate the relevant release evidence.
+source or packaging invalidate the relevant release evidence. First read the
+plugin-reader warning, if any, from the `pnpm check:plugin-pin` step.
 
 Final signed launch from `/Applications` on a Mac that has never run the app
 requires separate acceptance for each release. Its release notes must identify

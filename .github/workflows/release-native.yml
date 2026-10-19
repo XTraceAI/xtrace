@@ -106,6 +106,15 @@ jobs:
         with:
           path: ~/.cache/xtrace-ci-tools
           key: supply-tools-macos-14-arm64-syft-1.51.1-about-0.9.2
+      - name: Warn when the bundled plugin readers are behind the latest memhub release
+        run: |
+          if grep -q '"check:plugin-pin":' package.json; then
+            pnpm check:plugin-pin
+          else
+            MESSAGE='This candidate predates the plugin-reader check, so its bundled plugin readers were not checked against the latest memhub release.'
+            echo "::warning title=Plugin readers::$MESSAGE"
+            echo "- Warning: $MESSAGE" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Validate the native release candidate
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
