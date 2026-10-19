@@ -609,3 +609,123 @@ fn lookahead_past_the_supported_timestamp_range_returns_an_error() {
             .is_err()
     );
 }
+
+fn assert_final_leap_second_stays_in_its_period(timestamp: &str) {
+    let historical = Window::new(ms("2016-12-31T00:00:00Z"), ms("2017-01-01T00:00:00Z")).unwrap();
+    for (before, after, active_ms) in [
+        (false, false, 0),
+        (true, false, 599_999),
+        (true, true, 600_000),
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        let mut records = vec![event("leap", timestamp, true)];
+        if before {
+            records.push(event("before", "2016-12-31T23:50:00Z", true));
+        }
+        if after {
+            records.push(event("after", "2017-01-01T00:10:00Z", true));
+        }
+        seed(&mut db, "leap-boundary", &records);
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let report = metrics
+            .human_hours(historical, BreakLength::new(30).unwrap(), TimeZone::UTC)
+            .unwrap();
+        let expected_messages = Some(1 + u64::from(before));
+        assert_eq!(report.current.messages, expected_messages, "{timestamp}");
+        assert_eq!(
+            metrics
+                .counts(historical, TypingRate::default())
+                .unwrap()
+                .human_messages,
+            expected_messages
+        );
+        assert_eq!(report.current.active_ms, Some(active_ms), "{timestamp}");
+        assert_eq!(report.current.by_day[0].stretches.len(), 1);
+        let stretch = report.current.by_day[0].stretches[0];
+        assert_eq!(
+            stretch.start_ms,
+            if before {
+                ms("2016-12-31T23:50:00Z")
+            } else {
+                historical.end_ms() - 1
+            }
+        );
+        assert_eq!(stretch.end_ms, historical.end_ms() - i64::from(!after));
+        assert_eq!(report.previous.messages, Some(0));
+        assert_eq!(report.previous.active_ms, Some(0));
+    }
+}
+
+#[test]
+fn final_whole_leap_second_keeps_its_message_and_stretch() {
+    assert_final_leap_second_stays_in_its_period("2016-12-31T23:59:60Z");
+}
+
+#[test]
+fn final_fractional_leap_second_keeps_its_message_and_stretch() {
+    assert_final_leap_second_stays_in_its_period("2016-12-31T23:59:60.9876543219Z");
+}
+
+#[test]
+fn true_midnight_stays_outside_the_period_but_extends_its_stretch() {
+    let historical = Window::new(ms("2016-12-31T00:00:00Z"), ms("2017-01-01T00:00:00Z")).unwrap();
+    for before in [false, true] {
+        let mut db = TempDb::empty().unwrap();
+        let mut records = vec![event("midnight", "2017-01-01T00:00:00Z", true)];
+        if before {
+            records.push(event("before", "2016-12-31T23:50:00Z", true));
+        }
+        seed(&mut db, "midnight-boundary", &records);
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let report = metrics
+            .human_hours(historical, BreakLength::new(30).unwrap(), TimeZone::UTC)
+            .unwrap()
+            .current;
+        assert_eq!(report.messages, Some(u64::from(before)));
+        assert_eq!(report.active_ms, Some(if before { 600_000 } else { 0 }));
+        assert_eq!(report.by_day[0].stretches.len(), usize::from(before));
+        if before {
+            assert_eq!(report.by_day[0].stretches[0].end_ms, historical.end_ms());
+        }
+    }
+}
+
+#[test]
+fn offset_equivalent_leap_seconds_keep_the_same_period_membership() {
+    for timestamp in ["2017-01-01T00:59:60+01:00", "2017-01-01T00:59:60.9+01:00"] {
+        assert_final_leap_second_stays_in_its_period(timestamp);
+    }
+}
+
+#[test]
+fn ordinary_fractional_times_keep_their_millisecond_positions() {
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        "ordinary",
+        &[
+            event("first", "2016-12-31T13:00:00.1234+01:00", true),
+            event("second", "2016-12-31T12:10:00.1234Z", true),
+        ],
+    );
+    let report = MetricsDb::open(db.path())
+        .unwrap()
+        .human_hours(
+            Window::new(ms("2016-12-31T00:00:00Z"), ms("2017-01-01T00:00:00Z")).unwrap(),
+            BreakLength::new(30).unwrap(),
+            TimeZone::UTC,
+        )
+        .unwrap()
+        .current;
+    assert_eq!(report.messages, Some(2));
+    assert_eq!(report.active_ms, Some(600_000));
+    assert_eq!(report.by_day[0].stretches.len(), 1);
+    assert_eq!(
+        report.by_day[0].stretches[0].start_ms,
+        ms("2016-12-31T12:00:00.123Z")
+    );
+    assert_eq!(
+        report.by_day[0].stretches[0].end_ms,
+        ms("2016-12-31T12:10:00.123Z")
+    );
+}

@@ -146,6 +146,7 @@ impl MetricsDb {
         let read = Window::new(read_from, read_until)?;
         let start = InstantKey::from_millisecond(read.start_ms());
         let end = InstantKey::from_millisecond(read.end_ms());
+        let current_end = InstantKey::from_millisecond(current.end_ms());
         let mut times = Vec::new();
         let mut unknown = Vec::new();
         self.read_snapshot(|db| {
@@ -165,11 +166,17 @@ impl MetricsDb {
                 if instant < start || instant >= end {
                     continue;
                 }
-                // A leap second's projection can land on the read's end; it
-                // stays inside the last day.
+                // Keep an exact instant before the period's end inside its
+                // last day, even when a leap second projects past midnight.
+                // Real midnight and later lookahead retain their positions.
+                let projection_end = if instant < current_end {
+                    current.end_ms()
+                } else {
+                    read.end_ms()
+                };
                 let ms = row
                     .get::<_, i64>(1)?
-                    .clamp(read.start_ms(), read.end_ms() - 1);
+                    .clamp(read.start_ms(), projection_end - 1);
                 match row.get::<_, Option<bool>>(2)? {
                     Some(false) => {}
                     None => unknown.push(ms),
