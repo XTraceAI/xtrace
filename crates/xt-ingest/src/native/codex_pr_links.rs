@@ -25,8 +25,10 @@
 //! nothing.
 //!
 //! A thread is read only once the index holds its one user session; the
-//! files read are the rollouts the index recorded for it
-//! ([`title_sources`]), reached as the title read reaches them. Threads are
+//! files read are every rollout the index recorded for it, root and
+//! continuations, however many there are ([`codex_sources`]: the title
+//! read's exact matching without its cap), reached as the title read reaches
+//! them. A long history is read across passes by its files' marks. Threads are
 //! queued in a [`PrBacklog`] by every Codex scan that indexed them, and by a
 //! sweep over every indexed Codex locator that each watcher run makes once,
 //! from the first. A scan only queues: the threads are read in the watcher's
@@ -59,8 +61,8 @@
 use super::readers_cli::CancelToken;
 use super::session_source::host_roots;
 use super::session_titles::{
-    Batch, MAX_CODEX_LOCATORS, ReadMark, TitleLimits, Untitled, codex_contained, codex_path,
-    codex_thread, contains, full_thread_id, gather, object, title_sources,
+    Batch, ReadMark, TitleLimits, Untitled, codex_contained, codex_path, codex_sources,
+    codex_thread, contains, full_thread_id, gather, object,
 };
 use serde_json::Value;
 use std::{
@@ -298,8 +300,10 @@ fn read_thread(
         }
         _ => return Ok(true),
     };
-    let sources = title_sources(store, Host::Codex, native)?;
-    if sources.is_empty() || sources.len() > MAX_CODEX_LOCATORS {
+    // Every recorded rollout, however many: a long history is read across
+    // passes by its files' marks, never skipped for its length.
+    let sources = codex_sources(store, native)?;
+    if sources.is_empty() {
         return Ok(true);
     }
     let Ok((candidates, _outside)) = gather(

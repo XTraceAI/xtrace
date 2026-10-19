@@ -277,9 +277,7 @@ pub fn title_sources(
                 .collect()
         }
         Host::Codex => {
-            let escaped = escape_like(native_session_id);
-            let root = format!("codex:%-{escaped}.jsonl");
-            let continuation = format!("codex:%-{escaped}\\_%.jsonl");
+            let [root, continuation] = codex_patterns(native_session_id);
             let LocatorRows::Complete(rows) = store
                 .source_cursors_like_bounded(SessionSource::ReadersCli, &[&root, &continuation])?
             else {
@@ -287,20 +285,55 @@ pub fn title_sources(
             };
             Ok(rows
                 .into_iter()
-                .filter(|cursor| {
-                    codex_path(&cursor.cursor_key).is_some_and(|path| {
-                        codex_segment(Path::new(path), native_session_id).is_some()
-                    })
-                })
+                .filter_map(|cursor| codex_source(cursor, native_session_id))
                 .take(MAX_CODEX_LOCATORS + 1)
-                .map(|cursor| IndexedSource {
-                    checkpoint: None,
-                    locator: cursor.cursor_key,
-                })
                 .collect())
         }
         Host::Cursor | Host::Other => Ok(Vec::new()),
     }
+}
+
+/// Every rollout the index recorded under this exact Codex thread — its root
+/// and every `<thread>_<rollout>` continuation — matched exactly as
+/// [`title_sources`] matches them, but with no cap: a reader that must see
+/// each file of a long history, not decide all-or-nothing, uses this. The
+/// lookup is unbounded, so it holds every matching locator key in memory at
+/// once; a thread has one key per rollout file.
+pub(super) fn codex_sources(
+    store: &Store,
+    native_session_id: &str,
+) -> xt_store::Result<Vec<IndexedSource>> {
+    if identifier_error(native_session_id).is_some() {
+        return Ok(Vec::new());
+    }
+    let [root, continuation] = codex_patterns(native_session_id);
+    Ok(store
+        .source_cursors_like(SessionSource::ReadersCli, &[&root, &continuation])?
+        .into_iter()
+        .filter_map(|cursor| codex_source(cursor, native_session_id))
+        .collect())
+}
+
+/// The `LIKE` patterns of a Codex thread's root rollout and continuations.
+fn codex_patterns(native_session_id: &str) -> [String; 2] {
+    let escaped = escape_like(native_session_id);
+    [
+        format!("codex:%-{escaped}.jsonl"),
+        format!("codex:%-{escaped}\\_%.jsonl"),
+    ]
+}
+
+/// A matched locator that is exactly a rollout of this thread, as a source.
+fn codex_source(
+    cursor: xt_store::batch::SourceCursor,
+    native_session_id: &str,
+) -> Option<IndexedSource> {
+    codex_path(&cursor.cursor_key)
+        .is_some_and(|path| codex_segment(Path::new(path), native_session_id).is_some())
+        .then_some(IndexedSource {
+            checkpoint: None,
+            locator: cursor.cursor_key,
+        })
 }
 
 pub(super) fn codex_path(locator: &str) -> Option<&str> {

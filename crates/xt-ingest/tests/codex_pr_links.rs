@@ -737,3 +737,134 @@ fn a_remainder_below_the_line_bound_reads_nothing_pass_after_pass() {
         ]
     );
 }
+
+/// A continuation of `thread` with its own rollout identity.
+fn continuation(home: &Path, thread: &str, part: u32) -> PathBuf {
+    home.join(".codex/sessions/2026/09/07").join(format!(
+        "rollout-2026-09-07T12-00-00-{thread}_019a0000-0000-7000-8000-0000000b{part:04}.jsonl"
+    ))
+}
+
+/// Index one Codex thread whose history spans `paths`, each recorded as the
+/// reader records a segment: its own header naming its file.
+fn index_segments(store: &mut Store, native: &str, paths: &[PathBuf]) {
+    let mut lines = Vec::new();
+    for (at, path) in paths.iter().enumerate() {
+        lines.push(
+            json!({"type": "session", "host": "codex", "native_session_id": native,
+                   "conversation_id": format!("codex-{native}"), "source_surface": "codex_cli",
+                   "started_at": "2026-09-07T12:00:00.000Z", "cwd": "/repo/fixture",
+                   "git_branch": null, "title": null, "path": path.display().to_string(),
+                   "mtime": 1788782400.0})
+            .to_string(),
+        );
+        lines.push(
+            json!({"uuid": format!("6666{at:04}-5555-4555-8555-000000000000"),
+                   "type": "user", "cwd": "/repo/fixture", "timestamp": "2026-09-07T12:00:01Z",
+                   "message": {"role": "user", "content": [{"type": "text", "text": "turn"}]}})
+            .to_string(),
+        );
+    }
+    let report = import_reader_lines(
+        store,
+        Host::Codex,
+        "test".into(),
+        lines.into_iter().map(Ok),
+        T,
+        || {
+            Ok(ReaderOutcome {
+                diagnostics: vec![],
+                complete: true,
+            })
+        },
+    );
+    assert_eq!(report.status, HostStatus::Complete, "{report:?}");
+}
+
+/// A root rollout and ten continuations, the witness in `witnessed` (0 is the
+/// root), all recorded for one thread.
+fn long_history(temp: &Path, witnessed: usize) -> (PathBuf, TempDb, Vec<PathBuf>) {
+    let home = home(temp);
+    let mut paths = vec![rollout_path(&home, OPENER)];
+    paths.extend((1..=10).map(|part| continuation(&home, OPENER, part)));
+    for (at, path) in paths.iter().enumerate() {
+        let mut lines = vec![header(OPENER), prompt()];
+        if at == witnessed {
+            lines.push(witness(OPENER, SEEN));
+        }
+        write(path, &lines);
+    }
+    let mut db = TempDb::empty().unwrap();
+    index_segments(db.store_mut(), OPENER, &paths);
+    // The title read's capped listing stops past eight; this one may not.
+    assert_eq!(
+        xt_ingest::native::session_titles::title_sources(db.store(), Host::Codex, OPENER)
+            .unwrap()
+            .len(),
+        9
+    );
+    (home, db, paths)
+}
+
+/// A thread with more recorded rollouts than the title read verifies still
+/// has every one of them read: a witness in its root links.
+#[test]
+fn a_long_history_links_a_witness_in_its_root_rollout() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (home, mut db, paths) = long_history(temp.path(), 0);
+    let progress = pass(db.store_mut(), &home, &mut PrBacklog::default(), &[OPENER]);
+    assert_eq!((progress.decided, progress.witnesses), (1, 1));
+    let total: u64 = paths
+        .iter()
+        .map(|path| fs::metadata(path).unwrap().len())
+        .sum();
+    assert_eq!(progress.bytes_read, total);
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
+}
+
+/// A witness in the tenth continuation links too, read across passes when
+/// one pass has room for only a few of the files.
+#[test]
+fn a_long_history_links_a_witness_in_its_tenth_continuation_across_passes() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (home, mut db, paths) = long_history(temp.path(), 10);
+    let largest = paths
+        .iter()
+        .map(|path| fs::metadata(path).unwrap().len())
+        .max()
+        .unwrap();
+    let limits = TitleLimits {
+        max_batch_bytes: 3 * largest,
+        max_line_bytes: 4_096,
+        deadline: Duration::from_secs(5),
+        ..TitleLimits::default()
+    };
+    let mut backlog = PrBacklog::default();
+    backlog.add([OPENER]);
+    let (mut passes, mut witnesses, mut bytes) = (0, 0, 0);
+    while backlog.threads() > 0 {
+        let progress =
+            continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false)
+                .unwrap();
+        assert!(progress.advanced, "{progress:?}");
+        passes += 1;
+        witnesses += progress.witnesses;
+        bytes += progress.bytes_read;
+        assert!(passes < 20);
+    }
+    assert!(passes > 1, "{passes}");
+    assert_eq!(witnesses, 1);
+    let total: u64 = paths
+        .iter()
+        .map(|path| fs::metadata(path).unwrap().len())
+        .sum();
+    // Each file once: a later pass resumes behind the files already read.
+    assert_eq!(bytes, total);
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
+}
