@@ -3,20 +3,21 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { baselinePaths, probeEnvironment, requireProbeHost } from './hosted-validation.mjs';
 
-// Immutable public 0.1.6 inputs, independently checked when it was published.
+// Immutable 0.1.7 candidate inputs, independently checked before publication.
+// Runtime still requires the matching public tag and exact public DMG bytes.
 // The harness commit is separate from the released product source commit.
 export const release = Object.freeze({
-  version: '0.1.6',
-  tag: 'v0.1.6',
-  source: 'bab5673759993dc8970a846a8e37625def989d2b',
+  version: '0.1.7',
+  tag: 'v0.1.7',
+  source: 'e743e900fb40d32bdbe90709bd54b7d9bde32540',
   identifier: 'ai.xtrace.app',
   bundle: '/Applications/XTrace Desktop.app',
   team: '3C8BCX5J3H',
-  dmg: 'XTrace-Desktop-0.1.6-macos-arm64.dmg',
-  bytes: 11679323,
-  sha256: 'b53a694814b1563d81d8aef401a38f09ed02f1a88c17b6e7ffc65f0052659e14',
+  dmg: 'XTrace-Desktop-0.1.7-macos-arm64.dmg',
+  bytes: 11748749,
+  sha256: '2ec76b267a79ac20fd216306bd33c3b04715199f1c4ba086bc2a12664d0c1fe9',
   inventoryEntries: 79,
-  inventorySha256: '70a1cbcff0208976fca09e8557e08d93bb75b19dcc0262666cf555e85d59cdaa',
+  inventorySha256: '250d82fc255fd691aac182207dde84f39abeeef1d49ca603dd1965f54fd891bd',
 });
 
 export function requireFirstLaunchHost(input) {

@@ -149,15 +149,15 @@ test('download and lightweight-tag checks reject different bytes, size or source
     await assert.rejects(verifyTag(changed));
 });
 
-test('real-shaped annotated release tag resolves once through a fixed repository URL', async () => {
-  const annotationSHA = '82efaf3c16bbcd38a1d45ae7393e5df567179569';
+test('synthetic annotated release tag resolves once through a fixed repository URL', async () => {
+  const annotationSHA = 'c'.repeat(40);
   const ref = {
-    ref: 'refs/tags/v0.1.6',
+    ref: 'refs/tags/v0.1.7',
     object: { type: 'tag', sha: annotationSHA, url: 'https://untrusted.invalid/tag' },
   };
   const annotation = {
     sha: annotationSHA,
-    tag: 'v0.1.6',
+    tag: 'v0.1.7',
     object: { type: 'commit', sha: release.source, url: 'https://untrusted.invalid/commit' },
   };
   const requests = [];

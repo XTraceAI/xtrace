@@ -136,3 +136,17 @@ macOS 14 runtime behavior, and a complete signed update/restart need evidence fo
 each release. They remain unverified unless that release's notes record the exact
 checks and results. Signed packaging, native fixture/source checks and updater
 download checks do not establish those results.
+
+## Prepared 0.1.7 acceptance
+
+The hosted harness now pins the independently checked updater-enabled 0.1.7
+artifacts from source `e743e900fb40d32bdbe90709bd54b7d9bde32540`, with the public
+0.1.6 app as the update baseline. App, updater archive and DMG app inventories
+match. Signature and wrong-version/tampered-byte verifier checks passed; these
+checks do not establish SDK behavior or a successful app launch/update.
+
+The candidate remains unpublished at preparation. Its signed first launch and
+real 0.1.6-to-0.1.7 update/restart have not run. They require the existing reviewed
+workflow guards and exact public assets; the update additionally requires separate
+authorization to promote the pinned production feed. Timeout, interruption,
+permission-failure and real-history migration checks remain unverified.
