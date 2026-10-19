@@ -71,7 +71,7 @@ canonical shape, never a real conversation.
 
 ## Reading only what was verified
 
-Each file of the session is read in this order, and the order is the contract:
+Each Claude file is read in this order, and the order is the contract:
 
 1. Open it the way the importer does — a regular file, no alias followed, still
    the entry that was observed — and capture its device, inode, length and
@@ -79,7 +79,8 @@ Each file of the session is read in this order, and the order is the contract:
 2. Charge the session's cumulative **byte ceiling** from that captured length,
    **before** anything is allocated for the file and before its generation is
    proven. An oversized session costs a stat, not a read.
-3. Prove the generation against the checkpoint the index recorded.
+3. Verify the measured prefix against an identifiable recorded checkpoint,
+   or report the generation as `unrecorded` when that link is unavailable.
 4. Read exactly the captured length into memory, in bounded chunks a cancel can
    interrupt. A read that ends early means the file shrank under it.
 5. Observe both the **descriptor and the name** again. The descriptor must
@@ -203,6 +204,10 @@ under one of the host's anchored roots (`~/.codex/sessions`;
 `~/.cursor/chats`, `~/.cursor/projects`, each as spelled or where a symlinked
 root led before the read). A cancel after the last parsed line, and after
 translation, still returns nothing.
+
+Codex and Cursor detail output is not compared with indexed checkpoints. Its
+generation is `unrecorded`: the current transcript can differ from the source
+used for the saved measurements.
 
 | Case                                                                                                                                      | Answer                                                         |
 | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |

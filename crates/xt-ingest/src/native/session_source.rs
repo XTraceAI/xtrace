@@ -3,9 +3,11 @@
 //!
 //! The index keeps metrics and structural metadata; a transcript is not
 //! persisted. When a person opens one session, this module finds that
-//! session's own files under the home the index was built from, proves they
-//! are still the generation the saved measurements were taken from, and hands
-//! the caller the records **in memory**. Nothing here writes: no store row, no
+//! session's own files under the home the index was built from and hands the
+//! caller the records **in memory**. For Claude, identifiable checkpoints
+//! verify that the measured prefix is unchanged, permitting appended content.
+//! When that link cannot be established, the generation is unrecorded.
+//! Nothing here writes: no store row, no
 //! cache, no copy of the bytes on disk, no log of what the session said. The
 //! source is opened for reading only.
 //!
@@ -19,8 +21,8 @@
 //!   unreadable, replaced, ambiguous and too large each name themselves, and a
 //!   part of the history that could not be listed is never reported as a
 //!   session that is simply absent. The saved metrics are untouched either way.
-//! - **Read the bytes that were verified.** Each file is snapshotted into
-//!   bounded memory from the descriptor that was checked, and both that
+//! - **Read the bytes that were verified.** For Claude, each file is snapshotted
+//!   into bounded memory from the descriptor that was checked, and both that
 //!   descriptor and the name are checked again — identity, length and change
 //!   time — before a byte is parsed. Any mutation observed across the read,
 //!   an append included, makes the source a replaced one rather than a
@@ -36,8 +38,11 @@
 //! supervised by [`run_exact_detail`], and its output is taken only as a
 //! complete validated success — exit `0`, nothing on stderr, exactly one
 //! session whose header is the requested identity under this home — and then
-//! parsed by the same stream parser indexing uses. Any other run is refused
-//! with a closed reason and everything it wrote is discarded. A session whose
+//! parsed by the same stream parser indexing uses. These hosts do not compare
+//! detail output with indexed checkpoints and return [`GenerationBasis::Unrecorded`];
+//! their transcript may have changed since the saved measurements were taken.
+//! Any other run is refused with a closed reason and everything it wrote is
+//! discarded. A session whose
 //! selected Cursor representation is a SQLite store is refused as such; its
 //! transcript is never read in its place. Without a reader, those hosts are
 //! refused before any interpreter or producer is looked for, so opening one
