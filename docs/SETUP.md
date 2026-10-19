@@ -39,9 +39,12 @@ folders. The app does not fetch conversations that exist only in the cloud.
 
 The Dashboard uses 7-, 14- or 30-day ranges; its recent-session activity covers the
 last 48 hours. Sessions supports search and host filters. Opening a session shows
-its indexed details and timeline; original-file transcript viewing currently
-supports Claude only. Missing sources and unsupported transcript formats show an
-unavailable state. API-equivalent cost estimates are not actual subscription charges.
+its indexed details and timeline. Original-source transcript viewing supports
+Claude, Codex and Cursor JSONL history, with bounded reads kept in memory. Codex
+and Cursor need the bundled readers and Python 3.10 or newer. Missing readers,
+missing sources, reader failures and unsupported formats show an unavailable
+state; Cursor SQLite transcripts remain unsupported. API-equivalent cost
+estimates are not actual subscription charges.
 
 Use **Settings** (⌘,) for appearance, typing speed, human-time break length,
 storage and index status. The sidebar shows the app version. The menu-bar icon
@@ -79,7 +82,7 @@ and enrichment. Turning it off does not erase content already saved.
 **Delete stored content** removes saved transcript content, tool input, saved
 session titles and previews after confirmation. It preserves metric/index
 records and original host files; later imports can create new previews.
-Viewing a Claude transcript reads the original local source on demand without
+Viewing a supported transcript reads the original local source on demand without
 enabling archival. Account-usage history is stored separately from the database.
 
 There is no cloud transcript upload in this build. Network activity occurs for

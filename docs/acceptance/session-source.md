@@ -6,7 +6,7 @@ persisted by opening it: no store row, no cache, no copy of the bytes on disk,
 no log of what the session said. The source is opened for reading only, and the
 records live in memory until the caller drops them.
 
-`xt_ingest::native::session_source::load_session_source` answers one of two
+`xt_ingest::native::session_source::load_session_source_with` answers one of two
 things: the session's records, or the one reason they may not be shown. The
 measurements the index already holds are never affected by that answer — an
 unavailable source means the text is unavailable, not that the work is in
@@ -172,9 +172,9 @@ components it renders through.
 
 ## Limits of this stage
 
-- Codex and Cursor have no detail source here at all. Serving them would need a
-  reader that streams without staging disk copies; that is not this stage's to
-  add, and the existing import path for them is unchanged.
+- Codex and Cursor JSONL detail reads require the verified pinned reader and a
+  compatible interpreter. A selected Cursor SQLite store returns
+  `store_unsupported`; no substitute transcript is read in its place.
 - Structural hook summaries and PR witnesses are counted as non-record lines,
   not rendered as turns.
 - A session is held whole in memory, which is what a detail view needs and what

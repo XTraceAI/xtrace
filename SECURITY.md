@@ -1,8 +1,8 @@
 # Security reports
 
-This repository is at the foundation-scaffold stage and has no supported
-production release yet. Report suspected vulnerabilities against the current
-default branch; a version-support policy will accompany the first release.
+XTrace Desktop is a public beta. Report suspected vulnerabilities with the
+affected release version or source revision. This document does not promise
+security updates for older beta releases.
 
 Use the repository's **Security → Report a vulnerability** option if private
 vulnerability reporting is available:

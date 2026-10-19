@@ -26,17 +26,15 @@ bundled copy of the pinned sources (`vendor/agent-plugins`, verified by object
 identity without Git) with a discovered Python 3.10+ interpreter, and exposes the
 result as the typed `native_index_status` command and `native-index://status`
 event; see [native import](acceptance/native-import.md#app-integration).
-`xt_ingest::native::session_source` reads **one Claude** session's original
-local source on demand, for a detail view: it resolves that session alone
-through the same paths, reads only bytes it has verified against the open
-descriptor and the name both before and after the read, and returns its records
-in memory or the one reason they may not be shown. It writes nothing and caches
-nothing, reads under cumulative byte and record ceilings, and returns no
-content at all when cancelled. Codex and Cursor are refused before any
-interpreter or producer is looked for, because their sources are reachable only
-through the pinned reader's staged disk copies and whole-payload buffers, which
-a transient bounded read does not permit; indexing them is unaffected. See
-[session source](acceptance/session-source.md). The session page shows the M-09
+`xt_ingest::native::session_source` reads one session's original local source
+on demand for the detail view. Claude files are read directly, with descriptor
+and path checks before and after the read. Codex and Cursor JSONL sessions use
+the verified pinned reader's `--exact-detail` mode and a Python 3.10+
+interpreter resolved for that open. Reads are bounded and cancellable, hold
+records in memory, and write no transcript cache or staged source copy. Reader
+setup and execution failures return a closed unavailable reason; Cursor SQLite
+stores remain unsupported. See [session source](acceptance/session-source.md).
+The session page shows the M-09
 hands-off stretches that session contributed in the selected window, read from
 `xt-metrics` as metadata only, and reveals a stretch's first tool call only when
 exactly one tool call in the loaded transcript sits at the position M-09 named.
@@ -45,34 +43,33 @@ the same snapshot, with no comparison key or argument on the wire;
 see [session stretches](acceptance/session-stretches.md) and
 [session timeline](acceptance/session-timeline.md). The app
 exposes `app_info` and `db_counts` as well, but does not start the capture server
-automatically. Production metric calculation, product data queries and the
-remaining subsystem behavior are separate work.
+automatically. Dashboard, Sessions and Pull requests query production Rust
+metrics through typed native commands.
 
 The following table names each subsystem's responsibility. A reserved directory
 or compiling placeholder does not establish implemented behavior.
 
-| Path                      | Subsystem responsibility                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `crates/xt-store/`        | Storage, canonical schema, migrations, and transactional writes.                                     |
-| `crates/xt-ingest/`       | Normalization, parsers, native source import through the pinned readers, and the canonical writer.   |
-| `crates/xt-server/`       | Guarded loopback HTTP/MCP endpoints and the headless core interface.                                 |
-| `crates/xt-metrics/`      | Metric definitions, SQL views, aggregation, and shared result DTOs.                                  |
-| `crates/xt-probes/`       | GitHub pull-request probes; host/plugin discovery and executable resolution remain planned.          |
-| `crates/xt-rulebook/`     | Rule lifecycle, local proposals, verification, and fire history.                                     |
-| `crates/xt-judge/`        | Isolated configured judge CLI routes and separate judge-usage accounting.                            |
-| `crates/xt-fixtures/`     | Development-only fixture loading, database construction, and expected-result assertions.             |
-| `xtask/`                  | Developer commands for shared fixture validation, database creation, and export.                     |
-| `apps/desktop/src-tauri/` | Native lifecycle, Tauri commands, window chrome, and later tray, updater, and telemetry integration. |
-| `apps/desktop/ui/src/`    | React shell, UI components, screens, and the typed data-access boundary.                             |
+| Path                      | Subsystem responsibility                                                                           |
+| ------------------------- | -------------------------------------------------------------------------------------------------- |
+| `crates/xt-store/`        | Storage, canonical schema, migrations, and transactional writes.                                   |
+| `crates/xt-ingest/`       | Normalization, parsers, native source import through the pinned readers, and the canonical writer. |
+| `crates/xt-server/`       | Guarded loopback HTTP/MCP endpoints and the headless core interface.                               |
+| `crates/xt-metrics/`      | Metric definitions, SQL views, aggregation, and shared result DTOs.                                |
+| `crates/xt-probes/`       | GitHub pull-request probes; host/plugin discovery and executable resolution remain planned.        |
+| `crates/xt-rulebook/`     | Rule lifecycle, local proposals, verification, and fire history.                                   |
+| `crates/xt-judge/`        | Isolated configured judge CLI routes and separate judge-usage accounting.                          |
+| `crates/xt-fixtures/`     | Development-only fixture loading, database construction, and expected-result assertions.           |
+| `xtask/`                  | Developer commands for shared fixture validation, database creation, and export.                   |
+| `apps/desktop/src-tauri/` | Native lifecycle, Tauri commands, window chrome, tray, updater, and telemetry integration.         |
+| `apps/desktop/ui/src/`    | React shell, UI components, screens, and the typed data-access boundary.                           |
 
 All renderer code lives under the UI path above. Native lifecycle and window
 behavior belong to the Tauri application.
 
-The intended flow is source observations → canonical ingestion/storage → shared
-Rust metrics → native commands and renderer. The loopback import adapter
-already feeds the shared canonical writer; the metric and renderer integration
-remain separate work. JavaScript consumes metric DTOs rather than
-reimplementing calculations. The fixture harness uses the canonical storage API;
+The data flow is source observations → canonical ingestion/storage → shared
+Rust metrics → native commands and renderer. Native history imports and the
+optional loopback import adapter feed the shared canonical writer. JavaScript
+consumes metric DTOs rather than reimplementing calculations. The fixture harness uses the canonical storage API;
 its bounded baseline reference assertions do not implement the production metric
 engine or establish whole-rule coverage.
 

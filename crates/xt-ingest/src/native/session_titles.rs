@@ -35,8 +35,9 @@
 //!   segment — which a later sibling may supersede — is never shown as the
 //!   thread's name. A `history_base` names the rollout a history continues
 //!   from, never the thread: the sidecar is asked only for this thread. A
-//!   spawned thread's header names its parent in `session_id`; that is
-//!   accepted only as the parent its own typed `thread_spawn` names.
+//!   spawned thread's `session_id` names the root of its spawn tree, which
+//!   can differ from its immediate parent. When present, `parent_thread_id`
+//!   must match the typed `thread_spawn` parent; see [`spawn_check`].
 //! - **Cursor and anything else.** No host title exists; nothing is read. A
 //!   title derived from a prompt is never produced for any host.
 //!

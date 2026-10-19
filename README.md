@@ -52,8 +52,11 @@ zero.
 
 Your indexed Claude Code, Codex and Cursor sessions in one list. Find a session
 by ID, repo or branch, filter by tool, open it to see its timeline, and read
-Claude transcripts straight from the original files. A sub-session whose parent
-session can't be confirmed is left out of the list.
+Claude, Codex and Cursor JSONL transcripts from their original local sources.
+Codex and Cursor need the bundled readers and Python 3.10 or newer; missing
+readers and unsupported formats show an unavailable state. Cursor SQLite
+transcripts are not supported. A sub-session whose parent session can't be
+confirmed is left out of the list.
 
 ### Pull requests
 

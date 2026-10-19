@@ -153,7 +153,10 @@ pub struct Resume {
 const PREFIX_CHUNK: usize = 64 * 1024;
 
 /// Decide the resume point for `source`, whose identity was just observed.
-/// Reads at most `TAIL_DIGEST_LEN` bytes; leaves the file position unspecified.
+/// An unchanged file with a settled change time reads at most `TAIL_DIGEST_LEN`
+/// trailing bytes. Otherwise, a resumable checkpoint requires hashing the full
+/// prefix up to its saved position in `PREFIX_CHUNK` chunks. Identity or generation
+/// failures can return a fresh start without reading. Leaves the position unspecified.
 pub fn resume_point(
     checkpoint: Option<&NativeCheckpoint>,
     source: &mut fs::File,

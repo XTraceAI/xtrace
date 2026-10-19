@@ -1,4 +1,4 @@
-//! Resolving and reading **one** Claude session's original local source, on
+//! Resolving and reading **one** session's original local source, on
 //! demand, for a detail view.
 //!
 //! The index keeps metrics and structural metadata; a transcript is not
@@ -108,10 +108,11 @@ impl IndexedSource {
 
 /// What to open, and under what limits.
 pub struct SessionSourceRequest<'a> {
-    /// The home whose `.claude` tree is read: the same home the index was
-    /// built from.
+    /// The home whose host history roots are read: the same home the index
+    /// was built from.
     pub home: &'a Path,
-    /// The host the index recorded for this session. Only Claude is served.
+    /// The indexed host. Claude is read directly; Codex and Cursor JSONL
+    /// require a supplied [`DetailReader`]. Other hosts are unsupported.
     pub host: Host,
     /// The native session identity to display, exactly. An identifier that
     /// could name a path instead of a session is refused.
