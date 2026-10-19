@@ -7,7 +7,7 @@ test('SBOM source version follows the release manifest', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
   );
-  assert.equal(manifest.version, '0.1.6');
+  assert.equal(manifest.version, '0.1.7');
   assert.equal(await sourceVersion(), manifest.version);
 });
 
