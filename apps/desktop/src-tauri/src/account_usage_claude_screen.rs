@@ -200,11 +200,11 @@ impl Screen {
         self.wrap_pending = false;
         match final_byte {
             b'A' => self.row = self.row.saturating_sub(count),
-            b'B' | b'e' => self.row = (self.row + count).min(self.rows - 1),
-            b'C' | b'a' => self.col = (self.col + count).min(self.cols - 1),
+            b'B' | b'e' => self.row = self.row.saturating_add(count).min(self.rows - 1),
+            b'C' | b'a' => self.col = self.col.saturating_add(count).min(self.cols - 1),
             b'D' => self.col = self.col.saturating_sub(count),
             b'E' => {
-                self.row = (self.row + count).min(self.rows - 1);
+                self.row = self.row.saturating_add(count).min(self.rows - 1);
                 self.col = 0;
             }
             b'F' => {
@@ -244,7 +244,7 @@ impl Screen {
                 _ => self.cells[self.row].fill(' '),
             },
             b'X' => {
-                let end = (self.col + count).min(self.cols);
+                let end = self.col.saturating_add(count).min(self.cols);
                 self.cells[self.row][self.col..end].fill(' ');
             }
             b'P' => {
@@ -374,6 +374,27 @@ fn char_width(c: char) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_csi_counts_are_clamped_before_cursor_and_erase_arithmetic() {
+        for command in ['B', 'e', 'C', 'a', 'E', 'X'] {
+            let mut screen = Screen::new(4, 10);
+            screen.feed(b"abcdefghij\x1b[2;2H");
+            screen.feed(format!("\x1b[{}{command}", usize::MAX).as_bytes());
+            assert!(screen.row < 4 && screen.col < 10);
+            match command {
+                'B' | 'e' => assert_eq!((screen.row, screen.col), (3, 1)),
+                'C' | 'a' => assert_eq!((screen.row, screen.col), (1, 9)),
+                'E' => assert_eq!((screen.row, screen.col), (3, 0)),
+                'X' => assert_eq!((screen.row, screen.col), (1, 1)),
+                _ => unreachable!(),
+            }
+        }
+        let mut screen = Screen::new(2, 10);
+        screen.feed(b"abcdefghij\x1b[2G");
+        screen.feed(format!("\x1b[{}X", usize::MAX).as_bytes());
+        assert_eq!(screen.text(), "a\n");
+    }
 
     #[test]
     fn replays_cursor_moves_erases_and_wrapping() {
