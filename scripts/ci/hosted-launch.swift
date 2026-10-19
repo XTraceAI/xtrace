@@ -79,25 +79,118 @@ func kernelIsAlive(expected: UInt64, observed: UInt64?, missingProcess: Bool) th
     return true
 }
 // END TRANSITION POLICY
+// BEGIN STOP POLICY: shared query classification and bounded post-request waiting.
+enum ProcessMetadata: Equatable { case start(UInt64), unavailable, invalid }
+struct ProcessRead {
+    let metadata: ProcessMetadata
+    let bytes: Int32
+    let queryError: Int32
+    let killResult: Int32?
+    let killError: Int32?
+    var start: UInt64? { if case let .start(value) = metadata { return value }; return nil }
+    var missing: Bool { start == nil && killResult == -1 && killError == ESRCH }
+}
+func classifyProcess(_ info: proc_bsdinfo, pid: Int32, uid: uid_t, bytes: Int32) -> ProcessMetadata {
+    guard bytes == Int32(MemoryLayout<proc_bsdinfo>.stride) else { return .unavailable }
+    guard info.pbi_pid == UInt32(pid), info.pbi_uid == uid, info.pbi_start_tvsec > 0,
+          info.pbi_start_tvsec < UInt64.max / 1_000_000, info.pbi_start_tvusec < 1_000_000 else { return .invalid }
+    return .start(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+}
+func strictKernelIsAlive(_ read: ProcessRead, expected: UInt64) throws -> Bool {
+    guard read.metadata != .invalid else { throw TransitionError.unexpectedIdentity }
+    return try kernelIsAlive(expected: expected, observed: read.start, missingProcess: read.missing)
+}
+enum ExitObservation: Equatable { case matching, pending, absent }
+enum StopError: Error { case invalidIdentity, unavailable, deadline }
+func exitObservation(_ read: ProcessRead, expected: UInt64) throws -> ExitObservation {
+    guard expected > 0, read.metadata != .invalid else { throw StopError.invalidIdentity }
+    if let start = read.start {
+        guard start == expected else { throw StopError.invalidIdentity }
+        return .matching
+    }
+    guard read.queryError != EPERM, read.queryError != EACCES else { throw StopError.unavailable }
+    if read.missing { return .absent }
+    // Only the observed exited-but-unreaped case may remain pending. No other
+    // query/permission failure becomes life, absence, or permission to signal.
+    guard read.bytes == 0, read.queryError == ESRCH, read.killResult == 0 else { throw StopError.unavailable }
+    return .pending
+}
+func waitForExit(_ seconds: Double, observe: () throws -> ExitObservation,
+                 now: () -> Double, pause: (Double) -> Void) throws -> Bool {
+    let deadline = now() + seconds
+    while now() < deadline {
+        if try observe() == .absent { return true }
+        pause(min(0.1, max(0, deadline - now())))
+    }
+    // Check the final pause without rereading an absence already confirmed above.
+    return try observe() == .absent
+}
+func stopOwnedProcess(owner: () throws -> Bool, request: (Bool) -> Void,
+                      observe: () throws -> ExitObservation, now: () -> Double,
+                      pause: (Double) -> Void, phase: (String) -> Void) throws {
+    phase("initial-ownership")
+    guard try owner() else { return }
+    phase("stop-request")
+    request(false)
+    phase("graceful-wait")
+    if try waitForExit(10, observe: observe, now: now, pause: pause) { return }
+    phase("pre-force-ownership")
+    guard try owner() else { return }
+    phase("force-request")
+    request(true)
+    phase("forced-wait")
+    guard try waitForExit(5, observe: observe, now: now, pause: pause) else { throw StopError.deadline }
+}
+// END STOP POLICY
+
 let transitionURL = URL(fileURLWithPath: receiptURL.path + ".transition.json")
 let successorURL = URL(fileURLWithPath: receiptURL.path + ".successor.json")
 // AppKit launchDate is absent for direct-spawn restarts. Kernel birth time is
 // required for every receipt, including the initial LaunchServices process.
-func processStart(_ pid: Int32) -> UInt64? {
+// BEGIN PROCESS QUERY: actual owned-child tests compile this unchanged adapter.
+func readProcess(_ pid: Int32) -> ProcessRead {
     var info = proc_bsdinfo()
     let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
-    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
-          info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0,
-          info.pbi_start_tvsec < UInt64.max / 1_000_000, info.pbi_start_tvusec < 1_000_000 else { return nil }
-    return info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
+    errno = 0
+    let bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+    let queryError = errno
+    let metadata = classifyProcess(info, pid: pid, uid: getuid(), bytes: bytes)
+    if case .start = metadata {
+        return ProcessRead(metadata: metadata, bytes: bytes, queryError: queryError, killResult: nil, killError: nil)
+    }
+    errno = 0
+    let result = kill(pid, 0)
+    return ProcessRead(metadata: metadata, bytes: bytes, queryError: queryError, killResult: result, killError: errno)
+}
+// END PROCESS QUERY
+func processStart(_ pid: Int32) -> UInt64? {
+    let read = readProcess(pid)
+    guard read.metadata != .invalid else { fail("Kernel process identity fields are invalid") }
+    return read.start
+}
+var stopPhase = "initial-ownership"
+var stopObservations = Set<String>()
+func diagnoseStop(_ receipt: Receipt, _ read: ProcessRead) {
+    guard command == "stop" else { return }
+    let key = "\(stopPhase):\(read.metadata):\(read.bytes):\(read.queryError):\(read.killResult ?? 0):\(read.killError ?? 0)"
+    guard stopObservations.count < 8, stopObservations.insert(key).inserted else { return }
+    let detail: [String: Any] = ["phase": stopPhase, "pid": receipt.pid, "expectedStart": receipt.startTime,
+        "metadata": String(describing: read.metadata), "queryBytes": read.bytes, "queryErrno": read.queryError,
+        "killZeroResult": read.killResult.map { $0 as Any } ?? NSNull(),
+        "killZeroErrno": read.killError.map { $0 as Any } ?? NSNull()]
+    if let data = try? JSONSerialization.data(withJSONObject: detail, options: [.sortedKeys]) {
+        FileHandle.standardOutput.write(data); print("")
+    }
 }
 var diagnosedCandidates = Set<Int32>()
 func candidates() -> [Receipt] {
     NSWorkspace.shared.runningApplications.filter { !$0.isTerminated &&
         ($0.bundleIdentifier == identity || canonical($0.bundleURL) == bundle.path ||
          canonical($0.executableURL) == executable.path) }.compactMap { app -> Receipt? in
-        let start = processStart(app.processIdentifier)
-        let missing = start == nil && kill(app.processIdentifier, 0) == -1 && errno == ESRCH
+        let read = readProcess(app.processIdentifier)
+        guard read.metadata != .invalid else { fail("Candidate kernel process identity fields are invalid") }
+        let start = read.start
+        let missing = read.missing
         // At most four matched candidate snapshots per invocation; no unrelated
         // processes or environment values enter the diagnostic.
         if command == "adopt-update", diagnosedCandidates.count < 4,
@@ -135,9 +228,9 @@ func requireNoLegacyProcess() {
 func kernelAlive(_ receipt: Receipt) -> Bool {
     guard receipt.bundle == bundle.path, receipt.executable == executable.path,
           receipt.identifier == identity, receipt.pid > 0 else { fail("Invalid ownership receipt") }
-    let start = processStart(receipt.pid)
-    let missing = start == nil && kill(receipt.pid, 0) == -1 && errno == ESRCH
-    do { return try kernelIsAlive(expected: receipt.startTime, observed: start, missingProcess: missing) }
+    let read = readProcess(receipt.pid)
+    diagnoseStop(receipt, read)
+    do { return try strictKernelIsAlive(read, expected: receipt.startTime) }
     catch { fail("Kernel process identity is missing or differs from receipt") }
 }
 func owned(_ receipt: Receipt) -> NSRunningApplication? {
@@ -266,14 +359,26 @@ do {
             guard owned(receipt) != nil else { fail("Identity lost while reading environment") }
             print("Owned process has required synthetic paths; no unexpected environment keys")
         } else {
-            if let app = owned(receipt) {
-                _ = app.terminate()
-                if !wait(10, until: { !kernelAlive(receipt) }) {
-                    print("Graceful exit did not finish; terminating the exact owned process")
-                    if let stillOwned = owned(receipt) { _ = stillOwned.forceTerminate() }
-                    guard wait(5, until: { !kernelAlive(receipt) }) else { fail("Owned process exit unconfirmed") }
-                }
-            }
+            var currentOwner: NSRunningApplication?
+            do {
+                try stopOwnedProcess(owner: {
+                    currentOwner = owned(receipt) // Strict before either signal; unknown still fails.
+                    return currentOwner != nil
+                }, request: { force in
+                    guard let app = currentOwner else { fail("Stop request has no confirmed owner") }
+                    let accepted = force ? app.forceTerminate() : app.terminate()
+                    print("Owned stop request phase=\(stopPhase) accepted=\(accepted)")
+                }, observe: {
+                    let read = readProcess(receipt.pid)
+                    diagnoseStop(receipt, read)
+                    return try exitObservation(read, expected: receipt.startTime)
+                }, now: { ProcessInfo.processInfo.systemUptime }, pause: { seconds in
+                    RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+                }, phase: { phase in
+                    stopPhase = phase
+                    print("Owned stop phase=\(phase) pid=\(receipt.pid)")
+                })
+            } catch { fail("Owned process stop failed during \(stopPhase): \(error)") }
             print("Owned process exit confirmed")
         }
     }
