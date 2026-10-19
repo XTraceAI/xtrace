@@ -53,12 +53,13 @@ use super::claude_launch::{
     check::{CheckBacklog, CheckProgress, continue_checks_into},
     continue_claude_launches_into, group,
 };
+use super::codex_pr_links::{self, PrBacklog, PrProgress};
 use super::readers_cli::CancelToken;
 use super::session_source::{IndexedSource, host_roots};
 use super::session_titles::{
     Batch, MAX_CODEX_LOCATORS, Segment, SpawnCheck, TitleLimits, TypedSpawn, Untitled,
-    codex_contained, codex_path, codex_segment, contains, full_thread_id, gather, object,
-    spawn_check, typed_spawn,
+    codex_contained, codex_path, codex_segment, codex_thread, contains, full_thread_id, gather,
+    object, spawn_check, typed_spawn,
 };
 use serde_json::Value;
 use std::{
@@ -324,8 +325,12 @@ pub struct SpawnBacklog {
     /// watcher's passes.
     pub bash: BashBacklog,
     /// Display checks of sessions still checking
-    /// ([`super::claude_launch::check`]): last in the watcher's passes.
+    /// ([`super::claude_launch::check`]): in the watcher's passes.
     pub checks: CheckBacklog,
+    /// Exact pull-request links of Codex threads
+    /// ([`super::codex_pr_links`]): queued threads in every pass, the sweep
+    /// in the watcher's passes only, last in each.
+    pub prs: PrBacklog,
 }
 
 /// How far a sweep over every indexed Codex root has read.
@@ -343,6 +348,7 @@ impl SpawnBacklog {
             launches: LaunchBacklog::starting(),
             bash: BashBacklog::starting(),
             checks: CheckBacklog::starting(),
+            prs: PrBacklog::starting(),
             ..Self::default()
         }
     }
@@ -375,6 +381,7 @@ impl SpawnBacklog {
             || self.launches.pending()
             || self.bash.pending()
             || self.checks.pending()
+            || self.prs.pending()
     }
 
     /// Keep the own headers a pass read for the display checks.
@@ -410,6 +417,8 @@ pub struct SpawnProgress {
     pub bash: Option<BashProgress>,
     /// The pass of display checks, when one ran.
     pub checks: Option<CheckProgress>,
+    /// The pass over Codex pull-request links, when one ran.
+    pub prs: Option<PrProgress>,
 }
 
 impl SpawnProgress {
@@ -426,6 +435,7 @@ impl SpawnProgress {
                 .checks
                 .as_ref()
                 .map_or(0, |checks| checks.settled + checks.restarted)
+            + self.prs.as_ref().map_or(0, |prs| prs.changed)
     }
 
     /// Whether the pass moved any work forward. One that did not is retried
@@ -442,6 +452,7 @@ impl SpawnProgress {
             || self.checks.as_ref().is_some_and(|checks| {
                 checks.settled > 0 || checks.own_reads > 0 || checks.restarted > 0
             })
+            || self.prs.as_ref().is_some_and(|prs| prs.advanced)
     }
 }
 
@@ -653,6 +664,41 @@ fn continue_within(
         progress.checks = Some(checks);
         result?;
     }
+    // Codex pull-request links last, within what is left again: catching up
+    // on every indexed history after a restart reads the most.
+    if backlog.prs.pending() {
+        let (bytes, time) = batch.remaining();
+        let spent = progress
+            .launches
+            .as_ref()
+            .map_or(0, |launches| launches.bytes_read)
+            + progress.bash.as_ref().map_or(0, |bash| bash.bytes_read)
+            + progress
+                .checks
+                .as_ref()
+                .map_or(0, |checks| checks.bytes_read);
+        let mut within = Batch::new(
+            TitleLimits {
+                max_batch_bytes: bytes.saturating_sub(spent),
+                deadline: time,
+                ..limits
+            },
+            cancel,
+        );
+        let mut prs = PrProgress::default();
+        let result = codex_pr_links::continue_within(
+            store,
+            home,
+            &mut backlog.prs,
+            &mut within,
+            sweep,
+            &mut prs,
+        );
+        prs.bytes_read = within.bytes_read();
+        progress.bytes_read += prs.bytes_read;
+        progress.prs = Some(prs);
+        result?;
+    }
     Ok(())
 }
 
@@ -834,15 +880,10 @@ fn walk_roots(
 /// `codex:<dir>/rollout-<timestamp>-<thread>.jsonl`. A continuation, or any
 /// other name, is none.
 fn root_native(locator: &str) -> Option<String> {
-    let path = Path::new(codex_path(locator)?);
-    let stem = path
-        .file_name()?
-        .to_str()?
-        .strip_prefix("rollout-")?
-        .strip_suffix(".jsonl")?;
-    let native = stem.get(stem.len().checked_sub(36)?..)?;
-    (full_thread_id(native) && codex_segment(path, native) == Some(Segment::Root))
-        .then(|| native.to_owned())
+    match codex_thread(Path::new(codex_path(locator)?))? {
+        (native, Segment::Root) => Some(native),
+        (_, Segment::Continuation(_)) => None,
+    }
 }
 
 /// How a root rollout's locator for the thread `native` ends.

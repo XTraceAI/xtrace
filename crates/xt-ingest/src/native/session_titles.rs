@@ -345,6 +345,24 @@ pub(super) fn codex_segment(path: &Path, native: &str) -> Option<Segment> {
         .then(|| Segment::Continuation(rollout.to_owned()))
 }
 
+/// The thread a Codex rollout's name makes it a file of, root or
+/// continuation, and which segment it is; any other name is none.
+pub(super) fn codex_thread(path: &Path) -> Option<(String, Segment)> {
+    let stem = path
+        .file_name()?
+        .to_str()?
+        .strip_prefix("rollout-")?
+        .strip_suffix(".jsonl")?;
+    // A continuation's thread is before its last `_`; a root's ends the name.
+    let head = stem.rsplit_once('_').map_or(stem, |(head, _)| head);
+    let native = head.get(head.len().checked_sub(36)?..)?;
+    if !full_thread_id(native) {
+        return None;
+    }
+    let segment = codex_segment(path, native)?;
+    Some((native.to_owned(), segment))
+}
+
 /// `8-4-4-4-12` hexadecimal digits, as Codex spells a thread or rollout.
 pub(super) fn uuid_shaped(text: &str) -> bool {
     let groups: Vec<&str> = text.split('-').collect();
@@ -578,6 +596,119 @@ impl<'a> Batch<'a> {
             self.limits.max_batch_bytes.saturating_sub(self.charged),
             self.stop.deadline.saturating_duration_since(Instant::now()),
         )
+    }
+
+    /// Hand on every complete line an append-only source holds after `from`,
+    /// within this batch's budget, deadline and cancel, and say where a later
+    /// read resumes.
+    ///
+    /// The source is opened without following an alias and must still be the
+    /// file observed. A mark for another file (device or inode), or past the
+    /// file's current end, is not resumed: the file is read from its start.
+    /// Only the bytes up to the length seen when it is opened are read, so an
+    /// append during the read is left for the next one; a final line without
+    /// its newline is never handed on and is read again then. A complete
+    /// line longer than the line bound is dropped unparsed, and a read that
+    /// ends inside one resumes after what it read, dropping the rest of that
+    /// line. As much as the budget allows is read: what is left is left to a
+    /// later read, and the reason is returned beside the mark (the budget,
+    /// the deadline or a cancel); lines handed on before a cancel are the
+    /// caller's to discard. A file that shrank or could not be read is an
+    /// error, and its mark should be dropped.
+    pub(super) fn appended(
+        &mut self,
+        candidate: &Candidate<'_>,
+        from: Option<ReadMark>,
+        on_line: &mut dyn FnMut(&[u8]),
+    ) -> Result<(ReadMark, Option<Untitled>), Untitled> {
+        // Read to the end as observed: nothing to open.
+        let observed = FileIdentity::of(&candidate.observed);
+        if let Some(mark) = from.filter(|mark| {
+            observed.known
+                && (mark.dev, mark.ino, mark.offset) == (observed.dev, observed.ino, observed.len)
+        }) {
+            return Ok((mark, None));
+        }
+        let (mut source, identity) =
+            open_regular(&candidate.path, &candidate.observed).map_err(|_| {
+                if replaced_since(&candidate.path, &candidate.observed) {
+                    Untitled::Replaced
+                } else {
+                    Untitled::Unreadable
+                }
+            })?;
+        let start = from
+            .filter(|mark| {
+                identity.known
+                    && mark.dev == identity.dev
+                    && mark.ino == identity.ino
+                    && mark.offset <= identity.len
+            })
+            .unwrap_or(ReadMark {
+                dev: identity.dev,
+                ino: identity.ino,
+                offset: 0,
+                skipping: false,
+            });
+        let want = identity.len - start.offset;
+        if want == 0 {
+            return Ok((start, None));
+        }
+        let slice = want.min(self.limits.max_batch_bytes.saturating_sub(self.charged));
+        if slice == 0 {
+            return Ok((start, Some(Untitled::Budget)));
+        }
+        if let Some(why) = self.stop.stopped() {
+            return Ok((start, Some(why)));
+        }
+        self.charge(slice)?;
+        source
+            .seek(SeekFrom::Start(start.offset))
+            .map_err(|_| Untitled::Unreadable)?;
+        let mut end = ScanEnd {
+            complete: 0,
+            overlong: start.skipping,
+        };
+        let read = scan_tracked(
+            &mut source,
+            slice,
+            self.limits.max_line_bytes,
+            READ_CHUNK,
+            &self.stop,
+            Overlong::Report,
+            &mut |line| {
+                if let Line::Inspected(line) = line {
+                    on_line(line);
+                }
+                Flow::Continue
+            },
+            &mut end,
+        );
+        let (read, halted) = match read {
+            Ok(read) => (read, (slice < want).then_some(Untitled::Budget)),
+            Err((why @ (Untitled::Deadline | Untitled::Cancelled), read)) => (read, Some(why)),
+            Err((why, read)) => {
+                self.bytes_read += read;
+                return Err(why);
+            }
+        };
+        self.bytes_read += read;
+        let mark = if end.overlong {
+            // Inside a line too long to inspect: what was read of it is
+            // passed, and the rest of it is dropped next time.
+            ReadMark {
+                offset: start.offset + read,
+                skipping: true,
+                ..start
+            }
+        } else {
+            ReadMark {
+                offset: start.offset + end.complete,
+                skipping: false,
+                ..start
+            }
+        };
+        Ok((mark, halted))
     }
 
     /// Charge a read before anything is allocated for it.
@@ -894,6 +1025,18 @@ impl<'a> Batch<'a> {
     }
 }
 
+/// Where a resumable read of one append-only source stands
+/// ([`Batch::appended`]): the file it is for, the offset after the last
+/// complete line handed on, and whether that offset is inside a line too
+/// long to inspect, whose rest is dropped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ReadMark {
+    dev: u64,
+    ino: u64,
+    offset: u64,
+    skipping: bool,
+}
+
 /// Why a checkpoint proof ended before it decided.
 enum ProofHalt {
     Stopped(Untitled),
@@ -1175,30 +1318,76 @@ fn scan(
     overlong_lines: Overlong,
     on_line: &mut dyn FnMut(Line<'_>) -> Flow,
 ) -> Result<u64, (Untitled, u64)> {
+    scan_tracked(
+        source,
+        len,
+        max_line,
+        chunk,
+        stop,
+        overlong_lines,
+        on_line,
+        &mut ScanEnd::default(),
+    )
+}
+
+/// Where a [`scan_tracked`] stopped: the bytes read up to and including the
+/// last newline it handed on, and whether the line after it is already
+/// longer than the bound. Set on entry, `overlong` says the scan starts
+/// inside such a line, whose rest is dropped unparsed up to its newline.
+#[derive(Clone, Copy, Debug, Default)]
+struct ScanEnd {
+    complete: u64,
+    overlong: bool,
+}
+
+/// [`scan`], also saying in `end` where the last complete line ended, also
+/// when the scan fails part-way.
+#[allow(clippy::too_many_arguments)]
+fn scan_tracked(
+    source: &mut fs::File,
+    len: u64,
+    max_line: usize,
+    chunk: usize,
+    stop: &Stop<'_>,
+    overlong_lines: Overlong,
+    on_line: &mut dyn FnMut(Line<'_>) -> Flow,
+    end: &mut ScanEnd,
+) -> Result<u64, (Untitled, u64)> {
     let mut buffer = vec![0_u8; chunk];
     // The start of a line the previous chunk ended inside.
     let mut carry: Vec<u8> = Vec::new();
-    let mut overlong = false;
+    let mut overlong = end.overlong;
+    end.complete = 0;
     let mut read_total = 0_u64;
     while read_total < len {
         if let Some(why) = stop.stopped() {
+            end.overlong = overlong;
             return Err((why, read_total));
         }
         let want = usize::try_from((len - read_total).min(chunk as u64)).unwrap_or(chunk);
         let read = match source.read(&mut buffer[..want]) {
             // Shorter than the length that was observed: it shrank.
-            Ok(0) => return Err((Untitled::Replaced, read_total)),
+            Ok(0) => {
+                end.overlong = overlong;
+                return Err((Untitled::Replaced, read_total));
+            }
             Ok(read) => read,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return Err((Untitled::Unreadable, read_total)),
+            Err(_) => {
+                end.overlong = overlong;
+                return Err((Untitled::Unreadable, read_total));
+            }
         };
+        let chunk_start = read_total;
         read_total += read as u64;
         let mut rest = &buffer[..read];
         while let Some(at) = rest.iter().position(|byte| *byte == b'\n') {
             let piece = &rest[..at];
             rest = &rest[at + 1..];
+            end.complete = chunk_start + (read - rest.len()) as u64;
             let flow = if overlong || carry.len() + piece.len() > max_line {
                 if overlong_lines == Overlong::Refuse {
+                    end.overlong = true;
                     return Err((Untitled::LineTooLong, read_total));
                 }
                 overlong = false;
@@ -1211,6 +1400,7 @@ fn scan(
             };
             carry.clear();
             if flow == Flow::Stop {
+                end.overlong = false;
                 return Ok(read_total);
             }
         }
@@ -1223,6 +1413,7 @@ fn scan(
             }
         }
     }
+    end.overlong = overlong;
     Ok(read_total)
 }
 
