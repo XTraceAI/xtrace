@@ -41,9 +41,10 @@ pub const MAX_CHILD_FACTS: usize = 1_000;
 pub const CODEX_GUARDIAN_CHILD_VERSION: u32 = 1;
 
 /// Version of the Claude `Bash` launch validation a child fact rests on.
-/// Version 2 reads launch options through the shared Claude option map; its
-/// answer checks are unchanged. Stored version 1 facts stand as they are.
-pub const CLAUDE_BASH_CHILD_VERSION: u32 = 2;
+/// Version 3 reads JSON-escaped calls/results and duplicate IDs. Version 2
+/// reads options through the shared Claude option map. Existing accepted
+/// facts remain accepted; the detector label reopens earlier negative checks.
+pub const CLAUDE_BASH_CHILD_VERSION: u32 = 3;
 
 // Where a child fact's evidence lies. `codex_thread_spawn` and
 // `codex_guardian`: the Codex child's own opening `session_meta` says, by its

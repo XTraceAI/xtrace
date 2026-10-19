@@ -118,14 +118,17 @@ use xt_store::{
 /// Version of this scan's history validation, kept with each published
 /// validation. A thread validated by another version is read again once;
 /// it moves apart from the creation evidence version its proofs carry.
+/// Version 11 reads JavaScript replacement dollars correctly and bounds
+/// evaluated strings, so unchanged histories with earlier rejected launches
+/// are read again once. Existing accepted creation proofs remain unchanged.
 /// Reading a Codex `/review` subagent's header ([`group::review_subagent`]),
 /// files with no row, a quiet file's complete lines without its unfinished
 /// last line, and skipping a file this user may not read changed no version:
 /// they only let validations finish that this version published invalid or
 /// left pending, both of which every run reads again, and no finished
-/// display check rests on them. A bump would only send every finished check
-/// back to checking, and one whose own transcript is gone could never finish
-/// again. Version 10 also keeps the launches a history started with no first
+/// display check rests on them. Unlike those additions, version 11 must reopen
+/// finished checks for incorrect replacement results. A reopened check cannot
+/// finish while its own transcript is unavailable. Version 10 also keeps the launches a history started with no first
 /// result yet ([`scan::Unfinished`]), which hold a session they may have
 /// created unchecked, and reads a spawned helper whose inherited context
 /// starts with the header it copied, so every thread is read again once. Version 9 also
@@ -139,7 +142,7 @@ use xt_store::{
 /// standard-error routing are read again; version 6 adds the one-use printed
 /// UUID binding; version 5 found the literal launch forms of creation
 /// version 4.
-pub const CLAUDE_LAUNCH_VALIDATION_VERSION: u32 = 10;
+pub const CLAUDE_LAUNCH_VALIDATION_VERSION: u32 = 11;
 // The display check stores the scan version it ran under.
 const _: () =
     assert!(CLAUDE_LAUNCH_VALIDATION_VERSION == xt_store::child_check::LAUNCH_VALIDATION_VERSION);

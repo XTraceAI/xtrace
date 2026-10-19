@@ -898,7 +898,13 @@ impl Rows {
         let Some(launch_ms) = rows::timestamp(&value).filter(|_| call_token(call_id)) else {
             return Ok(());
         };
-        if let Ok(binding) = cell::parse_binding(input) {
+        let binding = match cell::parse_binding_in(input, allowance) {
+            Ok(binding) => Some(binding),
+            Err(cell::ParseError::Memory) => return Err(Unread::Memory),
+            Err(cell::ParseError::Grammar) => None,
+        };
+        if let Some(binding) = binding {
+            let binding = binding.value;
             let bytes =
                 call_id.len() + binding.key.len() + binding.literal.as_ref().map_or(0, String::len);
             let held = allowance.reserve(bytes)?;
@@ -914,16 +920,24 @@ impl Rows {
             });
             return Ok(());
         }
-        let loaded = prior.as_ref().and_then(|binding| {
-            let (_, value) = binding.output.as_ref()?;
-            cell::parse_loaded(input, &binding.key, value).ok()
-        });
-        let Ok(ops) = loaded
-            .clone()
+        let loaded = match prior.as_ref().and_then(|binding| {
+            binding
+                .output
+                .as_ref()
+                .map(|(_, value)| cell::parse_loaded_in(input, &binding.key, value, allowance))
+        }) {
+            Some(Ok(ops)) => Some(ops),
+            Some(Err(cell::ParseError::Memory)) => return Err(Unread::Memory),
+            _ => None,
+        };
+        let is_loaded = loaded.is_some();
+        let ops = match loaded
             .map(Ok)
-            .unwrap_or_else(|| cell::parse_operations(input))
-        else {
-            return Ok(());
+            .unwrap_or_else(|| cell::parse_operations_in(input, allowance))
+        {
+            Ok(ops) => ops,
+            Err(cell::ParseError::Memory) => return Err(Unread::Memory),
+            Err(cell::ParseError::Grammar) => return Ok(()),
         };
         for (op, operation) in ops.iter().enumerate() {
             if operation.tool != Tool::ExecCommand {
@@ -934,7 +948,7 @@ impl Rows {
             };
             let (child, host) = match command::launch(cmd, programs) {
                 Some(launch) => (launch.child, Host::Claude),
-                None if loaded.is_none() && codex_cli::launch(cmd) => (String::new(), Host::Codex),
+                None if !is_loaded && codex_cli::launch(cmd) => (String::new(), Host::Codex),
                 None => continue,
             };
             if !launch_args_allowed(operation) || self.open.len() >= bounds.max_open.min(64) {
@@ -949,10 +963,13 @@ impl Rows {
             } else {
                 ack
             };
-            let binding = loaded.as_ref().and(prior.as_ref()).and_then(|binding| {
-                let (output, _) = binding.output.as_ref()?;
-                Some((binding.call_offset, *output, binding.call_id.clone()))
-            });
+            let binding = is_loaded
+                .then_some(())
+                .and(prior.as_ref())
+                .and_then(|binding| {
+                    let (output, _) = binding.output.as_ref()?;
+                    Some((binding.call_offset, *output, binding.call_id.clone()))
+                });
             let held = allowance.reserve(
                 call_id.len()
                     + child.capacity()

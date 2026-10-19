@@ -575,8 +575,9 @@ impl LineState<'_> {
                 .grow(identity.verified().map_or(0, str::len))
                 .map_err(refusal)?;
         }
-        let structural = text.contains("tool_use");
-        if first.is_none() || (structural && !opening_only) {
+        // JSON escapes may occur in both block types and keys. Decode before
+        // deciding whether a call/result exists, including duplicate IDs.
+        if first.is_none() || !opening_only {
             let _decoding = self
                 .allowance
                 .reserve(source::decoded_bound(bytes))
@@ -591,7 +592,7 @@ impl LineState<'_> {
                 }
                 *first = opening;
             }
-            if structural && !opening_only {
+            if !opening_only {
                 self.structure(&value)?;
             }
         }
