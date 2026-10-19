@@ -62,6 +62,9 @@ release runtime, tray interaction or macOS 14 compatibility on a newer Mac.
 The released validator also compiles distinct test IDs for normal debug and
 release builds and launches verified disposable copies; the launcher and native
 inspector require that explicit ID instead of the older implicit production ID.
+All smoke modes keep their build and app copies under `.noindex`, unregister
+only the owned app after confirmed child exit, and retain the copy if exit
+cannot be confirmed.
 These normal runtime paths do not enable fixtures. Their synthetic
 native-index home does not isolate every provider reader: Claude usage startup
 also resolves the real app home/configuration, and passive usage can invoke

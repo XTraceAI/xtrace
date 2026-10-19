@@ -29,6 +29,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile, symlink, lstat, rename } from 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
+  checkSmokeBundle,
   isSmokeIdentifier,
   inspectorArguments,
   launchSmokeBundle,
@@ -341,4 +342,113 @@ test('a copied identity changed during signing is refused before spawn', async (
     }),
     /identity mismatch/,
   );
+});
+
+for (const mode of ['debug', 'release', 'fixture']) {
+  test(`${mode} smoke unregisters only its staged copy after confirmed exit`, async (t) => {
+    const f = await bundleFixture(t);
+    const events = [];
+    let copy;
+    let child;
+    let spawned;
+    const result = checkSmokeBundle(f.source, f.identifier, {
+      fixtureSmoke: mode === 'fixture',
+      temporaryRoot: f.directory,
+      run: (command, args) => {
+        if (command.endsWith('/inspect')) events.push('inspect');
+        if (command.endsWith('/lsregister')) {
+          assert.deepEqual(args, ['-u', copy]);
+          assert.deepEqual(events, ['inspect', 'SIGTERM', 'exit']);
+          assert.equal(readFileSync(join(copy, 'Contents/Info.plist'), 'utf8'), f.identifier);
+          events.push('unregister');
+        }
+        return f.run(command, args);
+      },
+      spawnProcess: (command, args, options) => {
+        copy = command.slice(0, command.indexOf('/Contents/MacOS/'));
+        assert.match(copy, /\/staging\.noindex\/XTrace Desktop\.app$/);
+        assert.equal(options.env.XTRACE_FIXTURE, mode === 'fixture' ? 'F1' : undefined);
+        assert.equal(options.env.XTRACE_DATA_DIR, join(copy, '..', 'data'));
+        assert.equal(options.env.XTRACE_NATIVE_HOME, join(copy, '..', 'home'));
+        child = fakeChild((signal) => {
+          events.push(signal);
+          queueMicrotask(() => {
+            events.push('exit');
+            child.exitCode = 0;
+            child.emit('exit', 0, null);
+          });
+        });
+        spawned = setImmediate(() => child.emit('spawn'));
+        return child;
+      },
+    });
+    t.after(() => clearImmediate(spawned));
+    await result;
+    assert.deepEqual(events, ['inspect', 'SIGTERM', 'exit', 'unregister']);
+    await assert.rejects(lstat(copy), { code: 'ENOENT' });
+    assert.equal(await readFile(f.plist, 'utf8'), f.identifier);
+  });
+
+  test(`${mode} smoke retains its copy and skips unregister when child exit is unconfirmed`, async (t) => {
+    const f = await bundleFixture(t);
+    const signals = [];
+    let copy;
+    let spawned;
+    await assert.rejects(
+      checkSmokeBundle(f.source, f.identifier, {
+        fixtureSmoke: mode === 'fixture',
+        temporaryRoot: f.directory,
+        stopOptions: { graceMs: 5, forceMs: 5 },
+        run: (command, args) => {
+          assert.ok(!command.endsWith('/lsregister'), 'Must not unregister a running app');
+          return f.run(command, args);
+        },
+        spawnProcess: (command) => {
+          copy = command.slice(0, command.indexOf('/Contents/MacOS/'));
+          const child = fakeChild((signal) => {
+            signals.push(signal);
+            return false;
+          });
+          spawned = setImmediate(() => child.emit('spawn'));
+          return child;
+        },
+      }),
+      /exit was not confirmed/,
+    );
+    t.after(() => clearImmediate(spawned));
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+    assert.equal(await readFile(join(copy, 'Contents/Info.plist'), 'utf8'), f.identifier);
+  });
+}
+
+test('a failed inspection still stops the child before unregistering and removing its copy', async (t) => {
+  const f = await bundleFixture(t);
+  const events = [];
+  let copy;
+  await assert.rejects(
+    checkSmokeBundle(f.source, f.identifier, {
+      temporaryRoot: f.directory,
+      run: (command, args) => {
+        if (command.endsWith('/inspect')) return { status: 1 };
+        if (command.endsWith('/lsregister')) {
+          assert.deepEqual(events, ['exit']);
+          events.push('unregister');
+        }
+        return f.run(command, args);
+      },
+      spawnProcess: (command) => {
+        copy = command.slice(0, command.indexOf('/Contents/MacOS/'));
+        const child = fakeChild(() => {
+          queueMicrotask(() => {
+            events.push('exit');
+            child.emit('exit', 0, null);
+          });
+        });
+        setImmediate(() => child.emit('spawn'));
+        return child;
+      },
+    }),
+  );
+  assert.deepEqual(events, ['exit', 'unregister']);
+  await assert.rejects(lstat(copy), { code: 'ENOENT' });
 });

@@ -168,9 +168,9 @@ test('native evidence binds source, base and actual OS; release mode also launch
     assert.ok(
       f.calls.includes('node scripts/security/scan-secrets.mjs --content artifacts/sbom.cdx.json'),
     );
-    assert.ok(f.calls.some((x) => x.includes('target/debug/bundle/macos/')));
+    assert.ok(f.calls.some((x) => x.includes('target.noindex/debug/bundle/macos/')));
     assert.equal(
-      f.calls.some((x) => x.includes('target/release/bundle/macos/')),
+      f.calls.some((x) => x.includes('target.noindex/release/bundle/macos/')),
       release,
     );
     const builds = f.calls.filter((call) => call.startsWith('pnpm tauri build'));
@@ -185,7 +185,7 @@ test('native evidence binds source, base and actual OS; release mode also launch
       assert.ok(launch.endsWith(ids[0]));
       assert.ok(launch.includes(f.trusted()));
     }
-    assert.ok(f.buildTargets.every((target) => target === f.trusted() + '/smoke-target'));
+    assert.ok(f.buildTargets.every((target) => target === f.trusted() + '/smoke-target.noindex'));
     await assert.rejects(access(f.trusted()), { code: 'ENOENT' });
   }
 });

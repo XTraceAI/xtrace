@@ -141,25 +141,29 @@ export async function stopSmokeChild(child, { graceMs = 3000, forceMs = 3000 } =
   });
 }
 
-async function main() {
-  const fixtureSmoke = process.argv[4] === '--fixture-smoke';
-  if (
-    process.platform !== 'darwin' ||
-    (process.argv.length !== 4 && !(process.argv.length === 5 && fixtureSmoke))
-  )
-    throw new Error();
-  const identifier = process.argv[3];
-  if (!isSmokeIdentifier(identifier)) throw new Error();
-  const bundle = resolve(process.argv[2]);
+/** Run the same owned staging and exit-confirmed cleanup for every smoke mode. */
+export async function checkSmokeBundle(
+  source,
+  identifier,
+  {
+    fixtureSmoke = false,
+    run = spawnSync,
+    spawnProcess = spawn,
+    stopOptions = {},
+    temporaryRoot = tmpdir(),
+  } = {},
+) {
+  if (!isSmokeIdentifier(identifier)) throw new Error('Invalid smoke identity');
+  const bundle = resolve(source);
   if (!(await stat(bundle)).isDirectory() || !bundle.endsWith('.app')) throw new Error();
-  const temporary = await mkdtemp(join(tmpdir(), 'xtrace-native-smoke-'));
-  const directory = fixtureSmoke ? join(temporary, 'staging.noindex') : temporary;
+  const temporary = await mkdtemp(join(temporaryRoot, 'xtrace-native-smoke-'));
+  const directory = join(temporary, 'staging.noindex');
   const script = join(dirname(fileURLToPath(import.meta.url)), 'debug-bundle.swift');
   const inspector = join(temporary, 'inspect');
   let child;
   let prepared;
   try {
-    const compile = spawnSync('swiftc', [script, '-o', inspector], {
+    const compile = run('swiftc', [script, '-o', inspector], {
       stdio: 'pipe',
       timeout: 120_000,
     });
@@ -167,14 +171,19 @@ async function main() {
     await mkdir(directory, { recursive: true });
     const env = smokeEnvironment(directory, process.env, { fixtureSmoke });
     await mkdir(env.XTRACE_NATIVE_HOME);
-    const launched = await launchSmokeBundle(bundle, directory, { identifier, fixtureSmoke });
+    const launched = await launchSmokeBundle(bundle, directory, {
+      identifier,
+      fixtureSmoke,
+      run,
+      spawnProcess,
+    });
     child = launched.child;
     prepared = launched.prepared;
     await new Promise((resolve, reject) => {
       child.once('spawn', resolve);
       child.once('error', reject);
     });
-    const inspect = spawnSync(inspector, inspectorArguments(child.pid, launched.prepared), {
+    const inspect = run(inspector, inspectorArguments(child.pid, launched.prepared), {
       stdio: 'pipe',
       timeout: 35_000,
     });
@@ -186,13 +195,22 @@ async function main() {
     );
   } finally {
     // Only terminate the exact child created here; never kill by app name.
-    if (child) await stopSmokeChild(child);
+    if (child) await stopSmokeChild(child, stopOptions);
     try {
-      if (fixtureSmoke && prepared) unregisterSmokeBundle(prepared, directory);
+      if (prepared) unregisterSmokeBundle(prepared, directory, run);
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }
   }
+}
+async function main() {
+  const fixtureSmoke = process.argv[4] === '--fixture-smoke';
+  if (
+    process.platform !== 'darwin' ||
+    (process.argv.length !== 4 && !(process.argv.length === 5 && fixtureSmoke))
+  )
+    throw new Error();
+  await checkSmokeBundle(process.argv[2], process.argv[3], { fixtureSmoke });
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(() => {
