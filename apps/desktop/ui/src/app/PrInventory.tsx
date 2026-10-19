@@ -296,11 +296,12 @@ export function PrInventory() {
             <p>
               Title, state, merge time, size and branch are what the last successful refresh stored.
               Nothing here contacts GitHub. XTrace checks pull requests on GitHub by itself. When
-              the pull requests the <Link to="/dashboard">Dashboard</Link> counts need you (a check
-              failed, gh stopped, or automatic checks are off), a red ! appears on its Effort card.
-              The list is read from storage when this view opens, again after a check commits new
-              facts, after an import, turn, backfill or index change commits new sessions or links,
-              and after live updates reconnect.
+              you want to check a link again, use Refresh pull-request facts on the{' '}
+              <Link to="/dashboard">Dashboard</Link>’s Effort card. That control stays available for
+              links GitHub could not find, including private repositories you can now access. It
+              turns red when checks need your attention. The list is read from storage when this
+              view opens, again after a check commits new facts, after an import, turn, backfill or
+              index change commits new sessions or links, and after live updates reconnect.
             </p>
           </details>
         </div>

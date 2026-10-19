@@ -1,6 +1,6 @@
 import { Tooltip } from '@base-ui/react/tooltip';
 import { useQuery } from '@tanstack/react-query';
-import { useId, useMemo, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useData, usePrRefresh } from '../../data/DataProvider';
 import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import type { MetricMergedPrs } from '../../data/generated/MetricMergedPrs';
@@ -40,14 +40,11 @@ const RUNNING_TIP =
   'XTrace is checking the pull requests you chose on GitHub. Click to see its progress or cancel it.';
 
 /**
- * A manual refresh of indexed pull requests' cached GitHub facts, reached
- * only when it is needed: its trigger is a small red ! in the Effort card's
- * header, drawn only while {@link prAttention} says the checks need the user,
- * and nothing at all otherwise. While a batch runs the trigger stays, quiet
- * rather than red, so its progress and Cancel stay one click away; it also
- * stays while its dialog is open. The dialog lists what storage holds only
- * when opened, and only its Refresh button starts a batch from here; the
- * native side's automatic check, which runs on its own, gives way to it. The
+ * A manual refresh of indexed pull requests' cached GitHub facts, always
+ * reachable from the Effort card header, including when every stored link
+ * was not found on GitHub. Its trigger turns red when checks need attention.
+ * The dialog reads storage only when opened; only Refresh starts a batch.
+ * The native side's automatic check gives way to a manual batch. The
  * batch itself belongs to the source runtime (`usePrRefresh`), so its
  * progress, Cancel and result survive this control unmounting; only the
  * dialog and the selection are this control's. The trigger sits in the
@@ -70,24 +67,6 @@ export function PrRefresh({
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   const button = useRef<HTMLButtonElement>(null);
-  // Always in the header, so focus has somewhere to go when the red ! is gone.
-  const slot = useRef<HTMLSpanElement>(null);
-  // Read when the dialog closes: the red ! when it is still there; when a
-  // refresh cleared what it was for, it is gone, and focus returns to the ⓘ
-  // beside the card's title instead of being dropped.
-  const returnFocus = useMemo(
-    () => ({
-      get current(): HTMLElement | null {
-        if (button.current?.isConnected) return button.current;
-        return (
-          slot.current
-            ?.closest('.xt-dash-card-header')
-            ?.querySelector<HTMLElement>('.xt-dash-definition') ?? null
-        );
-      },
-    }),
-    [],
-  );
   const titleId = useId();
   const list = useQuery({
     queryKey: queryKeys.pullRequests,
@@ -117,69 +96,66 @@ export function PrRefresh({
   const report = operation.phase === 'done' ? operation.report : undefined;
   const outcomes = new Map(report?.rows.map((row) => [row.id, row]) ?? []);
   const attention = prAttention(tile, auto);
-  const shown = attention !== null || running || open;
   return (
     <>
-      <span ref={slot} className="xt-pr-attention-slot">
-        {shown && (
-          <Tooltip.Root disableHoverablePopup>
-            <Tooltip.Trigger
-              render={
-                <button
-                  ref={button}
-                  type="button"
-                  // Explicit, as the kit's buttons are: WebKit tabs past a button without it.
-                  tabIndex={0}
-                  className="xt-pr-attention"
-                  data-state={running ? 'running' : attention ? 'attention' : 'open'}
-                  data-testid="pr-attention"
-                  aria-label={
-                    running
-                      ? RUNNING_NAME
-                      : attention
-                        ? 'Pull-request checks need your attention'
-                        : 'Refresh pull-request facts'
-                  }
-                  aria-haspopup="dialog"
-                  aria-expanded={open}
-                  aria-describedby={tipId}
-                  onClick={openDialog}
-                >
-                  {running ? <RunningMark /> : <AttentionMark />}
-                </button>
-              }
-              delay={0}
-            />
-            <Tooltip.Portal data-theme={theme}>
-              <Tooltip.Positioner
-                className="xt-rule-positioner"
-                positionMethod="fixed"
-                side="bottom"
-                align="end"
-                sideOffset={8}
-                collisionPadding={8}
-              >
-                <Tooltip.Popup
-                  id={tipId}
-                  role="tooltip"
-                  className="xt-rule-popover"
-                  data-testid="pr-attention-tip"
-                >
-                  {running
-                    ? RUNNING_TIP
+      <span className="xt-pr-attention-slot">
+        <Tooltip.Root disableHoverablePopup>
+          <Tooltip.Trigger
+            render={
+              <button
+                ref={button}
+                type="button"
+                // Explicit, as the kit's buttons are: WebKit tabs past a button without it.
+                tabIndex={0}
+                className="xt-pr-attention"
+                data-state={running ? 'running' : attention ? 'attention' : 'ready'}
+                data-testid="pr-attention"
+                aria-label={
+                  running
+                    ? RUNNING_NAME
                     : attention
-                      ? prAttentionText(attention)
-                      : 'Nothing needs your attention now.'}
-                </Tooltip.Popup>
-              </Tooltip.Positioner>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-        )}
+                      ? 'Pull-request checks need your attention'
+                      : 'Refresh pull-request facts'
+                }
+                aria-haspopup="dialog"
+                aria-expanded={open}
+                aria-describedby={tipId}
+                onClick={openDialog}
+              >
+                {running ? <RunningMark /> : attention ? <AttentionMark /> : <RefreshMark />}
+              </button>
+            }
+            delay={0}
+          />
+          <Tooltip.Portal data-theme={theme}>
+            <Tooltip.Positioner
+              className="xt-rule-positioner"
+              positionMethod="fixed"
+              side="bottom"
+              align="end"
+              sideOffset={8}
+              collisionPadding={8}
+            >
+              <Tooltip.Popup
+                id={tipId}
+                role="tooltip"
+                className="xt-rule-popover"
+                data-testid="pr-attention-tip"
+              >
+                {running
+                  ? RUNNING_TIP
+                  : attention
+                    ? prAttentionText(attention)
+                    : 'Check selected pull requests again, including ones GitHub could not find.'}
+              </Tooltip.Popup>
+            </Tooltip.Positioner>
+          </Tooltip.Portal>
+        </Tooltip.Root>
       </span>
       <Modal
         open={open}
         onOpenChange={setOpen}
-        returnFocusRef={returnFocus}
+        returnFocusRef={button}
         aria-labelledby={titleId}
         className="xt-env-modal xt-pr-refresh-modal"
       >
@@ -341,6 +317,26 @@ function RunningMark() {
       focusable="false"
     >
       <path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5" />
+    </svg>
+  );
+}
+
+/** A persistent, neutral entry to checking stored links again. */
+function RefreshMark() {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M21 5v6h-6M20 11a8 8 0 1 0-1 7M21 11l-4-5" />
     </svg>
   );
 }

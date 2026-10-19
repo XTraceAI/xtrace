@@ -807,9 +807,8 @@
   top: 0;
   transform: translateX(-50%);
 }
-/* The Effort header's red ! (`PrRefresh`): drawn only when the pull-request
-   checks need the user, the size of the definition beside the title, so the
-   header keeps its height. While a batch runs it is quiet and turns. */
+/* The Effort header's persistent refresh control turns red when checks need
+   attention. While a batch runs it is quiet and turns. */
 /* The slot is always in the header but draws nothing of its own. */
 .xt-pr-attention-slot {
   display: contents;
@@ -828,7 +827,7 @@
   cursor: pointer;
 }
 .xt-pr-attention[data-state='running'],
-.xt-pr-attention[data-state='open'] {
+.xt-pr-attention[data-state='ready'] {
   color: var(--meta);
 }
 .xt-pr-attention[data-state='running'] svg {
