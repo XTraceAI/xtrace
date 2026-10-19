@@ -345,6 +345,19 @@ impl MetricsDb {
                 )?);
             }
             candidates.retain(|(id, _)| !seen.contains(id));
+            // Compare actual instants, including offsets and sub-millisecond
+            // fractions, before applying the result cap. Missing times stay last.
+            let mut candidates = candidates
+                .into_iter()
+                .map(|(id, raw)| {
+                    let instant = raw
+                        .as_deref()
+                        .map(timestamp::parse)
+                        .transpose()?
+                        .map(|(instant, _)| instant);
+                    Ok((id, instant))
+                })
+                .collect::<Result<Vec<_>>>()?;
             candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             candidates.dedup_by(|a, b| a.0 == b.0);
             let mut next = Vec::new();
