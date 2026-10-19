@@ -831,6 +831,13 @@ pub(super) fn resume(
     })))
 }
 
+fn cell_failure(error: cell::ParseError) -> Outcome {
+    match error {
+        cell::ParseError::Memory => Outcome::Deferred,
+        cell::ParseError::Grammar => Outcome::SourceRejected,
+    }
+}
+
 /// What the recorded source lines say, including a one-use binding when the
 /// candidate cites its two witness lines.
 fn recorded(
@@ -869,7 +876,7 @@ fn recorded(
         return Err(rejected);
     }
     let ops = match (binding_call, binding_output) {
-        (None, None) => cell::parse_operations(&input).map_err(|()| rejected)?,
+        (None, None) => cell::parse_operations_in(&input, allowance).map_err(cell_failure)?,
         (Some(call_line), Some(output_line)) => {
             let call_head = rows::row(call_line).ok_or(rejected)?;
             let call_value: Value = serde_json::from_slice(call_line).map_err(|_| rejected)?;
@@ -884,7 +891,7 @@ fn recorded(
             if !call_head.is_exec() {
                 return Err(rejected);
             }
-            let binding = cell::parse_binding(&binding_code).map_err(|()| rejected)?;
+            let binding = cell::parse_binding_in(&binding_code, allowance).map_err(cell_failure)?;
             let output_head = rows::row(output_line).ok_or(rejected)?;
             let output_value: Value = serde_json::from_slice(output_line).map_err(|_| rejected)?;
             let Some(rows::Item::Output { call_id, items }) =
@@ -902,7 +909,7 @@ fn recorded(
                 binding.literal.as_deref(),
             )
             .ok_or(rejected)?;
-            cell::parse_loaded(&input, &binding.key, &id).map_err(|()| rejected)?
+            cell::parse_loaded_in(&input, &binding.key, &id, allowance).map_err(cell_failure)?
         }
         _ => return Err(rejected),
     };
@@ -970,7 +977,7 @@ fn recorded_codex(
     {
         return Err(rejected);
     }
-    let ops = cell::parse_operations(&input).map_err(|()| rejected)?;
+    let ops = cell::parse_operations_in(&input, allowance).map_err(cell_failure)?;
     let op = candidate.key.launch_operation_index as usize;
     ops.get(op)
         .filter(|operation| operation.tool == Tool::ExecCommand)
@@ -1796,6 +1803,71 @@ mod tests {
                 Err(Outcome::SourceRejected)
             );
         }
+    }
+
+    #[test]
+    fn evaluation_memory_refusal_defers_both_recorded_launch_validators() {
+        let expansion = format!(
+            "const p={};text(await tools.exec_command({{cmd:p.replace(/'/g,{})}}))",
+            serde_json::to_string(&"'".repeat(4096)).unwrap(),
+            serde_json::to_string(&"a".repeat(4096)).unwrap()
+        );
+        let mut launch: Value =
+            serde_json::from_slice(&exec_row("call_launch", 2, &["placeholder"])).unwrap();
+        launch["payload"]["input"] = json!(expansion);
+        let launch = serde_json::to_vec(&launch).unwrap();
+        let answer = output_row("call_launch", 3, &[started(THREAD)]);
+        let allowance = Allowance::new(4 << 20);
+        let row = codex_row("call_launch", 0);
+        assert_eq!(
+            recorded_codex(&row, &launch, &answer, false, &allowance),
+            Err(Outcome::Deferred)
+        );
+        let unfinished = HashMap::new();
+        let sources = Sources {
+            home: Path::new("/synthetic"),
+            programs: &[],
+            max_line: 1 << 20,
+            max_child_bytes: 1 << 20,
+            max_child_lines: 1000,
+            max_window_bytes: 1 << 20,
+            unfinished: &unfinished,
+        };
+        assert!(matches!(
+            recorded(&row, &launch, &answer, None, None, &sources, &allowance),
+            Err(Outcome::Deferred)
+        ));
+        assert_eq!(allowance.used(), 0);
+
+        let binding = format!(
+            "const id=\"{CHILD}\";store(\"k\",id);text({{session_id:id}});text(await tools.note(null));"
+        );
+        let mut call: Value =
+            serde_json::from_slice(&exec_row("binding", 0, &["placeholder"])).unwrap();
+        call["payload"]["input"] = json!(binding);
+        let receipt = output_row(
+            "binding",
+            1,
+            &[json!({"session_id": CHILD}).to_string(), "{}".into()],
+        );
+        let mut loaded: Value = serde_json::from_slice(&launch).unwrap();
+        loaded["payload"]["input"] = json!(format!(
+            "const id=load(\"k\");{}",
+            loaded["payload"]["input"].as_str().unwrap()
+        ));
+        assert!(matches!(
+            recorded(
+                &row,
+                &serde_json::to_vec(&loaded).unwrap(),
+                &answer,
+                Some(&serde_json::to_vec(&call).unwrap()),
+                Some(&receipt),
+                &sources,
+                &allowance
+            ),
+            Err(Outcome::Deferred)
+        ));
+        assert_eq!(allowance.used(), 0);
     }
 
     const PARENT: &str = "01a00000-0000-7000-8000-0000000000aa";

@@ -35,7 +35,7 @@ use rusqlite::{Connection, params};
 /// versions is a check still to run.
 macro_rules! child_check_versions {
     () => {
-        "check1.spawn2.scan11.claude6.cli1.bash2"
+        "check1.spawn2.scan11.claude6.cli1.bash3"
     };
 }
 pub(crate) use child_check_versions;

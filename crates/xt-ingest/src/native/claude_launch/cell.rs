@@ -29,6 +29,7 @@
 //! its own cell and a matching leading `load` in the next cell. Neither form
 //! evaluates JavaScript. Everything outside these grammars is refused.
 
+use super::source::{Allowance, Reserved};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -310,6 +311,8 @@ const RESERVED: [&str; 9] = [
 ];
 
 struct Parser {
+    held: Reserved,
+    memory_refused: bool,
     tokens: Vec<Tok>,
     at: usize,
     strings: BTreeMap<String, String>,
@@ -374,12 +377,21 @@ fn replacement_parts<'a>(
     emit(&input[end..])
 }
 
-fn replace_apostrophes(input: &str, with: &str) -> Result<String, ()> {
+fn replacement_length(input: &str, with: &str) -> Result<usize, ()> {
     let mut len = 0;
     replacement_parts(input, with, |part| {
         len = string_length(len, part.len())?;
         Ok(())
     })?;
+    Ok(len)
+}
+
+#[cfg(test)]
+fn replace_apostrophes(input: &str, with: &str) -> Result<String, ()> {
+    emit_replacement(input, with, replacement_length(input, with)?)
+}
+
+fn emit_replacement(input: &str, with: &str, len: usize) -> Result<String, ()> {
     // Refuse oversized output before allocating any of it. Both passes use
     // the same pieces so sizing and JavaScript substitution cannot drift.
     let mut output = String::with_capacity(len);
@@ -403,14 +415,62 @@ pub(super) fn parse_cell(source: &str) -> Result<Cell, ()> {
 /// Every operation of a cell, in order, or `Err` for anything outside the
 /// grammar. Each operation's result is emitted once, right after it, so the
 /// cell's `n`-th emitted result is its `n`-th operation's.
-pub(super) fn parse_operations(source: &str) -> Result<Vec<Cell>, ()> {
+pub(super) fn parse_operations_in(
+    source: &str,
+    allowance: &Allowance,
+) -> Result<Evaluated<Vec<Cell>>, ParseError> {
+    evaluate(source, allowance, operations)
+}
+
+/// Evaluated string allocations stay charged while callers inspect the result.
+/// This covers string evaluation, not every allocation in a launch scan.
+#[derive(Debug)]
+pub(super) struct Evaluated<T> {
+    pub value: T,
+    _held: Reserved,
+}
+impl<T> std::ops::Deref for Evaluated<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ParseError {
+    Grammar,
+    Memory,
+}
+
+fn evaluate<T>(
+    source: &str,
+    allowance: &Allowance,
+    parse: impl FnOnce(&mut Parser) -> Result<T, ()>,
+) -> Result<Evaluated<T>, ParseError> {
     let mut parser = Parser {
-        tokens: tokenize(source)?,
+        // Callers already reserve a decoding estimate. This additional owner
+        // covers evaluated copies/expansions, not a total tokenizer heap bound.
+        tokens: tokenize(source).map_err(|()| ParseError::Grammar)?,
         at: 0,
         strings: BTreeMap::new(),
         results: Vec::new(),
+        held: allowance.reserve(0).map_err(|_| ParseError::Memory)?,
+        memory_refused: false,
     };
-    operations(&mut parser)
+    match parse(&mut parser) {
+        Ok(value) => Ok(Evaluated {
+            value,
+            _held: parser.held,
+        }),
+        Err(()) if parser.memory_refused => Err(ParseError::Memory),
+        Err(()) => Err(ParseError::Grammar),
+    }
+}
+
+#[cfg(test)]
+pub(super) fn parse_operations(source: &str) -> Result<Vec<Cell>, ()> {
+    parse_operations_in(source, &Allowance::new(usize::MAX))
+        .map(|r| r.value)
+        .map_err(|_| ())
 }
 
 fn operations(parser: &mut Parser) -> Result<Vec<Cell>, ()> {
@@ -466,13 +526,21 @@ pub(super) struct Binding {
 
 /// The exact self-contained UUID recipe (or a UUID literal), its store and
 /// text calls, followed only by ordinary safe tool operations.
+pub(super) fn parse_binding_in(
+    source: &str,
+    allowance: &Allowance,
+) -> Result<Evaluated<Binding>, ParseError> {
+    evaluate(source, allowance, binding)
+}
+
+#[cfg(test)]
 pub(super) fn parse_binding(source: &str) -> Result<Binding, ()> {
-    let mut p = Parser {
-        tokens: tokenize(source)?,
-        at: 0,
-        strings: BTreeMap::new(),
-        results: Vec::new(),
-    };
+    parse_binding_in(source, &Allowance::new(usize::MAX))
+        .map(|r| r.value)
+        .map_err(|_| ())
+}
+
+fn binding(p: &mut Parser) -> Result<Binding, ()> {
     let prefix = usize::from(p.literal_patch()?);
     p.keyword("const")?;
     let id = p.binding()?;
@@ -560,7 +628,7 @@ pub(super) fn parse_binding(source: &str) -> Result<Binding, ()> {
     p.expect("}")?;
     p.expect(")")?;
     p.expect(";")?;
-    let operations = operations(&mut p)?.len();
+    let operations = operations(p)?.len();
     Ok(Binding {
         key,
         literal,
@@ -571,13 +639,23 @@ pub(super) fn parse_binding(source: &str) -> Result<Binding, ()> {
 
 /// Only a leading load of the matching literal key supplies one string to
 /// the existing expression reader. No other statement may precede it.
+pub(super) fn parse_loaded_in(
+    source: &str,
+    key: &str,
+    value: &str,
+    allowance: &Allowance,
+) -> Result<Evaluated<Vec<Cell>>, ParseError> {
+    evaluate(source, allowance, |p| loaded(p, key, value))
+}
+
+#[cfg(test)]
 pub(super) fn parse_loaded(source: &str, key: &str, value: &str) -> Result<Vec<Cell>, ()> {
-    let mut p = Parser {
-        tokens: tokenize(source)?,
-        at: 0,
-        strings: BTreeMap::new(),
-        results: Vec::new(),
-    };
+    parse_loaded_in(source, key, value, &Allowance::new(usize::MAX))
+        .map(|r| r.value)
+        .map_err(|_| ())
+}
+
+fn loaded(p: &mut Parser, key: &str, value: &str) -> Result<Vec<Cell>, ()> {
     let prefix = p.literal_patch()?;
     p.keyword("const")?;
     let name = p.binding()?;
@@ -589,7 +667,8 @@ pub(super) fn parse_loaded(source: &str, key: &str, value: &str) -> Result<Vec<C
     }
     p.expect(")")?;
     p.expect(";")?;
-    string_length(0, value.len())?;
+    p.checked_length(0, value.len())?;
+    p.charge(value.len())?;
     p.strings.insert(name, value.to_owned());
     let mut cells = if prefix {
         vec![Cell {
@@ -599,7 +678,7 @@ pub(super) fn parse_loaded(source: &str, key: &str, value: &str) -> Result<Vec<C
     } else {
         Vec::new()
     };
-    cells.extend(operations(&mut p)?);
+    cells.extend(operations(p)?);
     (cells.len() <= MAX_OPERATIONS).then_some(cells).ok_or(())
 }
 
@@ -667,6 +746,30 @@ text(await tools.exec_command({cmd:"claude --session-id "+child+" --output-forma
 }
 
 impl Parser {
+    fn checked_length(&mut self, current: usize, more: usize) -> Result<usize, ()> {
+        string_length(current, more).map_err(|()| {
+            self.memory_refused = true;
+        })
+    }
+
+    // Conservatively retain charges through the complete evaluation/result.
+    // Discarded temporaries may therefore cause an earlier refusal, never an
+    // uncharged expansion. A failed parse releases all of its reservations.
+    fn charge(&mut self, bytes: usize) -> Result<(), ()> {
+        self.held.grow(bytes).map_err(|_| {
+            self.memory_refused = true;
+        })
+    }
+
+    fn cloned_token(&mut self) -> Result<Option<Tok>, ()> {
+        let bytes = match self.peek() {
+            Some(Tok::Ident(s) | Tok::Str(s) | Tok::Num(s) | Tok::Regex(s)) => s.len(),
+            _ => 0,
+        };
+        self.charge(bytes)?;
+        Ok(self.peek().cloned())
+    }
+
     /// The one harmless leading operation this form admits. Its argument is
     /// a literal patch string; its reply keeps its actual emitted slot.
     fn literal_patch(&mut self) -> Result<bool, ()> {
@@ -713,9 +816,8 @@ impl Parser {
     }
 
     fn ident(&mut self) -> Result<String, ()> {
-        match self.peek() {
+        match self.cloned_token()? {
             Some(Tok::Ident(name)) => {
-                let name = name.clone();
                 self.at += 1;
                 Ok(name)
             }
@@ -748,10 +850,11 @@ impl Parser {
     }
 
     fn string(&mut self) -> Result<String, ()> {
-        match self.peek() {
+        if let Some(Tok::Str(value)) = self.peek() {
+            self.checked_length(0, value.len())?;
+        }
+        match self.cloned_token()? {
             Some(Tok::Str(value)) => {
-                string_length(0, value.len())?;
-                let value = value.clone();
                 self.at += 1;
                 Ok(value)
             }
@@ -786,7 +889,7 @@ impl Parser {
         self.expect("{")?;
         let mut args = BTreeMap::new();
         while !self.eat("}") {
-            let key = match self.peek().cloned() {
+            let key = match self.cloned_token()? {
                 Some(Tok::Ident(key) | Tok::Str(key)) => {
                     self.at += 1;
                     key
@@ -861,8 +964,14 @@ impl Parser {
         while self.eat("+") {
             match self.term()? {
                 Value::Str(more) => {
-                    string_length(text.len(), more.len())?;
-                    text.push_str(&more);
+                    let len = self.checked_length(text.len(), more.len())?;
+                    // Allocate the complete joined string only after its space
+                    // is reserved; the old terms remain charged during copying.
+                    self.charge(len)?;
+                    let mut joined = String::with_capacity(len);
+                    joined.push_str(&text);
+                    joined.push_str(&more);
+                    text = joined;
                 }
                 Value::Num(_) | Value::Bool(_) => return Err(()),
             }
@@ -874,9 +983,9 @@ impl Parser {
     /// `<constant>.replace(/'/g, "<string>")`.
     fn term(&mut self) -> Result<Value, ()> {
         if let Some(Tok::Str(value)) = self.peek() {
-            string_length(0, value.len())?;
+            self.checked_length(0, value.len())?;
         }
-        match self.peek().cloned() {
+        match self.cloned_token()? {
             Some(Tok::Str(value)) => {
                 self.at += 1;
                 Ok(Value::Str(value))
@@ -891,9 +1000,10 @@ impl Parser {
             }
             Some(Tok::Ident(name)) => {
                 self.at += 1;
-                let bound = self.strings.get(&name).ok_or(())?;
-                string_length(0, bound.len())?;
-                let bound = bound.clone();
+                let bytes = self.strings.get(&name).ok_or(())?.len();
+                self.checked_length(0, bytes)?;
+                self.charge(bytes)?;
+                let bound = self.strings.get(&name).ok_or(())?.clone();
                 if !self.eat(".") {
                     return Ok(Value::Str(bound));
                 }
@@ -906,7 +1016,11 @@ impl Parser {
                 self.expect(",")?;
                 let with = self.string()?;
                 self.expect(")")?;
-                Ok(Value::Str(replace_apostrophes(&bound, &with)?))
+                let len = replacement_length(&bound, &with).map_err(|()| {
+                    self.memory_refused = true;
+                })?;
+                self.charge(len)?;
+                Ok(Value::Str(emit_replacement(&bound, &with, len)?))
             }
             _ => Err(()),
         }
@@ -916,6 +1030,84 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evaluation_reserves_expansion_and_aggregate_strings_until_result_drop() {
+        let allowance = Allowance::new(4 << 20);
+        let source = format!(
+            "const p={};text(await tools.exec_command({{cmd:p.replace(/'/g,{})}}))",
+            serde_json::to_string(&"'".repeat(4096)).unwrap(),
+            serde_json::to_string(&"a".repeat(4096)).unwrap()
+        );
+        assert_eq!(
+            parse_operations_in(&source, &allowance).unwrap_err(),
+            ParseError::Memory
+        );
+        assert_eq!(allowance.used(), 0);
+        let loaded = format!("const id=load(\"k\");{source}");
+        assert_eq!(
+            parse_loaded_in(&loaded, "k", "id", &allowance).unwrap_err(),
+            ParseError::Memory
+        );
+        assert_eq!(allowance.used(), 0);
+        let binding = format!(
+            "const id=\"7fd904e4-b007-4f55-a1d1-40066c96457b\";store(\"k\",id);text({{session_id:id}});{source}"
+        );
+        assert_eq!(
+            parse_binding_in(&binding, &allowance).unwrap_err(),
+            ParseError::Memory
+        );
+        assert_eq!(allowance.used(), 0);
+
+        // Each 1 MiB output fits alone; their combined retained copies do not.
+        let term = format!(
+            "p.replace(/'/g,{})",
+            serde_json::to_string(&"a".repeat(1024)).unwrap()
+        );
+        let prefix = format!(
+            "const p={};",
+            serde_json::to_string(&"'".repeat(1024)).unwrap()
+        );
+        let one = format!("{prefix}text(await tools.exec_command({{cmd:{term}}}))");
+        let result = parse_operations_in(&one, &allowance).unwrap();
+        assert!(allowance.used() >= 1 << 20);
+        assert_eq!(result[0].str("cmd").unwrap().len(), 1 << 20);
+        drop(result);
+        assert_eq!(allowance.used(), 0);
+        let many = format!(
+            "{prefix}{}",
+            format!("text(await tools.exec_command({{cmd:{term}}}));").repeat(5)
+        );
+        assert_eq!(
+            parse_operations_in(&many, &allowance).unwrap_err(),
+            ParseError::Memory
+        );
+        assert_eq!(allowance.used(), 0);
+        let constants = format!(
+            "const a={};const b={};text(await tools.note(a+b))",
+            serde_json::to_string(&"a".repeat(1 << 20)).unwrap(),
+            serde_json::to_string(&"b".repeat(1 << 20)).unwrap()
+        );
+        assert_eq!(
+            parse_operations_in(&constants, &allowance).unwrap_err(),
+            ParseError::Memory
+        );
+        assert_eq!(allowance.used(), 0);
+        let malformed = "const p=\"abc\";unknown";
+        assert_eq!(
+            parse_operations_in(malformed, &allowance).unwrap_err(),
+            ParseError::Grammar
+        );
+        assert_eq!(allowance.used(), 0);
+        assert!(
+            parse_operations_in(
+                "text(await tools.exec_command({cmd: \"a\" + \"b\"}))",
+                &allowance
+            )
+            .is_ok()
+        );
+        assert_eq!(allowance.used(), 0);
+    }
 
     #[test]
     fn replacement_dollars_match_javascript_without_captures_or_recursion() {
@@ -974,6 +1166,8 @@ mod tests {
         // Repeating individually valid terms cannot bypass the expression bound.
         let half = "x".repeat(MAX_EVALUATED_STRING_BYTES / 2);
         let mut p = Parser {
+            held: Allowance::new(usize::MAX).reserve(0).unwrap(),
+            memory_refused: false,
             tokens: tokenize("p+p").unwrap(),
             at: 0,
             strings: BTreeMap::from([("p".into(), half.clone())]),

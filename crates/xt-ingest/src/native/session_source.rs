@@ -76,6 +76,8 @@ const READ_CHUNK: usize = 64 * 1024;
 /// may lower them, and tests do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceLimits {
+    /// Claude: cumulative source-file bytes. Codex/Cursor: emitted JSONL
+    /// stream bytes, including headers, ignored lines and line terminators.
     pub max_bytes: u64,
     pub max_records: usize,
 }
@@ -426,13 +428,17 @@ fn load_via_reader(
     // and, when it is a symlink, where it led. A root retargeted during the
     // read cannot vouch for a path under its new target.
     let roots = host_roots(request.host, &home);
+    let mut bounds = reader.bounds;
+    bounds.max_stdout = bounds
+        .max_stdout
+        .min(usize::try_from(request.limits.max_bytes).unwrap_or(usize::MAX));
     let stream = match run_exact_detail(
         reader.python,
         reader.producer,
         request.host,
         &home,
         request.native_session_id,
-        reader.bounds,
+        bounds,
         request.cancel,
     ) {
         Ok(stream) => stream,
@@ -499,6 +505,15 @@ fn session_from_stream(
     roots: &[PathBuf],
     stream: &[u8],
 ) -> Result<LoadedSession, SourceUnavailable> {
+    if cancelled(request.cancel) {
+        return Err(SourceUnavailable::Cancelled);
+    }
+    // Count the entire emitted stream before parsing or retaining any record.
+    // The reader's pipe cap enforces the same bound while collecting it.
+    let mut budget = Budget::new(request.limits);
+    budget
+        .take_bytes(stream.len() as u64)
+        .map_err(|limit| budget.too_large(limit))?;
     let native = request.native_session_id;
     let text = std::str::from_utf8(stream).map_err(|_| broken("reader output is not UTF-8"))?;
     // The producer ends every line it writes; output that stops inside one
@@ -507,7 +522,6 @@ fn session_from_stream(
         return Err(broken("reader output ends inside a line"));
     }
     let mut events = StreamEvents::new(request.host, xt_store::SessionSource::ReadersCli);
-    let mut budget = Budget::new(request.limits);
     let mut header = None;
     let mut records = Vec::new();
     let mut dropped_records = 0_u64;
@@ -1465,6 +1479,71 @@ mod tests {
         };
         assert_eq!(read.records.len(), 40);
         assert_eq!(read.generation, GenerationBasis::Unrecorded);
+    }
+
+    #[test]
+    fn codex_and_cursor_byte_limits_count_the_complete_emitted_stream() {
+        let home = PathBuf::from("/home/user");
+        let native = "00000000-0000-4000-8000-00000000c0de";
+        for (host, name, folder) in [
+            (Host::Codex, "codex", ".codex/sessions"),
+            (Host::Cursor, "cursor", ".cursor/chats"),
+        ] {
+            let stream = format!(
+                "{}\r\n{}\n\n",
+                serde_json::json!({
+                    "type":"session", "host":name, "native_session_id":native,
+                    "conversation_id":format!("{name}-{native}"), "source_surface":null,
+                    "started_at":null, "cwd":null, "git_branch":null, "title":null,
+                    "path":format!("/home/user/{folder}/rollout.jsonl"), "mtime":1.0
+                }),
+                serde_json::json!({
+                    "uuid":"77770000-7777-4777-8777-000000000000", "type":"user",
+                    "timestamp":"2026-09-07T12:00:00Z",
+                    "message":{"role":"user", "content":[{"type":"text", "text":"ask"}]}
+                })
+            );
+            let bytes = stream.len() as u64;
+            let roots = host_roots(host, &home);
+            let cancel = CancelToken::new();
+            let mut request = SessionSourceRequest {
+                home: &home,
+                host,
+                native_session_id: native,
+                indexed: &[],
+                cancel: Some(&cancel),
+                limits: SourceLimits {
+                    max_bytes: bytes,
+                    max_records: 1,
+                },
+            };
+            let loaded = session_from_stream(&request, &roots, stream.as_bytes()).unwrap();
+            assert_eq!(loaded.records.len(), 1);
+            assert_eq!(loaded.sources[0].bytes, bytes);
+            request.limits.max_bytes -= 1;
+            assert_eq!(
+                session_from_stream(&request, &roots, stream.as_bytes()),
+                Err(SourceUnavailable::TooLarge {
+                    limit: SourceCeiling::Bytes,
+                    reached: bytes,
+                    ceiling: bytes - 1
+                })
+            );
+            request.limits.max_bytes = bytes;
+            request.limits.max_records = 0;
+            assert!(matches!(
+                session_from_stream(&request, &roots, stream.as_bytes()),
+                Err(SourceUnavailable::TooLarge {
+                    limit: SourceCeiling::Records,
+                    ..
+                })
+            ));
+            cancel.cancel();
+            assert_eq!(
+                session_from_stream(&request, &roots, stream.as_bytes()),
+                Err(SourceUnavailable::Cancelled)
+            );
+        }
     }
 
     /// A cancel that lands after the last line is parsed — after every check

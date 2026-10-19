@@ -1479,6 +1479,62 @@ mod claude {
         );
     }
 
+    #[test]
+    fn escaped_launches_repair_previous_bash_negative_checks_without_source_changes() {
+        let home = Home::new();
+        let caller = write_session(
+            &home,
+            "-w-caller",
+            CALLER,
+            &caller_rows(Some((12_000, &printed("Answer alpha", "Answer beta")))),
+        );
+        let raw = fs::read_to_string(&caller)
+            .unwrap()
+            .replace("tool_use", "\\u0074ool_use");
+        fs::write(&caller, &raw).unwrap();
+        write_session(
+            &home,
+            "-w-alpha",
+            ALPHA,
+            &session_rows(ALPHA, "/w/alpha", 3_000, QUESTION, "Answer alpha"),
+        );
+        write_session(
+            &home,
+            "-w-beta",
+            BETA,
+            &session_rows(BETA, "/w/beta", 8_000, QUESTION, "Answer beta"),
+        );
+        let mut store = home.store();
+        // Import only, then seed the negative checks the old raw-text detector
+        // could finish against exactly these unchanged source bytes.
+        scan(&home, &mut store, &mut SpawnBacklog::default());
+        let connection = rusqlite::Connection::open(&home.db).unwrap();
+        connection.execute("UPDATE session_child_checks SET completed_generation=required_generation, detector_versions='check1.spawn2.scan11.claude6.cli1.bash2'", []).unwrap();
+        assert_eq!(
+            home.states(&[ALPHA, BETA]),
+            [ChildCheck::Checking, ChildCheck::Checking]
+        );
+        let frames = drain(
+            &home,
+            &mut store,
+            &mut SpawnBacklog::starting(),
+            &[ALPHA, BETA, CALLER],
+        );
+        assert_eq!(
+            frames.last().unwrap(),
+            &[ChildCheck::Child, ChildCheck::Child, ChildCheck::Checked]
+        );
+        assert_eq!(fs::read_to_string(&caller).unwrap(), raw);
+        let count = store.child_fact_summary().unwrap().children;
+        drain(
+            &home,
+            &mut store,
+            &mut SpawnBacklog::starting(),
+            &[ALPHA, BETA, CALLER],
+        );
+        assert_eq!(store.child_fact_summary().unwrap().children, count);
+    }
+
     /// A `Bash` launch with no result yet holds the session whose first
     /// input is its prompt, in its folder, born after it; a session with
     /// another first input is checked. The result arrives and the held one
@@ -2000,4 +2056,45 @@ mod claude {
         );
         assert_eq!(home.states(&[MAIN]), [ChildCheck::Checking]);
     }
+}
+
+#[test]
+fn previous_bash_detector_checks_again_once() {
+    let home = Home::new();
+    let main_path = write_thread(&home, MAIN, header(MAIN, "cli", 10_000, &[]), 11_000);
+    let mut store = home.store();
+    index_thread(&mut store, MAIN, &main_path, 11_000);
+    drain(
+        &home,
+        &mut store,
+        &mut SpawnBacklog::starting(),
+        spawn_limits(),
+        &[&codex(MAIN)],
+    );
+    assert_eq!(home.state(&codex(MAIN)), ChildCheck::Checked);
+    rusqlite::Connection::open(&home.db)
+        .unwrap()
+        .execute(
+            "UPDATE session_child_checks SET detector_versions='check1.spawn2.scan11.claude6.cli1.bash2'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(home.state(&codex(MAIN)), ChildCheck::Checking);
+    let (passes, _) = drain(
+        &home,
+        &mut store,
+        &mut SpawnBacklog::starting(),
+        spawn_limits(),
+        &[&codex(MAIN)],
+    );
+    assert_eq!(home.state(&codex(MAIN)), ChildCheck::Checked);
+    assert_eq!(changed(&passes), (0, 1));
+    let (again, _) = drain(
+        &home,
+        &mut store,
+        &mut SpawnBacklog::starting(),
+        spawn_limits(),
+        &[&codex(MAIN)],
+    );
+    assert_eq!(changed(&again), (0, 0));
 }

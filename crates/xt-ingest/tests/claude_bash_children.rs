@@ -798,3 +798,97 @@ fn small_budgets_still_reach_a_result() {
         assert_eq!(facts(&store, BETA), [bash(CALLER, CALL, 1)], "{name}");
     }
 }
+
+#[test]
+fn escaped_calls_results_and_duplicates_use_decoded_json() {
+    for variant in [
+        "plain",
+        "escaped_call",
+        "escaped_result",
+        "duplicate_call_plain",
+        "duplicate_call_escaped",
+        "duplicate_result_plain",
+        "duplicate_result_escaped",
+    ] {
+        let home = Home::new();
+        standard(&home);
+        let path = home.project("-w-caller").join(format!("{CALLER}.jsonl"));
+        let mut rows = caller_rows(
+            CALLER,
+            CALL,
+            12_000,
+            &printed("Answer alpha", "Answer beta"),
+        );
+        let index = match variant {
+            "escaped_call" => Some((1, "tool_use")),
+            "escaped_result" => Some((2, "tool_use_id")),
+            "duplicate_call_plain" | "duplicate_call_escaped" => {
+                let mut duplicate = rows[1].clone();
+                duplicate["uuid"] = json!("duplicate-call-row");
+                rows.push(duplicate);
+                Some((3, "tool_use"))
+            }
+            "duplicate_result_plain" | "duplicate_result_escaped" => {
+                let mut duplicate = rows[2].clone();
+                duplicate["uuid"] = json!("duplicate-result-row");
+                rows.push(duplicate);
+                Some((3, "tool_use_id"))
+            }
+            _ => None,
+        };
+        let mut lines: Vec<String> = rows.iter().map(Value::to_string).collect();
+        if variant.contains("escaped") {
+            let (i, word) = index.unwrap();
+            let changed = lines[i].replace(word, &format!("\\u0074{}", &word[1..]));
+            assert_eq!(serde_json::from_str::<Value>(&changed).unwrap(), rows[i]);
+            assert!(!changed.contains("tool_use"));
+            lines[i] = changed;
+        }
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let before_files = snapshot(&home);
+        let mut store = home.store();
+        scan(&home, &mut store, &mut SpawnBacklog::default());
+        let eligible_before = [ALPHA, BETA].map(|s| eligible(&home, &store, s));
+        let total = settle(&home, &mut store, &mut BashBacklog::starting());
+        let known_after = [ALPHA, BETA].map(|s| known(&home, &store, s));
+        let eligible_after = [ALPHA, BETA].map(|s| eligible(&home, &store, s));
+        let accepted = [ALPHA, BETA].map(|s| facts(&store, s).iter().filter(|f| f.4).count());
+        println!(
+            "BASH {variant}: known_and_parent={known_after:?} accepted_facts={accepted:?} eligible_before={eligible_before:?} eligible_after={eligible_after:?} passes={total:?}"
+        );
+        let expected = matches!(variant, "plain" | "escaped_call" | "escaped_result");
+        assert_eq!(known_after, [(expected, false); 2], "{variant}");
+        assert_eq!(
+            eligible_before, eligible_after,
+            "child fact must not change ownership"
+        );
+        assert_eq!(
+            snapshot(&home),
+            before_files,
+            "source histories remain unchanged"
+        );
+    }
+}
+
+#[test]
+fn earlier_accepted_bash_facts_keep_their_version_and_are_not_duplicated() {
+    let home = Home::new();
+    standard(&home);
+    let mut store = home.store();
+    scan(&home, &mut store, &mut SpawnBacklog::default());
+    let connection = rusqlite::Connection::open(&home.db).unwrap();
+    // Seed exactly the immutable fact rows an earlier detector wrote.
+    // The current writer intentionally refuses newly submitted old versions.
+    for (index, native) in [ALPHA, BETA].into_iter().enumerate() {
+        connection.execute("INSERT INTO session_child_facts(child_session_id,child_host,child_native_session_id,evidence_kind,evidence_version,source_native_session_id,source_rollout_id,launch_call_id,launch_operation_index,first_record_uuid,state,recorded_at) VALUES (?1,'claude',?2,'claude_bash_launch',2,?3,NULL,?4,?5,?6,'accepted',?7)", rusqlite::params![session(&store, native), native, CALLER, CALL, index as i64, format!("{native}-first"), T]).unwrap();
+    }
+    let again = settle(&home, &mut store, &mut BashBacklog::starting());
+    assert_eq!((again.changed, again.children, again.already), (0, 0, 2));
+    for native in [ALPHA, BETA] {
+        assert_eq!(known(&home, &store, native), (true, false));
+        let old = store.child_facts(&session(&store, native)).unwrap();
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].0.evidence_version, 2);
+        assert!(old[0].1);
+    }
+}

@@ -422,6 +422,7 @@ fn totals(passes: &[LaunchProgress]) -> LaunchProgress {
         total.waiting += pass.waiting;
         total.bytes_read += pass.bytes_read;
         total.published_invalid += pass.published_invalid;
+        total.published_valid += pass.published_valid;
     }
     total
 }
@@ -4654,4 +4655,67 @@ fn reading_a_history_again_for_a_new_version_keeps_accepted_relations() {
         "{warm:?}"
     );
     assert_eq!(dump(), before);
+}
+
+/// The original small recorded cell expands to exactly 16 MiB. A 4 MiB
+/// combined scan buffer allowance must leave an unread history, not a valid negative.
+#[test]
+fn evaluated_expansion_refuses_the_scan_and_can_be_retried_with_more_memory() {
+    for loaded in [false, true] {
+        let home = Home::new();
+        let expansion = format!(
+            "const p={};text(await tools.exec_command({{cmd:p.replace(/'/g,{})}}));",
+            js(&"'".repeat(4096)),
+            js(&"a".repeat(4096))
+        );
+        assert_eq!(expansion.len(), 8_260);
+        let rows = if loaded {
+            let mut rows = bound_cells("synthetic arbitrary key", json!({"session_id": CHILD}));
+            rows[3]["payload"]["input"] = json!(format!(
+                "const worker=load(\"synthetic arbitrary key\");{expansion}"
+            ));
+            rows
+        } else {
+            vec![
+                call(0, "call_launch", &expansion),
+                output(1, "call_launch", DONE, &[exit(0, "")]),
+            ]
+        };
+        let files = write_history(&home, &[rows]);
+        let before: Vec<_> = files.iter().map(|p| fs::read(p).unwrap()).collect();
+        let mut store = home.store();
+        index_parent(&mut store, &files[0]);
+        let limits = LaunchLimits {
+            thread_memory: 1 << 20,
+            cache_memory: 1 << 20,
+            pass_memory: 1 << 20,
+            ..LaunchLimits::default()
+        };
+        let limited = totals(&drain(
+            &home,
+            &mut store,
+            &mut LaunchBacklog::starting(),
+            &limits,
+        ));
+        assert_eq!(limited.published_valid, 0, "{limited:?}");
+        assert_eq!(
+            store.claude_launch_group(PARENT).unwrap().unwrap().status,
+            GroupStatus::Invalid
+        );
+        let retry = totals(&drain(
+            &home,
+            &mut store,
+            &mut LaunchBacklog::starting(),
+            &LaunchLimits::default(),
+        ));
+        assert_eq!(retry.published_valid, 1, "{retry:?}");
+        assert_eq!(retry.launches_found, 0);
+        assert_eq!(
+            files
+                .iter()
+                .map(|p| fs::read(p).unwrap())
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
 }

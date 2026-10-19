@@ -619,6 +619,107 @@ fn every_declared_refusal_is_its_own_closed_reason() {
 }
 
 #[test]
+fn caller_stream_byte_cap_is_enforced_while_reading_both_hosts() {
+    for (host, name, folder) in [
+        (Host::Codex, "codex", ".codex/sessions"),
+        (Host::Cursor, "cursor", ".cursor/chats"),
+    ] {
+        let scene = scene();
+        fs::create_dir_all(scene.home.join(folder)).unwrap();
+        let mut header = header_for(CODEX, &scene.home);
+        header["host"] = json!(name);
+        header["conversation_id"] = json!(format!("{name}-{CODEX}"));
+        header["source_surface"] = serde_json::Value::Null;
+        header["path"] = json!(scene.home.join(folder).join("rollout.jsonl"));
+        let lines = [header, record(0)];
+        let bytes: usize = lines.iter().map(|v| v.to_string().len() + 1).sum();
+        let python = fake(&scene, &prints(&lines));
+        let limits = SourceLimits {
+            max_bytes: bytes as u64,
+            max_records: 1,
+        };
+        let result = load(
+            &scene,
+            &python,
+            host,
+            CODEX,
+            DetailBounds::default(),
+            None,
+            limits,
+        );
+        let SessionSourceOutcome::Loaded(loaded) = result else {
+            panic!("{result:?}")
+        };
+        assert_eq!(loaded.records.len(), 1);
+        assert_eq!(loaded.sources[0].bytes, bytes as u64);
+        let smaller = SourceLimits {
+            max_bytes: bytes as u64 - 1,
+            ..limits
+        };
+        assert_eq!(
+            refused(load(
+                &scene,
+                &python,
+                host,
+                CODEX,
+                DetailBounds::default(),
+                None,
+                smaller
+            )),
+            SourceUnavailable::Reader(DetailFailure::OutputBound)
+        );
+        // An independently lower drain ceiling is also retained.
+        assert_eq!(
+            refused(load(
+                &scene,
+                &python,
+                host,
+                CODEX,
+                DetailBounds {
+                    max_stdout: bytes - 1,
+                    ..DetailBounds::default()
+                },
+                None,
+                limits
+            )),
+            SourceUnavailable::Reader(DetailFailure::OutputBound)
+        );
+        assert!(matches!(
+            refused(load(
+                &scene,
+                &python,
+                host,
+                CODEX,
+                DetailBounds::default(),
+                None,
+                SourceLimits {
+                    max_records: 0,
+                    ..limits
+                }
+            )),
+            SourceUnavailable::TooLarge {
+                limit: SourceCeiling::Records,
+                ..
+            }
+        ));
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert_eq!(
+            refused(load(
+                &scene,
+                &python,
+                host,
+                CODEX,
+                DetailBounds::default(),
+                Some(&cancel),
+                limits
+            )),
+            SourceUnavailable::Cancelled
+        );
+    }
+}
+
+#[test]
 fn output_past_its_bound_kills_the_reader_and_keeps_nothing() {
     let scene = scene();
     let small = DetailBounds {
