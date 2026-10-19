@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -339,6 +339,49 @@ test('release validation warns about stale plugin readers before validating, wit
   assert.doesNotMatch(steps[freshness], /continue-on-error|\|\| true|env:|secrets\.|token/i);
   const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
   assert.equal(pkg.scripts['check:plugin-pin'], 'node scripts/ci/plugin-pin.mjs freshness');
+  // Run the step's own shell as GitHub does, with a stand-in pnpm, against a
+  // candidate that has the script and one that predates it.
+  const guard = steps[freshness].split('        run: |\n')[1].replace(/^ {10}/gm, '');
+  const directory = await mkdtemp(join(tmpdir(), 'xtrace-reader-guard-'));
+  try {
+    const summary = join(directory, 'summary.md');
+    const runStep = async (scripts, pnpmStatus = 0) => {
+      await writeFile(join(directory, 'package.json'), JSON.stringify({ scripts }, null, 2));
+      await writeFile(summary, '');
+      const result = spawnSync(
+        'bash',
+        [
+          '--noprofile',
+          '--norc',
+          '-e',
+          '-o',
+          'pipefail',
+          '-c',
+          `pnpm() { echo "pnpm $*"; return ${pnpmStatus}; }\n${guard}`,
+        ],
+        {
+          cwd: directory,
+          env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary },
+          encoding: 'utf8',
+        },
+      );
+      return { ...result, summary: await readFile(summary, 'utf8') };
+    };
+    const current = await runStep(pkg.scripts);
+    assert.equal(current.status, 0, current.stderr);
+    assert.equal(current.stdout, 'pnpm check:plugin-pin\n');
+    assert.equal(current.summary, '');
+    // The checker's own failure, such as a malformed pin, still fails the step.
+    assert.equal((await runStep(pkg.scripts, 1)).status, 1);
+    const older = await runStep({ 'check:native': 'node scripts/ci/native-check.mjs' });
+    assert.equal(older.status, 0, older.stderr);
+    const message =
+      'This candidate predates the plugin-reader check, so its bundled plugin readers were not checked against the latest memhub release.';
+    assert.equal(older.stdout, `::warning title=Plugin readers::${message}\n`);
+    assert.equal(older.summary, `- Warning: ${message}\n`);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('only the signing step of the packaging job sees Apple values, after validation passes', () => {

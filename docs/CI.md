@@ -125,7 +125,9 @@ to date without checking. It only warns: the release continues, and only a
 malformed pin fails it. To act on a warning, refresh the bundled copy with
 `scripts/vendor-readers.sh` and update `.plugin-pin` (see the pinned plugin
 section below). Locally, `pnpm check:plugin-pin --checkout PATH` reads the
-tags of an existing `agent-plugins` checkout instead of the network.
+tags of an existing `agent-plugins` checkout instead of the network. A
+candidate older than this check has no such script; the step then warns that
+its bundled readers were not checked and the release continues.
 
 On default-branch dispatches, only after validation passes does the `package`
 job build the signed disk image. Reviewed tag dispatches skip this job. It runs
