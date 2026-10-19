@@ -139,33 +139,21 @@ export function latestMerged(
 }
 
 /**
- * The Merged PRs takeaway: how many of the counted merged pull requests are
- * listed, then what the PRs page's titles and hours are doing: read, still
- * being read, failed, or not asked for (the browser preview).
+ * The Merged PRs takeaway. The tile's number and list speak for themselves,
+ * so it says only that nothing merged in this range, or that the PRs page's
+ * titles and hours for the listed pull requests could not be read.
  */
 export function mergedTakeaway({
   merged,
-  shown,
   complete,
   list,
 }: {
   merged: number;
-  shown: number;
   complete: boolean;
   list: 'read' | 'reading' | 'failed' | 'none';
 }): string | null {
   if (merged === 0) return complete ? 'No pull request merged in this range.' : null;
-  const latest = `Latest ${shown === merged ? plural(merged, 'merged PR') : `${shown} of ${merged} merged`}${complete ? '' : ' so far'}`;
-  switch (list) {
-    case 'read':
-      return `${latest}, with agent hours on each.`;
-    case 'reading':
-      return `${latest}; reading their titles and agent hours…`;
-    case 'failed':
-      return `${latest}; their titles and agent hours could not be read.`;
-    case 'none':
-      return `${latest}.`;
-  }
+  return list === 'failed' ? 'Their titles and agent hours could not be read.' : null;
 }
 
 /**

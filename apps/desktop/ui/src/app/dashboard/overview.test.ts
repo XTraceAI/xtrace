@@ -248,25 +248,19 @@ it('lists the report’s own merged pull requests, latest first, with the PRs pa
   ]);
 });
 
-it('says what the Merged PRs list shows, without promising hours it has not read', () => {
-  const base = { merged: 12, shown: 4, complete: true };
-  expect(mergedTakeaway({ ...base, list: 'read' })).toBe(
-    'Latest 4 of 12 merged, with agent hours on each.',
-  );
-  expect(mergedTakeaway({ ...base, list: 'reading' })).toBe(
-    'Latest 4 of 12 merged; reading their titles and agent hours…',
-  );
+it('adds no Merged PRs line except for an empty range or unreadable titles', () => {
+  const base = { merged: 12, complete: true };
+  expect(mergedTakeaway({ ...base, list: 'read' })).toBeNull();
+  expect(mergedTakeaway({ ...base, list: 'reading' })).toBeNull();
+  expect(mergedTakeaway({ ...base, list: 'none' })).toBeNull();
+  expect(mergedTakeaway({ merged: 2, complete: false, list: 'read' })).toBeNull();
   expect(mergedTakeaway({ ...base, list: 'failed' })).toBe(
-    'Latest 4 of 12 merged; their titles and agent hours could not be read.',
+    'Their titles and agent hours could not be read.',
   );
-  expect(mergedTakeaway({ ...base, list: 'none' })).toBe('Latest 4 of 12 merged.');
-  expect(mergedTakeaway({ merged: 2, shown: 2, complete: false, list: 'read' })).toBe(
-    'Latest 2 merged PRs so far, with agent hours on each.',
-  );
-  expect(mergedTakeaway({ merged: 0, shown: 0, complete: true, list: 'reading' })).toBe(
+  expect(mergedTakeaway({ merged: 0, complete: true, list: 'reading' })).toBe(
     'No pull request merged in this range.',
   );
-  expect(mergedTakeaway({ merged: 0, shown: 0, complete: false, list: 'read' })).toBeNull();
+  expect(mergedTakeaway({ merged: 0, complete: false, list: 'read' })).toBeNull();
 });
 
 it('names the whole days a your-hours number covers', () => {

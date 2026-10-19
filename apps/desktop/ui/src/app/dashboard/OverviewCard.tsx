@@ -47,8 +47,9 @@ export const MERGED_LISTED = 4;
 /**
  * Leverage, Concurrency, Merged PRs and Hands-off median for the selected
  * range, two by two, each with its change against the previous period, a
- * day-by-day line where a day can be measured on its own, and one computed
- * takeaway on every tile but Leverage. Every number is the Rust report's.
+ * day-by-day line where a day can be measured on its own, and a computed
+ * takeaway on Concurrency and Hands-off median (on Merged PRs only for an
+ * empty range or unreadable titles). Every number is the Rust report's.
  */
 export function OverviewCard({
   report,
@@ -293,7 +294,6 @@ function MergedTile({
   const shown = latestMerged(markers, list.data?.report.rows ?? [], MERGED_LISTED);
   const takeaway = mergedTakeaway({
     merged: markers.length,
-    shown: shown.length,
     complete: prTile.complete,
     list: list.isError
       ? 'failed'
