@@ -19,15 +19,19 @@ const OPEN_LAYERS = '.xt-modal, .xt-popover, [role="dialog"], [role="alertdialog
  * window that takes no room from the page under it and never takes focus;
  * Escape closes it like Close, since it can cover controls a keyboard user
  * reaches. Without it, the full disclosure is part of the page's flow.
+ * `bottomInset` (inline only) is the height of a bar pinned over the bottom
+ * of the window, which does not count toward the disclosure being seen.
  */
 export function TelemetryNotice({
   suppressed = false,
   closable = true,
   floating = false,
+  bottomInset = 0,
 }: {
   suppressed?: boolean;
   closable?: boolean;
   floating?: boolean;
+  bottomInset?: number;
 }) {
   const { source } = useData();
   const { state } = useTelemetry(source.telemetry);
@@ -59,7 +63,11 @@ export function TelemetryNotice({
           onClose={closable ? () => setShown('closed') : undefined}
         />
       ) : (
-        <TelemetryDisclosure controls={source.telemetry} state={state.data} />
+        <TelemetryDisclosure
+          controls={source.telemetry}
+          state={state.data}
+          bottomInset={bottomInset}
+        />
       )}
     </div>
   );

@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { useNavigate } from 'react-router';
 import { useData } from '../../data/DataProvider';
 import type { DbCounts } from '../../data/generated/DbCounts';
@@ -45,6 +53,8 @@ export function WelcomePage() {
   const counts = useDbCounts();
   const [details, setDetails] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const barHeight = useHeight(bar);
   // Opened from the pinned bar below it: bring the facts into view above the bar.
   useEffect(() => {
     if (details) panel.current?.scrollIntoView?.({ block: 'nearest' });
@@ -136,7 +146,9 @@ export function WelcomePage() {
             Your agent history is read and kept on this Mac. No account, plugin or cloud service is
             needed.
           </p>
-          <TelemetryNotice closable={false} />
+          {/* The pinned bar covers the bottom of the window: that strip does
+              not count toward the notice being seen. */}
+          <TelemetryNotice closable={false} bottomInset={barHeight} />
         </Step>
       </div>
       {!preview && (
@@ -155,7 +167,7 @@ export function WelcomePage() {
       )}
       {/* Pinned to the bottom of the scroll area, so the continue is always in
           view; Details opens above it, inside the page's scroll. */}
-      <div className="xt-welcome-actions">
+      <div ref={bar} className="xt-welcome-actions">
         <Button variant="primary" height={34} className="xt-welcome-cta" onClick={open}>
           Open Dashboard
           <span className="xt-welcome-cta-arrow" aria-hidden="true">
@@ -194,6 +206,25 @@ export function WelcomePage() {
       </div>
     </section>
   );
+}
+
+/**
+ * An element's measured height in pixels, kept current as it resizes. Measured
+ * before paint, so nothing that reads it starts from a wrong zero.
+ */
+function useHeight(ref: RefObject<HTMLElement | null>) {
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => setHeight(element.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return height;
 }
 
 /** One numbered step: the number is decoration, the heading is the real structure. */
@@ -315,7 +346,7 @@ function Checks({ status }: { status: NativeIndexStatus }) {
         data-tone={
           readers.state === 'verified'
             ? 'success'
-            : checkTone(status, readers.state === 'unavailable')
+            : checkTone(status, 'readers', readers.state === 'unavailable')
         }
       >
         <Icon name={readers.state === 'verified' ? 'check' : 'info'} size={12} />
@@ -331,7 +362,9 @@ function Checks({ status }: { status: NativeIndexStatus }) {
       <span
         className="xt-welcome-check"
         data-tone={
-          python.state === 'available' ? 'success' : checkTone(status, python.state === 'missing')
+          python.state === 'available'
+            ? 'success'
+            : checkTone(status, 'python', python.state === 'missing')
         }
       >
         <Icon name={python.state === 'available' ? 'check' : 'info'} size={12} />
@@ -379,7 +412,7 @@ function Details({
                 {freshnessText(status)}
               </dd>
               <dt>Python</dt>
-              <dd data-tone={checkTone(status, status.python.state === 'missing')}>
+              <dd data-tone={checkTone(status, 'python', status.python.state === 'missing')}>
                 {status.python.state === 'available'
                   ? `Found at ${status.python.path}`
                   : status.python.state === 'resolving'
@@ -387,7 +420,7 @@ function Details({
                     : `Not found: ${status.python.reason}. Codex and Cursor history needs Python 3.10 or newer; Claude history is read without it.`}
               </dd>
               <dt>Readers</dt>
-              <dd data-tone={checkTone(status, status.readers.state === 'unavailable')}>
+              <dd data-tone={checkTone(status, 'readers', status.readers.state === 'unavailable')}>
                 {status.readers.state === 'verified'
                   ? 'Verified'
                   : `Unavailable: ${status.readers.reason}`}

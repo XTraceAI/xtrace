@@ -86,15 +86,27 @@ export const hostSummary = (
   nextSteps[host.state](host.needs_attention) ??
   (host.state === 'complete' || host.state === 'incomplete' ? sessionsRead(host) : null);
 
+/** The host states each check is the cause of: Python, or the bundled readers. */
+const checkCauses: Record<'python' | 'readers', readonly NativeHostState[]> = {
+  python: ['missing_runtime'],
+  readers: ['pin_mismatch', 'reader_failed'],
+};
+
 /**
- * The colour of a missing runtime or unverified reader on the quiet checks
- * line: a warning only while the app reports a source that needs attention,
- * since a missing Python is no problem when no history needs it.
+ * The colour of a missing Python or unverified readers on the quiet checks
+ * line and in Details: a warning only while the app flags a source
+ * (`needs_attention`) whose state that check causes, since a missing Python
+ * is no problem when no history needs it.
  */
 export const checkTone = (
-  status: Pick<NativeIndexStatus, 'needs_attention'>,
+  status: Pick<NativeIndexStatus, 'hosts'>,
+  check: 'python' | 'readers',
   missing: boolean,
-): 'warning' | undefined => (missing && status.needs_attention ? 'warning' : undefined);
+): 'warning' | undefined =>
+  missing &&
+  status.hosts.some((host) => host.needs_attention && checkCauses[check].includes(host.state))
+    ? 'warning'
+    : undefined;
 
 /**
  * The pages a first-time user is pointed to, by route: each title is the

@@ -23,11 +23,16 @@ const VISIBLE_SHARE = 0.5;
  * visibility is checked. Once it succeeds it is not called again; after a
  * failure it is called again only on the next change in what is visible,
  * never in a loop of its own.
+ *
+ * `bottomInset` is the height in pixels of something pinned over the bottom
+ * of the window (the welcome page's actions bar): that strip does not count
+ * as on screen. A changed inset starts a new observer.
  */
 export function useAcknowledgeWhenVisible(
   ref: RefObject<HTMLElement | null>,
   enabled: boolean,
   acknowledge: () => Promise<unknown>,
+  bottomInset = 0,
 ) {
   const latest = useRef(acknowledge);
   useEffect(() => {
@@ -64,7 +69,10 @@ export function useAcknowledgeWhenVisible(
             onScreen = entries.some((entry) => entry.intersectionRatio >= VISIBLE_SHARE);
             check();
           },
-          { threshold: [0, VISIBLE_SHARE, 1] },
+          {
+            threshold: [0, VISIBLE_SHARE, 1],
+            rootMargin: `0px 0px ${-Math.max(0, Math.ceil(bottomInset))}px 0px`,
+          },
         );
     observer?.observe(element);
     document.addEventListener('visibilitychange', check);
@@ -74,7 +82,7 @@ export function useAcknowledgeWhenVisible(
       observer?.disconnect();
       document.removeEventListener('visibilitychange', check);
     };
-  }, [ref, enabled]);
+  }, [ref, enabled, bottomInset]);
 }
 
 /**
@@ -86,13 +94,21 @@ export function useAcknowledgeWhenVisible(
 export function TelemetryDisclosure({
   controls,
   state,
+  bottomInset = 0,
 }: {
   controls: TelemetryControls;
   state: TelemetryState;
+  /** Pixels pinned over the bottom of the window that do not count as on screen. */
+  bottomInset?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { setEnabled, acknowledge } = useTelemetry(controls);
-  useAcknowledgeWhenVisible(ref, state.show_disclosure, () => acknowledge.mutateAsync());
+  useAcknowledgeWhenVisible(
+    ref,
+    state.show_disclosure,
+    () => acknowledge.mutateAsync(),
+    bottomInset,
+  );
   return (
     <SectionCard title="Anonymous usage data">
       <div ref={ref} className="xt-telemetry" data-testid="telemetry-disclosure">

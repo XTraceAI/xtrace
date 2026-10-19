@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useRef } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import fixture from '../../../fixtures/F1.json';
@@ -8,6 +9,7 @@ import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { TelemetryState } from '../../data/generated/TelemetryState';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
+import { useAcknowledgeWhenVisible } from './TelemetryDisclosure';
 
 const exported = fixture as FixtureExport;
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false, invoke: vi.fn() }));
@@ -16,7 +18,10 @@ vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false, invoke: vi.fn() }
 class FakeObserver {
   static all: FakeObserver[] = [];
   target: Element | null = null;
-  constructor(private readonly callback: IntersectionObserverCallback) {
+  constructor(
+    private readonly callback: IntersectionObserverCallback,
+    readonly options?: IntersectionObserverInit,
+  ) {
     FakeObserver.all.push(this);
   }
   observe(target: Element) {
@@ -530,4 +535,47 @@ it('tries again to record the notice as shown after a failed save, on the next v
   await showAll(1);
   await settle();
   expect(controls.acknowledgeDisclosure).toHaveBeenCalledTimes(2);
+});
+
+/** The observers still watching the disclosure, with the margins they were given. */
+const liveMargins = () =>
+  FakeObserver.all.filter((observer) => observer.target).map((o) => o.options?.rootMargin);
+
+it("leaves the welcome page's pinned bar out of what counts as on screen", async () => {
+  // The bar is measured, not guessed: give it a known height.
+  const measured = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains('xt-welcome-actions')
+      ? ({ height: 63, width: 800, top: 837, bottom: 900, left: 0, right: 800 } as DOMRect)
+      : measured.call(this);
+  });
+  const { controls } = store();
+  mount('/first-launch', source(controls, false));
+  await disclosure();
+  await settle();
+  expect(liveMargins()).toEqual(['0px 0px -63px 0px']);
+  cleanup();
+  // Elsewhere nothing is pinned over the window: the whole window counts.
+  FakeObserver.all = [];
+  mount('/settings', source(store().controls));
+  await disclosure();
+  await settle();
+  expect(liveMargins()).toEqual(['0px 0px 0px 0px']);
+});
+
+it('watches again with the new margin when the pinned inset changes', () => {
+  const acknowledge = vi.fn(async () => {});
+  function Probe({ inset }: { inset: number }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useAcknowledgeWhenVisible(ref, true, acknowledge, inset);
+    return <div ref={ref} />;
+  }
+  const view = render(<Probe inset={0} />);
+  expect(liveMargins()).toEqual(['0px 0px 0px 0px']);
+  view.rerender(<Probe inset={40.2} />);
+  // The old observer is gone; only the new margin is watched.
+  expect(liveMargins()).toEqual(['0px 0px -41px 0px']);
+  expect(acknowledge).not.toHaveBeenCalled();
 });

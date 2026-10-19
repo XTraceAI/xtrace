@@ -361,6 +361,74 @@ for (const [width, height] of [
       });
     });
 
+/**
+ * Share of the telemetry disclosure a reader can see: the part inside the
+ * window and above the pinned actions bar.
+ */
+const readableShare = (page: Page) =>
+  page.evaluate(() => {
+    const card = document
+      .querySelector('[data-testid="telemetry-disclosure"]')!
+      .getBoundingClientRect();
+    const bar = document.querySelector('.xt-welcome-actions')!.getBoundingClientRect();
+    const window_ = Math.max(0, Math.min(card.bottom, innerHeight) - Math.max(card.top, 0));
+    const above = Math.max(0, Math.min(card.bottom, bar.top) - Math.max(card.top, 0));
+    return { inWindow: window_ / card.height, aboveBar: above / card.height };
+  });
+const shownCount = (page: Page) =>
+  page.evaluate(() => (window as { telemetryShown?: number }).telemetryShown ?? 0);
+/** Two frames and a pause: time for any visibility callback to have run. */
+const settleFrames = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 300))),
+      ),
+  );
+
+for (const [width, height] of [
+  [1440, 900],
+  [1120, 720],
+] as const)
+  test(`the notice counts as shown only once half of it is above the pinned bar at ${width}x${height}`, async ({
+    page,
+  }) => {
+    await serve(page, states.missing, false, stateCounts(states.missing));
+    await page.setViewportSize({ width, height });
+    await page.goto('/e2e/telemetry-notice.html?notice=1&route=/first-launch');
+    await expect(page.getByTestId('telemetry-disclosure')).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await settleFrames(page);
+    // On load the bar covers the notice's top half or more: not yet shown.
+    const first = await readableShare(page);
+    expect(first.aboveBar).toBeLessThan(0.5);
+    expect(await shownCount(page)).toBe(0);
+    // Scrolled so at least half is inside the window but less than half is
+    // above the bar: what the bar covers does not count, so still not shown.
+    await page.evaluate(() => {
+      const outlet = document.querySelector('.xt-shell-outlet')!;
+      const card = document
+        .querySelector('[data-testid="telemetry-disclosure"]')!
+        .getBoundingClientRect();
+      const bar = document.querySelector('.xt-welcome-actions')!.getBoundingClientRect();
+      const target = (bar.top + innerHeight) / 2 - card.height / 2;
+      outlet.scrollTop += card.top - target;
+    });
+    await settleFrames(page);
+    const straddle = await readableShare(page);
+    expect(straddle.inWindow).toBeGreaterThanOrEqual(0.5);
+    expect(straddle.aboveBar).toBeLessThan(0.5);
+    expect(await shownCount(page)).toBe(0);
+    // Scrolled so at least half is above the bar: shown, once.
+    await page.evaluate(() => {
+      const outlet = document.querySelector('.xt-shell-outlet')!;
+      outlet.scrollTop = outlet.scrollHeight;
+    });
+    await settleFrames(page);
+    expect((await readableShare(page)).aboveBar).toBeGreaterThanOrEqual(0.5);
+    await expect.poll(() => shownCount(page)).toBe(1);
+  });
+
 /** Test-only counts: plausible indexed-history volumes, and the exact JSON integer limit. */
 const largeCounts: Record<string, FixtureExport['db_counts']> = {
   large: { sessions: 12_345, records: 1_234_567, usage: 123_456 },

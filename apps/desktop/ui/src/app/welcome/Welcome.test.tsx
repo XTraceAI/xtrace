@@ -538,40 +538,61 @@ it('says a source read only partly is partly read, never 0 sessions', async () =
   expect(list.textContent).not.toContain('0 sessions');
 });
 
-it('colours a missing Python or unverified readers as a warning only while a source needs attention', async () => {
+it('colours a missing Python or unverified readers as a warning only while a source they cause needs attention', async () => {
   const unready = {
     python: { state: 'missing', reason: 'python3 was not found' },
     readers: { state: 'unavailable', reason: 'the bundle did not match its pin' },
   } as const;
-  // No source needs Python here: missing it is a neutral fact.
-  const calm = mount(
-    '/first-launch',
-    nativeSource({ status: { ...ready, ...unready, needs_attention: false } }).source,
-  );
-  const python = (await screen.findByText('Python not found')).parentElement!;
-  const readers = screen.getByText('Bundled readers not verified').parentElement!;
-  expect(python.getAttribute('data-tone')).toBeNull();
-  expect(readers.getAttribute('data-tone')).toBeNull();
-  calm.unmount();
-  mount(
-    '/first-launch',
-    nativeSource({
-      status: {
-        ...ready,
-        ...unready,
-        hosts: [
-          host('claude', { state: 'complete', sessions_imported: 41 }),
-          host('codex', { state: 'missing_runtime', needs_attention: true }),
-          host('cursor', { state: 'missing_source' }),
-        ],
-        needs_attention: true,
-      },
-    }).source,
-  );
+  const tones = async (hosts: NativeHostStatus[]) => {
+    const view = mount(
+      '/first-launch',
+      nativeSource({
+        status: {
+          ...ready,
+          ...unready,
+          hosts,
+          needs_attention: hosts.some((h) => h.needs_attention),
+        },
+      }).source,
+    );
+    const python = (await screen.findByText('Python not found')).parentElement!;
+    const readers = screen.getByText('Bundled readers not verified').parentElement!;
+    const result = [python.getAttribute('data-tone'), readers.getAttribute('data-tone')];
+    view.unmount();
+    return result;
+  };
+  const claude = host('claude', { state: 'complete', sessions_imported: 41 });
+  // No source flagged: both are neutral facts.
   expect(
-    (await screen.findByText('Python not found')).parentElement!.getAttribute('data-tone'),
-  ).toBe('warning');
+    await tones([
+      claude,
+      host('codex', { state: 'missing_source' }),
+      host('cursor', { state: 'missing_source' }),
+    ]),
+  ).toEqual([null, null]);
+  // A source flagged for something else (a stopped scan) colours neither.
   expect(
-    screen.getByText('Bundled readers not verified').parentElement!.getAttribute('data-tone'),
-  ).toBe('warning');
+    await tones([
+      claude,
+      host('codex', { state: 'cancelled', needs_attention: true }),
+      host('cursor', { state: 'missing_source' }),
+    ]),
+  ).toEqual([null, null]);
+  // A source that needs Python: only Python warns.
+  expect(
+    await tones([
+      claude,
+      host('codex', { state: 'missing_runtime', needs_attention: true }),
+      host('cursor', { state: 'missing_source' }),
+    ]),
+  ).toEqual(['warning', null]);
+  // A source whose reader failed or could not be verified: only the readers warn.
+  for (const state of ['reader_failed', 'pin_mismatch'] as const)
+    expect(
+      await tones([
+        claude,
+        host('codex', { state: 'missing_source' }),
+        host('cursor', { state, needs_attention: true }),
+      ]),
+    ).toEqual([null, 'warning']);
 });
