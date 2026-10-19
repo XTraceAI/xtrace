@@ -898,15 +898,15 @@ async function attentionTip() {
   return (await screen.findByRole('tooltip')).textContent!;
 }
 
-it('shows no red ! and no status line when nothing needs the user', async () => {
+it('keeps a neutral refresh button and no status line when nothing needs the user', async () => {
   // Two pull requests not checked yet while automatic checks run: XTrace checks them itself.
   const source = autoChecked(autoStatus());
   mount(source);
   await loaded();
   await waitFor(() => expect(source.prAutoCheck.status).toHaveBeenCalled());
   await waitFor(() => expect(tile().textContent).toBe('Merged PRs2 PRs not checked yet'));
-  expect(attentionMark()).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Refresh PR facts…' })).toBeNull();
+  expect(attentionMark()!.dataset.state).toBe('ready');
+  expect(screen.getByRole('button', { name: 'Refresh pull-request facts' })).toBeTruthy();
   // The old line under the chart is gone; its words live in the dialog now.
   expect(document.querySelector('.xt-dashboard')!.textContent).not.toContain(
     'Confirmed-linked pull requests',
@@ -982,7 +982,7 @@ it('shows the red ! when automatic checks are off and some were never checked', 
   expect(await mergedTip()).toContain('Click the red ! on the Effort card to check them.');
 });
 
-it('returns focus to the ⓘ when a refresh cleared what the red ! was for', async () => {
+it('returns focus to the neutral refresh button when a check clears attention', async () => {
   const failed: SectionSpec = {
     ...NO_LINKS,
     tile: {
@@ -1028,17 +1028,15 @@ it('returns focus to the ⓘ when a refresh cleared what the red ! was for', asy
   fireEvent.click(await within(dialog()).findByRole('checkbox', { name: /#100/ }));
   fireEvent.click(start());
   await within(dialog()).findByTestId('pr-refresh-report');
-  // The re-read report has no failure; the red ! stays only while its dialog is open.
-  await waitFor(() => expect(attentionMark()!.dataset.state).toBe('open'));
+  // The re-read report has no failure; the trigger becomes a neutral refresh button.
+  await waitFor(() => expect(attentionMark()!.dataset.state).toBe('ready'));
   fireEvent.keyDown(dialog(), { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(attentionMark()).toBeNull();
-  await waitFor(() =>
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Effort definition' })),
-  );
+  expect(attentionMark()!.dataset.state).toBe('ready');
+  await waitFor(() => expect(document.activeElement).toBe(button));
 });
 
-it('stops asking once the user’s own check fails for the pull request itself, and returns focus to the ⓘ', async () => {
+it('keeps a neutral retry button after the user’s own check fails', async () => {
   const freshness = (manual: number) => ({
     never_attempted: 0,
     refreshed: 0,
@@ -1090,13 +1088,11 @@ it('stops asking once the user’s own check fails for the pull request itself, 
   fireEvent.click(start());
   await within(dialog()).findByTestId('pr-refresh-report');
   // The re-read report counts it as tried by hand: nothing is left for the red !.
-  await waitFor(() => expect(attentionMark()!.dataset.state).toBe('open'));
+  await waitFor(() => expect(attentionMark()!.dataset.state).toBe('ready'));
   fireEvent.keyDown(dialog(), { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(attentionMark()).toBeNull();
-  await waitFor(() =>
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Effort definition' })),
-  );
+  expect(attentionMark()!.dataset.state).toBe('ready');
+  await waitFor(() => expect(document.activeElement).toBe(button));
   // The tile still says it failed, and that the user's own check failed too,
   // with no pointer to a red ! that is not there.
   const tip = await mergedTip();
