@@ -122,6 +122,16 @@ function mount(path: string, source: DataSource) {
 }
 const path = () => screen.getByTestId('path').textContent;
 const welcomeHeading = () => screen.findByRole('heading', { level: 1, name: 'Welcome to XTrace' });
+const detailsToggle = () => screen.getByRole('button', { name: 'Details' });
+const openDetails = () => {
+  const toggle = detailsToggle();
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+  return screen.getByRole('region', { name: 'Details' });
+};
+const sourceRow = (list: HTMLElement, name: string) =>
+  within(list)
+    .getAllByRole('listitem')
+    .find((item) => within(item).queryByText(name, { exact: true }))!;
 
 it('offers welcome at startup when no indexed history existed, even after the scan fills counts', async () => {
   // The initial scan raced ahead: live counts already show sessions, yet the
@@ -130,8 +140,11 @@ it('offers welcome at startup when no indexed history existed, even after the sc
   mount('/', source);
   await welcomeHeading();
   expect(path()).toBe('/first-launch');
-  const counts = screen.getByRole('group', { name: 'In the local database now' });
-  expect(await within(counts).findByText('41')).toBeTruthy();
+  const total = screen.getByText('In the local database now').closest('p')!;
+  expect(await within(total).findByText('41')).toBeTruthy();
+  expect(within(total).getByText('sessions')).toBeTruthy();
+  const counts = within(openDetails()).getByRole('group', { name: 'Database counts' });
+  expect(within(counts).getByText('41')).toBeTruthy();
   expect(within(counts).getByText('900')).toBeTruthy();
   expect(within(counts).getByText('300')).toBeTruthy();
 });
@@ -268,9 +281,12 @@ it('reports a scan in progress by transcripts read, never as a percentage, and f
   mount('/first-launch', source);
   await welcomeHeading();
   expect(await screen.findByText('Scanning')).toBeTruthy();
-  expect(screen.getByTestId('welcome-files').textContent).toBe('128');
   expect(screen.getAllByText('Waiting to be read')).toHaveLength(3);
-  expect(screen.getByText('Looking…')).toBeTruthy();
+  expect(screen.getAllByText('Will be read in this scan.')).toHaveLength(3);
+  expect(screen.getByText('Looking for Python…')).toBeTruthy();
+  const details = openDetails();
+  expect(within(details).getByTestId('welcome-files').textContent).toBe('128');
+  expect(within(details).getByText('Looking…')).toBeTruthy();
   expect(document.body.textContent).not.toMatch(/%|of \d+ files|\d+ \/ \d+/);
   status = { ...ready };
   await act(async () => emit());
@@ -318,19 +334,39 @@ it('shows each source outcome without install, connection or capture claims', as
   // Ready can carry failures: the phase says so rather than a clean Ready.
   expect(screen.getByText('Ready with problems')).toBeTruthy();
   expect(screen.getByTestId('welcome-phase').textContent).toContain('3 sources reported a problem');
+  // At first glance: the outcome, and a next step in words, never the raw error.
+  const claude = sourceRow(list, 'Claude Code');
+  expect(within(claude).getByText('Read with gaps')).toBeTruthy();
+  expect(within(claude).getByText('40 sessions')).toBeTruthy();
+  const codex = sourceRow(list, 'Codex');
+  expect(within(codex).getByText('Needs Python 3')).toBeTruthy();
   expect(
-    within(list).getByRole('listitem', { name: 'Claude Code: Read with gaps' }).textContent,
-  ).toContain('40 · 2 partial · 1 skipped');
-  expect(within(list).getByRole('listitem', { name: 'Codex: Needs Python 3' })).toBeTruthy();
+    within(codex).getByText(
+      'Install Python 3.10 or newer, then reopen XTrace to read this history.',
+    ),
+  ).toBeTruthy();
+  const cursor = sourceRow(list, 'Cursor');
+  expect(within(cursor).getByText('Reader failed')).toBeTruthy();
   expect(
-    within(list).getByRole('listitem', { name: 'Cursor: Reader failed' }).textContent,
-  ).toContain('the reader exited with status 1');
-  expect(screen.getByTestId('welcome-freshness').textContent).toBe(
+    within(cursor).getByText(
+      'This history could not be read. See Details, or Settings → Native index.',
+    ),
+  ).toBeTruthy();
+  expect(screen.getByText('Python not found')).toBeTruthy();
+  expect(document.body.textContent).not.toContain('the reader exited with status 1');
+  expect(document.body.textContent).not.toContain('python3 was not found');
+  // Details holds the raw facts.
+  const details = openDetails();
+  const sources = within(details).getByRole('list', { name: 'Source details' });
+  expect(sourceRow(sources, 'Claude Code').textContent).toContain('40 · 2 partial · 1 skipped');
+  expect(sourceRow(sources, 'Cursor').textContent).toContain('the reader exited with status 1');
+  expect(within(details).getByTestId('welcome-freshness').textContent).toBe(
     'Degraded: the watcher could not be registered',
   );
-  expect(screen.getByText(/Not found: python3 was not found/)).toBeTruthy();
+  expect(within(details).getByText(/Not found: python3 was not found/)).toBeTruthy();
+  // Installing Python is a step to take; nothing claims an agent is installed or capturing.
   expect(document.body.textContent).not.toMatch(
-    /install|connected|capturing|plugin missing|telemetry|\$ /i,
+    /not installed|is installed|connected|capturing|plugin missing|telemetry|\$ /i,
   );
 });
 
@@ -349,10 +385,12 @@ it('reports a disabled index and a missing source plainly', async () => {
   cleanup();
   mount('/first-launch', nativeSource().source);
   const list = await screen.findByRole('list', { name: 'Local history sources' });
-  expect(
-    within(list).getByRole('listitem', { name: 'Cursor: No local history found' }),
-  ).toBeTruthy();
-  expect(screen.getByText('1 of 3 read · last scan since launch')).toBeTruthy();
+  const cursor = sourceRow(list, 'Cursor');
+  expect(within(cursor).getByText('No local history found')).toBeTruthy();
+  // No history is not a problem: the line says so plainly, in a calm colour.
+  expect(within(cursor).getByText('No history from this tool on this Mac.')).toBeTruthy();
+  expect(cursor.hasAttribute('data-attention')).toBe(false);
+  expect(within(openDetails()).getByText('1 of 3 read · last scan since launch')).toBeTruthy();
 });
 
 it('offers Retry on a read failure and keeps Dashboard one click away', async () => {
@@ -406,10 +444,73 @@ it('counts and colours the problem sources the app reports, including a cancelle
   const list = await screen.findByRole('list', { name: 'Local history sources' });
   expect(screen.getByText('Ready with problems')).toBeTruthy();
   expect(screen.getByTestId('welcome-phase').textContent).toContain('1 source reported a problem');
+  const codex = sourceRow(list, 'Codex');
+  expect(within(codex).getByText('Stopped before finishing')).toBeTruthy();
+  expect(codex.getAttribute('data-attention')).toBe('true');
+  expect(within(sourceRow(list, 'Cursor')).getByText('No local history found')).toBeTruthy();
+});
+
+it('shows the exact texts the release check reads, with Details closed', async () => {
+  // scripts/ci/hosted-ax.swift reads these as whole, separate texts on a
+  // ready welcome without opening anything, and presses one Open Dashboard.
+  const { source } = nativeSource();
+  mount('/first-launch', source);
+  await welcomeHeading();
+  expect(await screen.findByText('The initial scan finished.', { exact: true })).toBeTruthy();
+  expect(screen.getByText('Bundled readers verified', { exact: true })).toBeTruthy();
+  expect(screen.getByText('In the local database now', { exact: true })).toBeTruthy();
+  await waitFor(() => expect(document.body.textContent).not.toContain('Reading database counts'));
+  expect(screen.getAllByRole('button', { name: 'Open Dashboard' })).toHaveLength(1);
+  expect(detailsToggle().getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByTestId('welcome-files')).toBeNull();
+});
+
+it('keeps Reading database counts as the loading text until counts arrive', async () => {
+  let resolve: ((counts: typeof exported.db_counts) => void) | undefined;
+  const { source } = nativeSource();
+  source.dbCounts.mockImplementation(
+    () => new Promise<typeof exported.db_counts>((done) => (resolve = done)),
+  );
+  mount('/first-launch', source);
+  await welcomeHeading();
+  const total = screen.getByText('In the local database now').closest('p')!;
+  expect(total.textContent).toContain('Reading database counts');
+  await act(async () => resolve?.(exported.db_counts));
+  await waitFor(() => expect(total.textContent).not.toContain('Reading database counts'));
+});
+
+it('keeps technical details closed until Details is opened, and closes them again', async () => {
+  mount('/first-launch', nativeSource().source);
+  await welcomeHeading();
+  await screen.findByText('Ready');
+  const toggle = detailsToggle();
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  const region = document.getElementById(toggle.getAttribute('aria-controls')!)!;
+  expect(region.hidden).toBe(true);
+  expect(screen.queryByTestId('welcome-freshness')).toBeNull();
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  expect(region.hidden).toBe(false);
+  expect(within(region).getByTestId('welcome-freshness').textContent).toBe(
+    'Live: new activity is added as it happens',
+  );
+  expect(within(region).getByText('Found at /usr/bin/python3')).toBeTruthy();
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  expect(region.hidden).toBe(true);
+});
+
+it('names each page it points to by its own title, as plain text', async () => {
+  mount('/first-launch', nativeSource().source);
+  const step = (await screen.findByRole('heading', { level: 2, name: "What you'll find" })).closest(
+    'section',
+  )!;
+  for (const title of ['Dashboard', 'Sessions', 'Scores', 'Pull requests'])
+    expect(within(step).getByText(title, { exact: true })).toBeTruthy();
+  expect(within(step).queryAllByRole('link')).toHaveLength(0);
   expect(
-    within(list).getByRole('listitem', { name: 'Codex: Stopped before finishing' }),
-  ).toBeTruthy();
-  expect(
-    within(list).getByRole('listitem', { name: 'Cursor: No local history found' }),
-  ).toBeTruthy();
+    screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
+  ).toEqual(
+    expect.arrayContaining(['Finding your agent history', "What you'll find", 'Stays on this Mac']),
+  );
 });

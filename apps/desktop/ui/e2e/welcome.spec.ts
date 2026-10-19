@@ -109,6 +109,47 @@ async function serve(
   );
 }
 const heading = (page: Page) => page.getByRole('heading', { level: 1 });
+const details = (page: Page) => page.getByRole('button', { name: 'Details' });
+async function openDetails(page: Page) {
+  await details(page).click();
+  await expect(details(page)).toHaveAttribute('aria-expanded', 'true');
+  return page.getByRole('region', { name: 'Details' });
+}
+/** The layout checks every state shares: nothing wider than the page or its column. */
+const measureLayout = (page: Page) =>
+  page.evaluate(() => {
+    const root = document.querySelector('.xt-welcome')!;
+    const box = root.getBoundingClientRect();
+    const escaped = [...root.querySelectorAll<HTMLElement>('*')]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5);
+      })
+      .map((element) => element.className);
+    const cards = [...root.querySelectorAll('.xt-section-card, .xt-welcome-step')].map((card) => {
+      const rect = card.getBoundingClientRect();
+      const inner = [...card.querySelectorAll<HTMLElement>('*')].filter((element) => {
+        const r = element.getBoundingClientRect();
+        return r.width > 0 && (r.left < rect.left - 0.5 || r.right > rect.right + 0.5);
+      });
+      return inner.length;
+    });
+    const clipped = [
+      ...root.querySelectorAll<HTMLElement>(
+        '.xt-welcome-host, .xt-welcome-count, .xt-welcome-tour-item, .xt-welcome-host-detail-item',
+      ),
+    ].filter((element) => element.scrollWidth > element.clientWidth + 1).length;
+    return {
+      page: document.documentElement.scrollWidth,
+      outlet: (() => {
+        const outlet = document.querySelector('.xt-shell-outlet')!;
+        return outlet.scrollWidth - outlet.clientWidth;
+      })(),
+      escaped,
+      cards,
+      clipped,
+    };
+  });
 
 test('a fresh startup opens welcome with the real counts; a deep link is kept', async ({
   page,
@@ -117,10 +158,14 @@ test('a fresh startup opens welcome with the real counts; a deep link is kept', 
   await page.goto('/');
   await expect(page).toHaveURL(/\/first-launch$/);
   await expect(heading(page)).toHaveText('Welcome to XTrace');
-  const counts = page.getByRole('group', { name: 'In the local database now' });
+  const total = page.locator('.xt-welcome-total');
+  await expect(total).toContainText(String(fixture.db_counts.sessions));
+  await expect(total).toContainText('In the local database now');
+  const region = await openDetails(page);
+  const counts = region.getByRole('group', { name: 'Database counts' });
   await expect(counts).toContainText(String(fixture.db_counts.sessions));
   await expect(counts).toContainText(String(fixture.db_counts.records));
-  await expect(page.getByTestId('welcome-files')).toHaveText('128');
+  await expect(region.getByTestId('welcome-files')).toHaveText('128');
   await page.goto('/sessions');
   await expect(heading(page)).toHaveText('Sessions');
   await expect(page).toHaveURL(/\/sessions$/);
@@ -147,6 +192,41 @@ test('continue by keyboard is remembered across a restart', async ({ page }) => 
   await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto('/');
   await expect(page).toHaveURL(/\/dashboard$/);
+});
+
+test('a ready welcome shows the release check texts with Details closed', async ({ page }) => {
+  await serve(page, states.missing);
+  await page.goto('/first-launch');
+  await expect(page.getByText('The initial scan finished.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Bundled readers verified', { exact: true })).toBeVisible();
+  await expect(page.getByText('In the local database now', { exact: true })).toBeVisible();
+  await expect(page.getByText('Reading database counts')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open Dashboard', exact: true })).toHaveCount(1);
+  await expect(details(page)).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('welcome-freshness')).toHaveCount(0);
+});
+
+test('Details opens and closes by keyboard', async ({ page }) => {
+  await serve(page, states.partial);
+  await page.goto('/first-launch');
+  await expect(heading(page)).toHaveText('Welcome to XTrace');
+  const toggle = details(page);
+  for (let step = 0; step < 40; step++) {
+    if (await toggle.evaluate((element) => element === document.activeElement)) break;
+    await page.keyboard.press('Tab');
+  }
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const region = page.getByRole('region', { name: 'Details' });
+  await expect(region.getByTestId('welcome-freshness')).toHaveText(
+    'Degraded: the watcher could not be registered for one of the history folders',
+  );
+  await expect(region).toContainText('the bundled reader exited with status 1');
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('welcome-freshness')).toHaveCount(0);
 });
 
 test('a storage write failure still leaves for Dashboard, and welcome returns next time', async ({
@@ -184,45 +264,22 @@ for (const [width, height] of [
         await expect(page.getByRole('button', { name: 'Open Dashboard' })).toBeVisible();
         await page.evaluate(() => document.fonts.ready);
         await expect(page.locator('html')).toHaveAttribute('data-theme', scheme);
-        const layout = await page.evaluate(() => {
-          const root = document.querySelector('.xt-welcome')!;
-          const box = root.getBoundingClientRect();
-          const escaped = [...root.querySelectorAll<HTMLElement>('*')]
-            .filter((element) => {
-              const rect = element.getBoundingClientRect();
-              return rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5);
-            })
-            .map((element) => element.className);
-          const cards = [...root.querySelectorAll('.xt-section-card')].map((card) => {
-            const rect = card.getBoundingClientRect();
-            const inner = [...card.querySelectorAll<HTMLElement>('*')].filter((element) => {
-              const r = element.getBoundingClientRect();
-              return r.width > 0 && (r.left < rect.left - 0.5 || r.right > rect.right + 0.5);
-            });
-            return inner.length;
+        // Closed (as first shown), then with Details open: both must fit.
+        for (const open of [false, true]) {
+          // The page scrolls inside the outlet, so bring Details into view to see it.
+          if (open) await (await openDetails(page)).scrollIntoViewIfNeeded();
+          const layout = await measureLayout(page);
+          expect(layout.page).toBe(width);
+          expect(layout.outlet).toBe(0);
+          expect(layout.escaped).toEqual([]);
+          expect(layout.cards.every((count) => count === 0)).toBe(true);
+          expect(layout.clipped).toBe(0);
+          await page.screenshot({
+            path: info.outputPath(
+              `welcome-${state}-${width}-${scheme}${open ? '-details' : ''}.png`,
+            ),
           });
-          const clipped = [
-            ...root.querySelectorAll<HTMLElement>('.xt-welcome-host, .xt-welcome-count'),
-          ].filter((element) => element.scrollWidth > element.clientWidth + 1).length;
-          return {
-            page: document.documentElement.scrollWidth,
-            outlet: (() => {
-              const outlet = document.querySelector('.xt-shell-outlet')!;
-              return outlet.scrollWidth - outlet.clientWidth;
-            })(),
-            escaped,
-            cards,
-            clipped,
-          };
-        });
-        expect(layout.page).toBe(width);
-        expect(layout.outlet).toBe(0);
-        expect(layout.escaped).toEqual([]);
-        expect(layout.cards.every((count) => count === 0)).toBe(true);
-        expect(layout.clipped).toBe(0);
-        await page.screenshot({
-          path: info.outputPath(`welcome-${state}-${width}-${scheme}.png`),
-        });
+        }
         expect(errors).toEqual([]);
       });
 
@@ -248,7 +305,10 @@ for (const [width, height] of [
         await page.setViewportSize({ width, height });
         await page.emulateMedia({ colorScheme: scheme });
         await page.goto('/first-launch');
-        const group = page.getByRole('group', { name: 'In the local database now' });
+        await expect(page.locator('.xt-welcome-total')).toContainText(
+          counts.sessions.toLocaleString('en-US'),
+        );
+        const group = (await openDetails(page)).getByRole('group', { name: 'Database counts' });
         await expect(group).toContainText(counts.records.toLocaleString('en-US'));
         await page.evaluate(() => document.fonts.ready);
         const cells = await group.evaluate((root) =>

@@ -26,10 +26,14 @@ You do not need Rust, Node or pnpm to use a downloaded app. There is no Homebrew
 
 ## First launch
 
-The welcome screen shows indexing progress and per-host results as the app reads
-history already on this Mac. Choose **Open Dashboard** to explore. The first scan
-can take time; **Settings → Native index** shows missing readers or incomplete
-coverage. An empty host does not mean the host is installed or recording activity.
+The welcome screen walks through three steps. First, it lists Claude Code, Codex
+and Cursor with what the scan found for each: how many sessions were read, or
+what to do next, such as installing Python. Second, it names the main pages.
+Third, it explains that your history stays on this Mac. Choose **Details** to see
+the technical facts (files read, database counts, Python path, reader errors),
+and **Open Dashboard** to explore. The first scan can take time; **Settings →
+Native index** shows the same status later. A tool with no history found here is
+not a problem, and an empty tool does not mean it is installed or recording.
 
 Claude Code history is read directly. Codex and Cursor indexing need **Python
 3.10 or newer**; the reader scripts are bundled with XTrace, but Python is not.
