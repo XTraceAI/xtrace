@@ -106,6 +106,8 @@ jobs:
         with:
           path: ~/.cache/xtrace-ci-tools
           key: supply-tools-macos-14-arm64-syft-1.51.1-about-0.9.2
+      - name: Warn when the bundled plugin readers are behind the latest memhub release
+        run: pnpm check:plugin-pin
       - name: Validate the native release candidate
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}

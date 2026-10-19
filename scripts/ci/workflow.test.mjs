@@ -331,6 +331,16 @@ test('release validation explicitly uses verified vendored producer conformance'
   assert.match(gate, /assert-no-skipped-conformance\.sh/);
 });
 
+test('release validation warns about stale plugin readers before validating, without failing', async () => {
+  const steps = releaseJobs.native.split(/\n {6}- /);
+  const freshness = steps.findIndex((step) => step.includes('pnpm check:plugin-pin'));
+  const validation = steps.findIndex((step) => step.includes('pnpm check:native'));
+  assert.ok(freshness > 0 && validation === freshness + 1);
+  assert.doesNotMatch(steps[freshness], /continue-on-error|\|\| true|env:|secrets\.|token/i);
+  const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.scripts['check:plugin-pin'], 'node scripts/ci/plugin-pin.mjs freshness');
+});
+
 test('only the signing step of the packaging job sees Apple values, after validation passes', () => {
   assert.deepEqual(Object.keys(releaseJobs), [
     'validate-mode',
