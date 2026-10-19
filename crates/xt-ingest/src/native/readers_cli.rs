@@ -477,22 +477,50 @@ pub fn resolve_python_within(
             Path::new(&python).display()
         ))
     })?;
-    let mut stdout = probe
-        .stdout
-        .take()
-        .ok_or_else(|| ReaderError::MissingRuntime("probe output is unavailable".into()))?;
-    // The answer is one short line, read after exit: a probe that floods its
-    // output would fill the pipe and stall, which the deadline then ends.
-    let slot: ChildSlot = Arc::new(Mutex::new(Some(probe)));
-    if let Some(cancel) = cancel {
-        cancel.register(&slot);
+    let Some(stdout) = probe.stdout.take() else {
+        let _ = kill_group_and_reap(&mut probe);
+        return Err(ReaderError::MissingRuntime(
+            "probe output is unavailable".into(),
+        ));
+    };
+    // Keep ownership of the unreaped leader until the answer closes. A
+    // launcher may exit first while its descendant still owns stdout.
+    // Poll cancellation here: CancelToken's older registered-child path
+    // can reap the leader before its group is cleaned up.
+    let deadline = Instant::now() + timeout;
+    let overflow = Arc::new(AtomicBool::new(false));
+    let drain_overflow = Arc::clone(&overflow);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(drain_bounded(stdout, 4096, &drain_overflow));
+    });
+    let mut answer = None;
+    let mut timed_out = false;
+    let status = loop {
+        if let Ok(drained) = receiver.try_recv() {
+            answer = Some(drained);
+        }
+        let cancelled = cancel.is_some_and(CancelToken::is_cancelled);
+        timed_out |= Instant::now() >= deadline;
+        #[cfg(unix)]
+        let exited = exited_unreaped(&probe);
+        #[cfg(not(unix))]
+        let exited = probe.try_wait().is_ok_and(|status| status.is_some());
+        if cancelled || timed_out || overflow.load(Ordering::SeqCst) || (answer.is_some() && exited)
+        {
+            break kill_group_and_reap(&mut probe);
+        }
+        if answer.is_some() {
+            std::thread::sleep(Duration::from_millis(10));
+        } else if let Ok(drained) = receiver.recv_timeout(Duration::from_millis(10)) {
+            answer = Some(drained);
+        }
+    };
+    // A descendant that deliberately left the group cannot hold this call.
+    if answer.is_none() {
+        answer = receiver.recv_timeout(PIPE_SETTLE).ok();
     }
-    let awaited = await_child(&slot, Some(Instant::now() + timeout));
-    if let Some(cancel) = cancel {
-        cancel.unregister(&slot);
-    }
-    let (status, timed_out) = awaited?;
-    if cancel.is_some_and(CancelToken::is_cancelled) && !status.success() {
+    if cancel.is_some_and(CancelToken::is_cancelled) {
         return Err(ReaderError::Cancelled);
     }
     if timed_out {
@@ -500,9 +528,13 @@ pub fn resolve_python_within(
             "interpreter probe did not finish within {timeout:?}"
         )));
     }
-    let mut answer = String::new();
-    let _ = std::io::Read::read_to_string(&mut stdout, &mut answer);
-    if !status.success() || answer.trim() != "True" {
+    if !status.is_ok_and(|status| status.success())
+        || !answer.is_some_and(|answer| {
+            !answer.failed
+                && !answer.overflowed
+                && std::str::from_utf8(&answer.bytes).is_ok_and(|text| text.trim() == "True")
+        })
+    {
         return Err(ReaderError::MissingRuntime(format!(
             "{} must be Python 3.10 or newer with assertions enabled",
             Path::new(&python).display()
@@ -1032,7 +1064,7 @@ fn drain_bounded(mut pipe: impl std::io::Read, cap: usize, overflow: &AtomicBool
 
 /// Whether the child has exited, without reaping it: an exited leader that is
 /// not yet reaped still holds its process ID, so its group can be signalled
-/// safely. Only [`run_exact_detail`] reaps its child, so an error here cannot
+/// safely. The supervising caller alone reaps its child, so an error here cannot
 /// mean another reaper took it; it is treated as exited, and the reap below
 /// reports it.
 #[cfg(unix)]

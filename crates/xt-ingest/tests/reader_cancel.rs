@@ -590,3 +590,98 @@ fn cancel_reader_launcher(after_commit: bool) {
         assert_eq!(store.counts().unwrap().records, 0);
     }
 }
+
+/// A finite launcher whose leader exits before its descendant. The stderr
+/// case confirms that discarded diagnostics cannot delay interpreter discovery.
+fn early_exit_probe(root: &Path, retained: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let script = root.join("early-exit-python");
+    let root_literal = serde_json::to_string(&root.to_string_lossy()).unwrap();
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env python3
+import os, pathlib, time
+root = pathlib.Path({root_literal})
+(root / 'reader.pid').write_text(str(os.getpid()))
+child = os.fork()
+if child == 0:
+    if '{retained}' == 'stderr':
+        os.close(1)
+    time.sleep(10)
+    os._exit(0)
+(root / 'descendant.pid').write_text(str(child))
+print('True', flush=True)
+(root / 'leader-done').touch()
+os._exit(0)
+"#
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+fn assert_probe_processes_gone(root: &Path) {
+    for file in ["reader.pid", "descendant.pid"] {
+        let pid = fs::read_to_string(root.join(file))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while alive(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!alive(pid), "{file} remains alive: {pid}");
+    }
+}
+
+#[test]
+fn interpreter_deadline_covers_stdout_after_leader_exit() {
+    let temp = tempfile::tempdir().unwrap();
+    let python = early_exit_probe(temp.path(), "stdout");
+    let started = Instant::now();
+    let result = resolve_python_within(Some(python.as_os_str()), None, Duration::from_secs(2));
+    assert!(
+        matches!(result, Err(ReaderError::MissingRuntime(ref why)) if why.contains("within")),
+        "{result:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert_probe_processes_gone(temp.path());
+}
+
+#[test]
+fn interpreter_cancel_covers_stdout_after_leader_exit() {
+    let temp = tempfile::tempdir().unwrap();
+    let python = early_exit_probe(temp.path(), "stdout");
+    let token = CancelToken::new();
+    std::thread::scope(|scope| {
+        let result = scope.spawn(|| {
+            xt_ingest::native::readers_cli::resolve_python(Some(python.as_os_str()), Some(&token))
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !temp.path().join("leader-done").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let cancelled = Instant::now();
+        token.cancel();
+        assert!(matches!(
+            result.join().unwrap(),
+            Err(ReaderError::Cancelled)
+        ));
+        assert!(cancelled.elapsed() < Duration::from_secs(2));
+    });
+    assert_probe_processes_gone(temp.path());
+}
+
+#[test]
+fn interpreter_discards_retained_stderr_and_cleans_group_on_success() {
+    let temp = tempfile::tempdir().unwrap();
+    let python = early_exit_probe(temp.path(), "stderr");
+    let started = Instant::now();
+    assert!(resolve_python_within(Some(python.as_os_str()), None, Duration::from_secs(2)).is_ok());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_probe_processes_gone(temp.path());
+}
