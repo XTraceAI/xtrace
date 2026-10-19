@@ -80,7 +80,8 @@ test(
       assert.equal(ran.status, 0, ran.stderr);
       const report = JSON.parse(ran.stdout);
       assert.equal(report.status, 'passed');
-      assert.equal(report.pureStopSequences, 10);
+      assert.equal(report.pureStopSequences, 12);
+      assert.equal(report.deadlineControls, 8);
       assert.equal(report.children.length, 2);
       for (const child of report.children) {
         assert.equal(child.status, 'passed');

@@ -122,7 +122,8 @@ func waitForExit(_ seconds: Double, observe: () throws -> ExitObservation,
         if try observe() == .absent { return true }
         pause(min(0.1, max(0, deadline - now())))
     }
-    return false
+    // Check the final pause without rereading an absence already confirmed above.
+    return try observe() == .absent
 }
 func stopOwnedProcess(owner: () throws -> Bool, request: (Bool) -> Void,
                       observe: () throws -> ExitObservation, now: () -> Double,

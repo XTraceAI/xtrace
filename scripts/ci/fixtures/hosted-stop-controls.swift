@@ -73,6 +73,52 @@ assert(alreadyGone.0 == "passed" && alreadyGone.1.isEmpty && alreadyGone.4 == 0)
 let permissionError = sequence([matching], [denied])
 assert(permissionError.0 == "failed" && permissionError.1 == [false] && permissionError.3 == 0)
 
+// Absence becoming available during the last pause must still be observed.
+func finalPauseSequence(_ absenceAt: Double) -> ([Bool], Int, Double, Double, Int) {
+    var clock = 0.0, lastObservation = -1.0
+    var finalReads = 0
+    var requests: [Bool] = []
+    var ownerChecks = 0
+    try! stopOwnedProcess(owner: { ownerChecks += 1; return true }, request: { requests.append($0) }, observe: {
+        lastObservation = clock
+        if clock == absenceAt { finalReads += 1 }
+        return clock >= absenceAt ? .absent : (requests.last == true ? .pending : .matching)
+    }, now: { clock }, pause: { clock += $0 }, phase: { _ in })
+    return (requests, ownerChecks, clock, lastObservation, finalReads)
+}
+let gracefulBoundary = finalPauseSequence(10)
+assert(gracefulBoundary.0 == [false] && gracefulBoundary.1 == 1 && gracefulBoundary.2 == 10 && gracefulBoundary.3 == 10 && gracefulBoundary.4 == 1)
+let forcedBoundary = finalPauseSequence(15)
+assert(forcedBoundary.0 == [false, true] && forcedBoundary.1 == 2 && forcedBoundary.2 == 15 && forcedBoundary.3 == 15 && forcedBoundary.4 == 1)
+var deadlineControls = 0
+for duration in [5.0, 10.0] {
+    for last in [ExitObservation.pending, .matching] {
+        var clock = 0.0, finalReads = 0
+        let confirmed = try! waitForExit(duration, observe: {
+            if clock == duration { finalReads += 1 }
+            return last
+        }, now: { clock }, pause: { interval in
+            assert(clock < duration && interval > 0)
+            clock += interval
+            assert(clock <= duration)
+        })
+        assert(!confirmed && clock == duration && finalReads == 1)
+        deadlineControls += 1
+    }
+    for expectedError in [StopError.invalidIdentity, .unavailable] {
+        var clock = 0.0, finalReads = 0
+        do {
+            _ = try waitForExit(duration, observe: {
+                if clock == duration { finalReads += 1; throw expectedError }
+                return .matching
+            }, now: { clock }, pause: { clock += $0 })
+            fatalError("Deadline observation error was hidden")
+        } catch { assert(String(describing: error) == String(describing: expectedError)) }
+        assert(clock == duration && finalReads == 1)
+        deadlineControls += 1
+    }
+}
+
 struct DiagnosticFailure: Error { let message: String }
 func require(_ value: Bool, _ message: String) throws {
     if !value { throw DiagnosticFailure(message: message) }
@@ -212,7 +258,7 @@ func experiment(_ mode: String) -> [String: Any] {
 let children = [experiment("pipe-eof"), experiment("sigterm")]
 let passed = children.allSatisfy { $0["status"] as? String == "passed" && $0["reaped"] as? Bool == true }
 let report: [String: Any] = ["status": passed ? "passed" : "failed", "localOS": ProcessInfo.processInfo.operatingSystemVersionString,
-    "pureStopSequences": 10, "children": children, "xtraceLaunched": false]
+    "pureStopSequences": 12, "deadlineControls": deadlineControls, "children": children, "xtraceLaunched": false]
 let bytes = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
 FileHandle.standardOutput.write(bytes); print("")
 exit(passed ? 0 : 1)
