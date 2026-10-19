@@ -128,7 +128,7 @@ it('shows the typed native index status as reported and refreshes it on its even
   ).toBeTruthy();
   expect(
     within(card).getByText(
-      'Needs Python 3 · 0 imported, 0 partial, 0 skipped, 0 new records, 0 enriched · python runtime unavailable: python3 on PATH: python3 must be 3.10 or newer',
+      'Needs Python 3.10+ · 0 imported, 0 partial, 0 skipped, 0 new records, 0 enriched · python runtime unavailable: python3 on PATH: python3 must be 3.10 or newer',
     ),
   ).toBeTruthy();
   // The next status arrives through the event: the query is invalidated and refetched.

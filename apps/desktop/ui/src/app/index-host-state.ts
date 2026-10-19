@@ -33,7 +33,7 @@ const states: Record<NativeHostState, (needsAttention: boolean) => StateText> = 
   incomplete: () => ({ label: 'Read with gaps' }),
   // No source is not a failure: the host may simply have no local history.
   missing_source: () => ({ label: 'No local history found' }),
-  missing_runtime: () => ({ label: 'Needs Python 3' }),
+  missing_runtime: () => ({ label: 'Needs Python 3.10+' }),
   pin_mismatch: () => ({ label: 'Reader not verified', problem: 'danger' }),
   reader_failed: () => ({ label: 'Reader failed', problem: 'danger' }),
   cancelled: () => ({ label: 'Stopped before finishing' }),
