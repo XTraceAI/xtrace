@@ -420,6 +420,12 @@ First launch requires its exact public source tag and DMG. The update check also
 requires the exact prospective feed to be promoted through a separate authorized
 release action. The harness itself must reach an allowed reviewed workflow ref.
 
+Both released-app jobs use synthetic data and explicitly set `XTRACE_TELEMETRY=0`.
+That override disables telemetry and suppresses the default 0.1.7 telemetry notice.
+A passing result therefore covers a telemetry-disabled synthetic launch, not the
+default telemetry notice or default telemetry behavior. Each report records these
+limits in `validationLimits`, and the success output states the same limits.
+
 After reviewing the harness and explicitly authorizing the released app's real
 identity on a fresh hosted VM, dispatch `delivery_mode=first-launch` with
 `allow_release_identity=true`. The boolean defaults to false, and the job fails
@@ -495,6 +501,10 @@ must already serve the exact reviewed 0.1.7 manifest. Promotion is a separate
 release-owner action that makes the update available to production users; this
 job never changes the feed, publishes a release or substitutes an endpoint.
 A different feed fails the prerequisite before any app launch.
+
+The previous app and its 0.1.7 successor both keep `XTRACE_TELEMETRY=0` and synthetic
+data. Even a successful real update/restart does not validate the default telemetry
+notice or default telemetry behavior; those require separate validation.
 
 The job downloads the exact signed public 0.1.6 archive anonymously, checks its
 pinned bytes, installs it on the disposable VM and verifies all 79 entries plus

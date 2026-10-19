@@ -145,6 +145,12 @@ artifacts from source `e743e900fb40d32bdbe90709bd54b7d9bde32540`, with the publi
 match. Signature and wrong-version/tampered-byte verifier checks passed; these
 checks do not establish SDK behavior or a successful app launch/update.
 
+Both hosted runners intentionally use synthetic data with `XTRACE_TELEMETRY=0`.
+This suppresses the default telemetry notice as well as telemetry sending.
+Their reports and success messages identify that scope; the default 0.1.7
+telemetry notice and default telemetry behavior remain unvalidated even if
+these hosted checks pass.
+
 The candidate remains unpublished at preparation. Its signed first launch and
 real 0.1.6-to-0.1.7 update/restart have not run. They require the existing reviewed
 workflow guards and exact public assets; the update additionally requires separate

@@ -27,6 +27,13 @@ export function requireFirstLaunchHost(input) {
 }
 
 export const firstLaunchBudget = Object.freeze({ workMs: 8 * 60_000, cleanupMs: 2 * 60_000 });
+// The isolated environment suppresses both telemetry and its default notice.
+// Keep these limits in every report, including successful launch/update reports.
+export const signedLaunchLimits = Object.freeze({
+  launchConfiguration: 'synthetic data with telemetry disabled',
+  defaultTelemetryNoticeValidated: false,
+  defaultTelemetryBehaviorValidated: false,
+});
 export function executionBudget(now = () => performance.now(), limits = firstLaunchBudget) {
   let deadline = now() + limits.workMs;
   let cleaning = false;

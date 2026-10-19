@@ -80,6 +80,11 @@ test('actual update entrypoint denies local invocation before downloads or stagi
     assert.deepEqual(await readdir(output), ['report.json']);
     const report = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'));
     assert.equal(report.releasedAppLaunched, false);
+    assert.deepEqual(report.validationLimits, {
+      launchConfiguration: 'synthetic data with telemetry disabled',
+      defaultTelemetryNoticeValidated: false,
+      defaultTelemetryBehaviorValidated: false,
+    });
     assert.match(report.error, /explicit hosted real-identity exception/);
   } finally {
     await rm(temporary, { recursive: true, force: true });

@@ -94,6 +94,11 @@ test('actual first-launch entrypoint fails without opt-in before staging or app 
     const report = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'));
     assert.equal(report.status, 'failed');
     assert.equal(report.releasedAppLaunched, false);
+    assert.deepEqual(report.validationLimits, {
+      launchConfiguration: 'synthetic data with telemetry disabled',
+      defaultTelemetryNoticeValidated: false,
+      defaultTelemetryBehaviorValidated: false,
+    });
     assert.match(report.error, /explicit hosted real-identity exception/);
   } finally {
     await rm(temporary, { recursive: true, force: true });
@@ -121,6 +126,7 @@ test('first launch adds fresh provider, preference and current/old WebKit baseli
   assert.equal(env.XTRACE_DATA_DIR, '/owned/data');
   assert.equal(env.XTRACE_NATIVE_HOME, '/owned/home');
   assert.equal(env.CLAUDE_CONFIG_DIR, '/owned/claude');
+  assert.equal(env.XTRACE_TELEMETRY, '0');
   for (const key of [
     'HOME',
     'GITHUB_TOKEN',

@@ -7,6 +7,7 @@ import { requireFreshBaseline } from './hosted-validation.mjs';
 import { signatureProblems, notarizedByGatekeeper } from './release-dmg.mjs';
 import {
   release,
+  signedLaunchLimits,
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
   verifyAppInventory,
@@ -43,6 +44,7 @@ async function main() {
     status: 'failed',
     mode: 'update',
     release,
+    validationLimits: signedLaunchLimits,
     releasedAppLaunched: false,
     commandBudget: updateBudget,
   };
@@ -454,7 +456,7 @@ async function main() {
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (failure) throw failure;
   console.log(
-    'Pinned signed 0.1.6 updated through its real UI to 0.1.7; distinct restart, retained sentinel and empty native database verified.',
+    'Pinned signed 0.1.6 updated through its real UI to 0.1.7 with synthetic data and telemetry disabled; distinct restart, retained sentinel and empty native database verified. The default telemetry notice and default telemetry behavior were not validated.',
   );
 }
 
