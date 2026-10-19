@@ -3,6 +3,7 @@ import type { NativeHostStatus } from '../../data/generated/NativeHostStatus';
 import type { NativeIndexStatus } from '../../data/generated/NativeIndexStatus';
 import type { ControlTone } from '../../kit/control-tone';
 import type { IconName } from '../../kit/icons';
+import { count } from '../../kit/format';
 import { plural } from '../dashboard/present';
 
 /** A host's display name is the app's one name for it (the kit's `hostName`). */
@@ -18,7 +19,7 @@ export const attentionCount = (hosts: readonly NativeHostStatus[]) =>
 export const readerNote = (host: string) =>
   host === 'claude'
     ? 'Transcripts are read directly; no Python needed.'
-    : 'Read with the bundled reader and Python 3.';
+    : 'Read with the bundled reader and Python 3.10 or newer.';
 
 export function phasePill(status: NativeIndexStatus): { label: string; tone: ControlTone } {
   switch (status.phase.phase) {
@@ -37,33 +38,63 @@ export function phasePill(status: NativeIndexStatus): { label: string; tone: Con
 
 /**
  * What a first-time user can do about one source's last scan, in plain words:
- * a next step, never the raw error (that stays under Details). `null` means
- * the source was read and its session count says the rest. Whether a state is
- * a problem is the app's `needs_attention`, never decided here.
+ * a next step, never the raw error (that stays under Details), and nothing
+ * when a step would only repeat the source's label (no local history, waiting
+ * in a scan). Whether a state is a problem is the app's `needs_attention`,
+ * never decided here.
  *
  * Python is looked for again on each later scan of a source, but a scan
  * starts only when that history changes or XTrace opens, so reopening is the
  * step that always works.
  */
 const nextSteps: Record<NativeHostState, (needsAttention: boolean) => string | null> = {
-  pending: (needsAttention) =>
-    needsAttention ? 'Not read yet. Reopen XTrace to scan again.' : 'Will be read in this scan.',
+  pending: (needsAttention) => (needsAttention ? 'Reopen XTrace to scan again.' : null),
   complete: () => null,
   incomplete: (needsAttention) =>
-    needsAttention ? 'History was found, but no session could be read. See Details.' : null,
-  missing_source: () => 'No history from this tool on this Mac.',
+    needsAttention ? 'No session could be read. See Details for the reason.' : null,
+  missing_source: () => null,
   missing_runtime: () => 'Install Python 3.10 or newer, then reopen XTrace to read this history.',
-  pin_mismatch: () =>
-    'The reader bundled with XTrace could not be verified. See Details, or Settings → Native index.',
-  reader_failed: () => 'This history could not be read. See Details, or Settings → Native index.',
-  cancelled: () => 'The scan stopped before it finished. Reopen XTrace to scan again.',
+  pin_mismatch: () => 'See Details for the reason, or Settings → Native index.',
+  reader_failed: () => 'See Details for the reason, or Settings → Native index.',
+  cancelled: () => 'Reopen XTrace to scan again.',
 };
 
-/** One source's line on the welcome page: its next step, or how many sessions were read. */
+/**
+ * The sessions a read source holds: those read whole, then those only partly
+ * read (the app counts the two apart, so neither includes the other).
+ */
+const sessionsRead = ({
+  sessions_imported: whole,
+  sessions_partial: partly,
+}: Pick<NativeHostStatus, 'sessions_imported' | 'sessions_partial'>) =>
+  partly === 0
+    ? plural(whole, 'session')
+    : whole === 0
+      ? `${plural(partly, 'session')}, partly read`
+      : `${plural(whole, 'session')}, ${count(partly)} more partly read`;
+
+/**
+ * One source's line on the welcome page: its next step, else how many
+ * sessions were read, else nothing (its label says it all).
+ */
 export const hostSummary = (
-  host: Pick<NativeHostStatus, 'state' | 'needs_attention' | 'sessions_imported'>,
-): string =>
-  nextSteps[host.state](host.needs_attention) ?? plural(host.sessions_imported, 'session');
+  host: Pick<
+    NativeHostStatus,
+    'state' | 'needs_attention' | 'sessions_imported' | 'sessions_partial'
+  >,
+): string | null =>
+  nextSteps[host.state](host.needs_attention) ??
+  (host.state === 'complete' || host.state === 'incomplete' ? sessionsRead(host) : null);
+
+/**
+ * The colour of a missing runtime or unverified reader on the quiet checks
+ * line: a warning only while the app reports a source that needs attention,
+ * since a missing Python is no problem when no history needs it.
+ */
+export const checkTone = (
+  status: Pick<NativeIndexStatus, 'needs_attention'>,
+  missing: boolean,
+): 'warning' | undefined => (missing && status.needs_attention ? 'warning' : undefined);
 
 /**
  * The pages a first-time user is pointed to, by route: each title is the

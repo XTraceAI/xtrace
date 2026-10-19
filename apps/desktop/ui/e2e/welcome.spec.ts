@@ -90,6 +90,19 @@ const states: Record<string, NativeIndexStatus> = {
   },
   disabled: fixture.native_index as NativeIndexStatus,
 };
+/**
+ * Database counts that agree with each state: its sessions are the sessions
+ * its hosts report read, whole or partly (both are stored), so a screenshot
+ * never shows one session beside a host that read thousands.
+ */
+const stateCounts = (status: NativeIndexStatus): FixtureExport['db_counts'] => {
+  const sessions = status.hosts.reduce(
+    (sum, host) => sum + host.sessions_imported + host.sessions_partial,
+    0,
+  );
+  const records = status.hosts.reduce((sum, host) => sum + host.records_new, 0);
+  return { sessions, records, usage: Math.floor(records / 10) };
+};
 
 async function serve(
   page: Page,
@@ -256,18 +269,22 @@ for (const [width, height] of [
       }, info) => {
         const errors: string[] = [];
         page.on('pageerror', (error) => errors.push(error.message));
-        await serve(page, states[state]);
+        await serve(page, states[state], false, stateCounts(states[state]));
         await page.setViewportSize({ width, height });
         await page.emulateMedia({ colorScheme: scheme });
         await page.goto('/first-launch');
         await expect(heading(page)).toHaveText('Welcome to XTrace');
-        await expect(page.getByRole('button', { name: 'Open Dashboard' })).toBeVisible();
+        const cta = page.getByRole('button', { name: 'Open Dashboard' });
+        await expect(cta).toBeVisible();
         await page.evaluate(() => document.fonts.ready);
         await expect(page.locator('html')).toHaveAttribute('data-theme', scheme);
         // Closed (as first shown), then with Details open: both must fit.
         for (const open of [false, true]) {
-          // The page scrolls inside the outlet, so bring Details into view to see it.
-          if (open) await (await openDetails(page)).scrollIntoViewIfNeeded();
+          // Opening scrolls Details into view above the pinned bar.
+          if (open) await openDetails(page);
+          // The continue is always wholly in view, whatever is open or scrolled.
+          await expect(cta).toBeInViewport({ ratio: 1 });
+          if (open) await expectDetailsReachable(page);
           const layout = await measureLayout(page);
           expect(layout.page).toBe(width);
           expect(layout.outlet).toBe(0);
@@ -282,6 +299,67 @@ for (const [width, height] of [
         }
         expect(errors).toEqual([]);
       });
+
+/**
+ * Scrolled to the end of the page, the whole Details panel sits above the
+ * pinned bar: nothing in it is hidden behind the bar. Scrolled back to the
+ * top for the next check.
+ */
+async function expectDetailsReachable(page: Page) {
+  const cta = page.getByRole('button', { name: 'Open Dashboard' });
+  const gap = await page.evaluate(() => {
+    const outlet = document.querySelector('.xt-shell-outlet')!;
+    outlet.scrollTop = outlet.scrollHeight;
+    const panel = document.querySelector('.xt-welcome-details')!.getBoundingClientRect();
+    const bar = document.querySelector('.xt-welcome-actions')!.getBoundingClientRect();
+    return bar.top - panel.bottom;
+  });
+  expect(gap).toBeGreaterThanOrEqual(-0.5);
+  await expect(cta).toBeInViewport({ ratio: 1 });
+}
+
+/** The welcome page with the telemetry notice due, as on a real first launch. */
+for (const [width, height] of [
+  [1440, 900],
+  [1120, 720],
+] as const)
+  for (const scheme of ['light', 'dark'] as const)
+    test(`welcome with the telemetry notice keeps Open Dashboard in view at ${width}x${height} ${scheme}`, async ({
+      page,
+    }, info) => {
+      await serve(page, states.missing, false, stateCounts(states.missing));
+      await page.setViewportSize({ width, height });
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto('/e2e/telemetry-notice.html?notice=1&route=/first-launch');
+      await expect(heading(page)).toHaveText('Welcome to XTrace');
+      const notice = page.getByTestId('telemetry-disclosure');
+      await expect(notice).toBeVisible();
+      // Part of step 3, not floating over the page.
+      await expect(page.locator('.xt-welcome-step').last()).toContainText('Anonymous usage data');
+      await page.evaluate(() => document.fonts.ready);
+      const cta = page.getByRole('button', { name: 'Open Dashboard' });
+      await expect(cta).toBeInViewport({ ratio: 1 });
+      const layout = await measureLayout(page);
+      expect(layout.page).toBe(width);
+      expect(layout.outlet).toBe(0);
+      expect(layout.escaped).toEqual([]);
+      await page.screenshot({ path: info.outputPath(`welcome-telemetry-${width}-${scheme}.png`) });
+      // Scrolled to the end, the notice is all above the pinned bar.
+      const gap = await page.evaluate(() => {
+        const outlet = document.querySelector('.xt-shell-outlet')!;
+        outlet.scrollTop = outlet.scrollHeight;
+        const card = document
+          .querySelector('[data-testid="telemetry-disclosure"]')!
+          .getBoundingClientRect();
+        const bar = document.querySelector('.xt-welcome-actions')!.getBoundingClientRect();
+        return bar.top - card.bottom;
+      });
+      expect(gap).toBeGreaterThanOrEqual(-0.5);
+      await expect(cta).toBeInViewport({ ratio: 1 });
+      await page.screenshot({
+        path: info.outputPath(`welcome-telemetry-${width}-${scheme}-end.png`),
+      });
+    });
 
 /** Test-only counts: plausible indexed-history volumes, and the exact JSON integer limit. */
 const largeCounts: Record<string, FixtureExport['db_counts']> = {

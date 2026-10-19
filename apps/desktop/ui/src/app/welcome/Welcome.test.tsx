@@ -282,7 +282,10 @@ it('reports a scan in progress by transcripts read, never as a percentage, and f
   await welcomeHeading();
   expect(await screen.findByText('Scanning')).toBeTruthy();
   expect(screen.getAllByText('Waiting to be read')).toHaveLength(3);
-  expect(screen.getAllByText('Will be read in this scan.')).toHaveLength(3);
+  // Waiting in a scan needs no sentence: the label already says it.
+  const waiting = screen.getByRole('list', { name: 'Local history sources' });
+  for (const row of within(waiting).getAllByRole('listitem'))
+    expect(row.querySelector('.xt-welcome-host-summary')?.textContent).toBe('');
   expect(screen.getByText('Looking for Python…')).toBeTruthy();
   const details = openDetails();
   expect(within(details).getByTestId('welcome-files').textContent).toBe('128');
@@ -337,9 +340,9 @@ it('shows each source outcome without install, connection or capture claims', as
   // At first glance: the outcome, and a next step in words, never the raw error.
   const claude = sourceRow(list, 'Claude Code');
   expect(within(claude).getByText('Read with gaps')).toBeTruthy();
-  expect(within(claude).getByText('40 sessions')).toBeTruthy();
+  expect(within(claude).getByText('40 sessions, 2 more partly read')).toBeTruthy();
   const codex = sourceRow(list, 'Codex');
-  expect(within(codex).getByText('Needs Python 3')).toBeTruthy();
+  expect(within(codex).getByText('Needs Python 3.10+')).toBeTruthy();
   expect(
     within(codex).getByText(
       'Install Python 3.10 or newer, then reopen XTrace to read this history.',
@@ -348,9 +351,7 @@ it('shows each source outcome without install, connection or capture claims', as
   const cursor = sourceRow(list, 'Cursor');
   expect(within(cursor).getByText('Reader failed')).toBeTruthy();
   expect(
-    within(cursor).getByText(
-      'This history could not be read. See Details, or Settings → Native index.',
-    ),
+    within(cursor).getByText('See Details for the reason, or Settings → Native index.'),
   ).toBeTruthy();
   expect(screen.getByText('Python not found')).toBeTruthy();
   expect(document.body.textContent).not.toContain('the reader exited with status 1');
@@ -387,9 +388,11 @@ it('reports a disabled index and a missing source plainly', async () => {
   const list = await screen.findByRole('list', { name: 'Local history sources' });
   const cursor = sourceRow(list, 'Cursor');
   expect(within(cursor).getByText('No local history found')).toBeTruthy();
-  // No history is not a problem: the line says so plainly, in a calm colour.
-  expect(within(cursor).getByText('No history from this tool on this Mac.')).toBeTruthy();
+  // No history is not a problem, and the label says it: no sentence repeats it.
+  expect(cursor.querySelector('.xt-welcome-host-summary')?.textContent).toBe('');
   expect(cursor.hasAttribute('data-attention')).toBe(false);
+  // The logo is decoration beside the name: each row has one name for its source.
+  expect(within(list).queryAllByRole('img')).toHaveLength(0);
   expect(within(openDetails()).getByText('1 of 3 read · last scan since launch')).toBeTruthy();
 });
 
@@ -513,4 +516,62 @@ it('names each page it points to by its own title, as plain text', async () => {
   ).toEqual(
     expect.arrayContaining(['Finding your agent history', "What you'll find", 'Stays on this Mac']),
   );
+});
+
+it('says a source read only partly is partly read, never 0 sessions', async () => {
+  mount(
+    '/first-launch',
+    nativeSource({
+      status: {
+        ...ready,
+        hosts: [
+          host('claude', { state: 'incomplete', sessions_imported: 0, sessions_partial: 3 }),
+          host('codex', { state: 'complete', sessions_imported: 1 }),
+          host('cursor', { state: 'missing_source' }),
+        ],
+      },
+    }).source,
+  );
+  const list = await screen.findByRole('list', { name: 'Local history sources' });
+  expect(within(sourceRow(list, 'Claude Code')).getByText('3 sessions, partly read')).toBeTruthy();
+  expect(within(sourceRow(list, 'Codex')).getByText('1 session')).toBeTruthy();
+  expect(list.textContent).not.toContain('0 sessions');
+});
+
+it('colours a missing Python or unverified readers as a warning only while a source needs attention', async () => {
+  const unready = {
+    python: { state: 'missing', reason: 'python3 was not found' },
+    readers: { state: 'unavailable', reason: 'the bundle did not match its pin' },
+  } as const;
+  // No source needs Python here: missing it is a neutral fact.
+  const calm = mount(
+    '/first-launch',
+    nativeSource({ status: { ...ready, ...unready, needs_attention: false } }).source,
+  );
+  const python = (await screen.findByText('Python not found')).parentElement!;
+  const readers = screen.getByText('Bundled readers not verified').parentElement!;
+  expect(python.getAttribute('data-tone')).toBeNull();
+  expect(readers.getAttribute('data-tone')).toBeNull();
+  calm.unmount();
+  mount(
+    '/first-launch',
+    nativeSource({
+      status: {
+        ...ready,
+        ...unready,
+        hosts: [
+          host('claude', { state: 'complete', sessions_imported: 41 }),
+          host('codex', { state: 'missing_runtime', needs_attention: true }),
+          host('cursor', { state: 'missing_source' }),
+        ],
+        needs_attention: true,
+      },
+    }).source,
+  );
+  expect(
+    (await screen.findByText('Python not found')).parentElement!.getAttribute('data-tone'),
+  ).toBe('warning');
+  expect(
+    screen.getByText('Bundled readers not verified').parentElement!.getAttribute('data-tone'),
+  ).toBe('warning');
 });

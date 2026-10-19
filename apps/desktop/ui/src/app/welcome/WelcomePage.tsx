@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useData } from '../../data/DataProvider';
 import type { DbCounts } from '../../data/generated/DbCounts';
@@ -18,6 +18,7 @@ import { TelemetryNotice } from '../telemetry/TelemetryNotice';
 import { completeWelcome } from './welcome-completion';
 import {
   attentionCount,
+  checkTone,
   hostName,
   hostSummary,
   phasePill,
@@ -43,6 +44,11 @@ export function WelcomePage() {
   const index = useNativeIndexStatus();
   const counts = useDbCounts();
   const [details, setDetails] = useState(false);
+  const panel = useRef<HTMLDivElement>(null);
+  // Opened from the pinned bar below it: bring the facts into view above the bar.
+  useEffect(() => {
+    if (details) panel.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [details]);
   const detailsId = useId();
   const toggleId = useId();
   const preview = source.kind === 'preview';
@@ -133,6 +139,22 @@ export function WelcomePage() {
           <TelemetryNotice closable={false} />
         </Step>
       </div>
+      {!preview && (
+        <div
+          id={detailsId}
+          role="region"
+          aria-labelledby={toggleId}
+          ref={panel}
+          className="xt-welcome-details"
+          hidden={!details}
+        >
+          {details && (
+            <Details status={index.data} counts={counts.data} countsFailed={counts.isError} />
+          )}
+        </div>
+      )}
+      {/* Pinned to the bottom of the scroll area, so the continue is always in
+          view; Details opens above it, inside the page's scroll. */}
       <div className="xt-welcome-actions">
         <Button variant="primary" height={34} className="xt-welcome-cta" onClick={open}>
           Open Dashboard
@@ -170,19 +192,6 @@ export function WelcomePage() {
           </Button>
         )}
       </div>
-      {!preview && (
-        <div
-          id={detailsId}
-          role="region"
-          aria-labelledby={toggleId}
-          className="xt-welcome-details"
-          hidden={!details}
-        >
-          {details && (
-            <Details status={index.data} counts={counts.data} countsFailed={counts.isError} />
-          )}
-        </div>
-      )}
     </section>
   );
 }
@@ -265,7 +274,10 @@ function HostRow({ host }: { host: NativeHostStatus }) {
   const outcome = hostScanText(host);
   return (
     <li className="xt-welcome-host" data-attention={host.needs_attention || undefined}>
-      <HostGlyph host={host.host} size={20} />
+      {/* The name beside it is the row's one name for the source. */}
+      <span className="xt-welcome-host-glyph" aria-hidden="true">
+        <HostGlyph host={host.host} size={20} />
+      </span>
       <span className="xt-welcome-host-name">{hostName(host.host)}</span>
       <span className="xt-welcome-host-summary">{hostSummary(host)}</span>
       <StatePill tone={outcome.tone}>{outcome.label}</StatePill>
@@ -300,7 +312,11 @@ function Checks({ status }: { status: NativeIndexStatus }) {
     <p className="xt-welcome-checks">
       <span
         className="xt-welcome-check"
-        data-tone={readers.state === 'verified' ? 'success' : 'warning'}
+        data-tone={
+          readers.state === 'verified'
+            ? 'success'
+            : checkTone(status, readers.state === 'unavailable')
+        }
       >
         <Icon name={readers.state === 'verified' ? 'check' : 'info'} size={12} />
         <span>
@@ -315,11 +331,7 @@ function Checks({ status }: { status: NativeIndexStatus }) {
       <span
         className="xt-welcome-check"
         data-tone={
-          python.state === 'available'
-            ? 'success'
-            : python.state === 'missing'
-              ? 'warning'
-              : undefined
+          python.state === 'available' ? 'success' : checkTone(status, python.state === 'missing')
         }
       >
         <Icon name={python.state === 'available' ? 'check' : 'info'} size={12} />
@@ -367,7 +379,7 @@ function Details({
                 {freshnessText(status)}
               </dd>
               <dt>Python</dt>
-              <dd data-tone={status.python.state === 'missing' ? 'warning' : undefined}>
+              <dd data-tone={checkTone(status, status.python.state === 'missing')}>
                 {status.python.state === 'available'
                   ? `Found at ${status.python.path}`
                   : status.python.state === 'resolving'
@@ -375,7 +387,7 @@ function Details({
                     : `Not found: ${status.python.reason}. Codex and Cursor history needs Python 3.10 or newer; Claude history is read without it.`}
               </dd>
               <dt>Readers</dt>
-              <dd data-tone={status.readers.state === 'unavailable' ? 'warning' : undefined}>
+              <dd data-tone={checkTone(status, status.readers.state === 'unavailable')}>
                 {status.readers.state === 'verified'
                   ? 'Verified'
                   : `Unavailable: ${status.readers.reason}`}

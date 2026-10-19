@@ -188,7 +188,7 @@ describe('host scans qualify a ready index', () => {
   });
 
   it.each([
-    ['missing_runtime', 'Needs Python 3'],
+    ['missing_runtime', 'Needs Python 3.10+'],
     ['pin_mismatch', 'Reader not verified'],
     ['cancelled', 'Stopped before finishing'],
     ['pending', 'Not read yet'],

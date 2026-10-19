@@ -8,7 +8,8 @@
   gap: 18px;
   min-width: 0;
   max-width: 880px;
-  padding: 22px 24px 28px;
+  /* No bottom padding: the pinned actions bar is the page's last row. */
+  padding: 22px 24px 0;
 }
 .xt-welcome-head {
   display: flex;
@@ -137,6 +138,9 @@
   gap: 12px;
   min-width: 0;
   padding: 10px 12px;
+}
+.xt-welcome-host-glyph {
+  display: inline-flex;
 }
 .xt-welcome-host + .xt-welcome-host {
   border-top: 1px solid var(--divider);
@@ -271,12 +275,20 @@
   margin: 0;
 }
 
-/* The continue and the Details toggle. */
+/* The continue and the Details toggle, pinned to the bottom of the page's
+   scroll area (the shell outlet) so the continue is always in view. */
 .xt-welcome-actions {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  margin-top: -6px;
+  padding: 12px 0 16px;
+  border-top: 1px solid var(--divider);
+  background: var(--panel);
 }
 .xt-welcome-cta {
   padding: 0 16px;
@@ -288,10 +300,15 @@
   flex: none;
 }
 .xt-welcome-chevron[data-open='true'] {
-  transform: rotate(90deg);
+  /* Details opens above the pinned bar: the open chevron points up at it. */
+  transform: rotate(-90deg);
 }
 
 /* Details: the technical facts, closed by default. */
+.xt-welcome-details {
+  /* Scrolled into view clear of the pinned bar below it. */
+  scroll-margin-bottom: 80px;
+}
 .xt-welcome-details[hidden] {
   display: none;
 }
