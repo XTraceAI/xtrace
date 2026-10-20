@@ -18,6 +18,7 @@ on:
           - first-launch
           - telemetry
           - update
+          - updater-failures
       allow_release_identity:
         description: Explicitly allow the unchanged signed app identity on this fresh hosted VM
         required: true
@@ -41,7 +42,7 @@ jobs:
           DELIVERY_MODE: ${{ inputs.delivery_mode }}
         run: |
           case "$DELIVERY_MODE" in
-            native|probe|first-launch|telemetry|update|'') ;;
+            native|probe|first-launch|telemetry|update|updater-failures|'') ;;
             *) echo 'Unsupported delivery mode' >&2; exit 1 ;;
           esac
 
@@ -251,6 +252,81 @@ jobs:
           path: |
             artifacts/hosted-validation/*.json
             artifacts/hosted-validation/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Tests-only SDK calls against disposable targets. Never launches released XTrace.
+  updater-failures:
+    if: inputs.delivery_mode == 'updater-failures'
+    needs: validate-mode
+    runs-on: macos-14
+    timeout-minutes: 48
+    steps:
+      - name: Require exact default-branch source and fresh hosted macOS 14 arm64
+        timeout-minutes: 1
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_TYPE: ${{ github.ref_type }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$WORKFLOW_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$WORKFLOW_REF_TYPE" = branch
+          test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
+          test "$SOURCE_SHA" = "$CANDIDATE_SHA"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          [[ "$(sw_vers -productVersion)" == 14.* ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 2
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 2
+        with:
+          node-version-file: .node-version
+      - name: Compile the pinned tests-only SDK helper and check guards
+        timeout-minutes: 20
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -o pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          mkdir -p artifacts/hosted-updater-failures
+          rustc +1.94.1 --version > artifacts/hosted-updater-failures/toolchain.log
+          cargo +1.94.1 --version >> artifacts/hosted-updater-failures/toolchain.log
+          xcrun swiftc --version >> artifacts/hosted-updater-failures/toolchain.log
+          xcrun --show-sdk-version >> artifacts/hosted-updater-failures/toolchain.log
+          shasum -a 256 Cargo.lock >> artifacts/hosted-updater-failures/toolchain.log
+          cargo +1.94.1 build --locked -p xtrace-desktop --example updater_failures 2>&1 | tee artifacts/hosted-updater-failures/sdk-build.log
+          xcrun swiftc -module-cache-path target/hosted-updater-swift-cache.noindex scripts/ci/hosted-updater-cancel.swift -o target/debug/hosted-updater-cancel 2>&1 | tee artifacts/hosted-updater-failures/observer-build.log
+          shasum -a 256 target/debug/examples/updater_failures target/debug/hosted-updater-cancel > artifacts/hosted-updater-failures/built-helpers.log
+          node --test scripts/ci/hosted-updater-failures.test.mjs
+      - name: Exercise real SDK rejection and one bounded Cancel-only permission attempt
+        timeout-minutes: 19
+        env:
+          DELIVERY_MODE: updater-failures
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_TYPE: ${{ github.ref_type }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node scripts/ci/hosted-updater-failures.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        timeout-minutes: 2
+        if: always()
+        with:
+          name: hosted-updater-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/hosted-updater-failures/*.json
+            artifacts/hosted-updater-failures/*.log
           if-no-files-found: warn
           retention-days: 14
 
