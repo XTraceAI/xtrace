@@ -119,8 +119,12 @@ func nativeDataError(_ rows: [[String: String]]) -> Bool {
         "Dashboard metrics could not be loaded.", "The local index has stopped."]
     return rows.contains { row in row.values.contains { text in errors.contains { text.contains($0) } } }
 }
+func isAlert(_ row: [String: String]) -> Bool {
+    row[kAXRoleAttribute] == "AXAlert" ||
+        (row[kAXRoleAttribute] == "AXGroup" && row[kAXSubroleAttribute] == "AXApplicationAlert")
+}
 func nativeError(_ rows: [[String: String]]) -> Bool {
-    nativeDataError(rows) || rows.contains { $0[kAXRoleAttribute] == "AXAlert" || $0[kAXSubroleAttribute] == "AXDialog" }
+    nativeDataError(rows) || rows.contains { isAlert($0) || $0[kAXSubroleAttribute] == "AXDialog" }
 }
 func updateDashboard(_ rows: [[String: String]], _ version: String) -> Bool {
     !nativeError(rows) && rows.contains { $0[kAXRoleAttribute] == kAXWindowRole } &&
@@ -147,7 +151,7 @@ func telemetryAlerts(_ rows: [[String: String]]) -> TelemetryAlerts {
         ["AXDialog", "AXSheet"].contains(row[kAXRoleAttribute] ?? "") || row[kAXSubroleAttribute] == "AXDialog" ||
         row.values.contains { text in errors.contains { text.contains($0) } }
     }) else { return rejected }
-    let alerts = rows.filter { $0[kAXRoleAttribute] == "AXAlert" }
+    let alerts = rows.filter(isAlert)
     if alerts.isEmpty {
         return TelemetryAlerts(safe: !hasText(rows, blockedUpdaterText) && !rows.contains(where: { isButton($0, "Retry update") }), updaterWarning: false)
     }
@@ -286,13 +290,7 @@ while Date() < deadline {
                 pressed = true
             }
         } else if releaseMode {
-            let errors = ["Local index status and database counts could not be read.",
-                "Local index status could not be read.", "Database counts could not be read.",
-                "Dashboard metrics could not be loaded.", "The local index has stopped."]
-            if last.contains(where: { row in
-                row[kAXRoleAttribute] == "AXAlert" || row[kAXSubroleAttribute] == "AXDialog" ||
-                    row.values.contains(where: { text in errors.contains(where: { text.contains($0) }) })
-            }) { finish(6, "The released app displayed a startup or native-data error", last) }
+            if nativeError(last) { finish(6, "The released app displayed a startup or native-data error", last) }
             if sawWindow, sawWebContent, !pressed, let button,
                hasText("Welcome to XTrace"), hasText("The initial scan finished."),
                hasText("Bundled readers verified"), displayedVersion(last, "0.1.7"),
