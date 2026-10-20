@@ -88,8 +88,9 @@
 //!   for more than one line a pass always moves a mark or finishes a file;
 //!   with less it reads nothing and reports no progress (below), so the
 //!   watcher backs off rather than spins.
-//! - **Cancelled.** Nothing read by the cancelled read is recorded and its
-//!   mark does not move.
+//! - **Cancelled.** A cancel that lands at any point of a read, its last
+//!   chunk included, records nothing that read found, and its mark does not
+//!   move.
 //! - **File replaced, shrunk or unreadable.** Its mark is dropped; the next
 //!   read of it starts from its start, a replaced file under its new inode.
 //!
@@ -491,7 +492,9 @@ fn read_thread(
                 continue;
             }
         };
-        if halted == Some(Untitled::Cancelled) {
+        // A cancel that landed at any point, the last chunk included, records
+        // nothing this read found and leaves the mark where it was.
+        if halted == Some(Untitled::Cancelled) || batch.cancelled() {
             return Ok(false);
         }
         for (pull_request, (first_seen_at, last_seen_at)) in seen {
