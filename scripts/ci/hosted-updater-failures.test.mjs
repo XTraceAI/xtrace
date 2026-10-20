@@ -667,6 +667,95 @@ test(
   },
 );
 
+test(
+  'actual refresh wait delivers common-set work in both directions without extending deadlines or spinning',
+  { skip: process.platform !== 'darwin' },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'observer-refresh-'));
+    try {
+      const wait = observer
+        .split('// BEGIN REFRESH WAIT:')[1]
+        .split('\n')
+        .slice(1)
+        .join('\n')
+        .split('// END REFRESH WAIT')[0];
+      const swift = join(directory, 'main.swift'),
+        binary = join(directory, 'wait-controls');
+      // Foundation only: in-memory state changes stand in for queued work, not
+      // applications, AX windows or an actual authorization dialog.
+      await writeFile(
+        swift,
+        `import Foundation
+${wait}
+var present = false
+var evidence: [String: Any] = [:]
+let appear = Timer(timeInterval: 0.01, repeats: false) { _ in present = true }
+RunLoop.main.add(appear, forMode: .common)
+Thread.sleep(forTimeInterval: 0.1)
+evidence["oldWaitPresent"] = present
+waitForRefresh(until: Date().addingTimeInterval(0.1))
+evidence["refreshedPresent"] = present
+appear.invalidate()
+let disappear = Timer(timeInterval: 0.01, repeats: false) { _ in present = false }
+RunLoop.main.add(disappear, forMode: .common)
+Thread.sleep(forTimeInterval: 0.1)
+evidence["oldWaitAbsent"] = !present
+waitForRefresh(until: Date().addingTimeInterval(0.1))
+evidence["refreshedAbsent"] = !present
+disappear.invalidate()
+let idleStart = Date(), idleDeadline = idleStart.addingTimeInterval(0.04)
+var idleCalls = 0
+while Date() < idleDeadline { waitForRefresh(until: idleDeadline); idleCalls += 1 }
+evidence["idleElapsed"] = Date().timeIntervalSince(idleStart)
+evidence["idleCalls"] = idleCalls
+let expiredStart = Date()
+waitForRefresh(until: expiredStart.addingTimeInterval(-1))
+evidence["expiredElapsed"] = Date().timeIntervalSince(expiredStart)
+var events = 0, eventCalls = 0
+let repeated = Timer(timeInterval: 0.005, repeats: true) { _ in events += 1 }
+RunLoop.main.add(repeated, forMode: .common)
+let eventStart = Date(), eventDeadline = eventStart.addingTimeInterval(0.25)
+while Date() < eventDeadline { waitForRefresh(until: eventDeadline); eventCalls += 1 }
+repeated.invalidate()
+evidence["eventElapsed"] = Date().timeIntervalSince(eventStart)
+evidence["events"] = events
+evidence["eventCalls"] = eventCalls
+let bytes = try! JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
+FileHandle.standardOutput.write(bytes)
+`,
+      );
+      const compiled = spawnSync(
+        '/usr/bin/xcrun',
+        ['swiftc', '-module-cache-path', join(directory, 'cache'), swift, '-o', binary],
+        { encoding: 'utf8', timeout: 120000 },
+      );
+      assert.equal(compiled.status, 0, compiled.stderr);
+      const run = spawnSync(binary, [], { encoding: 'utf8', timeout: 5000 });
+      assert.equal(run.status, 0, `${run.error?.message || run.signal || ''}\n${run.stderr}`);
+      const evidence = JSON.parse(run.stdout);
+      console.log('Foundation refresh control evidence:', JSON.stringify(evidence));
+      assert.equal(evidence.oldWaitPresent, false);
+      assert.equal(evidence.refreshedPresent, true);
+      assert.equal(evidence.oldWaitAbsent, false);
+      assert.equal(evidence.refreshedAbsent, true);
+      assert.ok(evidence.idleElapsed >= 0.03 && evidence.idleElapsed < 0.09);
+      assert.ok(evidence.idleCalls >= 1 && evidence.idleCalls <= 2);
+      assert.ok(evidence.expiredElapsed < 0.05);
+      assert.ok(evidence.events >= 2);
+      assert.ok(evidence.eventCalls >= 2 && evidence.eventCalls <= 4);
+      assert.ok(evidence.eventElapsed >= 0.24 && evidence.eventElapsed < 0.34);
+      const callSites = observer.split('// END REFRESH WAIT')[1];
+      assert.equal((callSites.match(/waitForRefresh\(until: deadline\)/g) || []).length, 1);
+      assert.equal((callSites.match(/waitForRefresh\(until: disappearedBy\)/g) || []).length, 1);
+      assert.doesNotMatch(callSites, /Thread\.sleep/);
+      assert.match(callSites, /let deadline = Date\(\)\.addingTimeInterval\(40\)/);
+      assert.match(callSites, /let disappearedBy = Date\(\)\.addingTimeInterval\(5\)/);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  },
+);
+
 test('workflow mode stays manually guarded and outside release packaging; SDK source boundaries remain explicit', () => {
   assert.match(job, /if: inputs.delivery_mode == 'updater-failures'/);
   assert.match(job, /needs: validate-mode/);
