@@ -120,6 +120,16 @@ it('draws the 24 h line from a 12 h day, extends the scale to it and notes days 
   expect(half.scale).toEqual({ top: 24, topText: '24 h', midText: '12 h' });
   // The line sits on the top line, which the scale's own label names: no second label.
   expect(half.reference).toEqual({ fraction: 1, text: null });
+  // A 50 h scale would put its 25 h middle beside the 24 h line: the middle is left out.
+  const fifty = effortChart(
+    section({
+      tile: { known_merged: 0 },
+      groups: [{ assignment: ty('feat'), sessions: 1, days: { 0: { agentMs: 41 * HOUR } } }],
+    }),
+    'agent',
+  );
+  expect(fifty.scale).toEqual({ top: 50, topText: '50 h', midText: null });
+  expect(fifty.reference).toEqual({ fraction: 0.48, text: '24 h' });
   // Cost never has the line.
   expect(effortChart(section(MANY_TYPES), 'dollars').reference).toBeNull();
 });
