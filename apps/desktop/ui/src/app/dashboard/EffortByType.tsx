@@ -117,7 +117,7 @@ function EffortPlot({ chart, drawn }: { chart: Chart; drawn: boolean }) {
             {chart.scale && (
               <>
                 <span data-at="top">{chart.scale.topText}</span>
-                <span data-at="mid">{chart.scale.midText}</span>
+                {chart.scale.midText !== null && <span data-at="mid">{chart.scale.midText}</span>}
               </>
             )}
             {!chart.unmeasured && <span data-at="zero">0</span>}
@@ -125,7 +125,9 @@ function EffortPlot({ chart, drawn }: { chart: Chart; drawn: boolean }) {
           <div className="xt-effort-plot" data-testid="effort-plot">
             <div className="xt-effort-grid" aria-hidden="true">
               {chart.scale && <span className="xt-effort-gridline" data-at="top" />}
-              {chart.scale && <span className="xt-effort-gridline" data-at="mid" />}
+              {chart.scale && chart.scale.midText !== null && (
+                <span className="xt-effort-gridline" data-at="mid" />
+              )}
               <span className="xt-effort-baseline" />
               {chart.reference && (
                 <span

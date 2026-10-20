@@ -14,6 +14,7 @@
 pub mod checkpoint;
 pub mod claude_fs;
 pub mod claude_launch;
+pub mod codex_pr_links;
 mod human_input;
 pub mod origin;
 pub mod readers_cli;
@@ -391,6 +392,8 @@ fn relate_codex_spawns(
     // Codex agent's `codex exec --json` launch named.
     spawns.launches.add_threads(imported(report));
     spawns.launches.add_children(imported(report));
+    // Their histories may hold new pull-request witnesses.
+    spawns.prs.add(imported(report));
     let _ = session_creation::continue_scanned_spawns(
         store,
         request.home,

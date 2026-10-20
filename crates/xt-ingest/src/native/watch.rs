@@ -166,8 +166,10 @@ pub enum TailEvent {
     /// A sub-session pass the worker ran between reconciliations committed
     /// this many changes to what the session lists show: a relation newly
     /// recorded, or an accepted one first withheld as conflicted, a child
-    /// fact, or a session's display check finished
-    /// ([`super::claude_launch::check`]). It is sent once per such pass,
+    /// fact, a session's display check finished
+    /// ([`super::claude_launch::check`]), or a Codex session's exact
+    /// pull-request link created or widened ([`super::codex_pr_links`]). It
+    /// is sent once per such pass,
     /// after the commit, and never for a pass that only replayed, abstained
     /// or read nothing. It says nothing about freshness
     /// and is not a reconciliation. A scan's own changes are carried by the

@@ -42,6 +42,12 @@ const HOUR_MS = 3_600_000;
 export const FULL_DAY_HOURS = 24;
 /** The 24 h line is drawn once the busiest day reaches half of it. */
 const REFERENCE_FROM_HOURS = 12;
+/**
+ * The middle line is left out when the 24 h line sits within this share of
+ * the scale's height of it: two lines that close read as one line with two
+ * different labels (a 50 h scale puts them at 25 h and 24 h).
+ */
+const MID_CLEARANCE = 0.05;
 export const OVER_FULL_DAY = 'Above 24 h: agents ran at the same time';
 export { NO_MODEL };
 
@@ -102,8 +108,11 @@ export interface EffortChart {
   unit: 'hours' | 'dollars';
   days: readonly MetricEffortDay[];
   bars: EffortBar[];
-  /** The scale's top and middle; null when nothing above zero is measured. */
-  scale: { top: number; topText: string; midText: string } | null;
+  /**
+   * The scale's top and middle; null when nothing above zero is measured.
+   * `midText` is null when the middle line is left out next to the 24 h line.
+   */
+  scale: { top: number; topText: string; midText: string | null } | null;
   /** The 24 h line, as a fraction of the scale's top; hours only. */
   reference: { fraction: number; text: string | null } | null;
   /** Why the plot has nothing to draw, when no day has a measured value. */
@@ -308,6 +317,17 @@ export function effortChart(current: MetricPrEffort, metric: BarMetric): EffortC
     });
   });
 
+  // On the top line the scale's own label already names it: no second one.
+  const reference =
+    showReference && top !== null
+      ? {
+          fraction: FULL_DAY_HOURS / top,
+          text: top === FULL_DAY_HOURS ? null : `${FULL_DAY_HOURS} h`,
+        }
+      : null;
+  const midBesideReference =
+    reference !== null && Math.abs(reference.fraction - 0.5) < MID_CLEARANCE;
+
   return {
     metric,
     unit: metric === 'agent' ? 'hours' : 'dollars',
@@ -318,17 +338,10 @@ export function effortChart(current: MetricPrEffort, metric: BarMetric): EffortC
         ? {
             top,
             topText: scaleText(top, metric, unit),
-            midText: scaleText(top / 2, metric, unit),
+            midText: midBesideReference ? null : scaleText(top / 2, metric, unit),
           }
         : null,
-    // On the top line the scale's own label already names it: no second one.
-    reference:
-      showReference && top !== null
-        ? {
-            fraction: FULL_DAY_HOURS / top,
-            text: top === FULL_DAY_HOURS ? null : `${FULL_DAY_HOURS} h`,
-          }
-        : null,
+    reference,
     unmeasured,
     headline: headline(current, metric),
     ticks: tickIndices(count),
