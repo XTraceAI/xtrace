@@ -1,3 +1,4 @@
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -8,6 +9,7 @@ import type { CompactionCount } from '../../data/generated/CompactionCount';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { SessionCompactions } from '../../data/generated/SessionCompactions';
 import { events } from '../../data/ipc-names';
+import { reconciledIndexStatus } from '../../data/subscribe-invalidation';
 import type { TimeRange } from '../../kit/TopBar';
 import { ActivityLanes } from './ActivityLanes';
 import { recordedTime } from './present';
@@ -52,7 +54,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setup(outcomes: Record<string, CompactionCount>) {
+function setup(
+  outcomes: Record<string, CompactionCount>,
+  captureClient?: (client: QueryClient) => void,
+) {
+  function ClientProbe() {
+    const client = useQueryClient();
+    captureClient?.(client);
+    return null;
+  }
   const source = new FixtureDataSource(structuredClone(fixture as FixtureExport));
   const report = structuredClone((fixture as FixtureExport).dashboards[0]);
   const ids = Object.keys(outcomes);
@@ -78,6 +88,7 @@ function setup(outcomes: Record<string, CompactionCount>) {
   const page = (range: TimeRange, data = source) => (
     <MemoryRouter>
       <DataProvider source={data}>
+        {captureClient && <ClientProbe />}
         <ActivityLanes report={report} range={range} />
       </DataProvider>
     </MemoryRouter>
@@ -162,7 +173,10 @@ it('keeps resolved counts and ticks across scrolling, then applies genuine refre
     unknown: { state: 'unknown', reason: 'ownership' },
     later: { state: 'count', count: 2, events: [] },
   };
-  const { row, source, read } = setup(outcomes);
+  let client: QueryClient | undefined;
+  const { row, source, read } = setup(outcomes, (value) => {
+    client = value;
+  });
   const pending: Array<{ ids: readonly string[]; resolve: (answer: SessionCompactions) => void }> =
     [];
   read.mockImplementation((ids) => new Promise((resolve) => pending.push({ ids, resolve })));
@@ -173,6 +187,11 @@ it('keeps resolved counts and ticks across scrolling, then applies genuine refre
     });
   };
   await screen.findByRole('link', { name: 'Open session first, first' });
+  // This fixture emits no status event during setup and has no visible IDs yet.
+  // Finish its initial reconciliation before testing reads caused by scrolling.
+  await waitFor(() => expect(client && reconciledIndexStatus.get(client)).toBe('settled'));
+  await act(async () => {});
+  expect(read).not.toHaveBeenCalled();
   const scroll = screen.getByRole('region', { name: 'Session lanes scroll area' });
   scroll.scrollTop = 23;
   show(['first', 'zero', 'unknown']);
