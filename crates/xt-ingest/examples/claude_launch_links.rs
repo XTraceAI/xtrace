@@ -14,7 +14,8 @@
 //!     [--child CLAUDE_SESSION_UUID] [--timeout-secs N]
 //! # Every background child pass the watcher runs, over what the index already
 //! # holds, with no re-import: the Codex typed-header pass and sweep, the Codex
-//! # launch drainer and the Claude `Bash` launch sweep:
+//! # launch drainer, the Claude `Bash` launch sweep and the Codex pull-request
+//! # link sweep:
 //! cargo run -p xt-ingest --example claude_launch_links -- \
 //!     --db INDEX --home HOME --children \
 //!     [--child SESSION_UUID]... [--timeout-secs N]
@@ -32,7 +33,9 @@
 //! child's relation kind, state and parent identifiers. With `--children`,
 //! each named session's child facts, relation, the structural identifiers of
 //! a launch relation of either kind (a Claude `--session-id` or a Codex
-//! `codex exec --json` launch) and the launch rows naming it. Never a path,
+//! `codex exec --json` launch) and the launch rows naming it, and the exact
+//! pull-request links of Codex sessions: how many, and each pull request
+//! (`owner/repo#number`) with how many Codex sessions link it. Never a path,
 //! prompt, command or transcript text.
 use std::{
     env,
@@ -331,6 +334,14 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             add("launch_rejected", launches.rejected);
             add("launch_found", launches.launches_found);
         }
+        if let Some(prs) = &pass.prs {
+            add("pr_threads_decided", prs.decided);
+            add("pr_threads_not_indexed", prs.not_indexed);
+            add("pr_witnesses", prs.witnesses);
+            add("pr_links_changed", prs.changed);
+            add("pr_rejected", prs.rejected);
+            add("pr_locators_swept", prs.swept);
+        }
         if let Some(bash) = &pass.bash {
             add("bash_callers_read", bash.callers_read);
             add("bash_callers_unreadable", bash.callers_unreadable);
@@ -417,6 +428,22 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         launch_rows.extend(candidates);
     }
+    let mut codex_prs = std::collections::BTreeMap::<String, u64>::new();
+    let mut codex_links = 0_u64;
+    for link in store.all_pr_links()? {
+        if link.session_id.starts_with("codex-")
+            && link.confidence == xt_store::pr_link::PrConfidence::Exact
+        {
+            codex_links += 1;
+            *codex_prs
+                .entry(format!(
+                    "{}#{}",
+                    link.pull_request.repository(),
+                    link.pull_request.number()
+                ))
+                .or_default() += 1;
+        }
+    }
     println!(
         "{}",
         serde_json::json!({
@@ -431,6 +458,7 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "launch_summary": store.claude_launch_summary()?,
             "sessions": sessions,
             "launch_rows": launch_rows,
+            "codex_pr_links": {"links": codex_links, "pull_requests": codex_prs},
         })
     );
     Ok(())

@@ -69,8 +69,11 @@ export const eventKeyPrefixes: Partial<Record<DataEvent, readonly QueryKey[]>> =
    * conflicted: the parent the Sessions list, the exact session row and every
    * Dashboard range's lane context carry. These relations also change Human
    * eligibility, so refresh Human totals and linked-session Human counts.
+   * A pass can also commit a Codex session's pull-request link, including the
+   * first link to a pull request, so it re-reads the stored inventory too.
    */
   [events.sessionCreationsChanged]: [
+    ...inventory,
     queryKeys.sessions(7).slice(0, 2),
     queryKeys.session(7, '').slice(0, 2),
     queryKeys.dashboards,

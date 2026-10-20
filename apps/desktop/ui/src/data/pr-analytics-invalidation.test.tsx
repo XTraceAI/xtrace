@@ -287,7 +287,7 @@ it('reads locally on mount, range and mode changes, starting nothing else', asyn
   for (const spy of traps) expect(spy).not.toHaveBeenCalled();
 });
 
-it('refreshes Human counts in the report and drilldown on a committed sub-session change', async () => {
+it('refreshes Human counts and the inventory on a committed sub-session change', async () => {
   vi.useFakeTimers();
   const source = new FixtureDataSource(exported);
   const report = vi.spyOn(source, 'pullRequestAnalytics');
@@ -318,20 +318,20 @@ it('refreshes Human counts in the report and drilldown on a committed sub-sessio
     list.mock.calls.length,
   ];
   expect(counts()).toEqual([1, 1, 1, 1]);
-  // A relation changes Human eligibility in the report and drilldown;
-  // the stored pull-request inventory is unchanged.
+  // A relation changes Human eligibility in the report and drilldown, and a
+  // pass can commit a Codex pull-request link, so the inventory is re-read too.
   await act(async () => {
     source.emit(events.sessionCreationsChanged);
     await vi.advanceTimersByTimeAsync(501);
   });
   await settle();
-  expect(counts()).toEqual([2, 2, 1, 2]);
+  expect(counts()).toEqual([2, 2, 2, 2]);
   // Committed ingest still re-reads all four; neither event refreshes GitHub.
   await act(async () => {
     source.emit(events.importReceived);
     await vi.advanceTimersByTimeAsync(501);
   });
   await settle();
-  expect(counts()).toEqual([3, 3, 2, 3]);
+  expect(counts()).toEqual([3, 3, 3, 3]);
   expect(refresh).not.toHaveBeenCalled();
 });
