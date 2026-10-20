@@ -5,15 +5,31 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { firstLaunchEnvironment, sha256 } from './hosted-release.mjs';
+import { executionBudget, firstLaunchEnvironment, sha256 } from './hosted-release.mjs';
 import {
   telemetryEnvironment,
   validateTelemetryEnvironment,
   telemetryDataDirectory,
   verifyTelemetryDatabase,
+  acceptTelemetryUI,
 } from './hosted-telemetry.mjs';
-import { prepareProbeSource } from './hosted-telemetry-proxy.mjs';
-import { telemetryOwnedPaths } from './hosted-telemetry.mjs';
+import {
+  cleanupTelemetry,
+  telemetrySession,
+  telemetryCleanupFacts,
+  confirmProbeChildExit,
+  stopTelemetryOwners,
+  stopTelemetryProxies,
+  claimTelemetryProfiles,
+  removeTelemetryProfiles,
+} from './hosted-telemetry-run.mjs';
+import {
+  pollTelemetry,
+  startTelemetryProxy,
+  stopTelemetryProxy,
+  prepareProbeSource,
+} from './hosted-telemetry-proxy.mjs';
+import { telemetryOwnedPaths, requireTelemetryHost, telemetryBudget } from './hosted-telemetry.mjs';
 
 const owned = '/owned/staging.noindex';
 const home = '/Users/runner';
@@ -167,8 +183,31 @@ c.commit();c.close()`,
   }
 });
 
+test('updater warning requires rejection from the proxy belonging to this phase', () => {
+  const evidence = {
+    code: 0,
+    reason: 'Telemetry UI phase telemetry-notice observed',
+    nodes: [],
+    telemetry: { expectedUpdaterWarning: true },
+  };
+  assert.throws(() => acceptTelemetryUI(evidence, { github: 0 }, 'telemetry-notice'));
+  assert.equal(
+    acceptTelemetryUI(evidence, { github: 1 }, 'telemetry-notice').blockedUpdaterAuthority,
+    'github.com:443',
+  );
+  assert.throws(() => acceptTelemetryUI(evidence, { github: 1 }, 'telemetry-settings-on'));
+  assert.equal(
+    acceptTelemetryUI(
+      { ...evidence, telemetry: { expectedUpdaterWarning: false } },
+      { github: 0 },
+      'telemetry-notice',
+    ).blockedUpdaterAuthority,
+    null,
+  );
+});
+
 test(
-  'actual Swift telemetry identity/environment policies and prepared probe typecheck',
+  'actual Swift telemetry identity/environment/alert policies and prepared probe typecheck',
   { skip: process.platform !== 'darwin', timeout: 150000 },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'telemetry-swift-'));
@@ -177,6 +216,7 @@ test(
       await mkdir(owned);
       const cache = join(owned, 'cache');
       const launcher = await readFile(new URL('./hosted-launch.swift', import.meta.url), 'utf8');
+      const driver = await readFile(new URL('./hosted-ax.swift', import.meta.url), 'utf8');
       const block = (text, name) =>
         text
           .split(`// BEGIN ${name}:`)[1]
@@ -193,6 +233,7 @@ test(
       await writeFile(probePath, probe);
       for (const [path, timeout] of [
         [fileURLToPath(new URL('./hosted-launch.swift', import.meta.url)), 60000],
+        [fileURLToPath(new URL('./hosted-ax.swift', import.meta.url)), 30000],
         [probePath, 30000],
       ]) {
         const result = spawnSync(
@@ -215,6 +256,8 @@ test(
         receipt +
         block(launcher, 'LAUNCH CONTEXT POLICY') +
         envPolicy +
+        block(driver, 'UPDATE UI POLICY') +
+        block(driver, 'TELEMETRY UI POLICY') +
         controls;
       const path = join(owned, 'main.swift'),
         binary = join(owned, 'controls');
@@ -234,13 +277,427 @@ test(
   },
 );
 
-test('foundation owns only the default product and fixed harmless probe profiles', () => {
+test('cleanup retains all files on unknown exit, marks failure before proxy stop and preserves both errors', async () => {
+  const session = telemetrySession();
+  session.owners.push({ kind: 'telemetry', phase: 'notice', exited: false });
+  const calls = [];
+  await assert.rejects(
+    cleanupTelemetry(session, {
+      stopOwners: async () => {
+        calls.push('stop-app');
+        throw new Error('unknown app exit');
+      },
+      removeOwned: async () => calls.push('remove'),
+      stopProxies: async () => {
+        calls.push('stop-proxy');
+        assert.equal(session.cleanupFailed, true);
+        throw new Error('proxy exit failed');
+      },
+    }),
+    (error) =>
+      error.message === 'unknown app exit' && error.proxyCleanupError === 'proxy exit failed',
+  );
+  assert.deepEqual(calls, ['stop-app', 'stop-proxy']);
+  assert.equal(telemetryCleanupFacts(session).appExitUnknown, true);
+  assert.equal(telemetryCleanupFacts(session).owners[0].environmentVerified, false);
+  const healthy = telemetrySession();
+  const order = [];
+  await cleanupTelemetry(healthy, {
+    stopOwners: async () => order.push('stop-app'),
+    removeOwned: async () => order.push('remove'),
+    stopProxies: async () => order.push('stop-proxy'),
+  });
+  assert.deepEqual(order, ['stop-app', 'remove', 'stop-proxy']);
+  assert.equal(healthy.cleanupFailed, false);
+  await assert.rejects(
+    cleanupTelemetry(healthy, {
+      stopOwners: async () => {},
+      removeOwned: async () => {},
+      stopProxies: async () => {
+        throw new Error('proxy');
+      },
+    }),
+    /proxy/,
+  );
+  assert.equal(healthy.cleanupFailed, true);
+});
+test('telemetry owns only absent default/test profiles and rejects local execution before launch', async () => {
   const paths = telemetryOwnedPaths('/Users/runner');
   assert.equal(paths.length, 12);
-  assert.equal(new Set(paths).size, 12);
+  assert.equal(new Set(paths).size, paths.length);
   assert.ok(
     paths.every(
       (path) => path.startsWith('/Users/runner/Library/') && !path.includes('ai.xtrace.desktop'),
     ),
   );
+  assert.throws(() => requireTelemetryHost({ mode: 'first-launch' }), /explicit/);
+  assert.equal(telemetryBudget.workMs + telemetryBudget.cleanupMs, 21 * 60000);
+  const root = await mkdtemp(join(tmpdir(), 'telemetry-denied-'));
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL('./hosted-first-launch.mjs', import.meta.url)), 'telemetry'],
+      { cwd: root, env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 10000 },
+    );
+    assert.equal(run.status, 1);
+    const report = JSON.parse(
+      await readFile(join(root, 'artifacts/hosted-telemetry/report.json'), 'utf8'),
+    );
+    assert.equal(report.status, 'failed');
+    assert.equal(report.releasedAppLaunched, false);
+    assert.equal(report.freshBaseline, undefined);
+    assert.equal(report.telemetryCleanup.owners.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('probe cleanup distinguishes stopped parent from receipt-bound curl reaping', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'telemetry-cleanup-'));
+  try {
+    for (const [name, result, clean] of [
+      ['success', { pid: 17, passed: true, curlExitConfirmed: true }, true],
+      ['qualification-failed', { pid: 17, passed: false, curlExitConfirmed: true }, true],
+      ['child-unknown', { pid: 17, passed: false, curlExitConfirmed: false }, false],
+      ['wrong-owner', { pid: 18, passed: false, curlExitConfirmed: true }, false],
+      ['invalid', { pid: 17, curlExitConfirmed: true }, false],
+      ['missing', null, false],
+    ]) {
+      const receipt = join(root, `${name}.json`);
+      await writeFile(receipt, JSON.stringify({ pid: 17 }));
+      if (result) await writeFile(`${receipt}.result.json`, JSON.stringify(result));
+      const owner = {
+        kind: 'probe',
+        phase: name,
+        receipt,
+        environmentFile: '/owned/environment.json',
+        exited: false,
+      };
+      const session = telemetrySession();
+      session.owners.push(owner);
+      const calls = [];
+      const work = cleanupTelemetry(session, {
+        stopOwners: () =>
+          stopTelemetryOwners(session, {
+            helper: '/owned/helper',
+            automationEnvironment: {},
+            checked: async (label) => {
+              calls.push(label);
+            },
+          }),
+        removeOwned: async () => {
+          calls.push('database');
+          calls.push('remove');
+        },
+        stopProxies: async () => {
+          calls.push('proxy');
+        },
+      });
+      if (clean) await work;
+      else await assert.rejects(work);
+      assert.equal(owner.exited, true);
+      assert.equal(owner.childExitConfirmed, clean);
+      assert.equal(calls.filter((value) => value.endsWith('-stop')).length, 1);
+      assert.equal(calls.includes('database'), clean);
+      assert.equal(calls.includes('remove'), clean);
+      assert.equal(calls.at(-1), 'proxy');
+      const facts = telemetryCleanupFacts(session);
+      assert.equal(facts.probeParentExitUnknown, false);
+      assert.equal(facts.probeChildExitUnknown, !clean);
+      assert.equal(facts.appAndProfilesRemoved, false);
+    }
+    const session = telemetrySession();
+    session.owners.push({
+      kind: 'probe',
+      phase: 'missing-receipt',
+      receipt: join(root, 'absent'),
+      exited: false,
+    });
+    const calls = [];
+    await assert.rejects(
+      cleanupTelemetry(session, {
+        stopOwners: () =>
+          stopTelemetryOwners(session, { checked: async () => calls.push('signal') }),
+        removeOwned: async () => calls.push('remove'),
+        stopProxies: async () => calls.push('proxy'),
+      }),
+    );
+    assert.deepEqual(calls, ['proxy']);
+    await assert.rejects(
+      confirmProbeChildExit({ receipt: '/owned' }, async () => Buffer.alloc(16385)),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('proxy exit remains confirmed when final evidence fails, with prior errors retained', async () => {
+  for (const failure of ['missing', 'oversized', 'unwritable']) {
+    const proxy = { phase: 'notice', directory: '/owned' };
+    const session = { proxies: [proxy] };
+    let stops = 0;
+    const dependencies = {
+      stop: async () => {
+        stops++;
+        return { exitConfirmed: true, exitCode: 0 };
+      },
+      read: async () => {
+        if (failure === 'missing') throw new Error('missing evidence');
+        return Buffer.alloc(failure === 'oversized' ? 16385 : 1);
+      },
+      write: async () => {
+        throw new Error('unwritable evidence');
+      },
+    };
+    await assert.rejects(stopTelemetryProxies(session, '/output', dependencies));
+    assert.equal(proxy.exit.exitConfirmed, true);
+    assert.ok(proxy.evidenceError);
+    const first = proxy.evidenceError;
+    await assert.rejects(
+      stopTelemetryProxies(session, '/output', {
+        ...dependencies,
+        read: async () => Buffer.from('{}'),
+        write: async () => {},
+      }),
+    );
+    assert.equal(stops, 1);
+    assert.equal(proxy.evidenceError, first);
+    assert.equal(proxy.exit.exitConfirmed, true);
+  }
+  const proxy = { phase: 'notice', directory: '/owned' };
+  await assert.rejects(
+    stopTelemetryProxies({ proxies: [proxy] }, '/output', {
+      stop: async () => {
+        throw new Error('stop failed');
+      },
+      read: async () => {
+        throw new Error('must not read');
+      },
+    }),
+    /stop failed/,
+  );
+  assert.equal(proxy.exit.exitConfirmed, false);
+  assert.equal(proxy.shutdownError, 'stop failed');
+  assert.equal(proxy.evidenceError, undefined);
+});
+
+test('late profile claims preserve unexpected bytes and never claim the other kind', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'telemetry-claims-'));
+  try {
+    for (const kind of ['probe', 'telemetry']) {
+      const home = join(root, kind);
+      const session = telemetrySession();
+      const paths = telemetryOwnedPaths(home);
+      const sentinel = paths[kind === 'probe' ? 6 : 0];
+      // Initial absent baseline, then acquisition/probe preparation creates a sentinel.
+      await assert.rejects(readFile(join(sentinel, 'sentinel')));
+      await mkdir(sentinel, { recursive: true });
+      await writeFile(join(sentinel, 'sentinel'), 'not owned');
+      let launched = false;
+      await assert.rejects(
+        (async () => {
+          await claimTelemetryProfiles(session, kind, home);
+          launched = true;
+        })(),
+      );
+      await removeTelemetryProfiles(session);
+      assert.equal(launched, false);
+      assert.equal(session.profileClaims.length, 0);
+      assert.equal(await readFile(join(sentinel, 'sentinel'), 'utf8'), 'not owned');
+      const other = kind === 'probe' ? 'telemetry' : 'probe';
+      await claimTelemetryProfiles(session, other, home);
+      const claimed = session.profileClaims[0].paths[0];
+      await mkdir(claimed, { recursive: true });
+      await writeFile(join(claimed, 'owned'), 'owned');
+      await claimTelemetryProfiles(session, other, home, async () => {
+        throw new Error('Restart must reuse its claim');
+      });
+      await removeTelemetryProfiles(session);
+      await assert.rejects(readFile(join(claimed, 'owned')));
+      assert.equal(await readFile(join(sentinel, 'sentinel'), 'utf8'), 'not owned');
+      assert.equal(session.profileClaims[0].removed, true);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('polling clips time and checks the deadline observation exactly once', async () => {
+  for (const success of [true, false]) {
+    let clock = 0,
+      final = 0;
+    const sleeps = [];
+    const budget = executionBudget(() => clock, { workMs: 25, cleanupMs: 50 });
+    const result = await pollTelemetry(
+      async () => {
+        if (clock === 25) final++;
+        return success && clock === 25;
+      },
+      budget,
+      100,
+      20,
+      {
+        now: () => clock,
+        sleep: async (ms) => {
+          assert.ok(ms > 0);
+          sleeps.push(ms);
+          clock += ms;
+        },
+      },
+    );
+    assert.equal(Boolean(result), success);
+    assert.deepEqual(sleeps, [20, 5]);
+    assert.equal(final, 1);
+    assert.throws(() => budget.remaining(1));
+    budget.beginCleanup();
+    clock += 20;
+    budget.beginCleanup();
+    assert.equal(budget.remaining(50), 30);
+  }
+});
+
+test('proxy readiness hands off its exact child before failure and reserves its stop time', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'telemetry-start-'));
+  try {
+    let spawned = 0;
+    await assert.rejects(
+      startTelemetryProxy(
+        join(root, 'too-short'),
+        { remaining: () => 8000 },
+        {
+          launch: () => {
+            spawned++;
+          },
+        },
+      ),
+      /do not fit/,
+    );
+    assert.equal(spawned, 0);
+    for (const localStopFails of [false, true]) {
+      const session = telemetrySession();
+      let clock = 0,
+        readinessEnd = 0;
+      const child = { pid: 77, exitCode: null, signalCode: null, on() {} };
+      const budget = executionBudget(() => clock, { workMs: 13000, cleanupMs: 180000 });
+      await assert.rejects(
+        startTelemetryProxy(join(root, String(localStopFails)), budget, {
+          register: (proxy) => session.proxies.push(proxy),
+          launch: () => child,
+          read: async () => {
+            throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+          },
+          now: () => clock,
+          sleep: async (ms) => {
+            clock += ms;
+          },
+          stop: async (proxy, ms) => {
+            assert.equal(proxy.child, child);
+            assert.equal(session.proxies[0], proxy);
+            assert.equal(ms, 8000);
+            readinessEnd = clock;
+            if (localStopFails) throw new Error('local stop uncertain');
+            return { exitConfirmed: true };
+          },
+        }),
+      );
+      assert.equal(readinessEnd, 5000);
+      assert.equal(session.proxies.length, 1);
+      assert.equal(session.proxies[0].child, child);
+      budget.beginCleanup();
+      const calls = [];
+      const cleanup = cleanupTelemetry(session, {
+        stopOwners: async () => {},
+        removeOwned: async () => {
+          if (session.proxies[0].exit?.exitConfirmed !== true)
+            throw new Error('retain startup proof');
+          calls.push('remove');
+          session.appAndProfilesRemoved = true;
+        },
+        stopProxies: () =>
+          stopTelemetryProxies(session, undefined, {
+            budget,
+            stop: async (proxy, ms) => {
+              assert.equal(proxy.child, child);
+              assert.ok(ms > 0);
+              calls.push('global-stop');
+              throw new Error('global stop uncertain');
+            },
+          }),
+      });
+      if (localStopFails) {
+        await assert.rejects(cleanup, /retain startup proof/);
+        assert.deepEqual(calls, ['global-stop']);
+        assert.equal(telemetryCleanupFacts(session).proxyExitUnknown, true);
+        assert.equal(session.appAndProfilesRemoved, undefined);
+      } else {
+        await cleanup;
+        assert.deepEqual(calls, ['remove']);
+        assert.equal(telemetryCleanupFacts(session).proxyExitUnknown, false);
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('caller preserves proxy cleanup time and multiple stops share one remaining reserve', async () => {
+  let clock = 0;
+  const budget = executionBudget(() => clock, { workMs: 18000, cleanupMs: 180000 });
+  budget.beginCleanup();
+  const caller = await readFile(new URL('./hosted-first-launch.mjs', import.meta.url), 'utf8');
+  const body = caller
+    .split('  const run = (command, args, timeout = 30_000, env = systemEnvironment) => {')[1]
+    .split('\n  };')[0];
+  const invoke = new Function(
+    'budget',
+    'proxyStopReserve',
+    'spawnSync',
+    'command',
+    'args',
+    'timeout',
+    'env',
+    body,
+  );
+  clock = 180000 - 16050;
+  let timeout;
+  invoke(
+    budget,
+    16000,
+    (_command, _args, options) => {
+      timeout = options.timeout;
+    },
+    'owned',
+    [],
+    100,
+    {},
+  );
+  assert.equal(timeout, 50);
+  clock += 50;
+  assert.throws(
+    () =>
+      invoke(
+        budget,
+        16000,
+        () => {
+          throw new Error('Must not spawn');
+        },
+        'owned',
+        [],
+        100,
+        {},
+      ),
+    /reserved/,
+  );
+  const limits = [];
+  await stopTelemetryProxies({ proxies: [{}, {}] }, undefined, {
+    budget,
+    stop: async (_proxy, ms) => {
+      limits.push(ms);
+      clock += ms;
+      return { exitConfirmed: true };
+    },
+  });
+  assert.deepEqual(limits, [8000, 8000]);
+  assert.throws(() => budget.remaining(1));
+  await assert.rejects(stopTelemetryProxy({ child: {} }, 0), /No bounded/);
 });

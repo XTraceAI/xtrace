@@ -18,7 +18,8 @@ test('both signed jobs include stop controls and allow their native test budget'
   );
   for (const name of ['signed-first-launch', 'signed-update']) {
     const job = workflow.split(`  ${name}:\n`)[1].split(/\n {2}[a-z].*:\n/)[0];
-    assert.match(job, /node --test[^\n]*scripts\/ci\/hosted-stop.test.mjs/);
+    assert.match(job, /(?:node --test|TESTS=\()[^\n]*scripts\/ci\/hosted-stop.test.mjs/);
+    if (name === 'signed-first-launch') assert.match(job, /node --test "\$\{TESTS\[@\]\}"/);
     const minutes = [...job.matchAll(/^ {8}timeout-minutes: (\d+)$/gm)].map((match) =>
       Number(match[1]),
     );

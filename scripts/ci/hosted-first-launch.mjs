@@ -1,8 +1,25 @@
 import { spawnSync } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  telemetryBudget,
+  telemetryLimits,
+  telemetryOwnedPaths,
+  requireTelemetryHost,
+} from './hosted-telemetry.mjs';
+import {
+  runTelemetryPhases,
+  telemetrySession,
+  stopTelemetryOwners,
+  stopTelemetryProxies,
+  telemetryCleanupFacts,
+  cleanupTelemetry,
+  unregisterTelemetryProbe,
+  telemetryProxiesHealthy,
+  removeTelemetryProfiles,
+} from './hosted-telemetry-run.mjs';
 import { requireFreshBaseline } from './hosted-validation.mjs';
 import { signatureProblems, notarizedByGatekeeper } from './release-dmg.mjs';
 import { inspectMetadataResponse, readMetadataCapture, metadataLimit } from './hosted-metadata.mjs';
@@ -32,17 +49,21 @@ async function exists(path) {
 }
 
 async function main() {
-  const output = resolve('artifacts/hosted-first-launch');
+  const telemetry = process.argv.length === 3 && process.argv[2] === 'telemetry';
+  const mode = telemetry ? 'telemetry' : 'first-launch';
+  const limits = telemetry ? telemetryBudget : firstLaunchBudget;
+  const session = telemetry ? telemetrySession() : null;
+  const output = resolve(`artifacts/hosted-${mode}`);
   await mkdir(output, { recursive: true });
   const report = {
     status: 'failed',
-    mode: 'first-launch',
+    mode,
     release,
-    validationLimits: signedLaunchLimits,
+    validationLimits: telemetry ? telemetryLimits : signedLaunchLimits,
     releasedAppLaunched: false,
-    commandBudget: firstLaunchBudget,
+    commandBudget: limits,
   };
-  const budget = executionBudget();
+  const budget = executionBudget(undefined, limits);
   let staging,
     installed = false,
     mount,
@@ -50,14 +71,19 @@ async function main() {
     launchAttempted = false,
     failure;
   let helper, receipt, environmentFile, automationEnvironment;
-  const run = (command, args, timeout = 30_000, env = systemEnvironment) =>
-    spawnSync(command, args, {
+  let telemetryContext;
+  let proxyStopReserve = 0;
+  const run = (command, args, timeout = 30_000, env = systemEnvironment) => {
+    const remaining = budget.remaining(timeout + proxyStopReserve) - proxyStopReserve;
+    if (remaining <= 0) throw new Error('Command would consume reserved proxy cleanup time');
+    return spawnSync(command, args, {
       encoding: 'utf8',
       env,
-      timeout: budget.remaining(timeout),
+      timeout: remaining,
       killSignal: 'SIGKILL',
       maxBuffer: 4 * 1024 * 1024,
     });
+  };
   const checked = async (name, command, args, timeout, env) => {
     const result = run(command, args, timeout, env);
     await writeFile(join(output, `${name}.log`), `${result.stdout || ''}\n${result.stderr || ''}`);
@@ -103,15 +129,15 @@ async function main() {
       : null;
   };
   try {
-    if (process.argv.length !== 2)
-      throw new Error('First-launch runner accepts no positional overrides');
+    if (process.argv.length !== 2 && !telemetry)
+      throw new Error('Runner accepts only the explicit telemetry mode; no positional overrides');
     const head = run('/usr/bin/git', ['rev-parse', 'HEAD']).stdout?.trim();
     const osVersion =
       process.platform === 'darwin'
         ? run('/usr/bin/sw_vers', ['-productVersion']).stdout?.trim()
         : '';
-    requireFirstLaunchHost({
-      mode: 'first-launch',
+    (telemetry ? requireTelemetryHost : requireFirstLaunchHost)({
+      mode,
       allowReleaseIdentity: process.env.ALLOW_RELEASE_IDENTITY,
       platform: process.platform,
       arch: process.arch,
@@ -129,7 +155,12 @@ async function main() {
     const consoleUser = await checked('console', '/usr/bin/stat', ['-f', '%Su', '/dev/console']);
     if (!consoleUser || ['root', 'loginwindow'].includes(consoleUser))
       throw new Error('No interactive console user');
-    const baseline = firstLaunchBaselinePaths(homedir());
+    if (telemetry && (await realpath(homedir())) !== homedir())
+      throw new Error('Hosted home must be canonical');
+    const baseline = [
+      ...firstLaunchBaselinePaths(homedir()),
+      ...(telemetry ? telemetryOwnedPaths(homedir()) : []),
+    ];
     const present = await Promise.all(baseline.map(exists));
     requireFreshBaseline(
       baseline.filter((_, at) => present[at]),
@@ -146,6 +177,7 @@ async function main() {
       );
     report.freshBaseline = true;
     staging = await mkdtemp(join(output, 'run-'));
+    if (session) session.stagingOwned = true;
     const owned = join(staging, 'staging.noindex');
     await mkdir(owned);
     const env = firstLaunchEnvironment(owned);
@@ -322,79 +354,98 @@ async function main() {
       release.bundle,
       'installed-before-launch',
     );
-    if (await exists(join(env.XTRACE_DATA_DIR, 'xtrace.db')))
-      throw new Error('Synthetic database must start absent');
-    launchAttempted = true;
-    await checked(
-      'launch-services',
-      helper,
-      ['launch', receipt, environmentFile],
-      55_000,
-      automationEnvironment,
-    );
-    const ownership = JSON.parse(await readFile(receipt, 'utf8'));
-    report.releasedAppLaunched = true;
-    report.pid = ownership.pid;
-    await checked(
-      'process-environment',
-      helper,
-      ['inspect', receipt, environmentFile],
-      10_000,
-      automationEnvironment,
-    );
-    const ui = run(
-      driver,
-      [String(ownership.pid), release.bundle, release.identifier, 'first-launch'],
-      100_000,
-      automationEnvironment,
-    );
-    await writeFile(join(output, 'ui.log'), `${ui.stdout || ''}\n${ui.stderr || ''}`);
-    if (ui.error || ui.signal || ui.status !== 0)
-      throw new Error('First-launch UI did not pass; see ui.log');
-    const evidence = JSON.parse(ui.stdout);
-    if (
-      evidence.code !== 0 ||
-      evidence.reason !==
-        'Observed native-ready Welcome, Open Dashboard action and usable 0.1.7 Dashboard'
-    )
-      throw new Error('Driver returned no required first-launch evidence');
-    await writeFile(join(output, 'ui.json'), `${JSON.stringify(evidence, null, 2)}\n`);
-    await checked(
-      'stop',
-      helper,
-      ['stop', receipt, environmentFile],
-      20_000,
-      automationEnvironment,
-    );
-    report.exitConfirmed = true;
-    report.afterExitInventory = await verifyAppInventory(release.bundle);
-    report.quarantine.installedAfterExit = await quarantineAt(
-      release.bundle,
-      'installed-after-exit',
-    );
-    if (!(await exists(join(env.XTRACE_DATA_DIR, 'xtrace.db'))))
-      throw new Error('Owned data directory has no database');
-    for (const id of ['ai.xtrace.app', 'ai.xtrace.desktop'])
-      if (await exists(join(homedir(), 'Library/Application Support', id, 'xtrace.db')))
-        throw new Error('App wrote a database outside the owned data directory');
-    report.database = await verifyHostedDatabase(source, env.XTRACE_DATA_DIR, checked);
-    report.nativeDatabaseVerified = true;
-  } catch (error) {
-    failure = error;
-  }
-  budget.beginCleanup();
-  try {
-    if (launchAttempted && !report.exitConfirmed) {
-      if (!(await exists(receipt)))
-        throw new Error('Launch outcome has no ownership receipt; app retained');
+    if (telemetry) {
+      telemetryContext = {
+        source,
+        owned,
+        output,
+        home: homedir(),
+        checked,
+        helper,
+        driver,
+        automationEnvironment,
+        budget,
+        compilerEnvironment: env,
+      };
+      report.telemetryPhases = session.phases;
+      await runTelemetryPhases(telemetryContext, session);
+      report.releasedAppLaunched = true;
+      report.exitConfirmed = true;
+      report.nativeDatabaseVerified = true;
+      report.quarantine.installedAfterExit = await quarantineAt(
+        release.bundle,
+        'installed-after-exit',
+      );
+    } else {
+      if (await exists(join(env.XTRACE_DATA_DIR, 'xtrace.db')))
+        throw new Error('Synthetic database must start absent');
+      launchAttempted = true;
       await checked(
-        'cleanup-stop',
+        'launch-services',
+        helper,
+        ['launch', receipt, environmentFile],
+        55_000,
+        automationEnvironment,
+      );
+      const ownership = JSON.parse(await readFile(receipt, 'utf8'));
+      report.releasedAppLaunched = true;
+      report.pid = ownership.pid;
+      await checked(
+        'process-environment',
+        helper,
+        ['inspect', receipt, environmentFile],
+        10_000,
+        automationEnvironment,
+      );
+      const ui = run(
+        driver,
+        [String(ownership.pid), release.bundle, release.identifier, 'first-launch'],
+        100_000,
+        automationEnvironment,
+      );
+      await writeFile(join(output, 'ui.log'), `${ui.stdout || ''}\n${ui.stderr || ''}`);
+      if (ui.error || ui.signal || ui.status !== 0)
+        throw new Error('First-launch UI did not pass; see ui.log');
+      const evidence = JSON.parse(ui.stdout);
+      if (
+        evidence.code !== 0 ||
+        evidence.reason !==
+          'Observed native-ready Welcome, Open Dashboard action and usable 0.1.7 Dashboard'
+      )
+        throw new Error('Driver returned no required first-launch evidence');
+      await writeFile(join(output, 'ui.json'), `${JSON.stringify(evidence, null, 2)}\n`);
+      await checked(
+        'stop',
         helper,
         ['stop', receipt, environmentFile],
         20_000,
         automationEnvironment,
       );
       report.exitConfirmed = true;
+      report.afterExitInventory = await verifyAppInventory(release.bundle);
+      report.quarantine.installedAfterExit = await quarantineAt(
+        release.bundle,
+        'installed-after-exit',
+      );
+      if (!(await exists(join(env.XTRACE_DATA_DIR, 'xtrace.db'))))
+        throw new Error('Owned data directory has no database');
+      for (const id of ['ai.xtrace.app', 'ai.xtrace.desktop'])
+        if (await exists(join(homedir(), 'Library/Application Support', id, 'xtrace.db')))
+          throw new Error('App wrote a database outside the owned data directory');
+      report.database = await verifyHostedDatabase(source, env.XTRACE_DATA_DIR, checked);
+      report.nativeDatabaseVerified = true;
+    }
+  } catch (error) {
+    failure = error;
+  }
+  budget.beginCleanup();
+  proxyStopReserve = session
+    ? session.proxies.filter((proxy) => proxy.exit?.exitConfirmed !== true).length * 8000
+    : 0;
+  const removeOwned = async () => {
+    if (session) {
+      await telemetryProxiesHealthy(session);
+      await unregisterTelemetryProbe(session, checked);
     }
     if (installed) {
       await checked(
@@ -408,19 +459,59 @@ async function main() {
       await checked('cleanup-detach', '/usr/bin/hdiutil', ['detach', mount], 30_000);
       attached = false;
     }
+    if (session) {
+      await removeTelemetryProfiles(session);
+      session.appAndProfilesRemoved = true;
+    }
+  };
+  try {
+    if (session) {
+      await cleanupTelemetry(session, {
+        stopOwners: async () => {
+          if (telemetryContext) await stopTelemetryOwners(session, telemetryContext);
+          report.exitConfirmed = session.owners.every((owner) => owner.exited);
+        },
+        removeOwned,
+        stopProxies: () => {
+          proxyStopReserve = 0;
+          return stopTelemetryProxies(session, output, { budget });
+        },
+      });
+    } else {
+      if (launchAttempted && !report.exitConfirmed) {
+        if (!(await exists(receipt)))
+          throw new Error('Launch outcome has no ownership receipt; app retained');
+        await checked(
+          'cleanup-stop',
+          helper,
+          ['stop', receipt, environmentFile],
+          20_000,
+          automationEnvironment,
+        );
+        report.exitConfirmed = true;
+      }
+      await removeOwned();
+    }
     if (staging) await rm(staging, { recursive: true });
+    if (session) session.stagingRemoved = true;
     report.cleanupConfirmed = true;
   } catch (error) {
     report.cleanupError = error.message;
+    if (error.proxyCleanupError) report.proxyCleanupError = error.proxyCleanupError;
     failure ||= error;
   }
+  if (session)
+    report.releasedAppLaunched = session.owners.some((owner) => owner.kind === 'telemetry');
 
+  if (session) report.telemetryCleanup = telemetryCleanupFacts(session);
   if (failure) report.error = failure.message;
   else report.status = 'passed';
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (failure) throw failure;
   console.log(
-    'Pinned signed 0.1.7 passed hosted first-launch UI and empty native database checks with synthetic data and telemetry disabled. The default telemetry notice and default telemetry behavior were not validated. Updater was not tested.',
+    telemetry
+      ? 'Pinned signed 0.1.7 passed default telemetry notice, saved preferences, restart/override and rejected-attempt checks. Successful HTTP delivery, real PostHog delivery and before-first-pixel ordering were not validated.'
+      : 'Pinned signed 0.1.7 passed hosted first-launch UI and empty native database checks with synthetic data and telemetry disabled. The default telemetry notice and default telemetry behavior were not validated. Updater was not tested.',
   );
 }
 

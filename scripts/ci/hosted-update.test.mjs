@@ -294,7 +294,7 @@ test('update workflow leaves cleanup/upload time and denies wrong authorization 
 });
 
 test('first-launch and update checks share the scoped displayed-version predicate', () => {
-  assert.equal((driver.match(/displayedVersion\(last, "0\.1\.7"\)/g) || []).length, 2);
+  assert.equal((driver.match(/displayedVersion\(last, "0\.1\.7"\)/g) || []).length, 3);
   assert.equal((driver.match(/displayedVersion\(last, "0\.1\.6"\)/g) || []).length, 1);
   assert.match(driver, /displayedVersion\(rows, version\)/);
   assert.doesNotMatch(driver, /hasText\([^\n]*"v(?:0\.1\.[67]|" \+ version)/);
