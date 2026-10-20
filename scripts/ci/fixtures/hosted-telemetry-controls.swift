@@ -33,11 +33,12 @@ let retry = ["captureNode":"3","captureParent":"1",kAXRoleAttribute:kAXButtonRol
 let good = [workspace,alert,row("2","1","AXStaticText",blockedUpdaterText),retry]
 assert(telemetryAlerts(good).safe && telemetryAlerts(good).updaterWarning)
 assert(nativeError(good)) // Ordinary modes still reject the same warning.
-for bad in [Array(good.dropLast()), [workspace,retry], [workspace,row("2","0","AXStaticText",blockedUpdaterText),retry],
+let rejectedAlertCases: [[[String: String]]] = [Array(good.dropLast()), [workspace,retry], [workspace,row("2","0","AXStaticText",blockedUpdaterText),retry],
             good+[row("4","0","AXAlert","other")], good+[row("4","0","AXDialog")],
             good+[row("4","0","AXStaticText","Database counts could not be read.")],
             good+[row("4","1","AXStaticText","other error")],
-            good+[row("4","0","AXStaticText","Update installation failed. Retry installation.")]] {
+            good+[row("4","0","AXStaticText","Update installation failed. Retry installation.")]]
+for bad in rejectedAlertCases {
     assert(!telemetryAlerts(bad).safe)
 }
 var outside = good; outside[0][kAXDescriptionAttribute] = "Other"; assert(!telemetryAlerts(outside).safe)
