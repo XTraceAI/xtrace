@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stopSmokeChild } from './debug-bundle.mjs';
+import { guardProcessDetails } from './hosted-guard-diagnostics.mjs';
 import { validateTelemetryEnvironment } from './hosted-telemetry.mjs';
 
 export const telemetryCurlArguments = Object.freeze([
@@ -145,17 +146,37 @@ export async function qualifyTelemetryProxy(
 ) {
   validateTelemetryEnvironment(env, owned, home, proxy.port, environmentOff);
   const before = await telemetryProxyState(proxy);
-  const run = (launchEnv) =>
-    spawnSync('/usr/bin/curl', telemetryCurlArguments, {
+  let elapsedMs, timeoutMs;
+  const run = (launchEnv) => {
+    timeoutMs = budget.remaining(17000);
+    const began = performance.now();
+    const result = spawnSync('/usr/bin/curl', telemetryCurlArguments, {
       env: launchEnv,
       input: '{"probe":true}',
       encoding: 'utf8',
-      timeout: budget.remaining(17000),
+      timeout: timeoutMs,
       maxBuffer: 16384,
     });
+    elapsedMs = performance.now() - began;
+    return result;
+  };
+  const failure = (message, label, result, configuredProxy) => {
+    const error = new Error(message);
+    try {
+      error.message += `; ${JSON.stringify({ configuredProxy, ...guardProcessDetails(label, timeoutMs, elapsedMs, result) })}`;
+    } catch {
+      /* Diagnostic failure must not replace the guard error. */
+    }
+    return error;
+  };
   const live = run(env);
   if (live.error || live.signal || live.status !== 56 || live.stdout !== '000')
-    throw new Error('System curl did not confirm explicit CONNECT rejection');
+    throw failure(
+      'System curl did not confirm explicit CONNECT rejection',
+      'live-curl',
+      live,
+      env.HTTPS_PROXY,
+    );
   const after = await pollTelemetry(
     async () => {
       const state = await telemetryProxyState(proxy);
@@ -179,7 +200,12 @@ export async function qualifyTelemetryProxy(
     dead.stdout !== '000' ||
     !dead.stderr.includes('127.0.0.1')
   )
-    throw new Error('Unavailable proxy did not fail through the owned loopback endpoint');
+    throw failure(
+      'Unavailable proxy did not fail through the owned loopback endpoint',
+      'dead-curl',
+      dead,
+      deadEnv.HTTPS_PROXY,
+    );
   await telemetryProxyState(proxy);
   return {
     connectRejected: true,
