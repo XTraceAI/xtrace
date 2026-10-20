@@ -62,7 +62,9 @@ export function probeEnvironment(directory) {
 export function baselinePaths(home) {
   return [
     '/Applications/XTrace Desktop.app',
+    '/Applications/XTrace.app',
     join(home, 'Applications/XTrace Desktop.app'),
+    join(home, 'Applications/XTrace.app'),
     ...['ai.xtrace.app', 'ai.xtrace.desktop'].map((id) =>
       join(home, 'Library/Application Support', id),
     ),
@@ -84,7 +86,7 @@ export function requireFreshBaseline(existingPaths, processes) {
     processes
       .split('\n')
       .some((line) =>
-        /\/XTrace Desktop\.app\/Contents\/MacOS\/|(?:^|[\s/])xtrace-desktop\s*$/i.test(line),
+        /\/XTrace(?: Desktop)?\.app\/Contents\/MacOS\/|(?:^|[\s/])xtrace-desktop\s*$/i.test(line),
       )
   ) {
     throw new Error('An XTrace process already exists');

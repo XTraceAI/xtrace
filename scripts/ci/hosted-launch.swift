@@ -3,9 +3,6 @@ import Darwin
 
 // This helper only launches the fixed installed bundle through LaunchServices,
 // inspects its environment without printing values, or stops its exact receipt.
-let bundle = URL(fileURLWithPath: "/Applications/XTrace Desktop.app")
-let executable = bundle.appendingPathComponent("Contents/MacOS/xtrace-desktop")
-let identity = "ai.xtrace.app"
 func fail(_ message: String) -> Never { fputs("\(message)\n", stderr); exit(1) }
 let authorization = ProcessInfo.processInfo.environment
 guard authorization["ALLOW_RELEASE_IDENTITY"] == "true",
@@ -23,11 +20,96 @@ fail("Requires arm64")
 for key in ["ALLOW_RELEASE_IDENTITY", "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "GITHUB_EVENT_NAME"] {
     guard unsetenv(key) == 0, getenv(key) == nil else { fail("Could not remove helper marker: \(key)") }
 }
-guard CommandLine.arguments.count == 4,
-      ["launch", "inspect", "stop", "arm-update", "adopt-update", "absent"].contains(CommandLine.arguments[1]) else { fail("Invalid command") }
-let command = CommandLine.arguments[1]
-let receiptURL = URL(fileURLWithPath: CommandLine.arguments[2])
+guard CommandLine.arguments.count == 4 else { fail("Invalid command") }
 let environmentURL = URL(fileURLWithPath: CommandLine.arguments[3])
+let receiptURL = URL(fileURLWithPath: CommandLine.arguments[2])
+// BEGIN LAUNCH CONTEXT POLICY: fixed product and fixed owned telemetry probe only.
+struct LaunchContext {
+    let command: String
+    let bundle: URL
+    let executable: URL
+    let identifier: String
+    let probe: Bool
+    let telemetry: Bool
+}
+enum ContextError: Error { case invalid }
+func launchContext(_ raw: String, environment: URL, receipt: URL) throws -> LaunchContext {
+    let productCommands = ["launch", "inspect", "stop", "arm-update", "adopt-update", "absent"]
+    let lifecycle = ["launch", "inspect", "stop", "absent"]
+    let probe = raw.hasPrefix("probe-")
+    let telemetry = probe
+    let command = telemetry ? String(raw.dropFirst(probe ? 6 : 10)) : raw
+    guard (telemetry ? lifecycle : productCommands).contains(command) else { throw ContextError.invalid }
+    let owned = environment.deletingLastPathComponent()
+    if telemetry {
+        let phases = ["notice", "saved-off", "environment-off", "saved-on"]
+        guard let phase = phases.first(where: { environment.lastPathComponent == "environment-\($0).json" }),
+              owned.lastPathComponent == "staging.noindex",
+              owned.deletingLastPathComponent().lastPathComponent.hasPrefix("run-"),
+              owned.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "hosted-telemetry",
+              environment.standardizedFileURL.resolvingSymlinksInPath().path == environment.path,
+              receipt.standardizedFileURL.resolvingSymlinksInPath().path == receipt.path,
+              receipt.lastPathComponent == "\(probe ? "probe" : "launch")-receipt-\(phase).json",
+              receipt.deletingLastPathComponent() == (probe ? owned : owned.deletingLastPathComponent().deletingLastPathComponent()) else { throw ContextError.invalid }
+    }
+    let bundle = probe ? owned.appendingPathComponent("Telemetry Proxy Probe.app") : URL(fileURLWithPath: "/Applications/XTrace Desktop.app")
+    let executable = bundle.appendingPathComponent(probe ? "Contents/MacOS/TelemetryProxyProbe" : "Contents/MacOS/xtrace-desktop")
+    return LaunchContext(command: command, bundle: bundle, executable: executable,
+                         identifier: probe ? "ai.xtrace.app.test.telemetry-proxy" : "ai.xtrace.app", probe: probe, telemetry: telemetry)
+}
+func probeMetadataMatches(_ info: [String: Any]) -> Bool {
+    info["CFBundleIdentifier"] as? String == "ai.xtrace.app.test.telemetry-proxy" && info["CFBundleExecutable"] as? String == "TelemetryProxyProbe"
+}
+func receiptMatchesContext(_ receipt: Receipt, _ selected: LaunchContext) -> Bool {
+    receipt.pid > 0 && receipt.startTime > 0 && receipt.bundle == selected.bundle.path &&
+        receipt.executable == selected.executable.path && receipt.identifier == selected.identifier
+}
+// END LAUNCH CONTEXT POLICY
+let context: LaunchContext
+do { context = try launchContext(CommandLine.arguments[1], environment: environmentURL, receipt: receiptURL) }
+catch { fail("Unsupported command or owned telemetry path") }
+let command = context.command
+let bundle = context.bundle
+let executable = context.executable
+let identity = context.identifier
+
+// BEGIN TELEMETRY ENVIRONMENT POLICY: also compiled into the harmless probe.
+let telemetrySystemKeys: Set<String> = ["HOME", "USER", "LOGNAME", "SHELL", "__CF_USER_TEXT_ENCODING",
+    "XPC_SERVICE_NAME", "XPC_FLAGS", "COMMAND_MODE", "SECURITYSESSIONID", "__CFBundleIdentifier"]
+func genuineHome() -> String? {
+    guard let entry = getpwuid(getuid()), let home = entry.pointee.pw_dir else { return nil }
+    return String(cString: home)
+}
+func telemetryEnvironmentMatches(_ actual: [String: String], expected: [String: String], owned: URL, home: String) -> Bool {
+    let required: Set<String> = ["PATH", "LANG", "HOME", "TMPDIR", "XTRACE_NATIVE_HOME", "CLAUDE_CONFIG_DIR", "GH_CONFIG_DIR", "SSH_AUTH_SOCK", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"]
+    guard Set(expected.keys) == required || Set(expected.keys) == required.union(["XTRACE_TELEMETRY"]),
+          expected["XTRACE_TELEMETRY"] == nil || expected["XTRACE_TELEMETRY"] == "0",
+          expected["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin", expected["LANG"] == "en_US.UTF-8",
+          expected["HOME"] == home, expected["SSH_AUTH_SOCK"] == "",
+          expected["NO_PROXY"] == "", expected["no_proxy"] == "",
+          let proxy = expected["HTTPS_PROXY"], proxy == expected["https_proxy"],
+          proxy.range(of: #"^http://127\.0\.0\.1:[1-9][0-9]{0,4}$"#, options: .regularExpression) != nil,
+          let port = Int(proxy.split(separator: ":").last ?? ""), port <= 65535 else { return false }
+    for (key, suffix) in [("TMPDIR", "tmp"), ("XTRACE_NATIVE_HOME", "home"), ("CLAUDE_CONFIG_DIR", "claude"), ("GH_CONFIG_DIR", "gh")] {
+        if expected[key] != owned.appendingPathComponent(suffix).path { return false }
+    }
+    guard expected.allSatisfy({ actual[$0.key] == $0.value }), Set(actual.keys).isSubset(of: Set(expected.keys).union(telemetrySystemKeys)) else { return false }
+    return actual["HOME"] == home
+}
+func telemetryHelperEnvironmentIsSafe(_ actual: [String: String], home: String) -> Bool {
+    actual["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin" && actual["LANG"] == "en_US.UTF-8" &&
+        (actual["HOME"] == nil || actual["HOME"] == home) &&
+        Set(actual.keys).isSubset(of: telemetrySystemKeys.union(["PATH", "LANG"]))
+}
+// END TELEMETRY ENVIRONMENT POLICY
+func launchConfiguration(_ environment: [String: String]) -> NSWorkspace.OpenConfiguration {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.environment = environment
+    configuration.allowsRunningApplicationSubstitution = false
+    configuration.createsNewApplicationInstance = true
+    configuration.addsToRecentItems = false
+    return configuration
+}
 
 struct Receipt: Codable {
     let pid: Int32
@@ -226,8 +308,7 @@ func requireNoLegacyProcess() {
         canonical(app.executableURL) == executable.path
 }
 func kernelAlive(_ receipt: Receipt) -> Bool {
-    guard receipt.bundle == bundle.path, receipt.executable == executable.path,
-          receipt.identifier == identity, receipt.pid > 0 else { fail("Invalid ownership receipt") }
+    guard receiptMatchesContext(receipt, context) else { fail("Invalid ownership receipt") }
     let read = readProcess(receipt.pid)
     diagnoseStop(receipt, read)
     do { return try strictKernelIsAlive(read, expected: receipt.startTime) }
@@ -281,17 +362,27 @@ func processEnvironment(_ pid: Int32) -> [String: String] {
 
 do {
     let env = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: environmentURL))
+    if context.telemetry {
+        guard let home = genuineHome(), telemetryEnvironmentMatches(env, expected: env, owned: environmentURL.deletingLastPathComponent(), home: home),
+              telemetryHelperEnvironmentIsSafe(ProcessInfo.processInfo.environment, home: home) else { fail("Telemetry environment failed prelaunch qualification") }
+    }
     if command == "launch" {
+        if context.probe {
+            guard bundle.standardizedFileURL.resolvingSymlinksInPath() == bundle,
+                  executable.standardizedFileURL.resolvingSymlinksInPath() == executable,
+                  let info = Bundle(url: bundle)?.infoDictionary,
+                  probeMetadataMatches(info),
+                  NSRunningApplication.runningApplications(withBundleIdentifier: "ai.xtrace.app").isEmpty else { fail("Probe bundle or fresh product baseline differs") }
+        }
         guard NSRunningApplication.runningApplications(withBundleIdentifier: identity).isEmpty,
               NSRunningApplication.runningApplications(withBundleIdentifier: "ai.xtrace.desktop").isEmpty else {
             fail("An XTrace instance already exists")
         }
         guard !FileManager.default.fileExists(atPath: receiptURL.path) else { fail("Launch receipt already exists") }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.environment = env
-        configuration.allowsRunningApplicationSubstitution = false
-        configuration.createsNewApplicationInstance = true
-        configuration.addsToRecentItems = false
+        let configuration = launchConfiguration(env)
+        if context.probe {
+            configuration.arguments = [environmentURL.path, receiptURL.path + ".result.json"]
+        }
         var done = false
         var launchError: String?
         NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { app, error in

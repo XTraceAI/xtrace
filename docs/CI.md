@@ -569,3 +569,13 @@ with `mode=ro` for the same integrity and empty-table checks. Main database byte
 must stay unchanged; SQLite may create or update WAL/SHM bookkeeping. Engine
 versions and before/after file metadata are retained. No reader fallback or
 database repair is performed.
+
+### Dormant telemetry qualification helpers
+
+The source includes a rejecting loopback proxy, exact environment checks, a fixed
+harmless LaunchServices probe, and optional read-only telemetry database checks.
+They prepare a future contained signed-app check. They do not add a signed
+telemetry workflow mode or validate default telemetry behavior yet. The probe
+commands retain the fresh hosted macOS 14 arm64/manual-run guards; they are not a
+local app-launch option. Direct source tests use only synthetic data, pure Swift
+controls, and harmless system-curl requests to a rejecting local listener.
