@@ -903,3 +903,57 @@ test('actual caller product exit needs a confirmed launch and every product atte
     observed.map(({ name, expected }) => ({ name, value: expected })),
   );
 });
+
+test('actual saved-off branch checks and retains its proxy snapshot before enabling', async () => {
+  const source = await readFile(new URL('./hosted-telemetry-run.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf("    if (phase === 'notice') {");
+  const end = source.indexOf('    await stopOwner(owner,', start);
+  assert.ok(start > 0 && end > start);
+  const actual = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'phase',
+    'ui',
+    'attempt',
+    'telemetryProxyState',
+    'proxy',
+    'phaseReport',
+    source.slice(start, end),
+  );
+  for (const [name, count, error] of [
+    ['zero', 0, null],
+    ['positive', 1, null],
+    ['read-failure', null, 'Proxy observation failed'],
+  ]) {
+    const calls = [],
+      report = {},
+      proxy = { phase: 'saved-off' };
+    const snapshot = { telemetry: count, github: 1, probe: 2 };
+    const run = actual(
+      'saved-off',
+      async (mode) => calls.push(mode),
+      async () => {
+        throw new Error('No attempt wait in saved-off');
+      },
+      async (selected) => {
+        assert.equal(selected, proxy);
+        calls.push('snapshot');
+        if (error) throw new Error(error);
+        return snapshot;
+      },
+      proxy,
+      report,
+    );
+    if (name === 'zero') await run;
+    else
+      await assert.rejects(
+        run,
+        error ? /Proxy observation failed/ : /Saved-off startup attempted telemetry/,
+      );
+    assert.deepEqual(
+      calls,
+      name === 'zero'
+        ? ['telemetry-settings-off', 'snapshot', 'telemetry-settings-enable']
+        : ['telemetry-settings-off', 'snapshot'],
+    );
+    assert.equal(report.beforeEnable, error ? undefined : snapshot);
+  }
+});

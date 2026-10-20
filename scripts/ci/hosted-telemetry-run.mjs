@@ -431,7 +431,12 @@ export async function runTelemetryPhases(context, session) {
             ? 'telemetry-settings-on'
             : 'telemetry-settings-off',
       );
-      if (phase === 'saved-off') await ui('telemetry-settings-enable');
+      if (phase === 'saved-off') {
+        phaseReport.beforeEnable = await telemetryProxyState(proxy);
+        if (phaseReport.beforeEnable.telemetry !== 0)
+          throw new Error('Saved-off startup attempted telemetry before enabling');
+        await ui('telemetry-settings-enable');
+      }
       if (phase === 'saved-on') await ui('telemetry-settings-disable');
     }
     await stopOwner(owner, checked, helper, automationEnvironment, phase);
