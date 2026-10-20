@@ -615,3 +615,9 @@ cleanup reserves existing proxy-stop time before earlier cleanup commands.
 Unknown app or probe-child exit retains app, profile and staging proof; the runner records cleanup failure before stopping
 its owned proxies. A confirmed proxy exit cannot erase an evidence-copy failure.
 No report claims that hosted-machine disposal was verified.
+
+Launch reports distinguish an attempt from a fixed-identity receipt confirmation.
+`releasedAppLaunched` is `null` when an attempt has no confirmed receipt; that
+means unknown, not never launched. Cleanup reports distinguish retained, removed
+and unknown staging state; a failed recursive removal may have removed part of
+its contents and always marks cleanup failed.

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { executionBudget, firstLaunchEnvironment, sha256 } from './hosted-release.mjs';
+import { executionBudget, firstLaunchEnvironment, release, sha256 } from './hosted-release.mjs';
 import {
   telemetryEnvironment,
   validateTelemetryEnvironment,
@@ -18,6 +18,7 @@ import {
   telemetrySession,
   telemetryCleanupFacts,
   confirmProbeChildExit,
+  confirmTelemetryLaunch,
   stopTelemetryOwners,
   stopTelemetryProxies,
   claimTelemetryProfiles,
@@ -700,4 +701,124 @@ test('caller preserves proxy cleanup time and multiple stops share one remaining
   assert.deepEqual(limits, [8000, 8000]);
   assert.throws(() => budget.remaining(1));
   await assert.rejects(stopTelemetryProxy({ child: {} }, 0), /No bounded/);
+});
+
+test('actual final caller distinguishes attempted/confirmed launch and uncertain staging removal', async () => {
+  const source = await readFile(new URL('./hosted-first-launch.mjs', import.meta.url), 'utf8');
+  const start = source.lastIndexOf('  try {\n    if (session) {\n      await cleanupTelemetry');
+  const end = source.indexOf("  await writeFile(join(output, 'report.json')", start);
+  assert.ok(start > 0 && end > start);
+  const actual = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'input',
+    `
+    const {session,cleanupTelemetry,telemetryCleanupFacts,stopTelemetryOwners,stopTelemetryProxies,removeOwned,rm,staging}=input;
+    const report={status:'failed',releasedAppLaunched:false};let failure=input.failure;
+    const telemetryContext={},output='/owned/output',budget={};let proxyStopReserve=0;
+    ${source.slice(start, end)}
+    return {report,failure};`,
+  );
+  const root = await mkdtemp(join(tmpdir(), 'telemetry-report-'));
+  try {
+    for (const [name, receipt, workError] of [
+      ['pre-spawn-deadline', undefined, 'Work budget exhausted'],
+      ['missing-receipt', undefined, 'Launch failed'],
+      ['malformed', '{', 'Malformed receipt'],
+      [
+        'wrong-identity',
+        {
+          pid: 17,
+          startTime: 1,
+          bundle: '/wrong',
+          executable: '/wrong',
+          identifier: release.identifier,
+        },
+        'Wrong identity',
+      ],
+      [
+        'confirmed-ui-failure',
+        {
+          pid: 17,
+          startTime: 1,
+          bundle: release.bundle,
+          executable: join(release.bundle, 'Contents/MacOS/xtrace-desktop'),
+          identifier: release.identifier,
+        },
+        'UI failed',
+      ],
+    ]) {
+      const session = telemetrySession();
+      session.stagingOwned = true;
+      const owner = { kind: 'telemetry', phase: 'notice', receipt: join(root, `${name}.json`) };
+      session.owners.push(owner);
+      if (receipt !== undefined)
+        await writeFile(
+          owner.receipt,
+          typeof receipt === 'string' ? receipt : JSON.stringify(receipt),
+        );
+      const confirmed = name === 'confirmed-ui-failure';
+      if (confirmed) await confirmTelemetryLaunch(owner);
+      else await assert.rejects(confirmTelemetryLaunch(owner));
+      const result = await actual({
+        session,
+        cleanupTelemetry,
+        telemetryCleanupFacts,
+        staging: '/owned/staging',
+        failure: new Error(workError),
+        stopTelemetryOwners: async () => {
+          throw new Error('Exit remains unknown');
+        },
+        stopTelemetryProxies: async () => {},
+        removeOwned: async () => {
+          throw new Error('Must retain files');
+        },
+        rm: async () => {
+          throw new Error('Must retain staging');
+        },
+      });
+      assert.equal(result.report.releasedAppLaunched, confirmed ? true : null);
+      assert.equal(result.report.releasedAppLaunchAttempted, true);
+      assert.equal(result.report.releasedAppLaunchOutcomeUnknown, !confirmed);
+      assert.equal(result.report.error, workError);
+      assert.equal(result.report.cleanupError, 'Exit remains unknown');
+      assert.equal(result.report.telemetryCleanup.cleanupFailed, true);
+      assert.equal(result.report.telemetryCleanup.stagingState, 'retained');
+    }
+    for (const removalFails of [false, true]) {
+      const session = telemetrySession();
+      session.stagingOwned = true;
+      const staging = join(root, String(removalFails));
+      await mkdir(staging);
+      await writeFile(join(staging, 'proof'), 'proof');
+      const result = await actual({
+        session,
+        cleanupTelemetry,
+        telemetryCleanupFacts,
+        staging,
+        failure: new Error('Earlier work failure'),
+        stopTelemetryOwners: async () => {},
+        stopTelemetryProxies: async () => {},
+        removeOwned: async () => {
+          session.appAndProfilesRemoved = true;
+        },
+        rm: async (path) => {
+          await rm(join(path, 'proof'));
+          if (removalFails) throw new Error('Partial staging removal failed');
+          await rm(path, { recursive: true });
+        },
+      });
+      assert.equal(result.report.error, 'Earlier work failure');
+      assert.equal(result.report.releasedAppLaunched, false);
+      assert.equal(result.report.telemetryCleanup.cleanupFailed, removalFails);
+      assert.equal(
+        result.report.telemetryCleanup.stagingState,
+        removalFails ? 'unknown' : 'removed',
+      );
+      assert.equal(result.report.telemetryCleanup.stagingRetained, false);
+      assert.equal(result.report.cleanupConfirmed, removalFails ? undefined : true);
+      if (removalFails) assert.equal(result.report.cleanupError, 'Partial staging removal failed');
+      await assert.rejects(readFile(join(staging, 'proof')));
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

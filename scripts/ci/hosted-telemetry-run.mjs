@@ -120,6 +120,21 @@ async function stopOwner(owner, checked, helper, automationEnvironment, label) {
   );
   owner.exited = true;
 }
+export async function confirmTelemetryLaunch(owner) {
+  const receipt = await readJSON(owner.receipt);
+  if (
+    !Number.isSafeInteger(receipt.pid) ||
+    receipt.pid <= 0 ||
+    !Number.isSafeInteger(receipt.startTime) ||
+    receipt.startTime <= 0 ||
+    receipt.bundle !== release.bundle ||
+    receipt.executable !== join(release.bundle, 'Contents/MacOS/xtrace-desktop') ||
+    receipt.identifier !== release.identifier
+  )
+    throw new Error('Telemetry launch receipt did not confirm the fixed product identity');
+  owner.launchConfirmed = true;
+  return receipt;
+}
 export async function confirmProbeChildExit(owner, read = readFile) {
   try {
     const receiptBytes = await read(owner.receipt);
@@ -189,6 +204,13 @@ export async function stopTelemetryProxies(
   if (errors.length) throw new Error(errors.join('; '));
 }
 export function telemetryCleanupFacts(session) {
+  const stagingState = !session.stagingOwned
+    ? 'not-owned'
+    : session.stagingRemoved
+      ? 'removed'
+      : session.stagingRemovalAttempted
+        ? 'unknown'
+        : 'retained';
   return {
     appExitUnknown: session.owners.some((owner) => owner.kind === 'telemetry' && !owner.exited),
     probeParentExitUnknown: session.owners.some((owner) => owner.kind === 'probe' && !owner.exited),
@@ -196,20 +218,29 @@ export function telemetryCleanupFacts(session) {
       (owner) => owner.kind === 'probe' && owner.childExitConfirmed !== true,
     ),
     appAndProfilesRemoved: session.appAndProfilesRemoved === true,
-    stagingRetained: session.stagingOwned === true && session.stagingRemoved !== true,
+    stagingState,
+    stagingRetained: stagingState === 'retained',
     profileClaims: session.profileClaims,
     proxyExitUnknown: session.proxies.some((proxy) => proxy.exit?.exitConfirmed !== true),
     hostedMachineDisposalVerified: false,
     networkSandboxValidated: false,
     owners: session.owners.map(
-      ({ kind, phase, exited, environmentVerified, childExitConfirmed, childExitError }) => ({
+      ({
+        kind,
+        phase,
+        exited,
+        environmentVerified,
+        childExitConfirmed,
+        childExitError,
+        launchConfirmed,
+      }) => ({
         kind,
         phase,
         exitConfirmed: exited === true,
         environmentVerified: environmentVerified === true,
         ...(kind === 'probe'
           ? { childExitConfirmed: childExitConfirmed === true, childExitError }
-          : {}),
+          : { launchConfirmed: launchConfirmed === true }),
       }),
     ),
     proxies: session.proxies.map((proxy) => ({
@@ -343,7 +374,7 @@ export async function runTelemetryPhases(context, session) {
       55_000,
       automationEnvironment,
     );
-    const receipt = await readJSON(owner.receipt);
+    const receipt = await confirmTelemetryLaunch(owner);
     phaseReport.pid = receipt.pid;
     await checked(
       `${phase}-environment`,

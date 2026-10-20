@@ -492,16 +492,30 @@ async function main() {
       }
       await removeOwned();
     }
-    if (staging) await rm(staging, { recursive: true });
+    if (staging) {
+      if (session) session.stagingRemovalAttempted = true;
+      await rm(staging, { recursive: true });
+    }
     if (session) session.stagingRemoved = true;
     report.cleanupConfirmed = true;
   } catch (error) {
+    if (session) session.cleanupFailed = true;
     report.cleanupError = error.message;
     if (error.proxyCleanupError) report.proxyCleanupError = error.proxyCleanupError;
     failure ||= error;
   }
-  if (session)
-    report.releasedAppLaunched = session.owners.some((owner) => owner.kind === 'telemetry');
+  if (session) {
+    const attempts = session.owners.filter((owner) => owner.kind === 'telemetry');
+    report.releasedAppLaunchAttempted = attempts.length > 0;
+    report.releasedAppLaunchOutcomeUnknown = attempts.some(
+      (owner) => owner.launchConfirmed !== true,
+    );
+    report.releasedAppLaunched = attempts.some((owner) => owner.launchConfirmed === true)
+      ? true
+      : attempts.length
+        ? null
+        : false;
+  }
 
   if (session) report.telemetryCleanup = telemetryCleanupFacts(session);
   if (failure) report.error = failure.message;
