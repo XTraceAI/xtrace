@@ -231,6 +231,7 @@ async function main() {
     childEnv,
     failure;
   let permissionStarted = false;
+  // BEGIN CHECKED COMMAND: regression controls use the real refusal behavior.
   const command = (name, executable, args, timeout = 30000, env = systemEnvironment) => {
     const result = spawnSync(executable, args, {
       encoding: 'utf8',
@@ -255,6 +256,115 @@ async function main() {
       );
     return result.stdout.trim();
   };
+  // END CHECKED COMMAND
+  // BEGIN OWNED REGISTRY CLEANUP: only called after process/prompt/evidence gates.
+  const cleanupBundles = async () => {
+    if (
+      (await realpath(owned)) !== owned ||
+      (await realpath(parent)) !== parent ||
+      dirname(owned) !== parent ||
+      !owned.endsWith('/staging.noindex')
+    )
+      throw new Error('Cleanup paths are not the canonical owned staging directories');
+    const paths = [
+      ...(helperName ? [join(owned, `${helperName}.app`)] : []),
+      ...cases.map((name) => join(owned, `${name}-target`, 'XTrace Desktop.app')),
+    ];
+    const register =
+      '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
+    const registry = {
+      checkedRoot: owned,
+      checkedPaths: paths,
+      unregister: [],
+      absenceConfirmed: false,
+    };
+    report.registryCleanup = registry;
+    let unregisterError;
+    for (const bundle of paths) {
+      if (!(await exists(bundle))) continue;
+      if (!(await lstat(bundle)).isDirectory() || (await realpath(bundle)) !== bundle)
+        throw new Error('Owned bundle changed into a noncanonical path');
+      const result = spawnSync(register, ['-u', bundle], {
+        encoding: 'utf8',
+        env: systemEnvironment,
+        timeout: budget.remaining(30000),
+        killSignal: 'SIGKILL',
+        maxBuffer: 4 * 1024 * 1024,
+      });
+      const receipt = {
+        executable: register,
+        args: ['-u', bundle],
+        status: result.status,
+        signal: result.signal,
+        error: result.error?.message,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+      registry.unregister.push(receipt);
+      const missing =
+        result.status === 1 &&
+        !result.error &&
+        !result.signal &&
+        result.stdout === '' &&
+        result.stderr.trimEnd() === `failed to scan ${bundle}: -10814\n from spotlight`;
+      receipt.reportedMissing = missing;
+      if (result.error || result.signal || (result.status !== 0 && !missing))
+        unregisterError ||= new Error('An owned unregister command failed unexpectedly');
+    }
+    // One full read-only dump. Its larger bound is dedicated to this command;
+    // the raw bytes stay in one artifact rather than duplicating a large JSON field.
+    const dump = spawnSync(register, ['-dump'], {
+      env: systemEnvironment,
+      timeout: budget.remaining(30000),
+      killSignal: 'SIGKILL',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const raw = dump.stdout || Buffer.alloc(0);
+    const dumpText = raw.toString('utf8');
+    const pathRows = dumpText.match(/^path:.*$/gm) || [];
+    const stderr = dump.stderr?.toString('utf8') || '';
+    const log = join(output, 'launch-services-final.log');
+    registry.dump = {
+      executable: register,
+      args: ['-dump'],
+      status: dump.status,
+      signal: dump.signal,
+      error: dump.error?.message,
+      stderr,
+      log,
+      bytes: raw.length,
+      sha256: sha256(raw),
+      usable: false,
+    };
+    await writeFile(log, raw);
+    if (
+      dump.error ||
+      dump.signal ||
+      dump.status !== 0 ||
+      stderr ||
+      !raw.equals(Buffer.from(dumpText, 'utf8')) ||
+      !/^Status:\s+\S.+$/m.test(dumpText) ||
+      !/^bundle id:\s+\d+\b/m.test(dumpText) ||
+      !pathRows.length ||
+      pathRows.some((row) => !/^path:\s+\/\S.+$/.test(row)) ||
+      !dumpText.endsWith('\n')
+    )
+      throw new Error('Launch Services dump is incomplete or unrecognized; staging retained');
+    registry.dump.usable = true;
+    // Native path rows carry an address suffix. Search raw paths; do not compare
+    // a parsed whole value such as "/App.app (0x1234)" with "/App.app".
+    const rootPattern = owned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    registry.rootPresent = new RegExp(`${rootPattern}(?=[/\\s)]|$)`, 'm').test(dumpText);
+    registry.pathsPresent = paths.filter((bundle) => dumpText.includes(bundle));
+    if (registry.rootPresent || registry.pathsPresent.length)
+      throw new Error('An owned path remains in Launch Services; staging retained');
+    registry.absenceConfirmed = true;
+    if (unregisterError) throw unregisterError;
+    await rm(parent, { recursive: true });
+    registry.filesystemAbsent = !(await exists(parent));
+    if (!registry.filesystemAbsent) throw new Error('Owned staging remains after removal');
+  };
+  // END OWNED REGISTRY CLEANUP
   // BEGIN OWNED CHILD: safe regression controls exercise this exact private closure.
   const launch = (name, executable, args, timeout, env) => {
     const timeoutMs = budget.remaining(timeout);
@@ -497,13 +607,15 @@ async function main() {
       executable: observerBinary,
       sha256: sha256(await readFile(observerBinary)),
     };
+    // BEGIN APPLE SIGNATURE CHECK
     command('security-agent-apple-signature', '/usr/bin/codesign', [
       '--verify',
       '--strict',
       '-R',
-      'anchor apple',
+      '=anchor apple',
       securityExecutable,
     ]);
+    // END APPLE SIGNATURE CHECK
     const fetch = (name, destination, bytes) =>
       command(
         name,
@@ -761,16 +873,8 @@ async function main() {
       report.listenerClosed = true;
     }
     if (targetParent && (await exists(targetParent))) await chmod(targetParent, 0o755);
-    if (owned) {
-      const register =
-        '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
-      command('unregister-helper', register, ['-u', join(owned, `${helperName}.app`)]);
-      for (const name of cases) {
-        const bundle = join(owned, `${name}-target`, 'XTrace Desktop.app');
-        if (await exists(bundle)) command('unregister-target', register, ['-u', bundle]);
-      }
-    }
-    if (parent) await rm(parent, { recursive: true });
+    if (owned) await cleanupBundles();
+    else if (parent) throw new Error('Owned staging identity was not established; parent retained');
     report.cleanupConfirmed = true;
   } catch (error) {
     report.cleanupError = error.message;
