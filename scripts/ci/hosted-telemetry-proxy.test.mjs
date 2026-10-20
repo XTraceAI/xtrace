@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { mkdtemp, rm, readFile, realpath } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +29,7 @@ test(
       const result = await qualifyTelemetryProxy(proxy, env, root, homedir());
       assert.equal(result.connectRejected, true);
       assert.equal(result.deadProxyRejected, true);
+      assert.equal(result.deadCurlStatus, 7);
       assert.equal(result.noTLSOrBodyAccepted, true);
       const state = await telemetryProxyState(proxy);
       assert.ok(state.probe >= 1);
@@ -469,3 +472,105 @@ test('path-bearing diagnostic lines are removed whole without leaking spaced-nam
   const bounded = guardProcessDetails('late-path', 1500, 1, { status: 1, stderr: latePath });
   assert.equal(bounded.stderr.text, '<path-bearing line redacted>');
 });
+
+test(
+  'actual worker reserves an exclusive unavailable port and closes sockets on setup failure',
+  { timeout: 15000 },
+  () => {
+    const source = fileURLToPath(new URL('./hosted-telemetry-proxy.py', import.meta.url));
+    const control = String.raw`
+import errno,json,runpy,socket,sys,tempfile
+from pathlib import Path
+worker=runpy.run_path(sys.argv[1])
+original=socket.socket
+rows=[]
+for mode in ['normal','connect-error','accept-error','mismatched-peer','competing-bind','wrong-bind-error','main-normal','main-setup-error','main-publish-error']:
+    created=[];listened=[];next_role=iter(['listener','target','parking','collision'] if mode.startswith('main-') else ['target','parking','collision'])
+    class Tracked:
+        def __init__(self,base,role):self.base=base;self.role=role;created.append(self)
+        def __getattr__(self,name):return getattr(self.base,name)
+        def __enter__(self):return self
+        def __exit__(self,*args):self.base.close()
+        def listen(self,backlog):
+            listened.append(self.role)
+            assert self.role in ['listener','parking']
+            return self.base.listen(backlog)
+        def connect(self,endpoint):
+            assert self.role=='target' and endpoint[0]=='127.0.0.1'
+            if mode in ['connect-error','main-setup-error']:raise OSError(errno.ECONNREFUSED,'controlled setup failure')
+            return self.base.connect(endpoint)
+        def accept(self):
+            if mode=='accept-error':raise OSError(errno.ECONNABORTED,'controlled accept failure')
+            return self.base.accept()
+        def getpeername(self):
+            if mode=='mismatched-peer' and self.role=='target':return ('127.0.0.1',1)
+            return self.base.getpeername()
+        def bind(self,endpoint):
+            assert endpoint[0]=='127.0.0.1'
+            if self.role=='collision' and mode=='competing-bind':return
+            if self.role=='collision' and mode=='wrong-bind-error':raise OSError(errno.EACCES,'controlled unexpected error')
+            return self.base.bind(endpoint)
+    def factory(*args,**kwargs):return Tracked(original(*args,**kwargs),'peer' if 'fileno' in kwargs else next(next_role))
+    socket.socket=factory
+    failed=False
+    try:
+        if mode.startswith('main-'):
+            with tempfile.TemporaryDirectory(suffix='.noindex') as directory:
+                root=Path(directory).resolve();old_argv=sys.argv;sys.argv=['worker',str(root)]
+                publish=worker['main'].__globals__['publish']
+                if mode=='main-publish-error':
+                    def broken(path,value):
+                        if path.name=='ready.json':raise OSError('controlled publish failure')
+                        publish(path,value)
+                    worker['main'].__globals__['publish']=broken
+                try:worker['main']()
+                except OSError:failed=True
+                finally:sys.argv=old_argv;worker['main'].__globals__['publish']=publish
+                assert (root/'ready.json').exists()==(mode=='main-normal')
+                if mode=='main-normal':assert json.loads((root/'state.json').read_text())['stopped'] is True
+        else:
+            try:target,peer=worker['reserve_unavailable_port']()
+            except (OSError,ValueError):failed=True
+            if mode=='normal':
+                assert not failed and listened==['parking']
+                assert target.getsockname()==peer.getpeername() and target.getpeername()==peer.getsockname()
+                assert all(sock.fileno()==-1 for sock in created if sock.role in ['parking','collision'])
+                with original() as collision:
+                    try:collision.bind(target.getsockname());raise AssertionError('target port became unowned')
+                    except OSError as error:assert error.errno==errno.EADDRINUSE
+                with original() as client:
+                    client.settimeout(0.5)
+                    try:client.connect(target.getsockname());raise AssertionError('target accepted a connection')
+                    except OSError as error:assert error.errno==errno.ECONNREFUSED
+                for sock in [target,peer]:
+                    sock.setblocking(False)
+                    try:sock.recv(1);raise AssertionError('reservation exchanged data or closed early')
+                    except BlockingIOError:pass
+                target.close();peer.close()
+        assert failed==(mode not in ['normal','main-normal'])
+        assert all(sock.fileno()==-1 for sock in created),mode
+        rows.append(dict(mode=mode,failedAsExpected=failed,created=len(created),allSocketsClosed=True,targetNeverListened='target' not in listened))
+    finally:
+        socket.socket=original
+        for sock in created:sock.close()
+print(json.dumps(rows))
+`;
+    const began = performance.now();
+    const result = spawnSync(
+      process.platform === 'darwin' ? '/opt/homebrew/bin/python3' : 'python3',
+      ['-I', '-c', control, source],
+      { encoding: 'utf8', timeout: 12000, killSignal: 'SIGKILL', maxBuffer: 16384 },
+    );
+    assert.equal(
+      result.status,
+      0,
+      JSON.stringify(
+        guardProcessDetails('reservation-controls', 12000, performance.now() - began, result),
+      ),
+    );
+    const rows = JSON.parse(result.stdout);
+    assert.equal(rows.length, 9);
+    assert.ok(rows.every((row) => row.allSocketsClosed && row.targetNeverListened));
+    console.log(JSON.stringify({ reservationControls: rows }));
+  },
+);

@@ -1,4 +1,6 @@
 """Owned loopback CONNECT rejector. No TLS, DNS lookup, or upstream connection."""
+from contextlib import ExitStack
+import errno
 import json
 import os
 from pathlib import Path
@@ -17,6 +19,41 @@ def publish(path, value):
     os.replace(temporary, path)
 
 
+def reserve_unavailable_port():
+    """Keep an exclusive target port with no listener, without a close/rebind race."""
+    target = socket.socket()
+    peer = None
+    try:
+        with socket.socket() as parking:
+            parking.settimeout(1)
+            parking.bind(('127.0.0.1', 0))
+            parking.listen(1)
+            target.settimeout(1)
+            target.bind(('127.0.0.1', 0))
+            target.connect(parking.getsockname())
+            peer, _ = parking.accept()
+        # Only the separate parking socket listened; it is closed before readiness.
+        if (target.getsockname() != peer.getpeername()
+                or target.getpeername() != peer.getsockname()
+                or target.getsockname()[0] != '127.0.0.1'
+                or target.getpeername()[0] != '127.0.0.1'):
+            raise ValueError('Reservation endpoints differ from the owned loopback pair')
+        with socket.socket() as collision:
+            try:
+                collision.bind(target.getsockname())
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise
+            else:
+                raise ValueError('Reservation target port is not exclusive')
+        return target, peer
+    except BaseException:
+        target.close()
+        if peer is not None:
+            peer.close()
+        raise
+
+
 def main():
     if len(sys.argv) != 2:
         raise ValueError('Expected one owned output directory')
@@ -26,65 +63,67 @@ def main():
     ready, state_path = root/'ready.json', root/'state.json'
     if ready.exists() or state_path.exists():
         raise ValueError('Proxy proof already exists')
-    listener, dead = socket.socket(), socket.socket()
-    listener.bind(('127.0.0.1', 0)); listener.listen(8)
-    dead.bind(('127.0.0.1', 0))  # Reserved but deliberately not listening.
-    start = time.monotonic()
-    state = dict(pid=os.getpid(), probe=0, telemetry=0, github=0, unexpected=0,
-                 afterRejectBytes=0, incomplete=0, observations=[], stopped=False)
-    stopping = False
-    def stop(_signal, _frame):
-        nonlocal stopping
-        stopping = True
-    signal.signal(signal.SIGTERM, stop)
-    selector = selectors.DefaultSelector()
-    selector.register(listener, selectors.EVENT_READ, 'client')
-    selector.register(sys.stdin, selectors.EVENT_READ, 'owner')
-    publish(state_path, state)
-    publish(ready, dict(pid=os.getpid(), host='127.0.0.1', port=listener.getsockname()[1], deadPort=dead.getsockname()[1]))
-    try:
-        while not stopping and time.monotonic()-start < 30*60:
-            for key, _events in selector.select(0.2):
-                if key.data == 'owner':
-                    if not os.read(sys.stdin.fileno(), 1):
-                        stopping = True
-                    continue
-                client, _address = listener.accept()
-                with client:
-                    client.settimeout(2)
-                    data = b''
-                    kind = 'unexpected'
-                    try:
-                        while b'\r\n\r\n' not in data and len(data) < 8192:
-                            chunk = client.recv(min(4096, 8192-len(data)))
-                            if not chunk:
-                                break
-                            data += chunk
-                        head, separator, extra = data.partition(b'\r\n\r\n')
-                        first = head.split(b'\r\n', 1)[0]
-                        allowed = {b'CONNECT capture.invalid:443 HTTP/1.1': 'probe',
-                                   b'CONNECT us.i.posthog.com:443 HTTP/1.1': 'telemetry',
-                                   b'CONNECT github.com:443 HTTP/1.1': 'github'}
-                        if separator:
-                            kind = allowed.get(first, 'unexpected')
-                        else:
-                            state['incomplete'] += 1
-                        state[kind] += 1
-                        state['afterRejectBytes'] += len(extra)
-                        client.sendall(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
-                        client.shutdown(socket.SHUT_WR)
-                        # A rejected CONNECT must not proceed to TLS or a request body.
-                        tail = client.recv(1)
-                        state['afterRejectBytes'] += len(tail)
-                    except (OSError, TimeoutError):
-                        state['incomplete'] += 1
-                    if len(state['observations']) < 32:
-                        state['observations'].append(dict(kind=kind, elapsedMs=int((time.monotonic()-start)*1000)))
-                    publish(state_path, state)
-    finally:
-        state['stopped'] = True
+    with ExitStack() as owned:
+        listener = owned.enter_context(socket.socket())
+        listener.bind(('127.0.0.1', 0)); listener.listen(8)
+        dead, reservation_peer = reserve_unavailable_port()
+        owned.enter_context(dead)
+        owned.enter_context(reservation_peer)
+        start = time.monotonic()
+        state = dict(pid=os.getpid(), probe=0, telemetry=0, github=0, unexpected=0,
+                     afterRejectBytes=0, incomplete=0, observations=[], stopped=False)
+        stopping = False
+        def stop(_signal, _frame):
+            nonlocal stopping
+            stopping = True
+        signal.signal(signal.SIGTERM, stop)
+        selector = owned.enter_context(selectors.DefaultSelector())
+        selector.register(listener, selectors.EVENT_READ, 'client')
+        selector.register(sys.stdin, selectors.EVENT_READ, 'owner')
         publish(state_path, state)
-        selector.close(); listener.close(); dead.close()
+        publish(ready, dict(pid=os.getpid(), host='127.0.0.1', port=listener.getsockname()[1], deadPort=dead.getsockname()[1]))
+        try:
+            while not stopping and time.monotonic()-start < 30*60:
+                for key, _events in selector.select(0.2):
+                    if key.data == 'owner':
+                        if not os.read(sys.stdin.fileno(), 1):
+                            stopping = True
+                        continue
+                    client, _address = listener.accept()
+                    with client:
+                        client.settimeout(2)
+                        data = b''
+                        kind = 'unexpected'
+                        try:
+                            while b'\r\n\r\n' not in data and len(data) < 8192:
+                                chunk = client.recv(min(4096, 8192-len(data)))
+                                if not chunk:
+                                    break
+                                data += chunk
+                            head, separator, extra = data.partition(b'\r\n\r\n')
+                            first = head.split(b'\r\n', 1)[0]
+                            allowed = {b'CONNECT capture.invalid:443 HTTP/1.1': 'probe',
+                                       b'CONNECT us.i.posthog.com:443 HTTP/1.1': 'telemetry',
+                                       b'CONNECT github.com:443 HTTP/1.1': 'github'}
+                            if separator:
+                                kind = allowed.get(first, 'unexpected')
+                            else:
+                                state['incomplete'] += 1
+                            state[kind] += 1
+                            state['afterRejectBytes'] += len(extra)
+                            client.sendall(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                            client.shutdown(socket.SHUT_WR)
+                            # A rejected CONNECT must not proceed to TLS or a request body.
+                            tail = client.recv(1)
+                            state['afterRejectBytes'] += len(tail)
+                        except (OSError, TimeoutError):
+                            state['incomplete'] += 1
+                        if len(state['observations']) < 32:
+                            state['observations'].append(dict(kind=kind, elapsedMs=int((time.monotonic()-start)*1000)))
+                        publish(state_path, state)
+        finally:
+            state['stopped'] = True
+            publish(state_path, state)
 
 
 if __name__ == '__main__':
