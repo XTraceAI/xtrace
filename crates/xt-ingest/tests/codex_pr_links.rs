@@ -868,3 +868,189 @@ fn a_long_history_links_a_witness_in_its_tenth_continuation_across_passes() {
         [link(OPENER, SEEN_MS, SEEN_MS)]
     );
 }
+
+/// A prompt line of about `bytes` bytes.
+fn padded(bytes: usize) -> Value {
+    json!({"timestamp": "2026-09-07T12:00:01Z", "type": "response_item",
+           "payload": {"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "p".repeat(bytes)}]}})
+}
+
+fn lengths(paths: &[PathBuf]) -> Vec<u64> {
+    paths
+        .iter()
+        .map(|path| fs::metadata(path).unwrap().len())
+        .collect()
+}
+
+/// One thread with more rollouts than the mark limit, read across passes
+/// that each have room for two of them, links the witness in its last
+/// rollout and finishes, reading every byte once. While it is read the map
+/// holds at most the limit beside its own files' marks; once it is done, at
+/// most the limit.
+#[test]
+fn a_thread_with_more_files_than_the_mark_limit_finishes_across_passes() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let mut paths = vec![rollout_path(&home, OPENER)];
+    paths.extend((1..=7).map(|part| continuation(&home, OPENER, part)));
+    let last = paths.len() - 1;
+    for (at, path) in paths.iter().enumerate() {
+        // Every file the same length; the last one's padding holds the witness.
+        let lines = if at == last {
+            vec![header(OPENER), padded(100), witness(OPENER, SEEN)]
+        } else {
+            let filler = witness(OPENER, SEEN).to_string().len() + 101 + 1;
+            vec![header(OPENER), padded(filler)]
+        };
+        write(path, &lines);
+    }
+    let sizes = lengths(&paths);
+    let mut db = TempDb::empty().unwrap();
+    index_segments(db.store_mut(), OPENER, &paths);
+    let largest = *sizes.iter().max().unwrap();
+    let smallest = *sizes.iter().min().unwrap();
+    // Room for two files and part of a third, less than one line.
+    let limits = TitleLimits {
+        max_batch_bytes: 2 * largest + smallest / 2,
+        max_line_bytes: 4_096,
+        deadline: Duration::from_secs(5),
+        ..TitleLimits::default()
+    };
+    let mut backlog = PrBacklog::default().with_mark_limit(2);
+    backlog.add([OPENER]);
+    let (mut passes, mut bytes, mut witnesses) = (0, 0, 0);
+    while backlog.threads() > 0 {
+        let progress =
+            continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false)
+                .unwrap();
+        assert!(progress.advanced, "pass {passes}: {progress:?}");
+        assert!(backlog.marks() <= 2 + paths.len(), "{}", backlog.marks());
+        passes += 1;
+        bytes += progress.bytes_read;
+        witnesses += progress.witnesses;
+        assert!(passes <= 8, "the thread keeps restarting");
+    }
+    assert_eq!(passes, 4);
+    assert!(backlog.marks() <= 2, "{}", backlog.marks());
+    assert_eq!(bytes, sizes.iter().sum::<u64>());
+    assert_eq!(witnesses, 1);
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
+}
+
+/// With a mark limit of one, a thread of four files is partway through its
+/// third: none of its marks is evicted, so the next pass reads neither
+/// finished file again and continues the partly read one where it stopped.
+#[test]
+fn eviction_never_drops_a_mark_of_the_thread_being_read() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let paths = [
+        rollout_path(&home, OPENER),
+        continuation(&home, OPENER, 1),
+        continuation(&home, OPENER, 2),
+        continuation(&home, OPENER, 3),
+    ];
+    write(&paths[0], &[header(OPENER), prompt()]);
+    write(&paths[1], &[header(OPENER), prompt()]);
+    // Longer than one pass: ten lines of about 500 bytes.
+    let mut long = vec![header(OPENER)];
+    long.extend((0..10).map(|_| padded(500)));
+    write(&paths[2], &long);
+    write(&paths[3], &[header(OPENER), witness(OPENER, SEEN)]);
+    let sizes = lengths(&paths);
+    let mut db = TempDb::empty().unwrap();
+    index_segments(db.store_mut(), OPENER, &paths);
+    let limits = TitleLimits {
+        max_batch_bytes: sizes[0] + sizes[1] + 1_500,
+        max_line_bytes: 1_024,
+        deadline: Duration::from_secs(5),
+        ..TitleLimits::default()
+    };
+    assert!(sizes[2] > limits.max_batch_bytes);
+    let mut backlog = PrBacklog::default().with_mark_limit(1);
+    backlog.add([OPENER]);
+
+    let first =
+        continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false).unwrap();
+    assert_eq!(first.decided, 0);
+    // Both finished files and the partly read one keep their marks, over
+    // the limit of one: they are the thread's own.
+    assert_eq!(backlog.marks(), 3);
+    let into_long = first.bytes_read - sizes[0] - sizes[1];
+    assert!(into_long > 0 && into_long < sizes[2]);
+
+    let second =
+        continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false).unwrap();
+    // Neither finished file is read again; the long file goes on from where
+    // it stopped, re-reading at most the start of one line.
+    assert!(second.advanced);
+    assert!(
+        second.bytes_read <= sizes[2] - into_long + sizes[3] + limits.max_line_bytes as u64,
+        "{second:?}"
+    );
+    let mut total = first.bytes_read + second.bytes_read;
+    let mut passes = 2;
+    while backlog.threads() > 0 {
+        let progress =
+            continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false)
+                .unwrap();
+        assert!(progress.advanced, "{progress:?}");
+        total += progress.bytes_read;
+        passes += 1;
+        assert!(passes < 20);
+    }
+    let all: u64 = sizes.iter().sum();
+    assert!(total >= all && total <= all + passes * limits.max_line_bytes as u64);
+    // Done: trimmed back to the limit, oldest first.
+    assert_eq!(backlog.marks(), 1);
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
+}
+
+/// A witness appended to a file the thread already read to its end, while
+/// a pass is partway through a later file of the same thread, is read by the
+/// passes that finish the thread.
+#[test]
+fn review_append_to_a_finished_file_while_the_thread_is_mid_read() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = home(temp.path());
+    let paths = [rollout_path(&home, OPENER), continuation(&home, OPENER, 1)];
+    write(&paths[0], &[header(OPENER), prompt()]);
+    let mut long = vec![header(OPENER)];
+    long.extend((0..10).map(|_| padded(500)));
+    write(&paths[1], &long);
+    let sizes = lengths(&paths);
+    let mut db = TempDb::empty().unwrap();
+    index_segments(db.store_mut(), OPENER, &paths);
+    let limits = TitleLimits {
+        max_batch_bytes: sizes[0] + 1_500,
+        max_line_bytes: 1_024,
+        deadline: Duration::from_secs(5),
+        ..TitleLimits::default()
+    };
+    let mut backlog = PrBacklog::default();
+    backlog.add([OPENER]);
+    let first =
+        continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false).unwrap();
+    assert_eq!(first.decided, 0, "{first:?}");
+    // Codex appends a witness to the root, already read to its end; the
+    // scan that sees it queues the thread again (still waiting: one entry).
+    append(&paths[0], &[witness(OPENER, SEEN)]);
+    backlog.add([OPENER]);
+    let mut passes = 0;
+    while backlog.threads() > 0 {
+        continue_codex_pr_links(db.store_mut(), &home, &mut backlog, limits, None, false).unwrap();
+        passes += 1;
+        assert!(passes < 20);
+    }
+    assert_eq!(
+        db.store().all_pr_links().unwrap(),
+        [link(OPENER, SEEN_MS, SEEN_MS)]
+    );
+}

@@ -52,6 +52,53 @@
 //! longer than the bound, whose rest is skipped: it moves the mark, unless
 //! all it holds is the file's unfinished last line.
 //!
+//! # Progress across passes
+//!
+//! One record holds all reading progress: the mark map, one mark per file,
+//! the offset after the last complete line read (or inside a line too long
+//! to inspect). Every read of a file starts from its mark and saves its new
+//! mark there, whether the read reached the file's end or stopped partway.
+//! What the next pass does, for each state:
+//!
+//! - **Thread queued, not yet started.** When it reaches the front, its
+//!   recorded rollouts are listed afresh and each is read from its mark, or
+//!   from its start without one.
+//! - **Thread partly read** (a pass stopped inside it). It stays at the front
+//!   and is resumed first, listed afresh. A file read to its end before is
+//!   read from its mark, so only what was appended since is read: a witness
+//!   appended to it meanwhile is found now, not when the thread is next
+//!   queued.
+//! - **File partly read.** Its mark says where the read stopped; the next
+//!   pass continues from exactly there.
+//! - **File read to its end.** Its mark is its end; a later read reads only
+//!   what was appended.
+//! - **Mark evicted.** The map holds at most a fixed number of marks beside
+//!   the front thread's. The files the front thread listed in its latest
+//!   read are protected until it leaves the queue (on every path: decided,
+//!   not indexed, no single session, nothing recorded or readable), so no
+//!   mark of the thread being read is ever evicted, and while it is read
+//!   the map may hold its limit plus that thread's file count. Eviction
+//!   removes the oldest unprotected mark, one at a time, never all of
+//!   them; after the front thread leaves, the map is trimmed back to its
+//!   limit the same way. An evicted mark belongs to a thread no longer being
+//!   read; that file is read again from its start when its thread is next
+//!   queued, which only re-records the same links.
+//! - **Budget or deadline reached.** The pass stops with the mark saved;
+//!   only the start of the line it stopped inside is read again. With room
+//!   for more than one line a pass always moves a mark or finishes a file;
+//!   with less it reads nothing and reports no progress (below), so the
+//!   watcher backs off rather than spins.
+//! - **Cancelled.** Nothing read by the cancelled read is recorded and its
+//!   mark does not move.
+//! - **File replaced, shrunk or unreadable.** Its mark is dropped; the next
+//!   read of it starts from its start, a replaced file under its new inode.
+//!
+//! So a thread being read finishes after finitely many passes with room:
+//! each such pass moves a protected mark forward or finishes a file, and no
+//! protected mark moves back, whatever the thread's file count and however
+//! full the map. Finding the oldest unprotected mark skips the protected
+//! ones, at most the front thread's file count per eviction.
+//!
 //! A mark is trusted while the file keeps its device and inode and is at
 //! least as long as the mark. Codex only appends to a rollout; a file
 //! rewritten in place under the same inode that grows past the mark would be
@@ -77,9 +124,10 @@ use xt_store::{
 /// Locators the sweep reads from the index at a time.
 const SWEEP_PAGE: usize = 256;
 
-/// The most files whose read position is remembered. Past it the positions
-/// are forgotten, which only costs reading those files again.
-const MAX_MARKS: usize = 16_384;
+/// The most marks kept beside the front thread's protected ones. Past it the
+/// oldest unprotected mark is forgotten, which only costs reading that file
+/// again from its start.
+pub const MAX_MARKS: usize = 16_384;
 
 /// The one rule for whether a Codex rollout line of the thread `native`
 /// witnesses that the thread attached a pull request: that pull request's
@@ -136,13 +184,106 @@ fn text(value: Option<&Value>) -> Option<&str> {
 /// arrived, where each file's last read ended, and how far a sweep over
 /// every indexed Codex locator has read. It lives with whoever scans, in
 /// memory only.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PrBacklog {
     threads: VecDeque<String>,
     waiting: HashSet<String>,
-    marks: HashMap<PathBuf, ReadMark>,
+    marks: Marks,
     /// `Some` while a sweep is to finish: the last locator it queued.
     sweep: Option<Option<String>>,
+}
+
+impl Default for PrBacklog {
+    fn default() -> Self {
+        Self {
+            threads: VecDeque::new(),
+            waiting: HashSet::new(),
+            marks: Marks::new(MAX_MARKS),
+            sweep: None,
+        }
+    }
+}
+
+/// Every file's mark: the one record of reading progress. Bounded by
+/// `limit` beside the `pinned` paths, which are never evicted.
+#[derive(Debug)]
+struct Marks {
+    limit: usize,
+    next: u64,
+    by_path: HashMap<PathBuf, (u64, ReadMark)>,
+    /// Paths by when their mark was first recorded, oldest first.
+    order: BTreeMap<u64, PathBuf>,
+    /// The front thread's files, from its latest listing.
+    pinned: HashSet<PathBuf>,
+}
+
+impl Marks {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit: limit.max(1),
+            next: 0,
+            by_path: HashMap::new(),
+            order: BTreeMap::new(),
+            pinned: HashSet::new(),
+        }
+    }
+
+    fn get(&self, path: &Path) -> Option<ReadMark> {
+        self.by_path.get(path).map(|(_, mark)| *mark)
+    }
+
+    fn remove(&mut self, path: &Path) {
+        if let Some((seq, _)) = self.by_path.remove(path) {
+            self.order.remove(&seq);
+        }
+    }
+
+    /// Save `mark` for `path`. A new path first makes room, if it can,
+    /// by evicting the oldest unprotected marks down to the limit.
+    fn insert(&mut self, path: PathBuf, mark: ReadMark) {
+        if let Some(entry) = self.by_path.get_mut(&path) {
+            entry.1 = mark;
+            return;
+        }
+        self.trim(self.limit);
+        let seq = self.next;
+        self.next += 1;
+        self.order.insert(seq, path.clone());
+        self.by_path.insert(path, (seq, mark));
+    }
+
+    /// Evict the oldest unprotected marks, one at a time, until no more than
+    /// `keep` unprotected marks are left or only protected ones remain.
+    fn trim(&mut self, keep: usize) {
+        let protected = self
+            .pinned
+            .iter()
+            .filter(|path| self.by_path.contains_key(*path))
+            .count();
+        while self.by_path.len() - protected > keep {
+            let Some(seq) = self
+                .order
+                .iter()
+                .find(|(_, path)| !self.pinned.contains(*path))
+                .map(|(seq, _)| *seq)
+            else {
+                break;
+            };
+            if let Some(path) = self.order.remove(&seq) {
+                self.by_path.remove(&path);
+            }
+        }
+    }
+
+    /// The front thread left the queue: nothing is protected now.
+    fn unpin(&mut self) {
+        self.pinned.clear();
+        self.trim(self.limit);
+    }
+
+    fn len(&self) -> usize {
+        self.by_path.len()
+    }
 }
 
 impl PrBacklog {
@@ -164,6 +305,18 @@ impl PrBacklog {
         }
     }
 
+    /// This backlog keeping at most `limit` marks (at least one) beside the
+    /// front thread's, instead of [`MAX_MARKS`]. Tests lower it.
+    pub fn with_mark_limit(mut self, limit: usize) -> Self {
+        self.marks.limit = limit.max(1);
+        self
+    }
+
+    /// Files whose mark is kept.
+    pub fn marks(&self) -> usize {
+        self.marks.len()
+    }
+
     /// Threads still waiting.
     pub fn threads(&self) -> usize {
         self.threads.len()
@@ -172,13 +325,6 @@ impl PrBacklog {
     /// Whether a later pass has anything to do.
     pub fn pending(&self) -> bool {
         !self.threads.is_empty() || self.sweep.is_some()
-    }
-
-    fn remember(&mut self, path: PathBuf, mark: ReadMark) {
-        if self.marks.len() >= MAX_MARKS && !self.marks.contains_key(&path) {
-            self.marks.clear();
-        }
-        self.marks.insert(path, mark);
     }
 }
 
@@ -265,8 +411,10 @@ pub(super) fn continue_within(
         if !read_thread(store, &native, &roots, backlog, batch, progress)? {
             break;
         }
+        // Every way a thread leaves the queue passes here.
         backlog.threads.pop_front();
         backlog.waiting.remove(&native);
+        backlog.marks.unpin();
         progress.decided += 1;
         progress.advanced = true;
     }
@@ -317,8 +465,13 @@ fn read_thread(
         // Nothing recorded for it can be read now.
         return Ok(true);
     };
+    // Its files' marks are not evicted while it is read.
+    backlog.marks.pinned = candidates
+        .iter()
+        .map(|candidate| candidate.path.clone())
+        .collect();
     for candidate in &candidates {
-        let from = backlog.marks.get(&candidate.path).copied();
+        let from = backlog.marks.get(&candidate.path);
         let before = batch.bytes_read();
         // Each pull request once, with its earliest and latest witness.
         let mut seen = BTreeMap::<PrIdentity, (i64, i64)>::new();
@@ -360,7 +513,7 @@ fn read_thread(
         if batch.bytes_read() > before && from != Some(mark) {
             progress.advanced = true;
         }
-        backlog.remember(candidate.path.clone(), mark);
+        backlog.marks.insert(candidate.path.clone(), mark);
         if halted.is_some() {
             return Ok(false);
         }
