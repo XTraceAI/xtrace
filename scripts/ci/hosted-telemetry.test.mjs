@@ -822,3 +822,84 @@ test('actual final caller distinguishes attempted/confirmed launch and uncertain
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('actual caller product exit needs a confirmed launch and every product attempt absent', async () => {
+  const source = await readFile(new URL('./hosted-first-launch.mjs', import.meta.url), 'utf8');
+  const start = source.lastIndexOf('  try {\n    if (session) {\n      await cleanupTelemetry');
+  const end = source.indexOf("  await writeFile(join(output, 'report.json')", start);
+  const actual = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'input',
+    `
+    const {session,cleanupTelemetry,telemetryCleanupFacts,stopTelemetryOwners,stopTelemetryProxies,removeOwned,rm}=input;
+    const report={status:'failed',releasedAppLaunched:false};let failure=input.failure;
+    const telemetryContext={},output='/owned/output',budget={},staging='/owned/staging';let proxyStopReserve=0;
+    ${source.slice(start, end)}
+    return {report,failure};`,
+  );
+  const product = (confirmed, exited) => ({
+    kind: 'telemetry',
+    launchConfirmed: confirmed,
+    exited,
+  });
+  const probe = (exited) => ({ kind: 'probe', exited, childExitConfirmed: exited });
+  const observed = [];
+  for (const [name, owners, cleanupFailure, expected] of [
+    ['zero', [], null, false],
+    ['probe-only', [probe(true)], null, false],
+    ['unconfirmed-unresolved', [product(false, false)], 'stop', false],
+    ['unconfirmed-absent', [product(false, true)], null, false],
+    ['confirmed-unresolved', [product(true, false)], 'stop', false],
+    ['confirmed-absent', [product(true, true)], null, true],
+    ['mixed-unresolved', [product(true, true), product(false, false)], 'stop', false],
+    ['mixed-all-absent', [product(true, true), product(false, true)], null, true],
+    ['probe-failure-after-product-exit', [product(true, true), probe(false)], 'stop', true],
+    ['staging-failure-after-product-exit', [product(true, true)], 'staging', true],
+  ]) {
+    const session = telemetrySession();
+    session.stagingOwned = true;
+    session.owners = owners;
+    const result = await actual({
+      session,
+      cleanupTelemetry,
+      telemetryCleanupFacts,
+      failure: new Error('Earlier work failure'),
+      stopTelemetryOwners: async () => {
+        if (cleanupFailure === 'stop') throw new Error('Stop uncertain');
+      },
+      stopTelemetryProxies: async () => {},
+      removeOwned: async () => {},
+      rm: async () => {
+        if (cleanupFailure === 'staging') throw new Error('Partial removal');
+      },
+    });
+    const [launched, productUnknown, probeUnknown, launchUnknown] = {
+      zero: [false, false, false, false],
+      'probe-only': [false, false, false, false],
+      'unconfirmed-unresolved': [null, true, false, true],
+      'unconfirmed-absent': [null, false, false, true],
+      'confirmed-unresolved': [true, true, false, false],
+      'confirmed-absent': [true, false, false, false],
+      'mixed-unresolved': [true, true, false, true],
+      'mixed-all-absent': [true, false, false, true],
+      'probe-failure-after-product-exit': [true, false, true, false],
+      'staging-failure-after-product-exit': [true, false, false, false],
+    }[name];
+    assert.equal(result.report.releasedAppLaunched, launched, name);
+    assert.equal(result.report.releasedAppLaunchAttempted, launched !== false, name);
+    assert.equal(result.report.releasedAppLaunchOutcomeUnknown, launchUnknown, name);
+    assert.equal(result.report.telemetryCleanup.appExitUnknown, productUnknown, name);
+    assert.equal(result.report.telemetryCleanup.probeParentExitUnknown, probeUnknown, name);
+    assert.equal(result.report.telemetryCleanup.probeChildExitUnknown, probeUnknown, name);
+    observed.push({ name, actual: result.report.exitConfirmed, expected });
+    assert.equal(result.report.error, 'Earlier work failure');
+    assert.equal(result.report.telemetryCleanup.cleanupFailed, Boolean(cleanupFailure));
+    assert.equal(
+      result.report.telemetryCleanup.stagingState,
+      cleanupFailure === 'stop' ? 'retained' : cleanupFailure === 'staging' ? 'unknown' : 'removed',
+    );
+  }
+  assert.deepEqual(
+    observed.map(({ name, actual }) => ({ name, value: actual })),
+    observed.map(({ name, expected }) => ({ name, value: expected })),
+  );
+});

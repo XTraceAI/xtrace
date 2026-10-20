@@ -370,7 +370,6 @@ async function main() {
       report.telemetryPhases = session.phases;
       await runTelemetryPhases(telemetryContext, session);
       report.releasedAppLaunched = true;
-      report.exitConfirmed = true;
       report.nativeDatabaseVerified = true;
       report.quarantine.installedAfterExit = await quarantineAt(
         release.bundle,
@@ -469,7 +468,6 @@ async function main() {
       await cleanupTelemetry(session, {
         stopOwners: async () => {
           if (telemetryContext) await stopTelemetryOwners(session, telemetryContext);
-          report.exitConfirmed = session.owners.every((owner) => owner.exited);
         },
         removeOwned,
         stopProxies: () => {
@@ -506,6 +504,9 @@ async function main() {
   }
   if (session) {
     const attempts = session.owners.filter((owner) => owner.kind === 'telemetry');
+    report.exitConfirmed =
+      attempts.some((owner) => owner.launchConfirmed === true) &&
+      attempts.every((owner) => owner.exited === true);
     report.releasedAppLaunchAttempted = attempts.length > 0;
     report.releasedAppLaunchOutcomeUnknown = attempts.some(
       (owner) => owner.launchConfirmed !== true,
