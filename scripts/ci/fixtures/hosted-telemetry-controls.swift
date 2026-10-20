@@ -60,3 +60,46 @@ var disabledNotice=notice;disabledNotice[4]["captureEnabled"]="false";assert(!te
 var environmentOff=settings;environmentOff[1][kAXValueAttribute]="0";environmentOff[1]["captureEnabled"]="false"
 assert(telemetrySwitchState(environmentOff,on:false,enabled:false))
 assert(!telemetryAlerts(good+[row("4","0","AXStaticText","The update was installed, but restart failed. Retry restarting the app.")]).safe)
+
+// Synthetic WebKit alert identities; captured hosted rows remain private.
+var applicationAlert = alert
+applicationAlert[kAXRoleAttribute] = "AXGroup"
+applicationAlert[kAXSubroleAttribute] = "AXApplicationAlert"
+applicationAlert["captureParent"] = "branch"
+applicationAlert.removeValue(forKey: kAXHelpAttribute)
+applicationAlert[kAXDescriptionAttribute] = blockedUpdaterText
+let groupedAlert = [workspace, row("branch", "0", "AXGroup"), applicationAlert, good[2], retry]
+assert(isAlert(alert) && isAlert(applicationAlert))
+var missingSubrole = groupedAlert
+missingSubrole[2].removeValue(forKey: kAXSubroleAttribute)
+assert(!isAlert(missingSubrole[2]) && !telemetryAlerts(missingSubrole).safe)
+var wrongSubrole = groupedAlert
+wrongSubrole[2][kAXSubroleAttribute] = "AXOther"
+assert(!isAlert(wrongSubrole[2]) && !telemetryAlerts(wrongSubrole).safe)
+var wrongRole = groupedAlert
+wrongRole[2][kAXRoleAttribute] = "AXButton"
+assert(!isAlert(wrongRole[2]) && !telemetryAlerts(wrongRole).safe)
+let supportedAlertCases: [[[String: String]]] = [good, groupedAlert]
+for sample in supportedAlertCases {
+    assert(telemetryAlerts(sample).safe && telemetryAlerts(sample).updaterWarning)
+    assert(nativeError(sample)) // Ordinary first-launch and update modes reject both.
+    var misplaced = sample; misplaced[0][kAXDescriptionAttribute] = "Other"
+    assert(!telemetryAlerts(misplaced).safe)
+    assert(!telemetryAlerts(sample.filter { !isButton($0, "Retry update") }).safe)
+    var secondRetry = retry; secondRetry["captureNode"] = "retry-copy"
+    assert(!telemetryAlerts(sample + [secondRetry]).safe)
+    var different = sample
+    different[different.firstIndex { $0["captureNode"] == "2" }!][kAXValueAttribute] = "Changed warning"
+    assert(!telemetryAlerts(different).safe)
+    assert(!telemetryAlerts(sample + [row("extra-text", "1", "AXStaticText", "Unrelated content")]).safe)
+    assert(!telemetryAlerts(sample + [row("outside-copy", "0", "AXStaticText", blockedUpdaterText)]).safe)
+    var secondAlert = sample.first(where: isAlert)!; secondAlert["captureNode"] = "alert-copy"
+    assert(!telemetryAlerts(sample + [secondAlert]).safe)
+    let unrelatedLegacy = row("unrelated", "0", "AXAlert", "Other warning")
+    var unrelatedGroup = row("unrelated", "0", "AXGroup", "Other warning")
+    unrelatedGroup[kAXSubroleAttribute] = "AXApplicationAlert"
+    let unrelatedAlerts: [[String: String]] = [unrelatedLegacy, unrelatedGroup]
+    for extra in unrelatedAlerts { assert(!telemetryAlerts(sample + [extra]).safe) }
+    unrelatedGroup["captureParent"] = "1"
+    assert(!telemetryAlerts(sample + [unrelatedGroup]).safe)
+}
