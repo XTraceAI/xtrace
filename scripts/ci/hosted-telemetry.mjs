@@ -1,6 +1,22 @@
 import { isAbsolute, join } from 'node:path';
-import { firstLaunchEnvironment, verifyHostedDatabase } from './hosted-release.mjs';
+import {
+  firstLaunchEnvironment,
+  requireFirstLaunchHost,
+  verifyHostedDatabase,
+} from './hosted-release.mjs';
 
+export const telemetryBudget = Object.freeze({ workMs: 18 * 60_000, cleanupMs: 3 * 60_000 });
+export const telemetryLimits = Object.freeze({
+  launchConfiguration: 'fresh default app data with a non-forwarding rejecting loopback proxy',
+  successfulSignedHTTPPostValidated: false,
+  realPostHogDeliveryValidated: false,
+  beforeFirstPixelOrderingValidated: false,
+  payloadEvidence: 'frozen-source tests; CONNECT rejection exposes no event body',
+});
+export function requireTelemetryHost(input) {
+  if (input.mode !== 'telemetry') throw new Error('Expected explicit telemetry mode');
+  requireFirstLaunchHost({ ...input, mode: 'first-launch' });
+}
 export function telemetryDataDirectory(home) {
   if (!isAbsolute(home) || home === '/') throw new Error('Expected the genuine hosted user home');
   return join(home, 'Library/Application Support/ai.xtrace.app');
@@ -59,4 +75,20 @@ export async function verifyTelemetryDatabase(source, directory, checked, phase,
   )
     throw new Error('Database did not confirm the required saved telemetry state');
   return result;
+}
+
+export function acceptTelemetryUI(evidence, state, mode) {
+  if (
+    evidence.code !== 0 ||
+    evidence.reason !== `Telemetry UI phase ${mode} observed` ||
+    !Array.isArray(evidence.nodes) ||
+    typeof evidence.telemetry?.expectedUpdaterWarning !== 'boolean' ||
+    (evidence.telemetry.expectedUpdaterWarning && !(state.github > 0))
+  )
+    throw new Error('Telemetry UI evidence lacks required same-phase proxy confirmation');
+  return {
+    mode,
+    expectedUpdaterWarning: evidence.telemetry.expectedUpdaterWarning,
+    blockedUpdaterAuthority: evidence.telemetry.expectedUpdaterWarning ? 'github.com:443' : null,
+  };
 }

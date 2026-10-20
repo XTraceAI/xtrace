@@ -1,8 +1,8 @@
 import AppKit
 import Darwin
 
-// This helper only launches the fixed installed bundle through LaunchServices,
-// inspects its environment without printing values, or stops its exact receipt.
+// This hosted-only helper launches the fixed installed product or the fixed owned
+// harmless proxy probe, inspects environment without values, and stops exact receipts.
 func fail(_ message: String) -> Never { fputs("\(message)\n", stderr); exit(1) }
 let authorization = ProcessInfo.processInfo.environment
 guard authorization["ALLOW_RELEASE_IDENTITY"] == "true",
@@ -37,7 +37,7 @@ func launchContext(_ raw: String, environment: URL, receipt: URL) throws -> Laun
     let productCommands = ["launch", "inspect", "stop", "arm-update", "adopt-update", "absent"]
     let lifecycle = ["launch", "inspect", "stop", "absent"]
     let probe = raw.hasPrefix("probe-")
-    let telemetry = probe
+    let telemetry = probe || raw.hasPrefix("telemetry-")
     let command = telemetry ? String(raw.dropFirst(probe ? 6 : 10)) : raw
     guard (telemetry ? lifecycle : productCommands).contains(command) else { throw ContextError.invalid }
     let owned = environment.deletingLastPathComponent()

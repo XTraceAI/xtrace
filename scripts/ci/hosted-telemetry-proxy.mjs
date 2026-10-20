@@ -26,39 +26,93 @@ export const telemetryCurlArguments = Object.freeze([
   'https://capture.invalid/batch/',
 ]);
 const systemEnvironment = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8' };
-export async function startTelemetryProxy(directory, budget = { remaining: (ms) => ms }) {
+export async function pollTelemetry(
+  check,
+  budget,
+  timeout,
+  interval = 20,
+  { now = () => performance.now(), sleep = delay } = {},
+) {
+  const deadline = now() + budget.remaining(timeout);
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    const left = deadline - now();
+    if (left <= 0) return null;
+    const pause = Math.min(left, budget.remaining(interval));
+    if (pause <= 0) throw new Error('Telemetry wait budget exhausted');
+    await sleep(pause);
+  }
+}
+export async function startTelemetryProxy(
+  directory,
+  budget = { remaining: (ms) => ms },
+  {
+    register = () => {},
+    launch = spawn,
+    stop = stopTelemetryProxy,
+    read = readFile,
+    now = () => performance.now(),
+    sleep = delay,
+  } = {},
+) {
   await mkdir(directory, { mode: 0o700 });
-  const child = spawn(
+  const available = budget.remaining(13000);
+  if (available <= 8000)
+    throw new Error('Proxy readiness and emergency stop do not fit the work budget');
+  const child = launch(
     process.platform === 'darwin' ? '/opt/homebrew/bin/python3' : 'python3',
     ['-I', fileURLToPath(new URL('./hosted-telemetry-proxy.py', import.meta.url)), directory],
     { env: systemEnvironment, stdio: ['pipe', 'ignore', 'ignore'] },
   );
   child.on('error', () => {});
+  const proxy = { child, directory, pid: child.pid, ready: false };
+  register(proxy);
+  const readiness = {
+    remaining(ms) {
+      const left = budget.remaining(ms + 8000) - 8000;
+      if (left <= 0) throw new Error('Proxy readiness reserve reached');
+      return Math.min(ms, left);
+    },
+  };
   try {
-    const deadline = Date.now() + budget.remaining(5000);
-    while (Date.now() < deadline) {
-      if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined)
-        throw new Error('Rejecting proxy did not start');
-      try {
-        const ready = JSON.parse(await readFile(join(directory, 'ready.json'), 'utf8'));
-        if (
-          ready.pid !== child.pid ||
-          ready.host !== '127.0.0.1' ||
-          ![ready.port, ready.deadPort].every(
-            (port) => Number.isInteger(port) && port > 0 && port < 65536,
-          ) ||
-          ready.port === ready.deadPort
-        )
-          throw new Error('Rejecting proxy identity/ports differ from its owned child');
-        return { child, directory, pid: ready.pid, port: ready.port, deadPort: ready.deadPort };
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-      }
-      await delay(20);
-    }
-    throw new Error('Rejecting proxy readiness timed out');
+    const ready = await pollTelemetry(
+      async () => {
+        if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined)
+          throw new Error('Rejecting proxy did not start');
+        try {
+          const value = JSON.parse(await read(join(directory, 'ready.json'), 'utf8'));
+          if (
+            value.pid !== child.pid ||
+            value.host !== '127.0.0.1' ||
+            ![value.port, value.deadPort].every(
+              (port) => Number.isInteger(port) && port > 0 && port < 65536,
+            ) ||
+            value.port === value.deadPort
+          )
+            throw new Error('Rejecting proxy identity/ports differ from its owned child');
+          return value;
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          return null;
+        }
+      },
+      readiness,
+      available - 8000,
+      20,
+      { now, sleep },
+    );
+    if (!ready) throw new Error('Rejecting proxy readiness timed out');
+    Object.assign(proxy, { port: ready.port, deadPort: ready.deadPort, ready: true });
+    return proxy;
   } catch (error) {
-    await stopSmokeChild(child);
+    proxy.startupError = error.message;
+    try {
+      proxy.exit = await stop(proxy, budget.remaining(8000));
+    } catch (stopError) {
+      proxy.shutdownError = stopError.message;
+      error.proxyCleanupError = stopError.message;
+    }
     throw error;
   }
 }
@@ -102,14 +156,15 @@ export async function qualifyTelemetryProxy(
   const live = run(env);
   if (live.error || live.signal || live.status !== 56 || live.stdout !== '000')
     throw new Error('System curl did not confirm explicit CONNECT rejection');
-  const deadline = Date.now() + budget.remaining(2500);
-  let after;
-  do {
-    after = await telemetryProxyState(proxy);
-    if (after.probe > before.probe) break;
-    await delay(20);
-  } while (Date.now() < deadline);
-  if (after.probe <= before.probe) throw new Error('Rejected curl did not reach the owned proxy');
+  const after = await pollTelemetry(
+    async () => {
+      const state = await telemetryProxyState(proxy);
+      return state.probe > before.probe ? state : null;
+    },
+    budget,
+    2500,
+  );
+  if (!after) throw new Error('Rejected curl did not reach the owned proxy');
   const deadEnv = {
     ...env,
     HTTPS_PROXY: `http://127.0.0.1:${proxy.deadPort}`,
@@ -135,8 +190,10 @@ export async function qualifyTelemetryProxy(
     productionProviderContacted: false,
   };
 }
-export async function stopTelemetryProxy(proxy) {
-  await stopSmokeChild(proxy.child, { graceMs: 5000, forceMs: 3000 });
+export async function stopTelemetryProxy(proxy, maxMs = 8000) {
+  if (!Number.isFinite(maxMs) || maxMs < 2) throw new Error('No bounded proxy stop time remains');
+  const graceMs = Math.min(5000, Math.floor(maxMs) - 1);
+  await stopSmokeChild(proxy.child, { graceMs, forceMs: Math.floor(maxMs) - graceMs });
   return {
     pid: proxy.pid,
     exitCode: proxy.child.exitCode,

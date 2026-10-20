@@ -570,12 +570,54 @@ must stay unchanged; SQLite may create or update WAL/SHM bookkeeping. Engine
 versions and before/after file metadata are retained. No reader fallback or
 database repair is performed.
 
-### Dormant telemetry qualification helpers
+### Default telemetry validation of signed 0.1.7
 
-The source includes a rejecting loopback proxy, exact environment checks, a fixed
-harmless LaunchServices probe, and optional read-only telemetry database checks.
-They prepare a future contained signed-app check. They do not add a signed
-telemetry workflow mode or validate default telemetry behavior yet. The probe
-commands retain the fresh hosted macOS 14 arm64/manual-run guards; they are not a
-local app-launch option. Direct source tests use only synthetic data, pure Swift
-controls, and harmless system-curl requests to a rejecting local listener.
+The explicit `delivery_mode=telemetry` option reuses the signed first-launch job
+and its exact source/ref, hosted macOS 14 arm64, fresh-machine, signature,
+notarization, app-byte and ownership checks. It requires
+`allow_release_identity=true` and the exact reviewed candidate SHA. The ordinary
+first-launch and update modes remain telemetry-disabled. Adding this mode does
+not itself supply a passing hosted result or authorize a branch-based run.
+
+This mode uses the genuine hosted HOME and a previously absent default app-data
+folder, with synthetic native/provider paths. Before each signed launch, exact
+system-curl controls and a fixed harmless LaunchServices probe qualify inherited
+proxy settings against a separate rejecting loopback child. The listener never
+forwards or resolves upstream requests and accepts no TLS or event bodies. Each
+phase has a fresh proxy and receipt; the actual signed process environment is
+inspected immediately after launch. This is a controlled proxy configuration,
+not an OS-wide network sandbox.
+
+The four phases check the visible default notice and Turn off action; saved-off
+restart followed by Settings on; environment-off precedence while the saved
+preference remains on; then normal saved-on restart followed by Settings off.
+Each signed process must stop before read-only database assertions check saved
+preferences, disclosure and the absence of sent ledger rows. Blocked connection
+counts may vary. An exact updater warning is accepted only inside its Workspace
+alert, with this phase's rejected GitHub CONNECT; every unrelated error/dialog
+remains fatal. The harness never clicks Retry update.
+
+Reports separate UI, saved-state and blocked-attempt evidence. They do not prove
+successful signed HTTP delivery, real PostHog delivery, event payload contents or
+before-first-pixel ordering. Source tests cover gates and payload policy. The
+signed product and published assets remain unchanged.
+
+Work has one shared 18-minute cap, followed by one 3-minute cleanup reserve.
+Per-command ceilings are clipped to remaining time; they are not additional
+budgets. The app step is 22 minutes and the telemetry job is 33 minutes, including
+an always-run 2-minute evidence upload. Ordinary mode limits remain unchanged.
+The `hosted-telemetry-<run>-<attempt>` artifact contains bounded reports, receipts,
+UI snapshots and proxy facts. Probe and product profiles are claimed separately only at their first matching
+launch after a final absence check; a late unexpected profile is retained.
+Proxy handles enter the session before readiness, so failed startup cannot lose
+the child. Readiness reserves bounded child-stop time inside the work cap, and
+cleanup reserves existing proxy-stop time before earlier cleanup commands.
+Unknown app or probe-child exit retains app, profile and staging proof; the runner records cleanup failure before stopping
+its owned proxies. A confirmed proxy exit cannot erase an evidence-copy failure.
+No report claims that hosted-machine disposal was verified.
+
+Launch reports distinguish an attempt from a fixed-identity receipt confirmation.
+`releasedAppLaunched` is `null` when an attempt has no confirmed receipt; that
+means unknown, not never launched. Cleanup reports distinguish retained, removed
+and unknown staging state; a failed recursive removal may have removed part of
+its contents and always marks cleanup failed.

@@ -270,12 +270,22 @@ test('work deadlines cap remaining commands and reserve cleanup independently wi
 });
 
 test('workflow step budgets leave time for cleanup and evidence before the job ceiling', () => {
-  const jobMinutes = Number(job.match(/^ {4}timeout-minutes: (\d+)$/m)[1]);
-  const stepMinutes = [...job.matchAll(/^ {8}timeout-minutes: (\d+)$/gm)].map((m) => Number(m[1]));
-  assert.deepEqual(stepMinutes, [1, 2, 2, 3, 11, 2]);
-  assert.equal(jobMinutes, 22);
-  assert.ok(stepMinutes.reduce((sum, minutes) => sum + minutes, 0) < jobMinutes);
-  assert.ok((firstLaunchBudget.workMs + firstLaunchBudget.cleanupMs) / 60_000 < stepMinutes[4]);
+  for (const [telemetry, jobMinutes, appMinutes] of [
+    [false, 22, 11],
+    [true, 33, 22],
+  ]) {
+    const selected = job.replace(
+      /\$\{\{ inputs.delivery_mode == 'telemetry' && (\d+) \|\| (\d+) \}\}/g,
+      (_, yes, no) => (telemetry ? yes : no),
+    );
+    const stepMinutes = [...selected.matchAll(/^ {8}timeout-minutes: (\d+)$/gm)].map((m) =>
+      Number(m[1]),
+    );
+    assert.deepEqual(stepMinutes, [1, 2, 2, 3, appMinutes, 2]);
+    assert.equal(Number(selected.match(/^ {4}timeout-minutes: (\d+)$/m)[1]), jobMinutes);
+    assert.ok(stepMinutes.reduce((sum, minutes) => sum + minutes, 0) < jobMinutes);
+    assert.ok((firstLaunchBudget.workMs + firstLaunchBudget.cleanupMs) / 60000 < appMinutes);
+  }
 });
 
 test('signed first-launch job needs explicit opt-in before checkout and receives no signing credentials', () => {
@@ -298,6 +308,7 @@ test('signed first-launch job needs explicit opt-in before checkout and receives
     [{}, true],
     [{ ALLOW_RELEASE_IDENTITY: 'false' }, false],
     [{ ALLOW_RELEASE_IDENTITY: '' }, false],
+    [{ DELIVERY_MODE: 'telemetry' }, true],
     [{ DELIVERY_MODE: 'update' }, false],
     [{ RUNNER_ENVIRONMENT: 'self-hosted' }, false],
     [{ WORKFLOW_SHA: 'b'.repeat(40) }, false],
