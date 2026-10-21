@@ -50,6 +50,8 @@ export interface SidebarProps {
   activeKey?: SidebarKey;
   onNavigate: (key: SidebarKey) => void;
   rulebookCount?: number;
+  /** Off, Rulebook is a disabled "soon" row like Leaderboard; its address still opens. */
+  rulebookEnabled?: boolean;
   leaderboardEnabled?: boolean;
   showTeam?: boolean;
   hubConnected?: boolean;
@@ -94,6 +96,7 @@ export function Sidebar({
   activeKey,
   onNavigate,
   rulebookCount = 0,
+  rulebookEnabled = true,
   leaderboardEnabled = false,
   showTeam = false,
   hubConnected = false,
@@ -169,12 +172,16 @@ export function Sidebar({
     >
       {icon(key)}
       <span>{label}</span>
-      {key === 'rulebook' && Number.isFinite(rulebookCount) && rulebookCount > 0 && (
-        <span className="xt-rulebook-count" aria-label={`${rulebookCount} rulebook items`}>
-          {rulebookCount}
-        </span>
-      )}
-      {key === 'leaderboard' && !leaderboardEnabled && <span className="xt-soon">soon</span>}
+      {key === 'rulebook' &&
+        rulebookEnabled &&
+        Number.isFinite(rulebookCount) &&
+        rulebookCount > 0 && (
+          <span className="xt-rulebook-count" aria-label={`${rulebookCount} rulebook items`}>
+            {rulebookCount}
+          </span>
+        )}
+      {((key === 'rulebook' && !rulebookEnabled) ||
+        (key === 'leaderboard' && !leaderboardEnabled)) && <span className="xt-soon">soon</span>}
     </button>
   );
 
@@ -199,7 +206,7 @@ export function Sidebar({
         </div>
         <div className="xt-nav-group">
           <h2>Govern</h2>
-          {navItem('rulebook', 'Rulebook')}
+          {navItem('rulebook', 'Rulebook', !rulebookEnabled)}
         </div>
         <div className="xt-nav-group">
           <h2>Community</h2>

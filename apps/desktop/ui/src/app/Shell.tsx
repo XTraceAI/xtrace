@@ -139,6 +139,8 @@ export function Shell() {
         onNavigate={onNavigate}
         // Leaderboard keeps the kit's disabled "soon" row: this local build has
         // no ranking to show, and /leaderboard is only a named placeholder.
+        // Rulebook is hidden the same way for now; its addresses still open.
+        rulebookEnabled={false}
         // A background re-read keeps the values on screen; only the first
         // read and an explicit Refresh show the reading state.
         accountUsage={accountUsage.isError || claudeRefreshing ? undefined : accountUsage.data}

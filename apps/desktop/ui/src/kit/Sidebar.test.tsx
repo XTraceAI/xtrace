@@ -98,6 +98,18 @@ it('renders controlled navigation, groups, badge and disabled Leaderboard withou
   expect(input.onNavigate).toHaveBeenLastCalledWith('leaderboard');
 });
 
+it('turns Rulebook into a disabled "soon" row without its count when switched off', () => {
+  const input = props();
+  render(<Sidebar {...input} activeKey="rulebook" rulebookCount={3} rulebookEnabled={false} />);
+  const rulebook = screen.getByRole('button', { name: /Rulebook/ });
+  expect(rulebook.hasAttribute('disabled')).toBe(true);
+  expect(within(rulebook).getByText('soon')).toBeTruthy();
+  expect(rulebook.getAttribute('aria-current')).toBe('page');
+  expect(screen.queryByLabelText('3 rulebook items')).toBeNull();
+  fireEvent.click(rulebook);
+  expect(input.onNavigate).not.toHaveBeenCalled();
+});
+
 it('shows the exhausted weekly limit above the unused session and keeps capture status separate', async () => {
   // Keep this saved provider snapshot before its weekly reset while leaving
   // real timers in place for the dialog's async appearance.

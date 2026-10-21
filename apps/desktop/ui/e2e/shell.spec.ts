@@ -100,10 +100,11 @@ test('reloads every route and preserves canonical PR query context', async ({ pa
   await expect(page.getByText(/Pull request filtering is not available yet/)).toBeVisible();
 });
 
-// The app keeps the kit's default Leaderboard row: nothing ranks in this local
-// build, so the row is disabled, drawn in meta ink at 0.7 opacity with a "soon"
-// badge and no hover fill, and never navigates by pointer or keyboard, while a
-// typed or bookmarked /leaderboard still opens its named placeholder.
+// The app keeps the kit's default Leaderboard row (and hides Rulebook the same
+// way): nothing ranks in this local build, so the row is disabled, drawn in
+// meta ink at 0.7 opacity with a "soon" badge and no hover fill, and never
+// navigates by pointer or keyboard, while a typed or bookmarked /leaderboard
+// still opens its named placeholder.
 test('keeps Leaderboard unavailable in the sidebar while its address still opens', async ({
   page,
 }, info) => {
@@ -113,7 +114,8 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
     if (message.type() === 'error') errors.push('console error');
   });
   const leaderboard = page.getByRole('button', { name: /Leaderboard/ });
-  const rulebook = page.getByRole('button', { name: 'Rulebook', exact: true });
+  const rulebook = page.getByRole('button', { name: /Rulebook/ });
+  const prs = page.getByRole('button', { name: 'Pull requests', exact: true });
   const treatment = () =>
     page.evaluate(() => {
       const row = document.querySelector<HTMLButtonElement>('.xt-nav-item:disabled');
@@ -141,6 +143,10 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
     await expect(leaderboard).toBeDisabled();
     await expect(leaderboard.locator('.xt-soon')).toHaveText('soon');
     await expect(leaderboard).not.toHaveAttribute('aria-current', 'page');
+    // Rulebook is hidden the same way, while its address still opens.
+    await expect(rulebook).toBeDisabled();
+    await expect(rulebook.locator('.xt-soon')).toHaveText('soon');
+    await expect(rulebook).toHaveAttribute('aria-current', 'page');
     const rest = await treatment();
     expect(rest).toMatchObject({ opacity: '0.7', cursor: 'default' });
     expect(rest?.color).toBe(rest?.meta);
@@ -153,9 +159,9 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
     await leaderboard.click({ force: true });
     await expect(page).toHaveURL(/\/rulebook$/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rulebook');
-    // Tab passes over the disabled row, then through Usage's forecast note,
+    // Tab passes over both disabled rows, then through Usage's forecast note,
     // its refresh and two account details before the Hub control.
-    await rulebook.focus();
+    await prs.focus();
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'How the forecast works' })).toBeFocused();
     await page.keyboard.press('Tab');
@@ -169,6 +175,7 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
     await expect(leaderboard).not.toBeFocused();
     await page.keyboard.press('Shift+Tab');
     await expect(leaderboard).not.toBeFocused();
+    await expect(rulebook).not.toBeFocused();
     await expect(page).toHaveURL(/\/rulebook$/);
   }
   await page.goto('/leaderboard');
@@ -201,8 +208,8 @@ test('renders bundled fonts and remains navigable with external network denied',
   expect(fonts.size).toBeGreaterThan(0);
   expect(external).toEqual([]);
   await context.setOffline(true);
-  await page.getByRole('button', { name: 'Rulebook', exact: true }).click();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rulebook');
+  await page.getByRole('button', { name: 'Pull requests', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pull requests');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.getByText('fixture://F1', { exact: true })).toBeVisible();
 });

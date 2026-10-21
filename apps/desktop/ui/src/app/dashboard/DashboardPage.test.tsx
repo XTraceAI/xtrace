@@ -713,7 +713,7 @@ it('moves Dashboard reports to the selected range without a quota caption', asyn
   fireEvent.click(screen.getByRole('button', { name: 'Pull requests' }));
   expect(screen.getByRole('radio', { name: '14d' }).getAttribute('aria-checked')).toBe('true');
   // A route with no window of its own keeps the selection without the control.
-  fireEvent.click(screen.getByRole('button', { name: 'Rulebook' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   expect(screen.queryByRole('radiogroup', { name: 'Date range' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
   expect((await screen.findByRole('radio', { name: '14d' })).getAttribute('aria-checked')).toBe(
@@ -1393,7 +1393,7 @@ it('hides the TopBar period off windowed routes and while a range is loading', a
   // that measures no window shows none.
   fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
   expect(screen.getByTestId('report-period').textContent).toMatch(/^Aug 9\s–\sSep 7, 2026/);
-  fireEvent.click(screen.getByRole('button', { name: 'Rulebook' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   expect(screen.queryByTestId('report-period')).toBeNull();
 });
 

@@ -270,13 +270,24 @@ it('keeps Leaderboard unavailable in the sidebar while its address still opens',
   // the working rows around it still take focus and navigate.
   leaderboard.focus();
   expect(document.activeElement).not.toBe(leaderboard);
-  const rulebook = screen.getByRole('button', { name: 'Rulebook' });
-  rulebook.focus();
-  expect(document.activeElement).toBe(rulebook);
-  expect(screen.getByRole('button', { name: 'XTrace Hub' }).tabIndex).toBe(0);
+  // Rulebook is hidden the same way: disabled, marked "soon", out of the tab order.
+  const rulebook = screen.getByRole('button', { name: /Rulebook/ });
+  expect(rulebook.hasAttribute('disabled')).toBe(true);
+  expect(within(rulebook).getByText('soon')).toBeTruthy();
   fireEvent.click(rulebook);
-  expect(screen.getByRole('heading', { name: 'Rulebook' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'What your agents did' })).toBeTruthy();
+  rulebook.focus();
+  expect(document.activeElement).not.toBe(rulebook);
+  const prs = screen.getByRole('button', { name: 'Pull requests' });
+  prs.focus();
+  expect(document.activeElement).toBe(prs);
+  expect(screen.getByRole('button', { name: 'XTrace Hub' }).tabIndex).toBe(0);
   view.unmount();
+  // A typed or bookmarked /rulebook still opens its page.
+  mount('/rulebook');
+  await opened();
+  expect(screen.getByRole('heading', { name: 'Rulebook' })).toBeTruthy();
+  cleanup();
   mount('/leaderboard');
   await opened();
   expect(screen.getByRole('heading', { name: 'Leaderboard' })).toBeTruthy();
