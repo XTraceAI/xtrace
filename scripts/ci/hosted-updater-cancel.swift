@@ -121,6 +121,18 @@ func cancelControl(_ captured: Capture) -> AXUIElement? {
     guard let index = cancelIndex(captured.nodes.map(\.row), helperName) else { return nil }
     return captured.nodes[index].element
 }
+// BEGIN REFRESH WAIT: Foundation-only controls exercise this exact wait.
+func waitForRefresh(until deadline: Date) {
+    let sliceEnd = min(deadline, Date().addingTimeInterval(0.1))
+    guard sliceEnd.timeIntervalSinceNow > 0 else { return }
+    // The default mode belongs to the common set. NSWorkspace app-list changes
+    // require a main-run-loop turn; .common is not itself a runnable mode.
+    _ = RunLoop.main.run(mode: .default, before: sliceEnd)
+    // An empty run loop can return immediately. Keep the polling slice bounded
+    // without spinning or moving the caller's absolute deadline.
+    if sliceEnd.timeIntervalSinceNow > 0 { Thread.sleep(until: sliceEnd) }
+}
+// END REFRESH WAIT
 guard let baseline = capture() else { finish("Cannot establish SecurityAgent baseline") }
 evidence["baseline"] = baseline.map(\.json)
 guard baseline.isEmpty else { finish("Pre-existing authorization window; no action taken") }
@@ -159,10 +171,10 @@ while Date() < deadline {
             guard let after = capture() else { finish("Cannot confirm prompt disappearance") }
             evidence["after"] = after.map(\.json)
             if after.isEmpty { finish("Canceled the uniquely identified owned authorization dialog", true) }
-            Thread.sleep(forTimeInterval: 0.1)
+            waitForRefresh(until: disappearedBy)
         }
         finish("Authorization window remained after Cancel")
     }
-    Thread.sleep(forTimeInterval: 0.1)
+    waitForRefresh(until: deadline)
 }
 finish("No attributable cancelable prompt observed within 40 seconds")

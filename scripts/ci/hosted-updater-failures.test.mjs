@@ -667,6 +667,173 @@ test(
   },
 );
 
+test(
+  'actual refresh wait delivers common-set work in both directions without extending deadlines or spinning',
+  { skip: process.platform !== 'darwin' },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'observer-refresh-'));
+    try {
+      const wait = observer
+        .split('// BEGIN REFRESH WAIT:')[1]
+        .split('\n')
+        .slice(1)
+        .join('\n')
+        .split('// END REFRESH WAIT')[0];
+      const substitute = (text, from, to, count = 1) => {
+        assert.equal(
+          text.split(from).length - 1,
+          count,
+          `Expected ${count} occurrences of ${from}`,
+        );
+        return text.split(from).join(to);
+      };
+      // Rename only external operations in a test copy. Keep the actual helper's
+      // formula, branches and ordering; exact counts make a stale rewrite fail.
+      let controlled = substitute(wait, 'Date', 'DecisionDate', 2);
+      controlled = substitute(controlled, 'RunLoop', 'DecisionRunLoop');
+      controlled = substitute(controlled, 'Thread', 'DecisionThread');
+      const names = ['decisionWait', 'withoutRefresh', 'withoutFallback', 'withoutDeadline'];
+      const copies = names.map((name) => substitute(controlled, 'waitForRefresh', name));
+      copies[1] = substitute(
+        copies[1],
+        '_ = DecisionRunLoop.main.run(mode: .default, before: sliceEnd)',
+        '',
+      );
+      copies[2] = substitute(
+        copies[2],
+        'if sliceEnd.timeIntervalSinceNow > 0 { DecisionThread.sleep(until: sliceEnd) }',
+        '',
+      );
+      copies[3] = substitute(
+        copies[3],
+        'min(deadline, DecisionDate().addingTimeInterval(0.1))',
+        'DecisionDate().addingTimeInterval(0.1)',
+      );
+      const swift = join(directory, 'main.swift'),
+        binary = join(directory, 'wait-controls');
+      // Foundation only: in-memory state changes stand in for queued work, not
+      // applications, AX windows or an actual authorization dialog.
+      await writeFile(
+        swift,
+        `import Foundation
+${wait}
+enum DecisionClock {
+    static var now = 0.0, advance = 0.0
+    static var operations: [[String: Any]] = []
+    static func reset(_ step: Double) { now = 0; advance = step; operations = [] }
+}
+struct DecisionDate: Comparable {
+    let value: Double
+    init() { value = DecisionClock.now }
+    init(_ value: Double) { self.value = value }
+    func addingTimeInterval(_ interval: Double) -> Self { Self(value + interval) }
+    var timeIntervalSinceNow: Double { value - DecisionClock.now }
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.value < rhs.value }
+}
+struct DecisionRunLoop {
+    static let main = Self()
+    func run(mode: RunLoop.Mode, before end: DecisionDate) -> Bool {
+        DecisionClock.operations.append(["operation": "refresh", "mode": mode.rawValue, "until": end.value])
+        DecisionClock.now += DecisionClock.advance
+        return false
+    }
+}
+enum DecisionThread {
+    static func sleep(until end: DecisionDate) {
+        DecisionClock.operations.append(["operation": "sleep", "until": end.value])
+        DecisionClock.now = end.value
+    }
+}
+${copies.join('\n')}
+func decisions(_ wait: (DecisionDate) -> Void) -> [String: Any] {
+    func once(_ end: Double, _ advance: Double = 0) -> [String: Any] {
+        DecisionClock.reset(advance)
+        wait(DecisionDate(end))
+        return ["now": DecisionClock.now, "operations": DecisionClock.operations]
+    }
+    var result: [String: Any] = ["expired": once(-1), "short": once(0.04), "long": once(1),
+                               "earlyEvent": once(0.04, 0.01), "pastDeadline": once(0.04, 0.05)]
+    DecisionClock.reset(0.005)
+    let deadline = DecisionDate(0.25)
+    var calls = 0
+    while DecisionDate() < deadline && calls < 8 { wait(deadline); calls += 1 }
+    result["repeated"] = ["now": DecisionClock.now, "calls": calls, "operations": DecisionClock.operations]
+    return result
+}
+var present = false
+var evidence: [String: Any] = [:]
+let appear = Timer(timeInterval: 0.01, repeats: false) { _ in present = true }
+RunLoop.main.add(appear, forMode: .common)
+Thread.sleep(forTimeInterval: 0.1)
+evidence["oldWaitPresent"] = present
+waitForRefresh(until: Date().addingTimeInterval(1))
+evidence["refreshedPresent"] = present
+appear.invalidate()
+let disappear = Timer(timeInterval: 0.01, repeats: false) { _ in present = false }
+RunLoop.main.add(disappear, forMode: .common)
+Thread.sleep(forTimeInterval: 0.1)
+evidence["oldWaitAbsent"] = !present
+waitForRefresh(until: Date().addingTimeInterval(1))
+evidence["refreshedAbsent"] = !present
+disappear.invalidate()
+evidence["decisions"] = ["actual": decisions(decisionWait), "withoutRefresh": decisions(withoutRefresh),
+                         "withoutFallback": decisions(withoutFallback), "withoutDeadline": decisions(withoutDeadline)]
+let bytes = try! JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
+FileHandle.standardOutput.write(bytes)
+`,
+      );
+      const compiled = spawnSync(
+        '/usr/bin/xcrun',
+        ['swiftc', '-module-cache-path', join(directory, 'cache'), swift, '-o', binary],
+        { encoding: 'utf8', timeout: 120000 },
+      );
+      assert.equal(compiled.status, 0, compiled.stderr);
+      const run = spawnSync(binary, [], { encoding: 'utf8', timeout: 5000 });
+      assert.equal(run.status, 0, `${run.error?.message || run.signal || ''}\n${run.stderr}`);
+      const evidence = JSON.parse(run.stdout);
+      console.log('Foundation refresh control evidence:', JSON.stringify(evidence));
+      assert.equal(evidence.oldWaitPresent, false);
+      assert.equal(evidence.refreshedPresent, true);
+      assert.equal(evidence.oldWaitAbsent, false);
+      assert.equal(evidence.refreshedAbsent, true);
+      const refresh = (until) => ({ operation: 'refresh', mode: 'kCFRunLoopDefaultMode', until });
+      const sleep = (until) => ({ operation: 'sleep', until });
+      const checkDecisions = (result) => {
+        assert.deepEqual(result.expired, { now: 0, operations: [] });
+        assert.deepEqual(result.short, { now: 0.04, operations: [refresh(0.04), sleep(0.04)] });
+        assert.deepEqual(result.long, { now: 0.1, operations: [refresh(0.1), sleep(0.1)] });
+        assert.deepEqual(result.earlyEvent, result.short);
+        assert.deepEqual(result.pastDeadline, { now: 0.05, operations: [refresh(0.04)] });
+        assert.deepEqual(result.repeated, {
+          now: 0.25,
+          calls: 3,
+          operations: [
+            refresh(0.1),
+            sleep(0.1),
+            refresh(0.2),
+            sleep(0.2),
+            refresh(0.25),
+            sleep(0.25),
+          ],
+        });
+      };
+      checkDecisions(evidence.decisions.actual);
+      for (const name of names.slice(1)) {
+        assert.throws(() => checkDecisions(evidence.decisions[name]), { name: 'AssertionError' });
+        console.log('Expected synthetic mutation rejection:', name);
+      }
+      const callSites = observer.split('// END REFRESH WAIT')[1];
+      assert.equal((callSites.match(/waitForRefresh\(until: deadline\)/g) || []).length, 1);
+      assert.equal((callSites.match(/waitForRefresh\(until: disappearedBy\)/g) || []).length, 1);
+      assert.doesNotMatch(callSites, /Thread\.sleep/);
+      assert.match(callSites, /let deadline = Date\(\)\.addingTimeInterval\(40\)/);
+      assert.match(callSites, /let disappearedBy = Date\(\)\.addingTimeInterval\(5\)/);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  },
+);
+
 test('workflow mode stays manually guarded and outside release packaging; SDK source boundaries remain explicit', () => {
   assert.match(job, /if: inputs.delivery_mode == 'updater-failures'/);
   assert.match(job, /needs: validate-mode/);
