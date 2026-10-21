@@ -230,6 +230,10 @@ struct Setup {
 }
 
 fn setup_with(server: &Server, limits: impl FnOnce(&mut LookupLimits)) -> Setup {
+    setup_config(server, |config| limits(&mut config.limits))
+}
+
+fn setup_config(server: &Server, edit: impl FnOnce(&mut LinkConfig)) -> Setup {
     let home = home();
     let data = tempfile::tempdir().unwrap();
     let mut config = LinkConfig::new(home.path().to_path_buf(), data.path());
@@ -242,7 +246,7 @@ fn setup_with(server: &Server, limits: impl FnOnce(&mut LookupLimits)) -> Setup 
     config.limits.connect = Duration::from_secs(5);
     config.limits.commit = Duration::from_secs(5);
     config.limits.archive = Duration::from_secs(5);
-    limits(&mut config.limits);
+    edit(&mut config);
     let changed = Arc::new(AtomicUsize::new(0));
     let count = changed.clone();
     let service = SkillLinkService::new(
@@ -850,6 +854,129 @@ fn quitting_and_starting_again_leave_no_staging() {
     assert!(!copy.exists());
     assert!(agents.join("claimed").is_dir());
     assert!(agents.join("taken").is_dir());
+}
+
+/// A clock that, once armed, holds the next keep that reads it (after the
+/// keep has taken the preview, before it copies anything) until released.
+#[derive(Clone, Default)]
+struct HeldClock(Arc<Mutex<Option<Hold>>>);
+
+/// Where a held read says it arrived, and what lets it go.
+type Hold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
+
+impl HeldClock {
+    fn clock(&self) -> Clock {
+        let hold = self.0.clone();
+        Arc::new(move || {
+            let held = lock(&hold).take();
+            if let Some((entered, release)) = held {
+                entered.send(()).unwrap();
+                let _ = release.recv();
+            }
+            1_791_193_200_000
+        })
+    }
+
+    /// Arm it: the next read says so on the first channel and waits for the
+    /// second.
+    fn arm(&self) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        *lock(&self.0) = Some((entered_tx, release_rx));
+        (entered, release)
+    }
+}
+
+/// The hidden `.xtrace-keeping-…` copies in `~/.agents/skills`.
+fn keeping_copies(setup: &Setup) -> usize {
+    std::fs::read_dir(setup.home.path().join(".agents/skills"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(skill_link::KEEP_PREFIX)
+        })
+        .count()
+}
+
+#[test]
+fn quitting_during_a_keep_waits_for_it_and_claims_no_name() {
+    let server = github(skills_repo());
+    let held = HeldClock::default();
+    let setup = setup_config(&server, |config| config.clock = held.clock());
+    let preview = found(look(&setup, "https://github.com/octo/skills"));
+    let (entered, release) = held.arm();
+    let service = setup.service.clone();
+    let id = preview.lookup_id.clone();
+    let keeping = std::thread::spawn(move || service.keep(&id, &["skills/pdf".to_owned()]));
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Quit while the keep holds the preview.
+    let service = setup.service.clone();
+    let quitting = std::thread::spawn(move || service.shutdown());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !quitting.is_finished(),
+        "quitting must wait for the keep going"
+    );
+    release.send(()).unwrap();
+    let kept = keeping.join().unwrap();
+    quitting.join().unwrap();
+    // The keep saw the quit before claiming a name: nothing is in
+    // ~/.agents/skills, no hidden copy or staging folder is left, and
+    // nothing was recorded or published.
+    let agents = setup.home.path().join(".agents/skills");
+    assert!(!agents.join("pdf").exists());
+    assert_eq!(keeping_copies(&setup), 0);
+    assert_eq!(staged(&setup), 0);
+    assert_eq!(
+        kept,
+        GradingLinkKeep::Done {
+            skills: vec![GradingLinkKept {
+                path: "skills/pdf".into(),
+                name: "pdf".into(),
+                result: GradingLinkKeptResult::Failed,
+            }],
+            recorded: false,
+        }
+    );
+    assert_eq!(setup.changed.load(Ordering::SeqCst), 0);
+    assert!(
+        !setup
+            .data
+            .path()
+            .join(skill_link::LINKED_SKILLS_FILE)
+            .exists()
+    );
+}
+
+#[test]
+fn quitting_waits_for_a_keep_only_within_its_bound() {
+    let server = github(skills_repo());
+    let held = HeldClock::default();
+    let setup = setup_config(&server, |config| {
+        config.clock = held.clock();
+        config.shutdown_bound = Duration::from_millis(200);
+    });
+    let preview = found(look(&setup, "https://github.com/octo/skills"));
+    let (entered, release) = held.arm();
+    let service = setup.service.clone();
+    let id = preview.lookup_id.clone();
+    let keeping = std::thread::spawn(move || service.keep(&id, &["skills/pdf".to_owned()]));
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let started = Instant::now();
+    assert!(!setup.service.shutdown(), "the wait ran out");
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_millis(200), "{waited:?}");
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    // The keep, let go later, still claims nothing and cleans up after itself.
+    release.send(()).unwrap();
+    keeping.join().unwrap();
+    assert!(!setup.home.path().join(".agents/skills/pdf").exists());
+    assert_eq!(keeping_copies(&setup), 0);
+    assert_eq!(staged(&setup), 0);
 }
 
 #[test]

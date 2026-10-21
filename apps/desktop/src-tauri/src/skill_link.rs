@@ -21,6 +21,10 @@
 //!   preview is kept, discarded ([`SkillLinkService::discard`]) or replaced,
 //!   or XTrace quits ([`SkillLinkService::shutdown`]); a start removes any
 //!   left by a crash. Nothing downloaded is run.
+//! * **Quitting during a keep.** Quitting waits, within
+//!   [`LinkConfig::shutdown_bound`], for a keep going to finish. A skill
+//!   whose name is not claimed yet stops and its hidden copy is removed; one
+//!   already claimed is finished, so quitting leaves no empty claimed folder.
 //! * **Preview.** The skills found and whether each can be kept are decided
 //!   by `xt_judge::skill_link` ([`found_dto`]).
 //! * **Keep.** [`SkillLinkService::keep`] decides again over the chosen
@@ -43,9 +47,9 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::pin,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     task::{Poll, Waker},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use xt_judge::{
     CancelFlag,
@@ -126,6 +130,9 @@ pub struct LinkConfig {
     /// Whether the system's proxy settings apply (tests turn them off).
     pub system_proxy: bool,
     pub clock: Clock,
+    /// How long quitting waits for a keep going to finish: the same bound
+    /// quitting gives a grading run ([`crate::grading::SHUTDOWN_BOUND`]).
+    pub shutdown_bound: Duration,
 }
 
 impl LinkConfig {
@@ -139,6 +146,7 @@ impl LinkConfig {
             limits: LookupLimits::default(),
             system_proxy: true,
             clock: Arc::new(now_ms),
+            shutdown_bound: crate::grading::SHUTDOWN_BOUND,
         }
     }
 }
@@ -216,6 +224,8 @@ struct Inner {
     changed: Publish,
     /// Held only briefly: never across a request, the unpacking or a keep.
     slot: Mutex<Slot>,
+    /// Signalled whenever a keep lets go of its preview, for quitting.
+    idle: Condvar,
     stopped: std::sync::atomic::AtomicBool,
 }
 
@@ -247,6 +257,7 @@ impl SkillLinkService {
                 config,
                 changed,
                 slot: Mutex::new(Slot::Idle),
+                idle: Condvar::new(),
                 stopped: std::sync::atomic::AtomicBool::new(false),
             }),
         }
@@ -354,10 +365,12 @@ impl SkillLinkService {
             let mut slot = lock(&inner.slot);
             if matches!(&*slot, Slot::Keeping { id } if id == lookup_id) {
                 *slot = Slot::Ready(lookup);
+                drop(slot);
             } else {
                 drop(slot);
                 skill_link::remove_all(&lookup.unpacked.root);
             }
+            inner.idle.notify_all();
         };
         let states = skill_link::keep_states(&lookup.found.skills, &config.home);
         let chosen: Vec<usize> = lookup
@@ -387,12 +400,14 @@ impl SkillLinkService {
         let mut skills = Vec::with_capacity(chosen.len());
         for (n, at) in chosen.into_iter().enumerate() {
             let skill = &lookup.found.skills[at];
-            let kept = skill_link::keep(
+            // Quitting stops a skill whose name is not claimed yet.
+            let kept = skill_link::keep_unless(
                 &lookup.unpacked,
                 skill,
                 &config.home,
                 &agents,
                 &format!("{}-{n}", lookup.id),
+                || inner.stopped.load(std::sync::atomic::Ordering::SeqCst),
             );
             if let Kept::Kept { folder, claude } = &kept {
                 kept_any = true;
@@ -432,20 +447,46 @@ impl SkillLinkService {
                 *slot = Slot::Idle;
             }
         }
+        inner.idle.notify_all();
         if kept_any {
             (inner.changed)();
         }
         GradingLinkKeep::Done { skills, recorded }
     }
 
-    /// Quitting: cancel a look-up going, drop a preview and its staging
-    /// folder; nothing starts afterwards.
-    pub fn shutdown(&self) {
-        self.inner
+    /// Quitting: nothing starts afterwards. A keep going is waited for,
+    /// within [`LinkConfig::shutdown_bound`] (see the module docs); then a
+    /// look-up going is cancelled and a preview and its staging folder
+    /// dropped. False when the wait ran out (a hidden copy left then is
+    /// removed at the next start).
+    pub fn shutdown(&self) -> bool {
+        let inner = &self.inner;
+        inner
             .stopped
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        let dropped = std::mem::replace(&mut *lock(&self.inner.slot), Slot::Idle);
+        let bound = inner
+            .config
+            .as_ref()
+            .map_or(Duration::ZERO, |config| config.shutdown_bound);
+        let deadline = Instant::now() + bound;
+        let mut slot = lock(&inner.slot);
+        let mut finished = true;
+        while matches!(&*slot, Slot::Keeping { .. }) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                finished = false;
+                break;
+            }
+            slot = inner
+                .idle
+                .wait_timeout(slot, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        let dropped = std::mem::replace(&mut *slot, Slot::Idle);
+        drop(slot);
         drop_slot(dropped);
+        finished
     }
 }
 

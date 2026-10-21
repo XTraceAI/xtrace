@@ -946,7 +946,8 @@ pub enum Kept {
     Kept { folder: PathBuf, claude: ClaudeLink },
     /// `~/.agents/skills/<name>` was taken meanwhile; nothing was kept.
     NameTaken,
-    /// It could not be copied or put in place; nothing was kept.
+    /// It could not be copied or put in place, or [`keep_unless`] was told
+    /// to stop before the name was claimed; nothing was kept.
     Failed,
 }
 
@@ -985,7 +986,6 @@ pub fn agents_folder(_: &Path) -> Result<PathBuf, KeepError> {
 /// name, then link it in `~/.claude/skills` under `home` when that name is
 /// free. `token` makes the hidden copy's name unique. Never replaces
 /// anything: a name taken meanwhile keeps nothing.
-#[cfg(unix)]
 pub fn keep(
     unpacked: &Unpacked,
     skill: &FoundSkill,
@@ -993,12 +993,35 @@ pub fn keep(
     agents: &Path,
     token: &str,
 ) -> Kept {
+    keep_unless(unpacked, skill, home, agents, token, || false)
+}
+
+/// [`keep`], asking `stop` before copying and again just before claiming
+/// the name: once it says yes, the hidden copy is removed and nothing is
+/// claimed ([`Kept::Failed`]). After the claim the keep finishes, so
+/// quitting never leaves an empty claimed folder behind.
+#[cfg(unix)]
+pub fn keep_unless(
+    unpacked: &Unpacked,
+    skill: &FoundSkill,
+    home: &Path,
+    agents: &Path,
+    token: &str,
+    stop: impl Fn() -> bool,
+) -> Kept {
     let Some(name) = &skill.folder_name else {
         return Kept::Failed;
     };
+    if stop() {
+        return Kept::Failed;
+    }
     let copy = agents.join(format!("{KEEP_PREFIX}{token}"));
     let source = folder_at(&unpacked.root, &skill.path);
     if copy_staged(&source, &copy, &skill.path, &unpacked.links).is_err() {
+        remove_all(&copy);
+        return Kept::Failed;
+    }
+    if stop() {
         remove_all(&copy);
         return Kept::Failed;
     }
@@ -1030,7 +1053,14 @@ pub fn keep(
 }
 
 #[cfg(not(unix))]
-pub fn keep(_: &Unpacked, _: &FoundSkill, _: &Path, _: &Path, _: &str) -> Kept {
+pub fn keep_unless(
+    _: &Unpacked,
+    _: &FoundSkill,
+    _: &Path,
+    _: &Path,
+    _: &str,
+    _: impl Fn() -> bool,
+) -> Kept {
     Kept::Failed
 }
 

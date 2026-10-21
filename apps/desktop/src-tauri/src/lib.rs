@@ -1317,7 +1317,10 @@ fn stop_services(app: &tauri::AppHandle) {
             }
             waiting
         });
-    // A link look-up is cancelled and its preview's staging folder removed.
+    // A link keep going is waited for (within the same bound as a grading
+    // run), so it never stops between claiming a skill's name and filling
+    // it; then a look-up is cancelled and its preview's staging folder
+    // removed.
     if let Some(links) = app.try_state::<skill_link::SkillLinkService>() {
         links.shutdown();
     }

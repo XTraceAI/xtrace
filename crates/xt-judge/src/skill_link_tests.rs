@@ -733,6 +733,33 @@ fn kept_archive() -> Vec<u8> {
 }
 
 #[test]
+fn a_keep_told_to_stop_before_the_claim_leaves_no_copy_and_no_claimed_name() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join(".claude")).unwrap();
+    let (_temp, unpacked, found) = found_at(&kept_archive(), "skills/pdf");
+    let skill = &found.unwrap().skills[0];
+    let agents = agents_folder(home.path()).unwrap();
+    let left = || std::fs::read_dir(&agents).unwrap().count();
+    // Told before copying, and told after copying (just before the claim).
+    for stop_at in [1, 2] {
+        let asked = std::cell::Cell::new(0);
+        let kept = keep_unless(&unpacked, skill, home.path(), &agents, "t", || {
+            asked.set(asked.get() + 1);
+            asked.get() >= stop_at
+        });
+        assert_eq!(kept, Kept::Failed, "stop at {stop_at}");
+        assert_eq!(asked.get(), stop_at);
+        assert_eq!(left(), 0, "stop at {stop_at}");
+        assert!(!home.path().join(".claude/skills/pdf").exists());
+    }
+    // The name is still free: keeping it again works.
+    assert!(matches!(
+        keep(&unpacked, skill, home.path(), &agents, "t"),
+        Kept::Kept { .. }
+    ));
+}
+
+#[test]
 fn keeping_copies_the_skill_in_place_and_links_it_for_claude() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir(home.path().join(".claude")).unwrap();
