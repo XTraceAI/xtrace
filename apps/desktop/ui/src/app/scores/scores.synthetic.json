@@ -1,0 +1,1324 @@
+{
+  "no_projects": {
+    "state": "loaded",
+    "projects": [],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": null,
+        "graded": 0,
+        "total": 0,
+        "top_insights": [],
+        "running": false,
+        "rows": []
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "empty": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": null,
+        "graded": 0,
+        "total": 4,
+        "top_insights": [],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "graded": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "partial": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 55,
+        "graded": 1,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "warning",
+            "title": "Some files could not be read",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 55,
+              "graded_at_ms": 1791190860000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "running": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": true,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": {
+              "state": "running",
+              "run_id": "00000000-0000-4000-8000-000000000004",
+              "started_at_ms": 1791193200000
+            },
+            "running": true
+          }
+        ]
+      }
+    ],
+    "running": {
+      "run_id": "00000000-0000-4000-8000-000000000004",
+      "skill_id": "claude-md-doctor",
+      "skill_name": "CLAUDE.md doctor",
+      "project_path": "/work/delta",
+      "project_name": "delta",
+      "started_at_ms": 1791193200000
+    },
+    "making_rubric": null
+  },
+  "running_unlisted": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": true,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": {
+      "run_id": "00000000-0000-4000-8000-000000000004",
+      "skill_id": "claude-md-doctor",
+      "skill_name": "CLAUDE.md doctor",
+      "project_path": "/work/old-atlas",
+      "project_name": null,
+      "started_at_ms": 1791193200000
+    },
+    "making_rubric": null
+  },
+  "long_findings": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 70,
+        "graded": 1,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "The instructions name a build command that no longer exists in this project, so an agent that follows them as written fails before it changes anything",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "Two files give different rules for how tests are run, and nothing says which one wins when they disagree",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 70,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "failed": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": {
+              "state": "failed",
+              "run_id": "00000000-0000-4000-8000-000000000004",
+              "finished_at_ms": 1791192660000,
+              "reason": "timeout"
+            },
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": {
+              "state": "interrupted",
+              "run_id": "00000000-0000-4000-8000-000000000005",
+              "finished_at_ms": 1791192960000,
+              "reason": "app_closed"
+            },
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "added": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      },
+      {
+        "skill": {
+          "id": "readme-check",
+          "name": "README check",
+          "version": "1.0 #3fa2b9c1d0e4",
+          "description": "Checks that a project's README explains how to install and run it.",
+          "origin": {
+            "kind": "added",
+            "folder": "/home/you/.claude/skills/readme-check",
+            "plugin": null
+          },
+          "problem": null
+        },
+        "average": 70,
+        "graded": 2,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "warning",
+            "title": "No run command",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000004",
+              "score": 80,
+              "graded_at_ms": 1791193860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000005",
+              "score": 60,
+              "graded_at_ms": 1791194160000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "added_problem": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      },
+      {
+        "skill": {
+          "id": "readme-check",
+          "name": "README check",
+          "version": "1.0 #3fa2b9c1d0e4",
+          "description": "Checks that a project's README explains how to install and run it.",
+          "origin": {
+            "kind": "added",
+            "folder": "/home/you/.claude/skills/readme-check",
+            "plugin": null
+          },
+          "problem": {
+            "reason": "rubric_invalid",
+            "rubric": "total"
+          }
+        },
+        "average": 70,
+        "graded": 2,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "warning",
+            "title": "No run command",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000004",
+              "score": 80,
+              "graded_at_ms": 1791193860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000005",
+              "score": 60,
+              "graded_at_ms": 1791194160000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": null
+  },
+  "making_rubric": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": false,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": null,
+            "running": false
+          }
+        ]
+      }
+    ],
+    "running": null,
+    "making_rubric": {
+      "job_id": "00000000-0000-4000-8000-0000000000aa",
+      "location": "/home/you/.claude/skills/deploy",
+      "name": "deploy",
+      "started_at_ms": 1784000000000
+    }
+  },
+  "not_configured": {
+    "state": "not_configured"
+  },
+  "failed_read": {
+    "state": "failed"
+  }
+}

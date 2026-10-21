@@ -114,17 +114,24 @@ function describe(status: SidebarIndexFacts, qualified: boolean): Described {
     };
   const live = freshness.freshness === 'live';
   const summary = live
-    ? 'The local index is ready and changes are reconciled as they happen.'
+    ? 'New activity is added as it happens.'
     : 'The local index is ready. Watching for changes is not established, so new activity may not appear yet.';
   if (qualified)
     return {
       label: 'partial',
-      title: live ? 'Updating · partial' : 'Ready · partial',
+      title: live ? 'Live · partial' : 'Ready · partial',
       tone: 'attention',
       summary,
     };
+  // Only an unflagged index says its history has been read; a few skipped
+  // sessions do not flag a host, so it never says all of it was.
   return live
-    ? { label: 'updating', title: 'Updating', tone: 'live', summary }
+    ? {
+        label: 'live',
+        title: 'Up to date',
+        tone: 'live',
+        summary: `Your local history has been read. ${summary}`,
+      }
     : { label: 'ready', title: 'Ready', tone: 'idle', summary };
 }
 

@@ -7,6 +7,7 @@ import { Shell } from './Shell';
 import { PlaceholderPage } from './PlaceholderPage';
 import { PrsPage } from './PrsPage';
 import { RulebookPage } from './rulebook/RulebookPage';
+import { ScoresPage, SkillScoresPage } from './scores/ScoresPage';
 import { SettingsPage } from './SettingsPage';
 import { TrayPage } from './tray/TrayPage';
 import { pages } from './routes';
@@ -52,6 +53,10 @@ export function AppRoutes() {
                 <SessionDetailPage />
               ) : page.path === '/dashboard' ? (
                 <DashboardPage />
+              ) : page.path === '/scores' ? (
+                <ScoresPage />
+              ) : page.path === '/scores/:skillId' ? (
+                <SkillScoresPage />
               ) : page.path === '/prs' ? (
                 <PrsPage />
               ) : page.path === '/rulebook' ? (

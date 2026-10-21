@@ -119,7 +119,8 @@ const barred = () =>
   [...effort().querySelectorAll('[data-testid="effort-day"]')]
     .filter((node) => node.querySelector('.xt-effort-bar'))
     .map((node) => node.getAttribute('data-date'));
-const measure = (name: 'agent h' | 'human h' | 'cost') => screen.getByRole('radio', { name });
+const measure = (name: 'human + agent' | 'agent h' | 'human h' | 'cost') =>
+  screen.getByRole('radio', { name });
 /** Opens the dialog behind Effort's ⓘ: the definition, the notes and the daily values. */
 async function method() {
   fireEvent.click(screen.getByRole('button', { name: 'Effort definition' }));
@@ -227,6 +228,30 @@ it('unknown facts: the known merged count is shown with how many are not checked
   expect(await statusLine()).toContain(
     'Confirmed-linked pull requests: 1 checked, 1 not checked yet',
   );
+});
+
+it('the human + agent method note explains the human timeline and the agent ridge', async () => {
+  mount(nativeSource(sectioned(F19_CONFIRMED)));
+  await loaded();
+  fireEvent.click(measure('human + agent'));
+  const notes = within(await method()).getByTestId('effort-notes').textContent;
+  expect(notes).toContain('Human time comes from the times you sent messages to agents');
+  expect(notes).toContain('the soft purple shape rising from it is that whole day’s agent time');
+  expect(notes).toContain('how many agents ran then on average, on one scale for every day');
+  expect(notes).toContain('full height at 10 agents');
+  // Plain about the smoothing: flat only where none ran for a while, and the
+  // card, not the shape, gives the exact number.
+  expect(notes).toContain('flat where no agents ran for a while');
+  expect(notes).toContain('smoothed between 15-minute pieces');
+  expect(notes).toContain('the card under the pointer gives the exact number');
+  expect(notes).not.toContain('flat when none ran');
+  expect(notes).not.toContain('shaded');
+  fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  fireEvent.click(measure('human h'));
+  const human = within(await method()).getByTestId('effort-notes').textContent;
+  expect(human).toContain('Human time comes from the times you sent messages to agents');
+  expect(human).not.toContain('purple shape');
 });
 
 it('zero: no link at all is a measured 0 and the work still shows', async () => {

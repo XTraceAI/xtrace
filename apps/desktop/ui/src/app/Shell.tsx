@@ -180,7 +180,11 @@ export function Shell() {
                 ? 'rule'
                 : // Enough of the identity to say which session is open, in the
                   // same short form the lists show.
-                  page?.params.sessionId && shortId(page.params.sessionId)
+                  page?.params.sessionId
+                  ? shortId(page.params.sessionId)
+                  : // The skill an address names; the page says whether one
+                    // is built in.
+                    page?.params.skillId
           }
           {...(windowed ? { range, onRange: setRange } : { showRange: false as const })}
           nativeDrag={nativeMac}

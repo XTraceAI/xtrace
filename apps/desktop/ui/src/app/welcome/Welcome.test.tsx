@@ -317,7 +317,8 @@ it('shows each source outcome without install, connection or capture claims', as
           skipped_conversations_omitted: 0,
           records_new: 880,
           diagnostics: 3,
-          needs_attention: true,
+          // Sessions were read, so the app does not flag the gaps.
+          needs_attention: false,
         }),
         host('codex', {
           state: 'missing_runtime',
@@ -337,7 +338,7 @@ it('shows each source outcome without install, connection or capture claims', as
   const list = await screen.findByRole('list', { name: 'Local history sources' });
   // Ready can carry failures: the phase says so rather than a clean Ready.
   expect(screen.getByText('Ready with problems')).toBeTruthy();
-  expect(screen.getByTestId('welcome-phase').textContent).toContain('3 sources reported a problem');
+  expect(screen.getByTestId('welcome-phase').textContent).toContain('2 sources reported a problem');
   // At first glance: the outcome, and a next step in words, never the raw error.
   const claude = sourceRow(list, 'Claude Code');
   expect(within(claude).getByText('Read with gaps')).toBeTruthy();
@@ -496,7 +497,7 @@ it('keeps technical details closed until Details is opened, and closes them agai
   expect(toggle.getAttribute('aria-expanded')).toBe('true');
   expect(region.hidden).toBe(false);
   expect(within(region).getByTestId('welcome-freshness').textContent).toBe(
-    'Live: changes are reconciled as they happen',
+    'Live: new activity is added as it happens',
   );
   expect(within(region).getByText('Found at /usr/bin/python3')).toBeTruthy();
   fireEvent.click(toggle);
@@ -509,7 +510,7 @@ it('names each page it points to by its own title, as plain text', async () => {
   const step = (await screen.findByRole('heading', { level: 2, name: "What you'll find" })).closest(
     'section',
   )!;
-  for (const title of ['Dashboard', 'Sessions', 'Pull requests'])
+  for (const title of ['Dashboard', 'Sessions', 'Scores', 'Pull requests'])
     expect(within(step).getByText(title, { exact: true })).toBeTruthy();
   expect(within(step).queryAllByRole('link')).toHaveLength(0);
   expect(

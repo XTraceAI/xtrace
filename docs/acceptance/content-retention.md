@@ -29,8 +29,19 @@ message or of a proven Claude Code task notification's summary (migration 17,
 `cargo test -p xt-store --test record_previews`). Purge clears it with the
 others, and a replay does not refill it for the same record. Structural source labels, repository identities, public PR metadata
 and measurement digests remain. New fire, judge or evidence owners must register
-their content fields and enforce the shared mode when their writers are added.
+their content fields, so purge clears them. Their writers enforce the shared mode,
+except for content the user explicitly asked to keep, which is kept in every mode
+and documented here (grading runs below).
 The synthetic owner tables here do not claim that those future features exist.
+
+Grading runs (migration 25, `cargo test -p xt-store --test grades`) register
+`grades.summary`, `grades.insights_json` and `grades.report_file`. The user
+decided to always keep them: a grade's summary, insights and report are kept in
+every retention mode, because the user asked for that grade, and "Delete stored
+content" removes them. Purge clears those fields and keeps the run's status,
+score, completeness flag, project path and times. After a committed purge the app also removes the
+runs' kept grade folders (result, report and cards), and no run can write one
+meanwhile (`cargo test -p xtrace-desktop --lib grading`).
 
 A separate transaction-race test holds the settings write lock while a second
 connection attempts a canonical write. Its SQL trace must acquire `BEGIN IMMEDIATE`

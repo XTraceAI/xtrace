@@ -148,26 +148,15 @@ fn prepare_probe_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The user's Claude Code, found by the shared resolver. The probe has no override.
 fn resolve_claude() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(
-            std::env::split_paths(&path)
-                .filter(|directory| directory.is_absolute())
-                .map(|directory| directory.join("claude")),
-        );
-    }
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        candidates.push(home.join(".local/bin/claude"));
-        candidates.push(home.join(".claude/local/claude"));
-    }
-    candidates.extend([
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-    ]);
-    candidates
-        .into_iter()
-        .find(|path| crate::account_usage_codex::is_executable(path))
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    xt_probes::executable::resolve_claude(
+        None,
+        std::env::var_os("PATH").as_deref(),
+        home.as_deref(),
+    )
+    .ok()
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -600,20 +589,11 @@ mod pty {
     fn configure_environment(command: &mut Command, binary: &Path) {
         // Finder starts apps with a short PATH; Claude Code may need node or
         // its own helpers beside it.
-        let mut path: Vec<std::path::PathBuf> = Vec::new();
-        if let Some(parent) = binary.parent() {
-            path.push(parent.to_path_buf());
-        }
-        if let Some(current) = std::env::var_os("PATH") {
-            path.extend(std::env::split_paths(&current));
-        }
-        for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
-            let extra = std::path::PathBuf::from(extra);
-            if !path.contains(&extra) {
-                path.push(extra);
-            }
-        }
-        if let Ok(joined) = std::env::join_paths(path) {
+        let path = xt_probes::executable::claude_child_path_entries(
+            binary,
+            std::env::var_os("PATH").as_deref(),
+        );
+        if let Some(joined) = xt_probes::executable::join_path(&path) {
             command.env("PATH", joined);
         }
         command.env("TERM", "xterm-256color");

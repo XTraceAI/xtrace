@@ -150,6 +150,16 @@ const MIGRATIONS: &[Migration] = &[
         "0024_telemetry_events",
         "f364c5b1e1a93a115eead0a676bbf6d60f1a7cb1b64297dd846426b10ded9977"
     ),
+    migration!(
+        25,
+        "0025_grades",
+        "a1545053c447806fb5a8fa4a03f63a2f768eea186aa791fbc7ac7490007cf28b"
+    ),
+    migration!(
+        26,
+        "0026_grading_added_skills",
+        "c13cf797fee46571216aca8d6d856bcbcbcd3171bd2941891b8c6fd0f47b59a3"
+    ),
 ];
 
 /// Which file applied each version. Created inside the history transaction, so
@@ -664,11 +674,11 @@ mod tests {
         DROP TABLE tool_sent_inputs;
         ALTER TABLE tool_sent_inputs_rebuilt RENAME TO tool_sent_inputs;";
 
-    /// Undoes everything migration 23 applied, leaving it pending again.
-    const UNDO_23: &str = "ALTER TABLE pull_requests DROP COLUMN manual_failed_at;";
+    /// Undoes everything migration 25 applied, leaving it pending again.
+    const UNDO_25: &str = "DROP TABLE grades;";
 
-    /// Undoes everything migration 24 applied, leaving it pending again.
-    const UNDO_24: &str = "DROP TABLE telemetry_events;";
+    /// Undoes everything migration 26 applied, leaving it pending again.
+    const UNDO_26: &str = "DROP TABLE grading_added_skills;";
 
     /// Forgets that migrations from `version` on were applied, leaving what
     /// they wrote in place.
@@ -740,10 +750,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = current(&directory);
         let (expected, (versions, fingerprints)) = (installed(&path), history(&path));
-        // Migration 24 pending again: its table and history are gone.
+        // Migration 26 pending again: its table and history are gone.
         Connection::open(&path)
             .unwrap()
-            .execute_batch(&format!("{UNDO_24} {}", forget_from(24)))
+            .execute_batch(&format!("{UNDO_26} {}", forget_from(26)))
             .unwrap();
         drop(Store::open(&path).unwrap());
         assert_eq!(views(&path), expected);
@@ -756,11 +766,11 @@ mod tests {
     fn a_failing_pending_migration_brings_back_every_view_and_writes_nothing() {
         let directory = tempfile::tempdir().unwrap();
         let path = current(&directory);
-        // Migration 23 pending, but its column is still there, so its SQL
+        // Migration 25 pending, but its table is still there, so its SQL
         // fails after the managed set has been removed in the same transaction.
         Connection::open(&path)
             .unwrap()
-            .execute_batch(&forget_from(23))
+            .execute_batch(&forget_from(25))
             .unwrap();
         let (before, history_before) = (views(&path), history(&path));
         assert!(Store::open(&path).is_err());
@@ -778,19 +788,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = current(&directory);
         let expected = installed(&path);
-        // 23 and 24 pending; 23 can apply, 24 cannot while its table remains.
+        // 25 and 26 pending; 25 can apply, 26 cannot while its table remains.
         Connection::open(&path)
             .unwrap()
-            .execute_batch(&format!("{UNDO_23} {}", forget_from(23)))
+            .execute_batch(&format!("{UNDO_25} {}", forget_from(25)))
             .unwrap();
         assert!(Store::open(&path).is_err());
         let (versions, fingerprints) = history(&path);
-        assert_eq!(versions.last(), Some(&23), "migration 23 stayed committed");
-        assert_eq!(fingerprints.last().map(|(version, _)| *version), Some(23));
+        assert_eq!(versions.last(), Some(&25), "migration 25 stayed committed");
+        assert_eq!(fingerprints.last().map(|(version, _)| *version), Some(25));
         // Once the conflict is gone, the next open finishes and reinstalls.
         Connection::open(&path)
             .unwrap()
-            .execute_batch(UNDO_24)
+            .execute_batch(UNDO_26)
             .unwrap();
         drop(Store::open(&path).unwrap());
         assert_eq!(views(&path), expected);
@@ -808,7 +818,7 @@ mod tests {
             let path = current(&directory);
             Connection::open(&path)
                 .unwrap()
-                .execute_batch(&format!("{} {refusal}", forget_from(23)))
+                .execute_batch(&format!("{} {refusal}", forget_from(25)))
                 .unwrap();
             let (before, history_before) = (views(&path), history(&path));
             assert!(matches!(

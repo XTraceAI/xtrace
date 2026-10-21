@@ -184,19 +184,10 @@ fn resolve_codex() -> Option<PathBuf> {
     candidates.into_iter().find(|path| is_executable(path))
 }
 
-#[cfg(unix)]
+/// An absolute path to a regular file with an execute bit; the one check is
+/// [`xt_probes::executable::is_executable`].
 pub(super) fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.is_absolute()
-        && path
-            .metadata()
-            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-pub(super) fn is_executable(_: &Path) -> bool {
-    false
+    xt_probes::executable::is_executable(path)
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ export const freshnessText = (status: NativeIndexStatus) => {
     case 'unknown':
       return 'Not watching yet';
     case 'live':
-      return 'Live: changes are reconciled as they happen';
+      return 'Live: new activity is added as it happens';
     case 'degraded':
       return `Degraded: ${freshness.reason}`;
   }

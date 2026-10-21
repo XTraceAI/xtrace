@@ -248,6 +248,19 @@ pub struct MetricLeverageDay {
     #[ts(type = "number | null")]
     pub human_ms: Option<u64>,
     pub value: Option<f64>,
+    /// The average number of agents running in each local wall-clock
+    /// quarter-hour of the day, exactly 96 from 00:00 (agent time over the
+    /// real time the quarter covered; their agent time adds up to
+    /// `agent_ms`, checked when the report is built). A fall-back clock
+    /// change folds the repeated hour into the same quarters; a
+    /// spring-forward change leaves the skipped ones at 0. Sent at the
+    /// screen's display precision: one decimal. A positive average below
+    /// 0.05 is sent unrounded, so it still reads as below the scale, never
+    /// as zero.
+    pub quarter_agents: Vec<f64>,
+    /// The index of the first quarter with the most agents running on
+    /// average; `null` when the day has no agent time.
+    pub busiest_quarter: Option<u8>,
 }
 
 /// Leverage's two sides over the whole local days of `human_hours`: the
@@ -264,6 +277,12 @@ pub struct DashboardLeverage {
     /// Agent hours over the same number of whole days just before.
     #[ts(type = "number")]
     pub previous_agent_ms: u64,
+    /// The average number of agents running that fills a day's agent ridge
+    /// to the top, on one scale for every day: a quarter's height is
+    /// `min(quarter_agents, ridge_top_agents) / ridge_top_agents`, so a
+    /// busier quarter is drawn at the top while its card still gives the
+    /// exact number.
+    pub ridge_top_agents: u32,
     pub by_day: Vec<MetricLeverageDay>,
 }
 

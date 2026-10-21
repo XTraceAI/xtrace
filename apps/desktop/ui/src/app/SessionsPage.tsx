@@ -30,6 +30,9 @@ import { count, tokens as formatTokens } from '../kit/format';
 import { hostName } from '../kit/hosts';
 import {
   absentKey,
+  checkingEmpty,
+  checkingHidden,
+  countStillChecking,
   laneRows,
   listedLanes,
   notListed,
@@ -938,6 +941,14 @@ export function SessionsPage() {
   // Only a page that shows the range summary reads the range report, so only
   // there can the flag count untimed history.
   const summarised = !params.has('pr') && source.kind !== 'preview';
+  // The Rust totals for these filters, when the first page carried them. A
+  // failed or missing summary says nothing, never a count of zero.
+  const summaryFailed =
+    (query.isError && !query.isFetchNextPageError) || (!!pages && !pages[0]?.summary);
+  const summary = summaryFailed ? undefined : (pages?.[0]?.summary ?? undefined);
+  // How many matching sessions, loaded or not, the table hides while their
+  // check is unfinished: Rust's count of the same check that hides them.
+  const checking = summary?.checking_sessions ?? 0;
 
   return (
     <section className="xt-sessions" ref={sectionRef}>
@@ -995,12 +1006,10 @@ export function SessionsPage() {
       ) : (
         <>
           <SessionsSummary
-            summary={query.isError && !query.isFetchNextPageError ? null : pages?.[0]?.summary}
+            summary={summary}
             describedBy={scopeId}
             pending={query.isPending}
-            failed={
-              (query.isError && !query.isFetchNextPageError) || (!!pages && !pages[0]?.summary)
-            }
+            failed={summaryFailed}
             refreshing={query.isFetching}
             onRetry={() => void query.refetch()}
           />
@@ -1056,6 +1065,9 @@ export function SessionsPage() {
                 </button>
               </p>
             )}
+            {/* Plain text, not a live region: checks finish one by one, and
+                each new count would otherwise be announced. */}
+            {checking > 0 && <p className="xt-sessions-checking">{checkingHidden(checking)}</p>}
             {query.isError && !pages ? (
               <p role="alert">
                 Sessions could not be loaded.{' '}
@@ -1074,7 +1086,10 @@ export function SessionsPage() {
                 loading={query.isPending}
                 emptyMessage={
                   rows.length > 0
-                    ? 'No session to list: every loaded session is a sub-session whose main session is unknown.'
+                    ? // No number here: the line above is the page's one count.
+                      countStillChecking(rows, (row) => row) > 0
+                      ? checkingEmpty()
+                      : 'No session to list: every loaded session is a sub-session whose main session is unknown.'
                     : search || hosts || withPrs
                       ? 'No sessions match these filters.'
                       : 'No indexed sessions yet. Check indexing status in Settings.'

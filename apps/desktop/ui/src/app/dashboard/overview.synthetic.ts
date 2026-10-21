@@ -1,5 +1,6 @@
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { MetricHumanStretch } from '../../data/generated/MetricHumanStretch';
+import type { MetricLeverageDay } from '../../data/generated/MetricLeverageDay';
 import type { MetricPrAnalyticsRow } from '../../data/generated/MetricPrAnalyticsRow';
 import type { MetricTile } from '../../data/generated/MetricTile';
 import type { PrAnalyticsPage } from '../../data/generated/PrAnalyticsPage';
@@ -114,8 +115,10 @@ export function syntheticOverview(
   report.leverage = {
     agent_ms: Math.round(agent * H),
     previous_agent_ms: Math.round(agent * H * 0.99),
+    ridge_top_agents: report.leverage.ridge_top_agents,
     by_day: human.by_day.map((day, index) => {
       const agentMs = Math.round(report.days[index]!.agent_hours * H);
+      const quarters = syntheticQuarters(day.date, day.end_ms - 24 * H, day.stretches);
       return {
         date: day.date,
         start_ms: day.start_ms,
@@ -123,6 +126,7 @@ export function syntheticOverview(
         agent_ms: agentMs,
         human_ms: day.active_ms,
         value: day.active_ms ? agentMs / day.active_ms : null,
+        ...quarters,
       };
     }),
   };
@@ -183,6 +187,34 @@ export function syntheticOverview(
     };
   });
   return report;
+}
+
+const QUARTER = 15 * M;
+
+/**
+ * A day's synthetic agent ridge: agents start when each of your stretches
+ * begins and run on for up to an hour after it, a repeatable level of them
+ * per stretch with a gentle wobble (some quarters above the ridge's top). The day's agent
+ * time is the synthetic total beside it; the screen does not add the
+ * quarters up.
+ */
+function syntheticQuarters(
+  date: string,
+  midnight: number,
+  stretches: readonly MetricHumanStretch[],
+): Pick<MetricLeverageDay, 'quarter_agents' | 'busiest_quarter'> {
+  const agents = Array.from({ length: 96 }, () => 0);
+  stretches.forEach((stretch, index) => {
+    const from = Math.floor((stretch.start_ms - midnight) / QUARTER);
+    const to = Math.min(96, Math.ceil((stretch.end_ms - midnight + H) / QUARTER));
+    // A stretch's own level of agents, with a gentle wobble across it.
+    const base = 1.5 + seed(`${date}s${index}`) * 8.5;
+    for (let quarter = Math.max(0, from); quarter < to; quarter++)
+      agents[quarter] =
+        Math.round(base * (0.8 + 0.35 * Math.sin(quarter * 0.45 + index)) * 10) / 10;
+  });
+  const top = Math.max(...agents);
+  return { quarter_agents: agents, busiest_quarter: top > 0 ? agents.indexOf(top) : null };
 }
 
 /** Synthetic merged pull requests in the range; the latest `TITLES.length` have page rows. */

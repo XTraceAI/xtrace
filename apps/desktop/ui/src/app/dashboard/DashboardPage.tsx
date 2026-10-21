@@ -125,6 +125,7 @@ function DashboardReport({
   const method = useDetail('method');
   const mainRowId = useId();
   const effortId = useId();
+  const subtitle = laneSubtitle(report);
   return (
     <>
       <p className="xt-dash-summary" data-testid="dashboard-summary">
@@ -206,7 +207,8 @@ function DashboardReport({
 
       <SectionCard
         title="Sessions"
-        meta={laneSubtitle(report)}
+        meta={subtitle.text}
+        metaFull={subtitle.full}
         right={
           <span className="xt-dash-card-actions">
             <CoverageDetail report={report} />

@@ -408,15 +408,15 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &MenuItem::with_id(app, OPEN_ID, "Open XTrace Desktop", true, None::<&str>)?,
+            &MenuItem::with_id(app, OPEN_ID, "Open XTrace", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, QUIT_ID, "Quit XTrace Desktop", true, None::<&str>)?,
+            &MenuItem::with_id(app, QUIT_ID, "Quit XTrace", true, None::<&str>)?,
         ],
     )?;
     TrayIconBuilder::with_id("xtrace")
         .icon(tauri::include_image!("icons/tray-template.png"))
         .icon_as_template(true)
-        .tooltip("XTrace Desktop")
+        .tooltip("XTrace")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(on_menu)

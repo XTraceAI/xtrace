@@ -5,6 +5,7 @@ const navigation = {
   dashboard: sidebarIcons.dashboard,
   sessions: sidebarIcons.sessions,
   prs: sidebarIcons.prs,
+  scores: sidebarIcons.scores,
   merge: sidebarIcons.prs,
   rulebook: sidebarIcons.rulebook,
   leaderboard: sidebarIcons.leaderboard,

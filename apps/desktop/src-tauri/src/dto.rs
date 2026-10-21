@@ -1,9 +1,12 @@
 //! Serialized IPC and fixture contracts. Integer constructors enforce JSON precision.
 pub use crate::account_usage_dto::*;
 pub use crate::dashboard_dto::*;
+pub use crate::grading_dto::*;
+pub use crate::grading_link_dto::*;
 pub use crate::pr_analytics_dto::*;
 pub use crate::pr_dto::*;
 pub use crate::pr_effort_dto::*;
+pub use crate::projects_dto::*;
 pub use crate::rule_activity_dto::*;
 pub use crate::session_compactions::{
     CompactionCount, CompactionEvent, CompactionReason, CompactionTrigger, InheritedCompactions,
@@ -192,7 +195,10 @@ pub struct NativeHostStatus {
     /// This host's last scan leaves the index short of it. Settled scans
     /// (`complete`, and `missing_source`: no local history to read) and a
     /// host still waiting while the scan runs (`pending` during `scanning`)
-    /// do not; every other state does, `cancelled` included. Decided once,
+    /// do not. A scan that read with gaps (`incomplete`) does only when it
+    /// read no session at all (none imported, none partly read); a few
+    /// sessions skipped or partly read, or diagnostics, are shown as counts
+    /// instead. Every other state does, `cancelled` included. Decided once,
     /// in `native_index::mark_attention`, for every screen.
     pub needs_attention: bool,
     pub detail: Option<String>,
@@ -279,6 +285,17 @@ pub struct FixtureExport {
     /// A rule activity read as fixture startup answers it. Fixture mode has
     /// no native home, so it has no source, and it never reads the user's own.
     pub rule_activity: RuleActivityResult,
+    /// The project list as fixture startup answers it. Fixture mode has no
+    /// native home, so it has nothing to read, and it never reads the user's
+    /// own saved files.
+    pub projects: ProjectList,
+    /// The grading skills as fixture startup answers them. Fixture mode
+    /// bundles no skill and never runs one.
+    pub grading_skills: GradingSkills,
+    /// The grading runs as fixture startup answers them.
+    pub grading_runs: GradingRuns,
+    /// The Scores page's answer as fixture startup gives it.
+    pub grading_overview: GradingOverview,
 }
 
 pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs::ExportError> {
@@ -296,6 +313,19 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     PrAutoCheckStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     PrAnalyticsPage::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     RuleActivityResult::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    ProjectList::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingSkills::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingRuns::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingOverview::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingStart::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingProgress::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingInstalledSkills::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingSkillAdd::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingSkillRemove::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingRubricMake::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingRubricProgress::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingLinkLookup::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingLinkKeep::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     crate::privacy::ContentRetention::export_all(
         &ts_rs::Config::new().with_out_dir(directory.as_ref()),
     )?;

@@ -1,3 +1,10 @@
+import type { GradingStart } from './generated/GradingStart';
+import type { GradingInstalledSkills } from './generated/GradingInstalledSkills';
+import type { GradingSkillAdd } from './generated/GradingSkillAdd';
+import type { GradingSkillRemove } from './generated/GradingSkillRemove';
+import type { GradingRubricMake } from './generated/GradingRubricMake';
+import type { GradingLinkLookup } from './generated/GradingLinkLookup';
+import type { GradingLinkKeep } from './generated/GradingLinkKeep';
 import type { SessionPage } from './generated/SessionPage';
 import type { SessionRow } from './generated/SessionRow';
 import type { SessionSourceStatus } from './generated/SessionSourceStatus';
@@ -74,6 +81,36 @@ export class FixtureDataSource implements DataSource {
     read: async () => structuredClone(this.fixture.rule_activity),
     /** Nothing was started, so there is nothing to abandon. */
     cancel: async () => {},
+  };
+  /**
+   * Native fixture mode has no native home, so it has no saved files to list
+   * projects from: the export carries that exact answer, read through the
+   * same service. It is never a read of this machine's own files.
+   */
+  async projects() {
+    return structuredClone(this.fixture.projects);
+  }
+  /**
+   * Native fixture mode bundles no grading skill and never runs one: the
+   * export carries its exact answers, read through the same service.
+   */
+  readonly grading = {
+    skills: async () => structuredClone(this.fixture.grading_skills),
+    overview: async () => structuredClone(this.fixture.grading_overview),
+    runs: async () => structuredClone(this.fixture.grading_runs),
+    start: async (): Promise<GradingStart> => ({ state: 'not_configured' }),
+    /** Nothing runs, so there is nothing to cancel. */
+    cancel: async () => false,
+    /** Fixture mode reads no home folder, so it lists no installed skill. */
+    installed: async (): Promise<GradingInstalledSkills> => ({ state: 'not_configured' }),
+    addSkill: async (): Promise<GradingSkillAdd> => ({ state: 'not_configured' }),
+    removeSkill: async (): Promise<GradingSkillRemove> => ({ state: 'not_configured' }),
+    makeRubric: async (): Promise<GradingRubricMake> => ({ state: 'not_configured' }),
+    /** Fixture mode never uses the network or writes a home folder. */
+    linkLookup: async (): Promise<GradingLinkLookup> => ({ state: 'not_configured' }),
+    linkCancel: async () => false,
+    linkKeep: async (): Promise<GradingLinkKeep> => ({ state: 'not_configured' }),
+    linkDiscard: async () => false,
   };
   private report(windowDays: number) {
     const report = this.fixture.dashboards.find((entry) => entry.window.days === windowDays);

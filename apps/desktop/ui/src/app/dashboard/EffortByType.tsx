@@ -27,6 +27,7 @@ import { HumanTimeline } from './HumanTimeline';
 import { plural, unpricedText, usd } from './present';
 
 const metricOptions = [
+  { value: 'paired', label: 'human + agent' },
   { value: 'agent', label: 'agent h' },
   { value: 'human', label: 'human h' },
   { value: 'dollars', label: 'cost' },
@@ -75,6 +76,7 @@ export function EffortByType({
   const chart = useMemo(() => effortChart(current, barMetric(metric)), [current, metric]);
   const empty = current.cohort.sessions === 0;
   if (metric === 'human') return <HumanTimeline report={report} />;
+  if (metric === 'paired') return <HumanTimeline report={report} withAgents />;
   return (
     <div className="xt-effort" data-testid="effort-by-type">
       {empty ? (
@@ -303,6 +305,14 @@ function DayCard({ bar, metric }: { bar: EffortBar; metric: BarMetric }) {
 const WHOLE_DAY_NOTE =
   'Agent time, cost and merged cover the range, so its first day starts when the range does. The whole-day columns run from midnight to midnight, as human time and leverage do; they are the same agent hours the Overview divides.';
 
+/** How the human timeline draws your time, in the human h and human + agent views. */
+const humanNote = (breakMinutes: number) =>
+  `Human time comes from the times you sent messages to agents, across every conversation and tool, on one timeline. When two of your messages are at most ${breakMinutes} minutes apart (the break length in Settings), the time between them counts; a longer gap is a break. Each bar runs from a message to your last one before a break; a single message is a thin tick and adds no time. Stretches are split at local midnight. Every row is a whole day, midnight to midnight, the first one too; a stretch that began the evening before counts from midnight. Which messages are yours is the same as the human message count; if any is unknown, human time are unknown.`;
+
+/** How the human + agent view draws agent time under your time. */
+const agentRidgeNote = (top: number) =>
+  `In this view your time is the thin blue line along the bottom of each day, and the soft purple shape rising from it is that whole day’s agent time across the same 24 hours of local clock time. Its height in each 15 minutes is how many agents ran then on average, on one scale for every day, full height at ${plural(top, 'agent')}; a busier 15 minutes is drawn at the top. The shape is flat where no agents ran for a while and is smoothed between 15-minute pieces, so it can start to rise just before agents start; the card under the pointer gives the exact number. Agents running at the same time add up, as in agent h, so a day’s 15-minute pieces add up to its agent time. When the clock goes back an hour, both passes of the repeated hour share its pieces; when it skips an hour, those pieces stay flat. The headline’s leverage is the Overview’s: agent time per hour of yours over the same whole days. Point at a day to read its agent time, its busiest 15 minutes and the 15 minutes under the pointer.`;
+
 /** A whole day's agent time from the leverage pair; unknown (—) when the report has none. */
 const wholeAgentHours = (day: MetricLeverageDay | undefined) =>
   day === undefined ? UNMEASURED : agentTime(day.agent_ms);
@@ -388,8 +398,9 @@ export function EffortMethod({
         {context && ` ${context}`}
       </p>
       <p className="xt-dash-note" data-testid="effort-notes">
-        {metric === 'human'
-          ? `Human time comes from the times you sent messages to agents, across every conversation and tool, on one timeline. When two of your messages are at most ${human.break_minutes} minutes apart (the break length in Settings), the time between them counts; a longer gap is a break. Each bar runs from a message to your last one before a break; a single message is a thin tick and adds no time. Stretches are split at local midnight. Every row is a whole day, midnight to midnight, the first one too; a stretch that began the evening before counts from midnight. Which messages are yours is the same as the human message count; if any is unknown, human time are unknown.`
+        {metric === 'human' || metric === 'paired'
+          ? humanNote(human.break_minutes) +
+            (metric === 'paired' ? ` ${agentRidgeNote(report.leverage.ridge_top_agents)}` : '')
           : `${
               metric === 'agent'
                 ? `Each bar is one local day’s agent time over every session in the range, on one shared scale from zero. Agents running at the same time add up, so a day can pass 24 h; the dashed line marks 24 h. Each session’s hours count toward the model it used most within this range: the most responses, then the most output tokens. A session none of whose responses names a model counts its records that name one instead; one whose work names no model counts as ${NO_MODEL}. Sessions uses the same rule over the session’s whole history, so a session that changed models can show a different model there.`

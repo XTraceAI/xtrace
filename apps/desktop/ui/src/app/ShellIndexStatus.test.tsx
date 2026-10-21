@@ -149,7 +149,7 @@ const openPanel = async () => {
 it('describes the local index, not the off receiver, from one read with no report, poll or listener of its own', async () => {
   const { source } = nativeSource(async () => updating);
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   expect(screen.queryByText(/plugin · /)).toBeNull();
   const panel = await openPanel();
@@ -204,7 +204,7 @@ it('shares a page’s own read and polling instead of adding a second interval',
 it('does not read again when routes without a status reader remount', async () => {
   const { source } = nativeSource(async () => updating);
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   // Sessions reads no index status, so it is left and re-entered (Rulebook and
   // Leaderboard are disabled "soon" rows the sidebar cannot open).
   for (const name of ['Sessions', 'Pull requests', 'Sessions']) {
@@ -221,7 +221,7 @@ it('follows the status event through the shared query, with one read per change'
   let status = updating;
   const { source, send } = nativeSource(async () => status);
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   vi.useFakeTimers();
   status = {
     ...updating,
@@ -284,12 +284,12 @@ it('shows a cached status as last known while reconnecting fails, and as current
   expect(await screen.findByText('Live updates are unavailable.')).toBeTruthy();
   // The read itself answered “ready, live”: that is not proof this renderer
   // hears the index, so the row is not green and says it is last known.
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
-  expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Updating');
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Up to date');
   expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   expect(await screen.findByText('Live updates are still unavailable.')).toBeTruthy();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   const panel = await openPanel();
   expect(
     within(panel).getByText(/Live updates are unavailable, so this is the last status/),
@@ -298,7 +298,7 @@ it('shows a cached status as last known while reconnecting fails, and as current
   const reads = source.nativeIndexStatus.mock.calls.length;
   reachable = true;
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   // The reconnect's own catch-up read, and nothing from the sidebar.
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(reads + 1);
@@ -360,7 +360,7 @@ it('keeps a cached status last known after the listeners reconnect, until the ca
   );
   mount('/prs', source);
   expect(await screen.findByText('Live updates are unavailable.')).toBeTruthy();
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   hold = true;
   listeners.reachable = true;
   const from = vi.mocked(sidebarIndexStatus).mock.results.length;
@@ -370,8 +370,8 @@ it('keeps a cached status last known after the listeners reconnect, until the ca
   await heard();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
-  expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Updating');
+  expect(trigger().textContent).toBe('index · live?');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Up to date');
   expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
   // No render in between drew the cached “ready, live” as current.
   expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
@@ -392,7 +392,7 @@ it('stays last known when the catch-up read fails, and recovers on the next read
     hold ? reads.read() : Promise.resolve(updating),
   );
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   hold = true;
   listeners.reachable = true;
   const from = vi.mocked(sidebarIndexStatus).mock.results.length;
@@ -401,7 +401,7 @@ it('stays last known when the catch-up read fails, and recovers on the next read
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await act(async () => reads.waiting[0].reject(new Error('backend-specific detail')));
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
   expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
   // Nothing is read again on its own: no retry, poll or second catch-up.
@@ -415,9 +415,9 @@ it('stays last known when the catch-up read fails, and recovers on the next read
   });
   vi.useRealTimers();
   await waitFor(() => expect(reads.waiting).toHaveLength(2));
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   await act(async () => reads.waiting[1].resolve(updating));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(3);
 });
@@ -439,13 +439,13 @@ it('does not let a status read that began before the reconnect certify the statu
   await act(async () => reads.waiting[0].resolve(updating));
   await waitFor(() => expect(reads.waiting).toHaveLength(2));
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
   expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
   // The one follow-up read the runtime already owes began after them. Its
   // answer is identical, and still makes the status current.
   await act(async () => reads.waiting[1].resolve(updating));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   await idle();
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
@@ -459,7 +459,7 @@ it('holds a cached status last known while a read from before the reconnect is s
   );
   vi.useFakeTimers({ toFake: ['Date'] });
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   // A page with its own status reader opens once the cached status is stale,
   // so a second read starts, and is still out, while nothing is heard.
   hold = true;
@@ -471,7 +471,7 @@ it('holds a cached status last known while a read from before the reconnect is s
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   await act(async () => reads.waiting[0].resolve(degraded));
   await waitFor(() => expect(reads.waiting).toHaveLength(2));
   await idle();
@@ -479,7 +479,7 @@ it('holds a cached status last known while a read from before the reconnect is s
   expect(trigger().textContent).toBe('index · degraded?');
   expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
   await act(async () => reads.waiting[1].resolve(updating));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(3);
 });
 
@@ -489,7 +489,7 @@ it('never marks an ordinary status event’s read as last known while it is out'
   let hold = false;
   const { source, send } = nativeSource(() => (hold ? reads.read() : Promise.resolve(updating)));
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   hold = true;
   const from = vi.mocked(sidebarIndexStatus).mock.results.length;
   vi.useFakeTimers();
@@ -501,7 +501,7 @@ it('never marks an ordinary status event’s read as last known while it is out'
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await idle();
   // The event's read is out: the row neither flickers to “?” nor re-renders.
-  expect(trigger().textContent).toBe('index · updating');
+  expect(trigger().textContent).toBe('index · live');
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   expect(shownSince(from)).toEqual([]);
   await act(async () => reads.waiting[0].resolve(degraded));
@@ -517,18 +517,18 @@ it('makes the status current on an identical catch-up answer', async () => {
     hold ? reads.read() : Promise.resolve(updating),
   );
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   hold = true;
   listeners.reachable = true;
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   // Nothing about the index changed: the answer is what was cached, from a
   // different object. It still says the status is current as of this read.
   await act(async () => reads.waiting[0].resolve(structuredClone(updating)));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
 });
@@ -598,7 +598,7 @@ it('ignores a manual cache write and a cancelled read while recovering', async (
     hold ? reads.read() : Promise.resolve(updating),
   );
   render(tree(source));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   hold = true;
   listeners.reachable = true;
   const from = vi.mocked(sidebarIndexStatus).mock.results.length;
@@ -611,7 +611,7 @@ it('ignores a manual cache write and a cancelled read while recovering', async (
     runtimeClient!.setQueryData(queryKeys.nativeIndex, structuredClone(updating));
   });
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   await act(async () => {
     runtimeClient!.setQueryData(queryKeys.nativeIndex, degraded);
   });
@@ -635,7 +635,7 @@ it('ignores a manual cache write and a cancelled read while recovering', async (
   vi.useRealTimers();
   await waitFor(() => expect(reads.waiting).toHaveLength(2));
   await act(async () => reads.waiting[1].resolve(updating));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(3);
 });
 
@@ -644,14 +644,14 @@ it('finds a cached status current when the Shell remounts, with nothing read and
   vi.useFakeTimers({ toFake: ['Date'] });
   const { source } = nativeSource(async () => updating);
   render(tree(source));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   fireEvent.click(screen.getByRole('link', { name: 'leave' }));
   noShell();
   fireEvent.click(screen.getByRole('link', { name: 'enter' }));
-  expect(trigger().textContent).toBe('index · updating');
+  expect(trigger().textContent).toBe('index · live');
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   await idle();
-  expect(trigger().textContent).toBe('index · updating');
+  expect(trigger().textContent).toBe('index · live');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(1);
 });
 
@@ -663,7 +663,7 @@ it('finds the status current when the catch-up read was accepted while the Shell
     hold ? reads.read() : Promise.resolve(updating),
   );
   render(tree(source));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   fireEvent.click(screen.getByRole('link', { name: 'leave' }));
   noShell();
   // Reconnected, caught up and accepted, all with no sidebar mounted to hear of it.
@@ -678,10 +678,10 @@ it('finds the status current when the catch-up read was accepted while the Shell
   // The Shell mounts on a cached, fresh result: no read follows, so no success
   // will ever be announced to it. What it needs is on the cached result.
   fireEvent.click(screen.getByRole('link', { name: 'enter' }));
-  expect(trigger().textContent).toBe('index · updating');
+  expect(trigger().textContent).toBe('index · live');
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   await idle();
-  expect(trigger().textContent).toBe('index · updating');
+  expect(trigger().textContent).toBe('index · live');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
 });
 
@@ -693,7 +693,7 @@ it('remounts as last known while the catch-up read is still out, and current onc
     hold ? reads.read() : Promise.resolve(updating),
   );
   render(tree(source));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   fireEvent.click(screen.getByRole('link', { name: 'leave' }));
   hold = true;
   listeners.reachable = true;
@@ -703,10 +703,10 @@ it('remounts as last known while the catch-up read is still out, and current onc
   const from = vi.mocked(sidebarIndexStatus).mock.results.length;
   fireEvent.click(screen.getByRole('link', { name: 'enter' }));
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
   await act(async () => reads.waiting[0].resolve(structuredClone(updating)));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
 });
 
@@ -717,7 +717,7 @@ it('lets the remounting Shell’s own read catch the status up when nothing read
     hold ? reads.read() : Promise.resolve(updating),
   );
   render(tree(source));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   // A page with no status reader: the reconnect's catch-up finds no active
   // status query, so it marks the cached status stale and reads nothing.
   fireEvent.click(screen.getByRole('link', { name: 'leave quietly' }));
@@ -733,9 +733,9 @@ it('lets the remounting Shell’s own read catch the status up when nothing read
   fireEvent.click(screen.getByRole('link', { name: 'enter' }));
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   await act(async () => reads.waiting[0].resolve(structuredClone(updating)));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   await idle();
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
 });
@@ -751,12 +751,12 @@ it('starts again with a replaced source: the old runtime’s late answer and epo
   // Replaced by a source that is heard from the start.
   const after = nativeSource(async () => updating);
   view.rerender(tree(after.source));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
   // The old runtime's read answers now, into a cache nobody shows.
   await act(async () => old.waiting[0].resolve(degraded));
   await idle();
-  expect(trigger().textContent).toBe('index · updating');
+  expect(trigger().textContent).toBe('index · live');
   expect(after.source.nativeIndexStatus).toHaveBeenCalledTimes(1);
   expect(before.source.nativeIndexStatus).toHaveBeenCalledTimes(1);
 });
@@ -764,7 +764,7 @@ it('starts again with a replaced source: the old runtime’s late answer and epo
 it('gives a replacing source its own epoch: a current status before it certifies nothing after', async () => {
   const first = nativeSource(async () => updating);
   const view = render(tree(first.source));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   // The replacement's listeners cannot register: nothing of the first
   // runtime's registration carries over, so its status is last known.
   const reads = heldReads();
@@ -772,7 +772,7 @@ it('gives a replacing source its own epoch: a current status before it certifies
   const second = unheardSource(() => (hold ? reads.read() : Promise.resolve(updating)));
   view.rerender(tree(second.source));
   expect(await screen.findByText('Live updates are unavailable.')).toBeTruthy();
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating?'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   // Its own reconnect is caught up by its own read, and by nothing earlier.
   hold = true;
   second.listeners.reachable = true;
@@ -781,10 +781,10 @@ it('gives a replacing source its own epoch: a current status before it certifies
   await heard();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await idle();
-  expect(trigger().textContent).toBe('index · updating?');
+  expect(trigger().textContent).toBe('index · live?');
   expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
   await act(async () => reads.waiting[0].resolve(structuredClone(updating)));
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(second.source.nativeIndexStatus).toHaveBeenCalledTimes(2);
   expect(first.source.nativeIndexStatus).toHaveBeenCalledTimes(1);
 });
@@ -805,7 +805,7 @@ it('says the state is unknown when the first status read fails, and invents none
 it('reports a listening receiver without a port, and an unread one as unknown', async () => {
   const listening = nativeSource(async () => updating, true);
   const view = mount('/prs', listening.source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   let panel = await openPanel();
   expect(within(panel).getByText('Plugin receiver').parentElement?.textContent).toBe(
     'Plugin receiverListening',
@@ -819,7 +819,7 @@ it('reports a listening receiver without a port, and an unread one as unknown', 
   const unread = nativeSource(async () => updating);
   unread.source.appInfo.mockRejectedValue(new Error('app info unavailable'));
   mount('/prs', unread.source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   panel = await openPanel();
   expect(within(panel).getByText('Plugin receiver').parentElement?.textContent).toBe(
     'Plugin receiverUnknown',
@@ -829,7 +829,7 @@ it('reports a listening receiver without a port, and an unread one as unknown', 
 it('opens Settings from the panel, where the full diagnostics are', async () => {
   const { source } = nativeSource(async () => updating);
   mount('/prs', source);
-  await waitFor(() => expect(trigger().textContent).toBe('index · updating'));
+  await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   const panel = await openPanel();
   fireEvent.click(within(panel).getByRole('button', { name: 'Index details in Settings' }));
   expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy();

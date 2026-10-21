@@ -12,6 +12,8 @@ export const queryKeys = {
   sessions: (windowDays: number) => ['sessions', 'list', windowDays] as const,
   /** One session's row, read through the same list query the table uses. */
   session: (windowDays: number, id: string) => ['sessions', 'one', windowDays, id] as const,
+  /** The menu-bar list's first page of recently active sessions. */
+  trayRecent: (windowDays: number) => ['sessions', 'tray-recent', windowDays] as const,
   /**
    * One session's M-09 stretches for one window. Metadata only, so it is
    * cached like the row beside it and invalidated with it by every ingest
@@ -44,6 +46,20 @@ export const queryKeys = {
   }: PullRequestSessionsRequest) =>
     ['sessions', 'pr-linked', repository, number, windowDays, windowEndMs, confirmedOnly] as const,
   contentRetention: ['settings', 'content-retention'],
+  /** The grading skills: built in, then added; a change re-reads them. */
+  gradingSkills: ['grading', 'skills'],
+  /**
+   * The installed skills for the Add a skill dialog. Under `grading`, so an
+   * added or removed skill re-reads which rows are on Scores.
+   */
+  gradingInstalled: ['grading', 'installed'],
+  /**
+   * The Scores page's answer. Under `grading`, so every committed status
+   * change and a content purge re-read it; it reads the project list fresh.
+   */
+  gradingOverview: ['grading', 'overview'],
+  /** The recent grading runs; every committed status change re-reads them. */
+  gradingRuns: ['grading', 'runs'],
   /** The automatic pull-request check's status; its own event re-reads it. */
   prAutoCheck: ['prs-auto', 'status'],
   /** A saved change re-reads every cached Dashboard range, and nothing else. */

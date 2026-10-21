@@ -33,7 +33,7 @@ const DATABASE_COMPANIONS: [&str; 3] = ["-wal", "-shm", "-journal"];
 pub enum CopyError {
     /// The earlier app could be writing its data while it is copied.
     #[error(
-        "The earlier XTrace Desktop is still running. Quit it, then open XTrace Desktop \
+        "The earlier XTrace Desktop is still running. Quit it, then open XTrace \
          again so it can bring over your data."
     )]
     EarlierRunning,
@@ -250,7 +250,7 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 }
 
 /// True only when nothing at all is at `path`, not even a broken link.
-fn absent(path: &Path) -> bool {
+pub(crate) fn absent(path: &Path) -> bool {
     matches!(fs::symlink_metadata(path), Err(error) if error.kind() == io::ErrorKind::NotFound)
 }
 
@@ -629,10 +629,10 @@ mod tests {
         assert!(absent(&folders.current) && absent(&folders.staging()));
         assert_eq!(snapshot(&folders.earlier), before);
         let failure = crate::startup_failure::message(&error);
-        assert_eq!(failure.title, "XTrace Desktop couldn't start");
+        assert_eq!(failure.title, "XTrace couldn't start");
         assert_eq!(
             failure.body,
-            "The earlier XTrace Desktop is still running. Quit it, then open XTrace Desktop \
+            "The earlier XTrace Desktop is still running. Quit it, then open XTrace \
              again so it can bring over your data."
         );
         assert_eq!(failure.database, None);
@@ -763,7 +763,7 @@ mod tests {
         // Its own words: the earlier data is unchanged, nothing was deleted,
         // and nothing tells the person to move the earlier files away.
         let failure = crate::startup_failure::message(&error);
-        assert_eq!(failure.title, "XTrace Desktop couldn't start");
+        assert_eq!(failure.title, "XTrace couldn't start");
         assert_eq!(failure.database, None);
         assert!(
             failure.body.starts_with(

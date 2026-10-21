@@ -130,17 +130,21 @@ it('routes sidebar navigation, crumbs, settings and fixture metadata from the ge
   ).toBeTruthy();
   expect(
     within(screen.getByRole('navigation', { name: 'Main navigation' })).getAllByRole('button'),
-  ).toHaveLength(5);
+  ).toHaveLength(6);
+  fireEvent.click(screen.getByRole('button', { name: 'Scores' }));
+  expect(screen.getByRole('heading', { name: 'Scores', level: 1 })).toBeTruthy();
+  expect(
+    within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByText('scores'),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
   expect(screen.getByRole('heading', { name: 'Sessions' })).toBeTruthy();
   fireEvent.keyDown(window, { key: ',', metaKey: true });
   expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
   expect(screen.getByText(exported.app_info.data_dir)).toBeTruthy();
-  expect(await screen.findByText(String(exported.db_counts.records))).toBeTruthy();
-  // Read beside its own label: the schema version can share the count's digits.
-  expect(screen.getByText('Usage rows').nextElementSibling?.textContent).toBe(
-    String(exported.db_counts.usage),
-  );
+  // Read beside their own labels: the schema version can share a count's digits.
+  const beside = (label: string) => screen.getByText(label).nextElementSibling?.textContent;
+  await waitFor(() => expect(beside('Records')).toBe(String(exported.db_counts.records)));
+  expect(beside('Usage rows')).toBe(String(exported.db_counts.usage));
   expect(document.querySelector('.xt-nav-item[aria-current]')).toBeNull();
 });
 
@@ -278,9 +282,9 @@ it('keeps Leaderboard unavailable in the sidebar while its address still opens',
   expect(screen.getByRole('heading', { name: 'What your agents did' })).toBeTruthy();
   rulebook.focus();
   expect(document.activeElement).not.toBe(rulebook);
-  const prs = screen.getByRole('button', { name: 'Pull requests' });
-  prs.focus();
-  expect(document.activeElement).toBe(prs);
+  const scores = screen.getByRole('button', { name: 'Scores' });
+  scores.focus();
+  expect(document.activeElement).toBe(scores);
   expect(screen.getByRole('button', { name: 'XTrace Hub' }).tabIndex).toBe(0);
   view.unmount();
   // A typed or bookmarked /rulebook still opens its page.

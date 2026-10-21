@@ -206,7 +206,7 @@ for (const [name, body] of [
       expect(layout.panelColor).not.toBe('rgba(0, 0, 0, 0)');
       expect(layout.overflow).toBe(false);
       expect(layout.clipped).toBe(false);
-      await expect(panel.getByRole('button', { name: 'Open XTrace Desktop' })).toBeInViewport();
+      await expect(panel.getByRole('button', { name: 'Open XTrace' })).toBeInViewport();
       await expect(panel.getByRole('region', { name: 'Account usage' })).toBeVisible();
       await expect(panel.getByRole('region', { name: 'Today’s human hours' })).toBeVisible();
       const tiles = panel.locator('.xt-tray-tiles');
@@ -296,7 +296,7 @@ for (const [name, body] of [
       // Expanded usage and long content scroll, while Open remains reachable.
       const provider = panel.locator('.xt-account-provider').first();
       if (await provider.count()) await provider.locator('summary').click();
-      await expect(panel.getByRole('button', { name: 'Open XTrace Desktop' })).toBeInViewport();
+      await expect(panel.getByRole('button', { name: 'Open XTrace' })).toBeInViewport();
       await page.screenshot({
         path: info.outputPath(`tray-${name.replace(' ', '-')}-${scheme}.png`),
       });

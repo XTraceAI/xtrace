@@ -46,7 +46,8 @@ const ready: NativeIndexStatus = {
 const partial: NativeIndexStatus = {
   ...ready,
   hosts: [
-    scan('claude', 'incomplete'),
+    // Read with gaps and no session read: the app flags it.
+    { ...scan('claude', 'incomplete'), sessions_imported: 0, records_new: 0 },
     // One unbroken token, far wider than the panel: it has to wrap inside it.
     scan('codex', 'reader_failed', `synthetic-reader-detail-${'x'.repeat(120)}`),
     scan('cursor', 'complete'),
@@ -107,7 +108,7 @@ for (const [width, height] of [
       await open(page, partial, width, height);
       const row = trigger(page);
       await expect(row).toHaveText('index · partial');
-      await expect(row).toHaveAccessibleName('Local index: Updating · partial');
+      await expect(row).toHaveAccessibleName('Local index: Live · partial');
       // A live watcher does not get the green dot while a host scan is partial.
       await expect(row.locator('i')).toHaveCSS('background-color', await token(page, '--warning'));
 
@@ -126,7 +127,7 @@ for (const [width, height] of [
       expect(await sidebar.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
       // Layout probe: the widest state the presenter can word (17 characters,
       // a last-known state) is drawn whole in the same row.
-      await label.evaluate((element) => (element.textContent = 'index · updating?'));
+      await label.evaluate((element) => (element.textContent = 'index · degraded?'));
       expect(await unclipped(label)).toBe(true);
       expect((await box(row)).x + (await box(row)).width).toBeLessThanOrEqual(actions.x);
       await label.evaluate((element) => (element.textContent = 'index · partial'));
@@ -162,7 +163,7 @@ for (const [width, height] of [
       ).toBe(true);
 
       // What it says: the index, each host's last scan, and the plugin apart.
-      await expect(dialog.getByText('Updating · partial')).toHaveCSS(
+      await expect(dialog.getByText('Live · partial')).toHaveCSS(
         'color',
         await token(page, '--warning'),
       );
@@ -205,7 +206,7 @@ for (const scheme of ['light', 'dark'] as const)
   }) => {
     await page.emulateMedia({ colorScheme: scheme });
     await open(page, ready, 1120, 720);
-    await expect(trigger(page)).toHaveText('index · updating');
+    await expect(trigger(page)).toHaveText('index · live');
     await expect(trigger(page).locator('i')).toHaveCSS(
       'background-color',
       await token(page, '--success'),

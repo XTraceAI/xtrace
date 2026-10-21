@@ -31,7 +31,7 @@ export const ruleSummaries: Record<RuleId, string> = {
   'M-06':
     'How many sessions ran at the same time: the average while any was running, and the peak.',
   'M-07':
-    'An estimate of your typing time: the length of your messages, including pasted text, at your saved typing speed.',
+    'An estimate of your typing time: the length of your messages, including pasted text, at an estimated typing speed.',
   'M-08':
     'Agent hours divided by human time: the time from each message you sent an agent to the next, when they are at most the break length apart.',
   'M-09':
@@ -48,7 +48,7 @@ export const ruleSummaries: Record<RuleId, string> = {
     'How a session is tied to a pull request: a direct link, a matching commit, or a guess from the repo and branch.',
   'M-14': 'Whether a pull request is merged and how big it is, read from saved GitHub data.',
   'M-15':
-    'An estimate of your typing effort: the length of your messages, including pasted text, at your saved typing speed.',
+    'An estimate of your typing effort: the length of your messages, including pasted text, at an estimated typing speed.',
   'M-16':
     'Sessions per day, each counted on the first day it was active in the range: the average and the busiest day.',
   'M-17':

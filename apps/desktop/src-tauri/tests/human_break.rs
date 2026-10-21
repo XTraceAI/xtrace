@@ -182,7 +182,55 @@ fn leverage_agent_hours_are_the_whole_day_bars_of_your_hours_days() {
             (row.date.as_str(), row.start_ms, row.end_ms)
         );
         assert_eq!(day.human_ms, row.active_ms);
+        // The screen gets the day's 96 quarter-hour averages; the report
+        // was only built because its quarters add up to the day's agent
+        // time (checked against the metric's quarters in `Daily::leverage`),
+        // and the busiest one is named exactly when there is any.
+        assert_eq!(day.quarter_agents.len(), 96, "{}", day.date);
+        assert_eq!(
+            day.quarter_agents.iter().any(|agents| *agents > 0.0),
+            day.agent_ms > 0,
+            "{}",
+            day.date
+        );
+        assert_eq!(
+            day.busiest_quarter.is_some(),
+            day.agent_ms > 0,
+            "{}",
+            day.date
+        );
     }
+    // The metric's own quarters over the same whole days: each day's add up
+    // to that day's agent time, and the screen's averages are zero exactly where they are.
+    let metrics = xt_metrics::MetricsDb::open(root.path().join("data/xtrace.db")).unwrap();
+    let whole = xt_metrics::Window::new(
+        leverage.by_day[0].start_ms,
+        leverage.by_day.last().unwrap().end_ms,
+    )
+    .unwrap();
+    let quarter_days = metrics
+        .active_spans(whole)
+        .unwrap()
+        .by_quarter_hour(whole, TimeZone::system())
+        .unwrap();
+    assert_eq!(quarter_days.len(), leverage.by_day.len());
+    for (quarters, day) in quarter_days.iter().zip(&leverage.by_day) {
+        assert_eq!(quarters.day.date, day.date);
+        assert_eq!(
+            quarters.quarters.iter().map(|q| q.agent_ms).sum::<u64>(),
+            day.agent_ms,
+            "{}",
+            day.date
+        );
+        // A quarter with agent time is never sent as zero agents.
+        for (quarter, agents) in quarters.quarters.iter().zip(&day.quarter_agents) {
+            assert_eq!(quarter.agent_ms > 0, *agents > 0.0, "{}", day.date);
+        }
+        assert_eq!(quarters.busiest, day.busiest_quarter, "{}", day.date);
+    }
+    assert!(leverage.agent_ms > 0);
+    // One shared ridge scale for every day.
+    assert_eq!(leverage.ridge_top_agents, 10);
     // The total beside human time is those whole days' agent hours added up.
     assert_eq!(
         leverage.agent_ms,

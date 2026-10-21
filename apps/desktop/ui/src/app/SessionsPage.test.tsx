@@ -1283,15 +1283,16 @@ it.each([
         hosts: [
           {
             host: 'claude',
+            // Read with gaps and no session read: the app flags it.
             state: 'incomplete',
             needs_attention: true,
             detail: null,
-            sessions_imported: 1,
-            sessions_partial: 1,
+            sessions_imported: 0,
+            sessions_partial: 0,
             sessions_skipped: 0,
             skipped_conversations: [],
             skipped_conversations_omitted: 0,
-            records_new: 25,
+            records_new: 0,
             records_enriched: 0,
             diagnostics: 1,
           },
@@ -1420,15 +1421,16 @@ it('states an incomplete index and untimed history together in one compact row',
     hosts: [
       {
         host: 'claude',
+        // Read with gaps and no session read: the app flags it.
         state: 'incomplete',
         needs_attention: true,
         detail: null,
-        sessions_imported: 1,
-        sessions_partial: 1,
+        sessions_imported: 0,
+        sessions_partial: 0,
         sessions_skipped: 0,
         skipped_conversations: [],
         skipped_conversations_omitted: 0,
-        records_new: 25,
+        records_new: 0,
         records_enriched: 0,
         diagnostics: 1,
       },
@@ -1515,15 +1517,16 @@ it.each([
     hosts: [
       {
         host: 'claude',
+        // Read with gaps and no session read: the app flags it.
         state: 'incomplete',
         needs_attention: true,
         detail: null,
-        sessions_imported: 1,
-        sessions_partial: 1,
+        sessions_imported: 0,
+        sessions_partial: 0,
         sessions_skipped: 0,
         skipped_conversations: [],
         skipped_conversations_omitted: 0,
-        records_new: 25,
+        records_new: 0,
         records_enriched: 0,
         diagnostics: 1,
       },
@@ -1546,6 +1549,8 @@ it.each([
 it.each([
   // The findings' example: Cursor not installed is settled, so no flag.
   ['a host with no local history', 'missing_source', false, null],
+  // Read, with a few sessions skipped: the app no longer flags it.
+  ['a host read with gaps', 'incomplete', false, null],
   ['a cancelled host scan', 'cancelled', true, 'History incomplete'],
 ] as const)(
   'flags %s exactly when the app says it needs attention',

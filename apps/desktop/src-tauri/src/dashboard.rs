@@ -873,17 +873,27 @@ impl Daily {
     /// Leverage for each whole local day: that day's agent hours divided by
     /// its own human time; no value when it is zero or unknown.
     fn leverage(&self, zone: TimeZone) -> Result<DashboardLeverage, StateError> {
-        let agent_days = self.agent.by_day(self.agent_window, zone)?;
-        if agent_days.len() != self.human.current.by_day.len() {
+        let agent_days = self.agent.by_day(self.agent_window, zone.clone())?;
+        // The same spans split at every wall-clock quarter-hour: each day's
+        // quarters add up to exactly its agent time, checked here.
+        let quarter_days = self.agent.by_quarter_hour(self.agent_window, zone)?;
+        if agent_days.len() != self.human.current.by_day.len()
+            || quarter_days.len() != agent_days.len()
+        {
             return Err(StateError::MetricEncoding);
         }
         let mut by_day = Vec::with_capacity(agent_days.len());
-        for (agent, human) in agent_days.iter().zip(&self.human.current.by_day) {
+        for ((agent, human), quarters) in agent_days
+            .iter()
+            .zip(&self.human.current.by_day)
+            .zip(&quarter_days)
+        {
             if (agent.date.as_str(), agent.start_ms, agent.end_ms)
                 != (human.date.as_str(), human.start_ms, human.end_ms)
             {
                 return Err(StateError::MetricEncoding);
             }
+            let quarter_agents = quarter_fields(agent, quarters)?;
             let value = human
                 .active_ms
                 .filter(|ms| *ms > 0)
@@ -898,13 +908,62 @@ impl Daily {
                 agent_ms: agent.active_ms,
                 human_ms: human.active_ms,
                 value,
+                quarter_agents,
+                busiest_quarter: quarters.busiest,
             });
         }
         Ok(DashboardLeverage {
             agent_ms: self.agent.active_ms,
             previous_agent_ms: self.previous_agent_ms,
+            ridge_top_agents: RIDGE_TOP_AGENTS,
             by_day,
         })
+    }
+}
+
+/// The average number of agents running that fills a day's agent ridge to
+/// the top, the same for every day; a busier quarter is drawn at the top.
+pub const RIDGE_TOP_AGENTS: u32 = 10;
+
+/// A whole day's quarter-hours as the screen gets them: each quarter's
+/// average agents at display precision. The day must be the
+/// same day as its agent time, with exactly 96 quarters whose agent time adds
+/// up to it; anything else is refused, never sent.
+fn quarter_fields(
+    agent: &xt_metrics::DayActive,
+    quarters: &xt_metrics::DayQuarters,
+) -> Result<Vec<f64>, StateError> {
+    let sum = quarters
+        .quarters
+        .iter()
+        .try_fold(0_u64, |sum, quarter| sum.checked_add(quarter.agent_ms));
+    if quarters.day != *agent
+        || quarters.quarters.len() != xt_metrics::QUARTERS_PER_DAY
+        || sum != Some(agent.active_ms)
+    {
+        return Err(StateError::MetricEncoding);
+    }
+    Ok(quarters
+        .quarters
+        .iter()
+        .map(|quarter| display_agents(quarter.agent_ms, quarter.elapsed_ms))
+        .collect())
+}
+
+/// A quarter's average agents running (agent time over real time), the one
+/// place the app works it out, at the screen's display precision, one decimal, rounded half up in exact integer
+/// arithmetic. A positive average that would round to 0 is kept unrounded,
+/// so the screen still writes it as below its scale, never as zero.
+fn display_agents(agent_ms: u64, elapsed_ms: u64) -> f64 {
+    if elapsed_ms == 0 {
+        return 0.0;
+    }
+    let (agent, elapsed) = (u128::from(agent_ms), u128::from(elapsed_ms));
+    let tenths = (agent * 20 + elapsed) / (2 * elapsed);
+    if tenths == 0 && agent > 0 {
+        agent_ms as f64 / elapsed_ms as f64
+    } else {
+        tenths as f64 / 10.0
     }
 }
 
@@ -1423,6 +1482,58 @@ mod tests {
 #[cfg(test)]
 mod leverage_tests {
     use super::*;
+
+    const Q: u64 = 15 * 60_000;
+
+    #[test]
+    fn quarter_agents_are_sent_at_one_decimal_and_a_small_positive_stays_above_zero() {
+        assert_eq!(display_agents(0, Q), 0.0);
+        assert_eq!(display_agents(Q, Q), 1.0);
+        assert_eq!(display_agents(50 * 60_000, Q), 3.3);
+        // Exactly 1.15 rounds half up, decided on integers, not binary floats.
+        assert_eq!(display_agents(1_035_000, 900_000), 1.2);
+        assert_eq!(display_agents(Q / 20, Q), 0.1);
+        // Below 0.05: unrounded, so it reads `<0.1`, never `0`.
+        assert_eq!(display_agents(Q / 100, Q), 0.01);
+        // A folded (30-minute) quarter averages over its real length.
+        assert_eq!(display_agents(2 * Q, 2 * Q), 1.0);
+        assert_eq!(display_agents(0, 0), 0.0);
+    }
+
+    #[test]
+    fn quarter_fields_refuse_a_day_whose_quarters_do_not_add_up() {
+        let quarter = |agent_ms: u64| xt_metrics::QuarterHour {
+            agent_ms,
+            elapsed_ms: Q,
+        };
+        let agent = xt_metrics::DayActive {
+            date: "2026-09-01".into(),
+            start_ms: 0,
+            end_ms: 86_400_000,
+            active_ms: 3 * Q,
+        };
+        let mut quarters = xt_metrics::DayQuarters {
+            day: agent.clone(),
+            quarters: (0..96).map(|_| quarter(0)).collect(),
+            busiest: Some(40),
+        };
+        quarters.quarters[40] = quarter(3 * Q);
+        let agents = quarter_fields(&agent, &quarters).unwrap();
+        assert_eq!(agents.len(), 96);
+        assert_eq!((agents[40], agents[0]), (3.0, 0.0));
+        // One millisecond short of the day's agent time: refused.
+        let mut short = quarters.clone();
+        short.quarters[40] = quarter(3 * Q - 1);
+        assert!(quarter_fields(&agent, &short).is_err());
+        // Not 96 quarters: refused.
+        let mut fewer = quarters.clone();
+        fewer.quarters.pop();
+        assert!(quarter_fields(&agent, &fewer).is_err());
+        // Another day: refused.
+        let mut other = quarters;
+        other.day.date = "2026-09-02".into();
+        assert!(quarter_fields(&agent, &other).is_err());
+    }
     use xt_metrics::{HumanHours, HumanHoursPeriods};
 
     const H: u64 = 3_600_000;

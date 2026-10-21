@@ -41,6 +41,13 @@ export const sidebarIcons = {
       <path d="M12 15h5" />
     </>,
   ),
+  scores: glyph(
+    <>
+      <path d="M12 3l2.6 5.5 6 .8-4.4 4.1 1.1 6L12 16.5l-5.3 2.9 1.1-6-4.4-4.1 6-.8z" />
+    </>,
+    14,
+    true,
+  ),
   prs: glyph(
     <>
       <circle cx="6" cy="6" r="2.5" />

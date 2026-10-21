@@ -12,7 +12,13 @@ import { accountUsageQueryOptions } from '../account-usage-query';
 import { isLiveSessionHost, useLiveSessionStatus } from '../live-session-status';
 import { LiveSessionBadge, LiveSessionHost } from '../LiveSessionBadge';
 import { displayTitle, repoName, shortId } from '../session-context';
-import { listedLanes, notListed, sessionKey } from '../dashboard/lanes';
+import {
+  checkingEmpty,
+  countStillChecking,
+  listedLanes,
+  notListed,
+  sessionKey,
+} from '../dashboard/lanes';
 import { verifiedParent } from '../session-parent';
 import { useSessionTitles } from '../session-titles';
 import '../../styles/sidebar.css';
@@ -208,7 +214,7 @@ function Usage() {
       refreshEnabled={false}
       failureMessage={
         source.kind !== 'preview'
-          ? 'Account usage could not be read. Open XTrace Desktop to refresh.'
+          ? 'Account usage could not be read. Open XTrace to refresh.'
           : undefined
       }
       onRefresh={() => {}}
@@ -217,7 +223,7 @@ function Usage() {
 }
 
 const RECENT_LIMIT = 3;
-const RECENT_KEY = ['sessions', 'tray-recent', 7] as const;
+const RECENT_KEY = queryKeys.trayRecent(7);
 function RecentSessions() {
   const { source } = useData();
   const query = useQuery({
@@ -231,6 +237,12 @@ function RecentSessions() {
     enabled: source.kind !== 'preview',
     refetchOnMount: 'always',
   });
+  // Whether a returned session is left out while its check is unfinished,
+  // judged by its own row, as the list leaves it out.
+  const checking = useMemo(
+    () => !query.isError && !!query.data && countStillChecking(query.data.rows, (row) => row) > 0,
+    [query.data, query.isError],
+  );
   // First indexed page only. Reuse the list's decision about which sessions
   // may be shown, then keep main sessions before limiting the visible rows.
   // No scan for every session currently running is performed.
@@ -283,7 +295,11 @@ function RecentSessions() {
       ) : query.isPending ? (
         <p className="xt-tray-unavailable">Reading sessions…</p>
       ) : rows.length === 0 ? (
-        <p className="xt-tray-unavailable">No recent sessions to show.</p>
+        <p className="xt-tray-unavailable">
+          {checking
+            ? checkingEmpty('No recent session to show yet')
+            : 'No recent sessions to show.'}
+        </p>
       ) : (
         <ul className="xt-tray-sessions">
           {rows.map((row) => {
@@ -401,7 +417,7 @@ export function TrayPage() {
           else void navigate('/dashboard');
         }}
       >
-        Open XTrace Desktop
+        Open XTrace
       </button>
     </main>
   );

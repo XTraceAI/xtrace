@@ -7,10 +7,14 @@ import type { FixturePrSessions } from "./FixturePrSessions";
 import type { FixtureSessionStretches } from "./FixtureSessionStretches";
 import type { FixtureSessionsSummary } from "./FixtureSessionsSummary";
 import type { FixtureSpanDetail } from "./FixtureSpanDetail";
+import type { GradingOverview } from "./GradingOverview";
+import type { GradingRuns } from "./GradingRuns";
+import type { GradingSkills } from "./GradingSkills";
 import type { NativeIndexStatus } from "./NativeIndexStatus";
 import type { PrAnalyticsPage } from "./PrAnalyticsPage";
 import type { PrList } from "./PrList";
 import type { PrRefreshReport } from "./PrRefreshReport";
+import type { ProjectList } from "./ProjectList";
 import type { RuleActivityResult } from "./RuleActivityResult";
 import type { SessionPage } from "./SessionPage";
 import type { TodaySummary } from "./TodaySummary";
@@ -60,4 +64,23 @@ pr_sessions: Array<FixturePrSessions>, today: TodaySummary,
  * A rule activity read as fixture startup answers it. Fixture mode has
  * no native home, so it has no source, and it never reads the user's own.
  */
-rule_activity: RuleActivityResult, };
+rule_activity: RuleActivityResult, 
+/**
+ * The project list as fixture startup answers it. Fixture mode has no
+ * native home, so it has nothing to read, and it never reads the user's
+ * own saved files.
+ */
+projects: ProjectList, 
+/**
+ * The grading skills as fixture startup answers them. Fixture mode
+ * bundles no skill and never runs one.
+ */
+grading_skills: GradingSkills, 
+/**
+ * The grading runs as fixture startup answers them.
+ */
+grading_runs: GradingRuns, 
+/**
+ * The Scores page's answer as fixture startup gives it.
+ */
+grading_overview: GradingOverview, };

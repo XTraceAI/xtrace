@@ -123,5 +123,6 @@ export const welcomeTour: readonly { path: string; icon: IconName; description: 
     description: 'Hours, tokens and trends across your agents.',
   },
   { path: '/sessions', icon: 'sessions', description: 'Every conversation, one row each.' },
+  { path: '/scores', icon: 'scores', description: 'Grades for the projects on this Mac.' },
   { path: '/prs', icon: 'prs', description: 'The agent effort behind each pull request.' },
 ];

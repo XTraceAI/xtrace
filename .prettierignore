@@ -8,6 +8,8 @@ artifacts/
 apps/desktop/ui/src/data/generated/
 # Preserve the Rust exporter's exact fixture bytes.
 apps/desktop/ui/fixtures/F1.json
+apps/desktop/ui/src/app/scores/scores.synthetic.json
+apps/desktop/ui/src/app/scores/picker.synthetic.json
 
 **/playwright-report/
 **/test-results/
@@ -16,3 +18,6 @@ scripts/supply-chain/upstream-licenses/*.txt
 
 # Preserve generated upstream license texts verbatim.
 THIRD_PARTY_NOTICES.md
+
+# Preserve the pinned upstream skill verbatim (see vendor/claude-md-doctor/pin.json).
+vendor/claude-md-doctor/skill/

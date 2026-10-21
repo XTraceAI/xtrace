@@ -1,0 +1,1 @@
+- Add a developer command that grades a project's CLAUDE.md with a bundled, pinned copy of claude-md-doctor run headless by Claude Code under locked-down permissions, and reads back a strictly checked score and findings. Not shown in the app yet.

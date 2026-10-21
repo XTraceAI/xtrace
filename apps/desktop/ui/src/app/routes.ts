@@ -6,6 +6,9 @@ export const pages: { path: string; title: string; crumb: string; active?: Sideb
   // One session, opened from the list or from a Dashboard lane. The list's
   // filters travel in this address so going back restores them.
   { path: '/sessions/:sessionId', title: 'Session', crumb: 'sessions', active: 'sessions' },
+  { path: '/scores', title: 'Scores', crumb: 'scores', active: 'scores' },
+  // One grading skill: its score for each listed project, and Grade.
+  { path: '/scores/:skillId', title: 'Skill scores', crumb: 'scores', active: 'scores' },
   { path: '/prs', title: 'Pull requests', crumb: 'pull-requests', active: 'prs' },
   { path: '/rulebook', title: 'Rulebook', crumb: 'rulebook', active: 'rulebook' },
   { path: '/rulebook/fires', title: 'Rule fires', crumb: 'rulebook', active: 'rulebook' },

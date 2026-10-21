@@ -1,9 +1,10 @@
 //! Finding the GitHub CLI executable a manual pull-request refresh runs.
 //!
 //! The reviewed [`xt_probes::gh`] client refuses to search for its own
-//! executable: it takes an already resolved absolute path. This is the only
-//! place that resolves one, and it is deliberately the smallest resolver that
-//! can answer the question:
+//! executable: it takes an already resolved absolute path. This module names
+//! `gh`'s override and install directories; the lookup itself is the shared
+//! [`xt_probes::executable`] resolver, deliberately the smallest one that can
+//! answer the question:
 //!
 //! * an explicit absolute path from the backend-only [`GH_ENV`] override,
 //!   which exists so tests and a deployment can name the executable;
@@ -80,51 +81,16 @@ pub fn resolve_within(
     search: Option<&OsStr>,
     known: &[&Path],
 ) -> Result<PathBuf, GhUnavailable> {
-    if !cfg!(unix) {
-        return Err(GhUnavailable::UnsupportedPlatform);
-    }
-    if let Some(explicit) = explicit {
-        let path = Path::new(explicit);
-        if !path.is_absolute() {
-            return Err(GhUnavailable::OverrideNotAbsolute);
-        }
-        return executable(path).ok_or(GhUnavailable::OverrideNotExecutable);
-    }
-    if let Some(search) = search {
-        // A relative `PATH` entry would resolve against this process's working
-        // directory, which is not a place an executable may come from.
-        let found = std::env::split_paths(search)
-            .filter(|entry| entry.is_absolute())
-            .find_map(|entry| executable(&entry.join(EXECUTABLE)));
-        if let Some(found) = found {
-            return Ok(found);
-        }
-    }
-    known
-        .iter()
-        .find_map(|directory| executable(&directory.join(EXECUTABLE)))
-        .ok_or(GhUnavailable::NotFound)
+    use xt_probes::executable::{Unavailable, resolve_within};
+    resolve_within(EXECUTABLE, explicit, search, known).map_err(|reason| match reason {
+        Unavailable::OverrideNotAbsolute => GhUnavailable::OverrideNotAbsolute,
+        Unavailable::OverrideNotExecutable => GhUnavailable::OverrideNotExecutable,
+        Unavailable::NotFound => GhUnavailable::NotFound,
+        Unavailable::UnsupportedPlatform => GhUnavailable::UnsupportedPlatform,
+    })
 }
 
 /// The override and `PATH` as this process received them.
 pub fn resolve_from_environment(explicit: Option<&OsStr>) -> Result<PathBuf, GhUnavailable> {
     resolve(explicit, std::env::var_os("PATH").as_deref())
-}
-
-/// An absolute path to a regular file with an execute bit, or nothing.
-/// Metadata follows symbolic links, so the usual package-manager symlink is
-/// accepted as the absolute path it is spelled with.
-#[cfg(unix)]
-fn executable(path: &Path) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    if !path.is_absolute() {
-        return None;
-    }
-    let metadata = path.metadata().ok()?;
-    (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
-}
-
-#[cfg(not(unix))]
-fn executable(_: &Path) -> Option<PathBuf> {
-    None
 }

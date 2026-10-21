@@ -11,16 +11,26 @@ target of macOS 14 is not proof of testing on every supported Mac; check the
 1. Open the [current update release](https://github.com/XTraceAI/xtrace-desktop/releases/latest),
    or visit [all releases](https://github.com/XTraceAI/xtrace-desktop/releases) for
    newer testing candidates. The latest-release link and automatic updates can
-   remain on an earlier release while a newer beta is being tested. Choose the release's `XTrace-Desktop-<version>-macos-arm64.dmg` asset. The
+   remain on an earlier release while a newer beta is being tested. Choose the release's `XTrace-<version>-macos-arm64.dmg` asset
+   (releases up to 0.1.7, which the latest-release link may still show, name it
+   `XTrace-Desktop-<version>-macos-arm64.dmg`). The
    `.app.tar.gz`, `.sig` and `latest.json` assets serve the updater; GitHub's
    source-code archives do not contain an installed app.
-2. Open the downloaded disk image. Drag **XTrace Desktop** onto **Applications**.
-   If replacing an earlier copy, quit XTrace Desktop first and confirm replacement
+2. Open the downloaded disk image. Drag **XTrace** onto **Applications**.
+   If replacing an earlier copy, quit XTrace first and confirm replacement
    in Finder.
-3. Eject the disk image and open **XTrace Desktop** from **Applications**.
+3. Eject the disk image and open **XTrace** from **Applications**.
    Accept macOS's ordinary downloaded-app confirmation if shown. If macOS rejects
    the app's signature or says it is damaged, stop and report the release version
    and exact message; do not remove quarantine or disable Gatekeeper.
+
+Releases through 0.1.7 were named **XTrace Desktop**. A copy of one of those that
+updates itself keeps that name until it next quits after the update, and then
+renames itself to **XTrace**; if it cannot (for example an account that cannot
+change Applications), nothing changes and it keeps working under the old name.
+If you install the new disk image while an older
+**XTrace Desktop** copy is in Applications, quit **XTrace Desktop** and move it
+to the Trash, so that only one copy stays.
 
 You do not need Rust, Node or pnpm to use a downloaded app. There is no Homebrew cask.
 
@@ -50,8 +60,8 @@ missing sources, reader failures and unsupported formats show an unavailable
 state; Cursor SQLite transcripts remain unsupported. API-equivalent cost
 estimates are not actual subscription charges.
 
-Use **Settings** (⌘,) for appearance, typing speed, human-time break length,
-storage and index status. The sidebar shows the app version. The menu-bar icon
+Use **Settings** (⌘,) for appearance, human-time break length, storage and
+index status. The sidebar shows the app version. The menu-bar icon
 opens today's activity; closing the main window can leave XTrace running.
 
 ## Optional local integrations
@@ -84,7 +94,8 @@ summary, in either storage mode, and cannot be switched off separately.
 **Archive full transcript content** is off by default and affects future imports
 and enrichment. Turning it off does not erase content already saved.
 **Delete stored content** removes saved transcript content, tool input, saved
-session titles and previews after confirmation. It preserves metric/index
+session titles and previews after confirmation, and the reasons Claude gave
+for not making a rubric for a skill. It preserves metric/index
 records and original host files; later imports can create new previews.
 Viewing a supported transcript reads the original local source on demand without
 enabling archival. Account-usage history is stored separately from the database.
@@ -92,7 +103,7 @@ enabling archival. Account-usage history is stored separately from the database.
 There is no cloud transcript upload in this build. Network activity occurs for
 anonymous usage telemetry (on by default after a first notice; see
 [TELEMETRY.md](../TELEMETRY.md) for every event and how to turn it off),
-account limits, GitHub PR facts and public release checks/downloads. Claude usage checks run the installed Claude Code CLI
+account limits, GitHub PR facts, public release checks/downloads, and the public GitHub repository look-ups and downloads you start with **Add from a link** in Scores (GitHub's API and `codeload.github.com`, without signing in). Claude usage checks run the installed Claude Code CLI
 at launch and about every ten minutes, with failure backoff, in an app-owned
 probe folder. Claude Code can record that folder's trust and usage cache in its
 own configuration and leave probe files in its history. These checks send no

@@ -11,7 +11,7 @@
 //! ```
 //!
 //! The readers are the installed app's bundled producer
-//! (`/Applications/XTrace Desktop.app/Contents/Resources/agent-plugins`
+//! (`/Applications/XTrace.app/Contents/Resources/agent-plugins`
 //! unless `--bundle` names another), verified against the pin compiled into
 //! the app ([`xtrace_desktop::native_index::PIN`]) before anything is opened.
 //! Stages, each followed by a frame: the copy opened (its migration applied),
@@ -51,7 +51,7 @@ use xtrace_desktop::{
     state::{AppState, StartupOptions},
 };
 
-const INSTALLED_BUNDLE: &str = "/Applications/XTrace Desktop.app/Contents/Resources/agent-plugins";
+const INSTALLED_BUNDLE: &str = "/Applications/XTrace.app/Contents/Resources/agent-plugins";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();

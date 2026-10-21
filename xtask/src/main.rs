@@ -253,7 +253,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
             )?;
             let export = xtrace_desktop::dto::FixtureExport {
                 app_info: xtrace_desktop::dto::AppInfo {
-                    name: "XTrace Desktop".into(),
+                    name: "XTrace".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
                     data_dir: format!("fixture://{id}"),
                     fixture: Some(id.to_string()),
@@ -302,6 +302,13 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
                 // service has no source to read.
                 rule_activity: xtrace_desktop::rule_activity::RuleActivityService::new(None)
                     .read("fixture"),
+                // Nor any saved files to list projects from.
+                projects: xtrace_desktop::projects::ProjectsService::new(None).list(),
+                // Nor a bundled grading skill.
+                grading_skills: xtrace_desktop::grading::GradingService::not_configured().skills(),
+                grading_runs: xtrace_desktop::grading::GradingService::not_configured().runs(),
+                grading_overview: xtrace_desktop::grading::GradingService::not_configured()
+                    .overview(),
             };
             serde_json::to_string_pretty(&export)?
         } else {

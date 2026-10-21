@@ -2,11 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useId, useRef, useState } from 'react';
 import { discardStoredWords } from '../data/content-purges';
 import { useData } from '../data/DataProvider';
-import type {
-  HumanBreakControls,
-  RetentionControls,
-  TypingSpeedControls,
-} from '../data/DataSource';
+import type { HumanBreakControls, RetentionControls } from '../data/DataSource';
 import type { ContentPurge } from '../data/generated/ContentPurge';
 import type { ContentRetention } from '../data/generated/ContentRetention';
 import type { NativeIndexStatus } from '../data/generated/NativeIndexStatus';
@@ -46,7 +42,6 @@ export function SettingsPage() {
           </select>
         </label>
       </SectionCard>
-      <TypingSpeed controls={source.typingSpeed} />
       <BreakLength controls={source.humanBreak} />
       {source.retention ? (
         <StoredContent controls={source.retention} />
@@ -74,77 +69,6 @@ export function SettingsPage() {
   );
 }
 
-/** Monkeytype's official test; its WPM counts five characters, spaces included, as a word. */
-export const TYPING_TEST_URL = 'https://monkeytype.com/';
-export const DEFAULT_WPM = 40;
-const CHARACTERS_PER_WORD = 5;
-const MIN_WPM = 1;
-const MAX_WPM = 300;
-
-/** A whole number of words per minute in bounds, or null; never a rounded guess. */
-export function parseWpm(text: string): number | null {
-  const trimmed = text.trim();
-  if (!/^\d{1,3}$/.test(trimmed)) return null;
-  const wpm = Number(trimmed);
-  return wpm >= MIN_WPM && wpm <= MAX_WPM ? wpm : null;
-}
-
-const cpmText = (wpm: number) =>
-  `${wpm} WPM (${(wpm * CHARACTERS_PER_WORD).toLocaleString()} characters per minute)`;
-
-/** Opens the official test outside the app; a plain new-tab link in a browser preview. */
-function TypingTestLink({ controls }: { controls?: TypingSpeedControls }) {
-  const [failed, setFailed] = useState(false);
-  return (
-    <>
-      <p className="xt-settings-note">
-        <a
-          className="xt-settings-link"
-          href={TYPING_TEST_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(event) => {
-            if (!controls) return;
-            // The app window never navigates: the system browser opens the page.
-            event.preventDefault();
-            setFailed(false);
-            controls.openTest().catch(() => setFailed(true));
-          }}
-        >
-          Test your typing speed on Monkeytype
-        </a>
-      </p>
-      {failed && <p role="alert">The typing test could not be opened in your browser.</p>}
-    </>
-  );
-}
-
-/** The saved typing speed the typing estimate reads, with the official test beside it. */
-function TypingSpeed({ controls }: { controls?: TypingSpeedControls }) {
-  const hintId = useId();
-  return (
-    <SectionCard title="Typing speed">
-      {controls ? (
-        <TypingSpeedControl controls={controls} hintId={hintId} />
-      ) : (
-        <p className="xt-settings-note">
-          The typing speed is saved in the desktop app&apos;s database. It cannot be changed in this
-          preview, which uses {cpmText(DEFAULT_WPM)}.
-        </p>
-      )}
-      <p id={hintId} className="xt-settings-note">
-        Estimated Human time is counted message length divided by this speed, at{' '}
-        {CHARACTERS_PER_WORD} characters per word, the same word Monkeytype counts: {DEFAULT_WPM}{' '}
-        WPM, the default, is {DEFAULT_WPM * CHARACTERS_PER_WORD} characters per minute. The
-        Dashboard uses it for every counted message in both the selected and the previous period.
-        Counted length includes selected or pasted text. It is a rough estimate, not a measurement
-        of your attention or of whether text was typed or pasted.
-      </p>
-      <TypingTestLink controls={controls} />
-    </SectionCard>
-  );
-}
-
 /**
  * How one save ended, from the setting as read afterwards: the requested
  * value, another value, or no successful read at all. Unknown keeps the
@@ -159,7 +83,7 @@ type SaveAction = { kind: 'save' | 'check'; requested: number };
 interface SavedNumber {
   controls: { read(): Promise<number>; set(value: number): Promise<number> };
   queryKey: readonly unknown[];
-  /** Shown in the saved summary, e.g. `40 WPM (200 characters per minute)`. */
+  /** Shown in the saved summary, e.g. `60 min`. */
   text: (value: number) => string;
   parse: (text: string) => number | null;
   inputLabel: string;
@@ -167,11 +91,11 @@ interface SavedNumber {
   defaultValue: number;
   resetLabel: string;
   invalid: string;
-  /** The setting in a sentence, e.g. `typing speed`. */
+  /** The setting in a sentence, e.g. `break length`. */
   noun: string;
-  /** Its short name, e.g. `speed`. */
+  /** Its short name, e.g. `length`. */
   short: string;
-  /** The value as a request is stated, e.g. `40 WPM`. */
+  /** The value as a request is stated, e.g. `60 min`. */
   requested: (value: number) => string;
   testId: string;
   className: string;
@@ -328,37 +252,6 @@ function SavedNumberControl({ setting, hintId }: { setting: SavedNumber; hintId:
   );
 }
 
-function TypingSpeedControl({
-  controls,
-  hintId,
-}: {
-  controls: TypingSpeedControls;
-  hintId: string;
-}) {
-  return (
-    <SavedNumberControl
-      hintId={hintId}
-      setting={{
-        controls,
-        queryKey: queryKeys.typingSpeed,
-        text: cpmText,
-        parse: parseWpm,
-        inputLabel: 'Words per minute',
-        maxLength: 3,
-        defaultValue: DEFAULT_WPM,
-        resetLabel: `Reset to ${DEFAULT_WPM} WPM`,
-        invalid: `Enter a whole number from ${MIN_WPM} to ${MAX_WPM}.`,
-        noun: 'typing speed',
-        short: 'speed',
-        requested: (wpm) => `${wpm} WPM`,
-        testId: 'typing-speed-saved',
-        className: 'xt-typing-speed',
-        summaryClassName: 'xt-typing-speed-summary',
-      }}
-    />
-  );
-}
-
 export const DEFAULT_BREAK_MINUTES = 60;
 const MIN_BREAK_MINUTES = 5;
 const MAX_BREAK_MINUTES = 240;
@@ -463,6 +356,13 @@ function StoredContent({ controls }: { controls: RetentionControls }) {
         reopening your session files. Delete stored content removes these previews too; messages
         indexed after that get new ones, and previews cannot be turned off.
       </p>
+      <p className="xt-settings-note" data-testid="retention-grades">
+        {/* The number of reports kept is the app's KEEP_FOLDERS (grading.rs). */}
+        Grades from the Scores page are kept either way too: each grade’s score, summary and
+        findings, and the saved HTML report of the newest 50 grades; older grades keep no report.
+        Delete stored content removes the summary, findings and report; the score stays. It also
+        removes the reasons Claude gave for not making a rubric for a skill.
+      </p>
       {mode.isError && <p role="alert">The storage mode could not be read.</p>}
       {change.isError && (
         <p role="alert">The storage mode could not be changed. The mode shown is the saved one.</p>
@@ -533,9 +433,11 @@ function PurgeContent({
         <h2 id={title}>Delete stored content?</h2>
         <p>
           This clears saved transcript text, tool results, session titles, tool input and the short
-          message previews from the XTrace database. Counts, usage, tool names, identifiers and
-          source provenance stay. Original host transcripts and other files are not touched. Deleted
-          text is not securely erased from database free space or backups. This cannot be undone.
+          message previews from the XTrace database, and removes each grade’s summary, findings and
+          saved HTML report and the reasons Claude gave for not making a rubric for a skill. Counts,
+          usage, tool names, identifiers, source provenance and grade scores stay. Original host
+          transcripts and your projects’ files are not touched. Deleted text is not securely erased
+          from database free space or backups. This cannot be undone.
         </p>
         <p>Messages indexed after the delete get new previews; previews cannot be turned off.</p>
         {archiving && <p>Full-content archive is on, so later imports can save content again.</p>}

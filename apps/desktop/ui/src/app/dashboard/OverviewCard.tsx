@@ -18,6 +18,7 @@ import { DefinitionInfo } from './DefinitionInfo';
 import {
   CONCURRENCY_DEFINITION,
   HANDS_OFF_DEFINITION,
+  LEVERAGE_DEFINITION,
   OVERVIEW_DEFINITION,
   type DayValue,
   concurrencyByDay,
@@ -79,12 +80,14 @@ export function OverviewCard({
           label="Leverage"
           icon="bolt"
           rule="M-08"
+          definition={LEVERAGE_DEFINITION}
           tile={tiles.leverage}
           format={continuous}
           unit="×"
           // The exact whole days and what its change compares with (as many
           // whole days before, one more than the range when it starts
-          // mid-day) are stated in its definition and accessible description.
+          // mid-day) are stated in its accessible description, not its
+          // definition, which is only the equation.
           description={leverageSpanText(human.by_day)}
           sub={
             // The two sides the value divides, over the same whole local
@@ -207,7 +210,7 @@ function OverviewTile({
   /** Words in place of the number while there is none. */
   placeholder?: string;
   sub?: string;
-  /** More about the number, in its definition and accessible description, not on the tile. */
+  /** More about the number, in its accessible description, not on the tile or in its definition. */
   description?: string;
   takeaway?: string | null;
   children: ReactNode;
@@ -217,11 +220,7 @@ function OverviewTile({
   const words = !measured && placeholder !== undefined;
   const change = measured ? tileDelta(tile) : undefined;
   const describedBy = useId();
-  const tip = [
-    measured || !reason || words ? undefined : sentence(reason),
-    tileTip(tile, context),
-    description,
-  ]
+  const tip = [measured || !reason || words ? undefined : sentence(reason), tileTip(tile, context)]
     .filter(Boolean)
     .join(' ');
   return (

@@ -1,0 +1,3284 @@
+{
+  "mixed": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint",
+        "location": "plugin:code-tools@official/lint",
+        "name": "Lint check",
+        "description": "Grades how clean the linter leaves a project.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "code-tools"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/lint",
+        "location": "/home/you/.agents/skills/lint",
+        "name": "Lint check (my copy)",
+        "description": "My own copy of the lint grader.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "id_clash",
+          "name": "Lint check",
+          "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/readme-check",
+        "location": "/home/you/.claude/skills/readme-check",
+        "name": "README check",
+        "description": "Checks that a project's README explains how to install and run it.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "readme-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/release-notes",
+        "location": "/home/you/.agents/skills/release-notes",
+        "name": "release-notes",
+        "description": "Writes release notes from merged pull requests.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "total"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/security-scan",
+        "location": "/home/you/.codex/skills/security-scan",
+        "name": "security-scan",
+        "description": "Looks for leaked keys and risky settings.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "header_unterminated"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/deploy",
+        "location": "/home/you/.claude/skills/deploy",
+        "name": "deploy",
+        "description": "Ships the current branch to staging.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/design/2.0.1/skills/frontend-design",
+        "location": "plugin:design@official/frontend-design",
+        "name": "frontend-design",
+        "description": "Builds distinctive, production-grade interfaces with a strong point of view on typography, color and layout.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "design"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/documents/1.0.0/skills/pdf",
+        "location": "plugin:documents@official/pdf",
+        "name": "pdf",
+        "description": "Reads, fills and merges PDF files.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "documents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/doctor-graded",
+        "location": "/home/you/.claude/skills/doctor-graded",
+        "name": "CLAUDE.md Doctor (copy)",
+        "description": "A copy of the built-in rubric.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "claude-md-doctor"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 3,
+    "yours": 5,
+    "cant_score": 0,
+    "on_scores": 2,
+    "skipped": 1,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "plugins_unread": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.agents/skills/lint",
+        "location": "/home/you/.agents/skills/lint",
+        "name": "Lint check (my copy)",
+        "description": "My own copy of the lint grader.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/readme-check",
+        "location": "/home/you/.claude/skills/readme-check",
+        "name": "README check",
+        "description": "Checks that a project's README explains how to install and run it.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "readme-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/release-notes",
+        "location": "/home/you/.agents/skills/release-notes",
+        "name": "release-notes",
+        "description": "Writes release notes from merged pull requests.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "total"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/security-scan",
+        "location": "/home/you/.codex/skills/security-scan",
+        "name": "security-scan",
+        "description": "Looks for leaked keys and risky settings.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "header_unterminated"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/deploy",
+        "location": "/home/you/.claude/skills/deploy",
+        "name": "deploy",
+        "description": "Ships the current branch to staging.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/doctor-graded",
+        "location": "/home/you/.claude/skills/doctor-graded",
+        "name": "CLAUDE.md Doctor (copy)",
+        "description": "A copy of the built-in rubric.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "claude-md-doctor"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 2,
+    "yours": 3,
+    "cant_score": 0,
+    "on_scores": 2,
+    "skipped": 1,
+    "incomplete": true,
+    "plugins_unread": {
+      "file": "installed_plugins",
+      "failure": "link"
+    }
+  },
+  "added": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint",
+        "location": "plugin:code-tools@official/lint",
+        "name": "Lint check",
+        "description": "Grades how clean the linter leaves a project.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "code-tools"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/lint",
+        "location": "/home/you/.agents/skills/lint",
+        "name": "Lint check (my copy)",
+        "description": "My own copy of the lint grader.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "id_clash",
+          "name": "Lint check",
+          "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/release-notes",
+        "location": "/home/you/.agents/skills/release-notes",
+        "name": "release-notes",
+        "description": "Writes release notes from merged pull requests.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "total"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/security-scan",
+        "location": "/home/you/.codex/skills/security-scan",
+        "name": "security-scan",
+        "description": "Looks for leaked keys and risky settings.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "header_unterminated"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/deploy",
+        "location": "/home/you/.claude/skills/deploy",
+        "name": "deploy",
+        "description": "Ships the current branch to staging.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/design/2.0.1/skills/frontend-design",
+        "location": "plugin:design@official/frontend-design",
+        "name": "frontend-design",
+        "description": "Builds distinctive, production-grade interfaces with a strong point of view on typography, color and layout.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "design"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/documents/1.0.0/skills/pdf",
+        "location": "plugin:documents@official/pdf",
+        "name": "pdf",
+        "description": "Reads, fills and merges PDF files.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "documents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/doctor-graded",
+        "location": "/home/you/.claude/skills/doctor-graded",
+        "name": "CLAUDE.md Doctor (copy)",
+        "description": "A copy of the built-in rubric.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "claude-md-doctor"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/readme-check",
+        "location": "/home/you/.claude/skills/readme-check",
+        "name": "README check",
+        "description": "Checks that a project's README explains how to install and run it.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "readme-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "on_scores"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 2,
+    "yours": 5,
+    "cant_score": 0,
+    "on_scores": 3,
+    "skipped": 1,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "many": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint",
+        "location": "plugin:code-tools@official/lint",
+        "name": "Lint check",
+        "description": "Grades how clean the linter leaves a project.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "code-tools"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/lint",
+        "location": "/home/you/.agents/skills/lint",
+        "name": "Lint check (my copy)",
+        "description": "My own copy of the lint grader.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "id_clash",
+          "name": "Lint check",
+          "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/readme-check",
+        "location": "/home/you/.claude/skills/readme-check",
+        "name": "README check",
+        "description": "Checks that a project's README explains how to install and run it.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "readme-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/release-notes",
+        "location": "/home/you/.agents/skills/release-notes",
+        "name": "release-notes",
+        "description": "Writes release notes from merged pull requests.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "total"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/security-scan",
+        "location": "/home/you/.codex/skills/security-scan",
+        "name": "security-scan",
+        "description": "Looks for leaked keys and risky settings.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "header_unterminated"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/deploy",
+        "location": "/home/you/.claude/skills/deploy",
+        "name": "deploy",
+        "description": "Ships the current branch to staging.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/design/2.0.1/skills/frontend-design",
+        "location": "plugin:design@official/frontend-design",
+        "name": "frontend-design",
+        "description": "Builds distinctive, production-grade interfaces with a strong point of view on typography, color and layout.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "design"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/documents/1.0.0/skills/pdf",
+        "location": "plugin:documents@official/pdf",
+        "name": "pdf",
+        "description": "Reads, fills and merges PDF files.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "documents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-00",
+        "location": "plugin:tools@official/tool-00",
+        "name": "tool-00",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-01",
+        "location": "plugin:tools@official/tool-01",
+        "name": "tool-01",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-02",
+        "location": "plugin:tools@official/tool-02",
+        "name": "tool-02",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-03",
+        "location": "plugin:tools@official/tool-03",
+        "name": "tool-03",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-04",
+        "location": "plugin:tools@official/tool-04",
+        "name": "tool-04",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-05",
+        "location": "plugin:tools@official/tool-05",
+        "name": "tool-05",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-06",
+        "location": "plugin:tools@official/tool-06",
+        "name": "tool-06",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-07",
+        "location": "plugin:tools@official/tool-07",
+        "name": "tool-07",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-08",
+        "location": "plugin:tools@official/tool-08",
+        "name": "tool-08",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-09",
+        "location": "plugin:tools@official/tool-09",
+        "name": "tool-09",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-10",
+        "location": "plugin:tools@official/tool-10",
+        "name": "tool-10",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-11",
+        "location": "plugin:tools@official/tool-11",
+        "name": "tool-11",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-12",
+        "location": "plugin:tools@official/tool-12",
+        "name": "tool-12",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-13",
+        "location": "plugin:tools@official/tool-13",
+        "name": "tool-13",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-14",
+        "location": "plugin:tools@official/tool-14",
+        "name": "tool-14",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-15",
+        "location": "plugin:tools@official/tool-15",
+        "name": "tool-15",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-16",
+        "location": "plugin:tools@official/tool-16",
+        "name": "tool-16",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-17",
+        "location": "plugin:tools@official/tool-17",
+        "name": "tool-17",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-18",
+        "location": "plugin:tools@official/tool-18",
+        "name": "tool-18",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-19",
+        "location": "plugin:tools@official/tool-19",
+        "name": "tool-19",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-20",
+        "location": "plugin:tools@official/tool-20",
+        "name": "tool-20",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-21",
+        "location": "plugin:tools@official/tool-21",
+        "name": "tool-21",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-22",
+        "location": "plugin:tools@official/tool-22",
+        "name": "tool-22",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-23",
+        "location": "plugin:tools@official/tool-23",
+        "name": "tool-23",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-24",
+        "location": "plugin:tools@official/tool-24",
+        "name": "tool-24",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-25",
+        "location": "plugin:tools@official/tool-25",
+        "name": "tool-25",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-26",
+        "location": "plugin:tools@official/tool-26",
+        "name": "tool-26",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-27",
+        "location": "plugin:tools@official/tool-27",
+        "name": "tool-27",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-28",
+        "location": "plugin:tools@official/tool-28",
+        "name": "tool-28",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-29",
+        "location": "plugin:tools@official/tool-29",
+        "name": "tool-29",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-30",
+        "location": "plugin:tools@official/tool-30",
+        "name": "tool-30",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-31",
+        "location": "plugin:tools@official/tool-31",
+        "name": "tool-31",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-32",
+        "location": "plugin:tools@official/tool-32",
+        "name": "tool-32",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-33",
+        "location": "plugin:tools@official/tool-33",
+        "name": "tool-33",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-34",
+        "location": "plugin:tools@official/tool-34",
+        "name": "tool-34",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/tools/1.0.0/skills/tool-35",
+        "location": "plugin:tools@official/tool-35",
+        "name": "tool-35",
+        "description": "A plugin skill without a rubric.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "tools"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/doctor-graded",
+        "location": "/home/you/.claude/skills/doctor-graded",
+        "name": "CLAUDE.md Doctor (copy)",
+        "description": "A copy of the built-in rubric.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "claude-md-doctor"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 3,
+    "yours": 41,
+    "cant_score": 0,
+    "on_scores": 2,
+    "skipped": 1,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "making": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint",
+        "location": "plugin:code-tools@official/lint",
+        "name": "Lint check",
+        "description": "Grades how clean the linter leaves a project.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "code-tools"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/lint",
+        "location": "/home/you/.agents/skills/lint",
+        "name": "Lint check (my copy)",
+        "description": "My own copy of the lint grader.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "id_clash",
+          "name": "Lint check",
+          "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/readme-check",
+        "location": "/home/you/.claude/skills/readme-check",
+        "name": "README check",
+        "description": "Checks that a project's README explains how to install and run it.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "readme-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/release-notes",
+        "location": "/home/you/.agents/skills/release-notes",
+        "name": "release-notes",
+        "description": "Writes release notes from merged pull requests.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "total"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/security-scan",
+        "location": "/home/you/.codex/skills/security-scan",
+        "name": "security-scan",
+        "description": "Looks for leaked keys and risky settings.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "header_unterminated"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/deploy",
+        "location": "/home/you/.claude/skills/deploy",
+        "name": "deploy",
+        "description": "Ships the current branch to staging.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "running",
+          "job_id": "00000000-0000-4000-8000-0000000000aa",
+          "started_at_ms": 1784000000000
+        }
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/design/2.0.1/skills/frontend-design",
+        "location": "plugin:design@official/frontend-design",
+        "name": "frontend-design",
+        "description": "Builds distinctive, production-grade interfaces with a strong point of view on typography, color and layout.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "design"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/documents/1.0.0/skills/pdf",
+        "location": "plugin:documents@official/pdf",
+        "name": "pdf",
+        "description": "Reads, fills and merges PDF files.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "documents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/doctor-graded",
+        "location": "/home/you/.claude/skills/doctor-graded",
+        "name": "CLAUDE.md Doctor (copy)",
+        "description": "A copy of the built-in rubric.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "claude-md-doctor"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 3,
+    "yours": 5,
+    "cant_score": 0,
+    "on_scores": 2,
+    "skipped": 1,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "made": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.claude/skills/deploy",
+        "location": "/home/you/.claude/skills/deploy",
+        "name": "Deploy",
+        "description": "Whether the branch ships to staging cleanly.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "deploy"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": {
+          "state": "made",
+          "job_id": "00000000-0000-4000-8000-0000000000aa",
+          "criteria": [
+            {
+              "name": "Build passes",
+              "points": 40
+            },
+            {
+              "name": "Staging deploy succeeds",
+              "points": 40
+            },
+            {
+              "name": "Rollback documented",
+              "points": 20
+            }
+          ],
+          "kept_by_xtrace": false
+        }
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/design/2.0.1/skills/frontend-design",
+        "location": "plugin:design@official/frontend-design",
+        "name": "Frontend design",
+        "description": "How distinctive and finished a project's interface is.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "design"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "frontend-design"
+        },
+        "rubric_kept_by_xtrace": true,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": {
+          "state": "made",
+          "job_id": "00000000-0000-4000-8000-0000000000ab",
+          "criteria": [
+            {
+              "name": "Distinctive design",
+              "points": 100
+            }
+          ],
+          "kept_by_xtrace": true
+        }
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint",
+        "location": "plugin:code-tools@official/lint",
+        "name": "Lint check",
+        "description": "Grades how clean the linter leaves a project.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "code-tools"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/lint",
+        "location": "/home/you/.agents/skills/lint",
+        "name": "Lint check (my copy)",
+        "description": "My own copy of the lint grader.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "id_clash",
+          "name": "Lint check",
+          "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/readme-check",
+        "location": "/home/you/.claude/skills/readme-check",
+        "name": "README check",
+        "description": "Checks that a project's README explains how to install and run it.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "readme-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/release-notes",
+        "location": "/home/you/.agents/skills/release-notes",
+        "name": "release-notes",
+        "description": "Writes release notes from merged pull requests.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "total"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/security-scan",
+        "location": "/home/you/.codex/skills/security-scan",
+        "name": "security-scan",
+        "description": "Looks for leaked keys and risky settings.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "header_unterminated"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/documents/1.0.0/skills/pdf",
+        "location": "plugin:documents@official/pdf",
+        "name": "pdf",
+        "description": "Reads, fills and merges PDF files.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "documents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/doctor-graded",
+        "location": "/home/you/.claude/skills/doctor-graded",
+        "name": "CLAUDE.md Doctor (copy)",
+        "description": "A copy of the built-in rubric.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "claude-md-doctor"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 5,
+    "yours": 3,
+    "cant_score": 0,
+    "on_scores": 2,
+    "skipped": 1,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "make_failed": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint",
+        "location": "plugin:code-tools@official/lint",
+        "name": "Lint check",
+        "description": "Grades how clean the linter leaves a project.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "code-tools"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/lint",
+        "location": "/home/you/.agents/skills/lint",
+        "name": "Lint check (my copy)",
+        "description": "My own copy of the lint grader.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "lint-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "id_clash",
+          "name": "Lint check",
+          "folder": "/home/you/.claude/plugins/cache/tools/code-tools/1.2.0/skills/lint"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/readme-check",
+        "location": "/home/you/.claude/skills/readme-check",
+        "name": "README check",
+        "description": "Checks that a project's README explains how to install and run it.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "readme-check"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "addable"
+        },
+        "group": "ready",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/release-notes",
+        "location": "/home/you/.agents/skills/release-notes",
+        "name": "release-notes",
+        "description": "Writes release notes from merged pull requests.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "total"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": {
+          "state": "failed",
+          "job_id": "00000000-0000-4000-8000-0000000000ac",
+          "failure": {
+            "reason": "run",
+            "failure": "timeout"
+          }
+        }
+      },
+      {
+        "folder": "/home/you/.codex/skills/security-scan",
+        "location": "/home/you/.codex/skills/security-scan",
+        "name": "security-scan",
+        "description": "Looks for leaked keys and risky settings.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "problem",
+          "reason": "header_unterminated"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "remake",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/deploy",
+        "location": "/home/you/.claude/skills/deploy",
+        "name": "deploy",
+        "description": "Ships the current branch to staging.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "failed",
+          "job_id": "00000000-0000-4000-8000-0000000000aa",
+          "failure": {
+            "reason": "rubric_invalid",
+            "rubric": "total"
+          }
+        }
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/design/2.0.1/skills/frontend-design",
+        "location": "plugin:design@official/frontend-design",
+        "name": "frontend-design",
+        "description": "Builds distinctive, production-grade interfaces with a strong point of view on typography, color and layout.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "design"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "cancelled",
+          "job_id": "00000000-0000-4000-8000-0000000000ab"
+        }
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/documents/1.0.0/skills/pdf",
+        "location": "plugin:documents@official/pdf",
+        "name": "pdf",
+        "description": "Reads, fills and merges PDF files.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "documents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "cant_score",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "refused",
+          "job_id": "00000000-0000-4000-8000-0000000000ad",
+          "reason": "This skill reads, fills and merges PDF files; it does not review a project, so its output cannot be scored."
+        }
+      },
+      {
+        "folder": "/home/you/.claude/skills/doctor-graded",
+        "location": "/home/you/.claude/skills/doctor-graded",
+        "name": "CLAUDE.md Doctor (copy)",
+        "description": "A copy of the built-in rubric.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "ready",
+          "id": "claude-md-doctor"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 3,
+    "yours": 4,
+    "cant_score": 1,
+    "on_scores": 2,
+    "skipped": 1,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "yours": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.claude/skills/api-docs",
+        "location": "/home/you/.claude/skills/api-docs",
+        "name": "api-docs",
+        "description": "Helps with api docs.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/architecture",
+        "location": "/home/you/.agents/skills/architecture",
+        "name": "architecture",
+        "description": "Helps with architecture.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/brand-voice",
+        "location": "plugin:work@official/brand-voice",
+        "name": "brand-voice",
+        "description": "Helps with brand voice.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/bug-triage",
+        "location": "/home/you/.codex/skills/bug-triage",
+        "name": "bug-triage",
+        "description": "Helps with bug triage.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/changelog",
+        "location": "/home/you/.claude/skills/changelog",
+        "name": "changelog",
+        "description": "Helps with changelog.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/ci-fix",
+        "location": "/home/you/.agents/skills/ci-fix",
+        "name": "ci-fix",
+        "description": "Helps with ci fix.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/code-review",
+        "location": "plugin:work@official/code-review",
+        "name": "code-review",
+        "description": "Helps with code review.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/commit-message",
+        "location": "/home/you/.codex/skills/commit-message",
+        "name": "commit-message",
+        "description": "Helps with commit message.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/competitor-notes",
+        "location": "/home/you/.claude/skills/competitor-notes",
+        "name": "competitor-notes",
+        "description": "Helps with competitor notes.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/cost-report",
+        "location": "/home/you/.agents/skills/cost-report",
+        "name": "cost-report",
+        "description": "Helps with cost report.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/data-cleanup",
+        "location": "plugin:work@official/data-cleanup",
+        "name": "data-cleanup",
+        "description": "Helps with data cleanup.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/db-migrate",
+        "location": "/home/you/.codex/skills/db-migrate",
+        "name": "db-migrate",
+        "description": "Helps with db migrate.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/debug",
+        "location": "/home/you/.claude/skills/debug",
+        "name": "debug",
+        "description": "Helps with debug.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/deploy-check",
+        "location": "/home/you/.agents/skills/deploy-check",
+        "name": "deploy-check",
+        "description": "Helps with deploy check.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/design-critique",
+        "location": "plugin:work@official/design-critique",
+        "name": "design-critique",
+        "description": "Helps with design critique.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/docs-site",
+        "location": "/home/you/.codex/skills/docs-site",
+        "name": "docs-site",
+        "description": "Helps with docs site.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/email-draft",
+        "location": "/home/you/.claude/skills/email-draft",
+        "name": "email-draft",
+        "description": "Helps with email draft.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/error-budget",
+        "location": "/home/you/.agents/skills/error-budget",
+        "name": "error-budget",
+        "description": "Helps with error budget.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/feature-flag",
+        "location": "plugin:work@official/feature-flag",
+        "name": "feature-flag",
+        "description": "Helps with feature flag.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/frontend-polish",
+        "location": "/home/you/.codex/skills/frontend-polish",
+        "name": "frontend-polish",
+        "description": "Helps with frontend polish.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/grant-writer",
+        "location": "/home/you/.claude/skills/grant-writer",
+        "name": "grant-writer",
+        "description": "Helps with grant writer.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/incident-review",
+        "location": "/home/you/.agents/skills/incident-review",
+        "name": "incident-review",
+        "description": "Helps with incident review.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/interview-notes",
+        "location": "plugin:work@official/interview-notes",
+        "name": "interview-notes",
+        "description": "Helps with interview notes.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/invoice",
+        "location": "/home/you/.codex/skills/invoice",
+        "name": "invoice",
+        "description": "Helps with invoice.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/landing-copy",
+        "location": "/home/you/.claude/skills/landing-copy",
+        "name": "landing-copy",
+        "description": "Helps with landing copy.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/meeting-notes",
+        "location": "/home/you/.agents/skills/meeting-notes",
+        "name": "meeting-notes",
+        "description": "Helps with meeting notes.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/metrics-sql",
+        "location": "plugin:work@official/metrics-sql",
+        "name": "metrics-sql",
+        "description": "Helps with metrics sql.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/onboarding",
+        "location": "/home/you/.codex/skills/onboarding",
+        "name": "onboarding",
+        "description": "Helps with onboarding.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/perf-profile",
+        "location": "/home/you/.claude/skills/perf-profile",
+        "name": "perf-profile",
+        "description": "Helps with perf profile.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/pitch-deck",
+        "location": "/home/you/.agents/skills/pitch-deck",
+        "name": "pitch-deck",
+        "description": "Helps with pitch deck.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/pr-describe",
+        "location": "plugin:work@official/pr-describe",
+        "name": "pr-describe",
+        "description": "Helps with pr describe.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/privacy-check",
+        "location": "/home/you/.codex/skills/privacy-check",
+        "name": "privacy-check",
+        "description": "Helps with privacy check.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/release-plan",
+        "location": "/home/you/.claude/skills/release-plan",
+        "name": "release-plan",
+        "description": "Helps with release plan.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/research-brief",
+        "location": "/home/you/.agents/skills/research-brief",
+        "name": "research-brief",
+        "description": "Helps with research brief.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/roadmap",
+        "location": "plugin:work@official/roadmap",
+        "name": "roadmap",
+        "description": "Helps with roadmap.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/runbook",
+        "location": "/home/you/.codex/skills/runbook",
+        "name": "runbook",
+        "description": "Helps with runbook.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/sales-email",
+        "location": "/home/you/.claude/skills/sales-email",
+        "name": "sales-email",
+        "description": "Helps with sales email.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/schema-design",
+        "location": "/home/you/.agents/skills/schema-design",
+        "name": "schema-design",
+        "description": "Helps with schema design.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/seo-audit",
+        "location": "plugin:work@official/seo-audit",
+        "name": "seo-audit",
+        "description": "Helps with seo audit.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/slides",
+        "location": "/home/you/.codex/skills/slides",
+        "name": "slides",
+        "description": "Helps with slides.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/spec-writer",
+        "location": "/home/you/.claude/skills/spec-writer",
+        "name": "spec-writer",
+        "description": "Helps with spec writer.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/standup",
+        "location": "/home/you/.agents/skills/standup",
+        "name": "standup",
+        "description": "Helps with standup.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/support-reply",
+        "location": "plugin:work@official/support-reply",
+        "name": "support-reply",
+        "description": "Helps with support reply.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.codex/skills/test-plan",
+        "location": "/home/you/.codex/skills/test-plan",
+        "name": "test-plan",
+        "description": "Helps with test plan.",
+        "source": {
+          "kind": "codex"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/skills/translate",
+        "location": "/home/you/.claude/skills/translate",
+        "name": "translate",
+        "description": "Helps with translate.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/user-interview",
+        "location": "/home/you/.agents/skills/user-interview",
+        "name": "user-interview",
+        "description": "Helps with user interview.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.claude/plugins/cache/official/work/1.4.0/skills/weekly-update",
+        "location": "plugin:work@official/weekly-update",
+        "name": "weekly-update",
+        "description": "Helps with weekly update.",
+        "source": {
+          "kind": "plugin",
+          "plugin": "work"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "yours",
+        "rubric_action": "make",
+        "rubric_job": null
+      },
+      {
+        "folder": "/home/you/.agents/skills/code-review-patterns",
+        "location": "/home/you/.agents/skills/code-review-patterns",
+        "name": "code-review-patterns",
+        "description": "Self-reviews a diff before a push and fixes what it finds.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "cant_score",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "refused",
+          "job_id": "00000000-0000-4000-8000-0000000000b2",
+          "reason": "It fixes its own diff, commits and pushes; it needs project changes and the network and writes no report to score."
+        }
+      },
+      {
+        "folder": "/home/you/.claude/skills/framer",
+        "location": "/home/you/.claude/skills/framer",
+        "name": "framer",
+        "description": "Designs, edits and publishes Framer sites.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "cant_score",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "refused",
+          "job_id": "00000000-0000-4000-8000-0000000000b1",
+          "reason": "It designs, edits and publishes Framer sites through a networked tool; it does not review a local project and cannot work offline."
+        }
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 0,
+    "yours": 47,
+    "cant_score": 2,
+    "on_scores": 1,
+    "skipped": 0,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "all_refused": {
+    "state": "loaded",
+    "skills": [
+      {
+        "folder": "/home/you/.agents/skills/code-review-patterns",
+        "location": "/home/you/.agents/skills/code-review-patterns",
+        "name": "code-review-patterns",
+        "description": "Self-reviews a diff before a push and fixes what it finds.",
+        "source": {
+          "kind": "agents"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "cant_score",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "refused",
+          "job_id": "00000000-0000-4000-8000-0000000000b2",
+          "reason": "It fixes its own diff, commits and pushes; it needs project changes and the network and writes no report to score."
+        }
+      },
+      {
+        "folder": "/home/you/.claude/skills/framer",
+        "location": "/home/you/.claude/skills/framer",
+        "name": "framer",
+        "description": "Designs, edits and publishes Framer sites.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "not_ready"
+        },
+        "group": "cant_score",
+        "rubric_action": "make",
+        "rubric_job": {
+          "state": "refused",
+          "job_id": "00000000-0000-4000-8000-0000000000b1",
+          "reason": "It designs, edits and publishes Framer sites through a networked tool; it does not review a local project and cannot work offline."
+        }
+      },
+      {
+        "folder": "/home/you/.claude/skills/claude-md-doctor",
+        "location": "/home/you/.claude/skills/claude-md-doctor",
+        "name": "claude-md-doctor",
+        "description": "Checks CLAUDE.md and AGENTS.md files and backtests their rules.",
+        "source": {
+          "kind": "claude"
+        },
+        "rubric": {
+          "state": "missing"
+        },
+        "rubric_kept_by_xtrace": false,
+        "scores": {
+          "state": "built_in"
+        },
+        "group": "on_scores",
+        "rubric_action": null,
+        "rubric_job": null
+      }
+    ],
+    "ready": 0,
+    "yours": 0,
+    "cant_score": 2,
+    "on_scores": 1,
+    "skipped": 0,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "empty": {
+    "state": "loaded",
+    "skills": [],
+    "ready": 0,
+    "yours": 0,
+    "cant_score": 0,
+    "on_scores": 0,
+    "skipped": 0,
+    "incomplete": false,
+    "plugins_unread": null
+  },
+  "not_configured": {
+    "state": "not_configured"
+  },
+  "failed": {
+    "state": "failed"
+  }
+}

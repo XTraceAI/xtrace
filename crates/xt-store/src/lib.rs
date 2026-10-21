@@ -93,12 +93,14 @@ macro_rules! response_selected_sql {
     };
 }
 
+pub mod added_skills;
 pub mod batch;
 pub mod child_check;
 pub mod child_fact;
 pub mod claude_launch;
 pub mod confirmation;
 pub mod creation;
+pub mod grades;
 pub mod human_break;
 pub mod human_input;
 pub mod identity_reader;

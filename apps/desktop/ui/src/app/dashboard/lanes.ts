@@ -1,5 +1,6 @@
 import type { DashboardLane } from '../../data/generated/DashboardLane';
 import type { SessionChildCheck } from '../../data/generated/SessionChildCheck';
+import { count } from '../../kit/format';
 
 /**
  * The returned spans of one session, in the order the report sorted them
@@ -70,6 +71,43 @@ export interface ShownContext {
  */
 export const stillChecking = (found: ShownContext | undefined, host: string) =>
   !found || found.host !== host || found.child_check == null || found.child_check === 'checking';
+
+/**
+ * How many of the given sessions a list leaves out because they are still
+ * being checked: each is judged by its own context with [`stillChecking`],
+ * the same rule that hides it, so this never counts a session a list shows.
+ * A session hidden only because a session above it is still being checked is
+ * not counted.
+ */
+export const countStillChecking = <S extends { host: string }>(
+  sessions: readonly S[],
+  contextOf: (session: S) => ShownContext | null | undefined,
+) =>
+  sessions.filter((session) => stillChecking(contextOf(session) ?? undefined, session.host)).length;
+
+/*
+ * What the lists say about sessions hidden while their check is unfinished.
+ * The words stay true if a check never finishes, and for a session hidden
+ * only because nothing is known of it yet: they say why it is hidden, never
+ * that it will appear.
+ */
+
+/** Why such sessions are hidden, after a list's own empty words. */
+export const CHECKING_REASON =
+  'Sessions are hidden while XTrace has not finished checking whether another session started them.';
+
+/** An empty list whose returned sessions include one still being checked. */
+export const checkingEmpty = (lead = 'No session to show yet') => `${lead}. ${CHECKING_REASON}`;
+
+/** How many matching sessions are hidden while being checked, as one sentence. */
+export const checkingHidden = (hidden: number) =>
+  hidden === 1
+    ? '1 session is hidden because XTrace has not finished checking whether another session started it.'
+    : `${count(hidden)} sessions are hidden because XTrace has not finished checking whether another session started them.`;
+
+/** The same, short enough for a card's one-line subtitle. */
+export const checkingHiddenShort = (hidden: number) =>
+  `${count(hidden)} hidden: check not finished`;
 
 /**
  * Whether a list leaves a session out: it is still being checked, or it is a

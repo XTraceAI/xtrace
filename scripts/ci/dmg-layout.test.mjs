@@ -12,16 +12,16 @@ import {
 import { blob, dsStore, iloc, record, u32 } from './ds-store-fixture.mjs';
 
 const expected = {
-  app: 'XTrace Desktop.app',
+  app: 'XTrace.app',
   background: 'background.tiff',
-  icons: { 'XTrace Desktop.app': { x: 180, y: 170 }, Applications: { x: 480, y: 170 } },
+  icons: { 'XTrace.app': { x: 180, y: 170 }, Applications: { x: 480, y: 170 } },
 };
 const finderRecords = [
   record('.', 'bwsp', 'blob', blob(Buffer.from('window settings'))),
   record('.', 'vSrn', 'long', u32(1)),
   iloc('Applications', 480, 170),
-  record('XTrace Desktop.app', 'ICVO', 'bool', Buffer.from([1])),
-  iloc('XTrace Desktop.app', 180, 170),
+  record('XTrace.app', 'ICVO', 'bool', Buffer.from([1])),
+  iloc('XTrace.app', 180, 170),
 ];
 
 test('the expected layout comes from the disk image settings in tauri.conf.json', async () => {
@@ -39,12 +39,12 @@ test('reads saved icon positions from one leaf or a split record tree', () => {
 
 test('reports the misplaced app icon seen in a local build and a missing icon', () => {
   const moved = readIconPositions(
-    dsStore([iloc('Applications', 480, 170), iloc('XTrace Desktop.app', 208, 151)]),
+    dsStore([iloc('Applications', 480, 170), iloc('XTrace.app', 208, 151)]),
   );
   assert.deepEqual(layoutProblems(moved, expected), [
-    'XTrace Desktop.app is at 208,151; expected 180,170.',
+    'XTrace.app is at 208,151; expected 180,170.',
   ]);
-  const missing = readIconPositions(dsStore([iloc('XTrace Desktop.app', 180, 170)]));
+  const missing = readIconPositions(dsStore([iloc('XTrace.app', 180, 170)]));
   assert.deepEqual(layoutProblems(missing, expected), ['Applications has no saved icon position.']);
 });
 
@@ -58,12 +58,12 @@ test('a mounted image needs the app, the Applications link, the background and s
   const volume = await mkdtemp(join(tmpdir(), 'xtrace-dmg-layout-test-'));
   try {
     assert.deepEqual((await inspectMountedLayout(volume, expected)).problems, [
-      'XTrace Desktop.app is missing.',
+      'XTrace.app is missing.',
       'The Applications shortcut is missing.',
       'The window background picture is missing.',
       'Finder saved no window layout (.DS_Store is missing).',
     ]);
-    await mkdir(join(volume, 'XTrace Desktop.app'));
+    await mkdir(join(volume, 'XTrace.app'));
     await symlink('/Applications', join(volume, 'Applications'));
     await mkdir(join(volume, '.background'));
     await writeFile(join(volume, '.background/background.tiff'), '');

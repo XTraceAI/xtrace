@@ -40,6 +40,11 @@
     "size": [228, 900]
   },
   {
+    "id": "sidebar/active-scores",
+    "components": ["Sidebar"],
+    "size": [228, 900]
+  },
+  {
     "id": "sidebar/active-prs",
     "components": ["Sidebar"],
     "size": [228, 900]

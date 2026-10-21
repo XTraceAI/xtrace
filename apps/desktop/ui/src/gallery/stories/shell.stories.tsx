@@ -238,10 +238,11 @@ export const shellStories = [
       )}
     </div>
   )),
-  ...(['dashboard', 'sessions', 'prs', 'rulebook', 'leaderboard'] as const).map((initial) =>
-    story(`sidebar/active-${initial}`, ['Sidebar'], [228, 900], (props) => (
-      <SidebarExample {...props} initial={initial} />
-    )),
+  ...(['dashboard', 'sessions', 'scores', 'prs', 'rulebook', 'leaderboard'] as const).map(
+    (initial) =>
+      story(`sidebar/active-${initial}`, ['Sidebar'], [228, 900], (props) => (
+        <SidebarExample {...props} initial={initial} />
+      )),
   ),
   ...[
     'plugin-off',

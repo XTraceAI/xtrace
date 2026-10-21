@@ -362,7 +362,7 @@ impl AppState {
         metric_context: MetricContext,
     ) -> Result<Self, StateError> {
         let info = AppInfo {
-            name: "XTrace Desktop".into(),
+            name: "XTrace".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             data_dir: data_dir.to_str().ok_or(StateError::InvalidOption)?.into(),
             fixture,

@@ -38,6 +38,10 @@ import {
   usd,
 } from './present';
 import {
+  checkingEmpty,
+  checkingHidden,
+  checkingHiddenShort,
+  countStillChecking,
   groupSessionLanes,
   laneRows,
   listedLanes,
@@ -75,9 +79,41 @@ export const MIN_LANE_ROWS = 3;
 export const laneHours = (report: DashboardMetrics) =>
   Math.round(Math.max(1, report.lane_end_ms - report.lane_start_ms) / HOUR);
 
-/** Which sessions the card lists, said where the card is named. */
-export const laneSubtitle = (report: DashboardMetrics) =>
-  `Active in the last ${laneHours(report)} hours`;
+/**
+ * Each session's context by exact host and identity: the listed sessions' and
+ * their sub-sessions'. One session's context is never another host's.
+ */
+const laneContext = (report: DashboardMetrics) =>
+  new Map<string, DashboardLaneSession>(
+    [...report.lane_sessions, ...report.lane_sub_sessions].map((session) => [
+      sessionKey(session.host, session.session_id),
+      session,
+    ]),
+  );
+
+/**
+ * How many returned sessions the card leaves out because they are still being
+ * checked, each by its own context, as the card decides to leave it out.
+ */
+export const lanesStillChecking = (report: DashboardMetrics) => {
+  const context = laneContext(report);
+  return countStillChecking(groupSessionLanes(report.lanes), (lane) =>
+    context.get(sessionKey(lane.host, lane.sessionId)),
+  );
+};
+
+/**
+ * Which sessions the card lists, said where the card is named, with how many
+ * it leaves out while their check is unfinished, if any: a short line, and,
+ * when some are left out, the same in full for its tooltip and screen readers.
+ */
+export const laneSubtitle = (report: DashboardMetrics): { text: string; full?: string } => {
+  const hidden = lanesStillChecking(report);
+  const listed = `Active in the last ${laneHours(report)} hours`;
+  if (hidden === 0) return { text: listed };
+  const text = `${listed} · ${checkingHiddenShort(hidden)}`;
+  return { text, full: `${text}. ${checkingHidden(hidden)}` };
+};
 
 /** What the rows are and are not, read from the card's definition. */
 export const laneDefinition = (report: DashboardMetrics) =>
@@ -150,12 +186,7 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
   // never make a row by themselves, and the sub-sessions with no span here.
   // Keyed by exact host and identity, as the grouping is: one session's
   // context is never another host's.
-  const context = new Map<string, DashboardLaneSession>(
-    [...report.lane_sessions, ...report.lane_sub_sessions].map((session) => [
-      sessionKey(session.host, session.session_id),
-      session,
-    ]),
-  );
+  const context = laneContext(report);
   // A session the report named no context row for keeps an honest unknown
   // rather than borrowing another row's repository.
   const found = (lane: SessionLane) => context.get(sessionKey(lane.host, lane.sessionId)) ?? null;
@@ -174,6 +205,7 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
     );
   };
   const returned = groupSessionLanes(lanes);
+  const checking = lanesStillChecking(report);
   // The listed sessions' sub-sessions with no span here, whenever they ran,
   // so a group lists every sub-session its total adds up. Each is placed only
   // under its verified parent — a returned session or another of these — so
@@ -630,9 +662,15 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
         rowHeight={22}
         hover="track"
         stickyHeader
-        emptyMessage={`${
-          returned.length > 0 ? 'No session to list' : 'No active span'
-        } in the last ${hours} hours (${clockTime(start, window)} – ${clockTime(end, window)}).`}
+        emptyMessage={
+          checking > 0
+            ? checkingEmpty(
+                `No session to show yet in the last ${hours} hours (${clockTime(start, window)} – ${clockTime(end, window)})`,
+              )
+            : `${
+                returned.length > 0 ? 'No session to list' : 'No active span'
+              } in the last ${hours} hours (${clockTime(start, window)} – ${clockTime(end, window)}).`
+        }
       />
     </div>
   );

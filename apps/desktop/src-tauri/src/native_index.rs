@@ -394,28 +394,31 @@ fn usage_probe_directory(data_dir: &std::path::Path) -> Option<PathBuf> {
 /// one rule every screen reads (Sessions, sidebar, Welcome, Settings). A
 /// settled scan does not: `complete`, or `missing_source` (no local history
 /// to read is not a failure). A host the running scan has not reached yet is
-/// waiting, not a problem. Every other state is: a scan that read with gaps,
-/// could not run, failed or was cancelled, and a host left unscanned once no
-/// scan is running.
-pub fn host_needs_attention(state: NativeHostState, scanning: bool) -> bool {
-    match state {
+/// waiting, not a problem. A scan that read with gaps (`incomplete`) is a
+/// problem only when it could not read the host at all: it read no session,
+/// neither imported nor partly read. One that read sessions but skipped or
+/// partly read some, or raised diagnostics, is not; Settings shows those
+/// counts. Every other state is a problem: a scan that could not run, failed
+/// or was cancelled, and a host left unscanned once no scan is running.
+pub fn host_needs_attention(host: &NativeHostStatus, scanning: bool) -> bool {
+    match host.state {
         NativeHostState::Complete | NativeHostState::MissingSource => false,
         NativeHostState::Pending => !scanning,
-        NativeHostState::Incomplete
-        | NativeHostState::MissingRuntime
+        NativeHostState::Incomplete => host.sessions_imported == 0 && host.sessions_partial == 0,
+        NativeHostState::MissingRuntime
         | NativeHostState::PinMismatch
         | NativeHostState::ReaderFailed
         | NativeHostState::Cancelled => true,
     }
 }
 
-/// Set every host's `needs_attention` from its state and the phase, and the
-/// index's own flag from the hosts. Called after every change to the phase or
-/// the hosts, before the status is published.
+/// Set every host's `needs_attention` from its state, its session counts and
+/// the phase, and the index's own flag from the hosts. Called after every
+/// change to the phase or the hosts, before the status is published.
 pub fn mark_attention(status: &mut NativeIndexStatus) {
     let scanning = status.phase == NativeIndexPhase::Scanning;
     for host in &mut status.hosts {
-        host.needs_attention = host_needs_attention(host.state, scanning);
+        host.needs_attention = host_needs_attention(host, scanning);
     }
     status.needs_attention = status.hosts.iter().any(|host| host.needs_attention);
 }
@@ -969,6 +972,14 @@ mod tests {
         NativeHostState::Cancelled,
     ];
 
+    /// A host in `state` whose scan read no session at all.
+    fn unread(state: NativeHostState) -> NativeHostStatus {
+        NativeHostStatus {
+            state,
+            ..pending(Host::Claude)
+        }
+    }
+
     #[test]
     fn only_settled_scans_and_hosts_waiting_on_a_running_scan_are_not_a_problem() {
         for state in STATES {
@@ -977,8 +988,51 @@ mod tests {
                 NativeHostState::Complete | NativeHostState::MissingSource
             );
             let waiting = state == NativeHostState::Pending;
-            assert_eq!(host_needs_attention(state, true), !settled && !waiting);
-            assert_eq!(host_needs_attention(state, false), !settled, "{state:?}");
+            // A scan that read nothing: only settled and waiting hosts pass.
+            let host = unread(state);
+            assert_eq!(host_needs_attention(&host, true), !settled && !waiting);
+            assert_eq!(host_needs_attention(&host, false), !settled, "{state:?}");
+            // Sessions read change nothing but a scan that read with gaps.
+            let read = NativeHostStatus {
+                sessions_imported: 1200,
+                sessions_partial: 2,
+                sessions_skipped: 3,
+                diagnostics: 1,
+                ..host
+            };
+            let gaps = state == NativeHostState::Incomplete;
+            for scanning in [true, false] {
+                assert_eq!(
+                    host_needs_attention(&read, scanning),
+                    host_needs_attention(&unread(state), scanning) && !gaps,
+                    "{state:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_scan_read_with_gaps_is_a_problem_only_when_it_read_no_session() {
+        let incomplete = |imported, partial, skipped, diagnostics| NativeHostStatus {
+            sessions_imported: imported,
+            sessions_partial: partial,
+            sessions_skipped: skipped,
+            diagnostics,
+            ..unread(NativeHostState::Incomplete)
+        };
+        for scanning in [true, false] {
+            // A few sessions skipped or partly read out of many, or a
+            // diagnostic: the tool was read, so no warning.
+            assert!(!host_needs_attention(&incomplete(1200, 0, 3, 3), scanning));
+            assert!(!host_needs_attention(&incomplete(1200, 2, 0, 0), scanning));
+            assert!(!host_needs_attention(&incomplete(1200, 0, 0, 1), scanning));
+            // Every session read only partly is still a read tool.
+            assert!(!host_needs_attention(&incomplete(0, 4, 0, 0), scanning));
+            // Nothing read at all (a Claude root that is an alias, say, or
+            // every session skipped): the tool could not be read.
+            assert!(host_needs_attention(&incomplete(0, 0, 0, 1), scanning));
+            assert!(host_needs_attention(&incomplete(0, 0, 0, 0), scanning));
+            assert!(host_needs_attention(&incomplete(0, 0, 5, 5), scanning));
         }
     }
 

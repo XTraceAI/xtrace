@@ -933,10 +933,140 @@ it('answers rule activity from a fixture exactly as fixture mode does, never as 
   expect(invoke).not.toHaveBeenCalled();
 });
 
+it('invokes the native project list with nothing but its own name', async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  const result = { state: 'not_configured' };
+  vi.mocked(invoke).mockResolvedValue(result);
+  const source = await nativeSource();
+  expect(await source.projects?.()).toEqual(result);
+  // No home, path or filter crosses: the native side chooses the source.
+  expect(invoke).toHaveBeenCalledTimes(1);
+  expect(invoke).toHaveBeenCalledWith(commands.projectsList);
+  expect(commands.projectsList).toBe('projects_list');
+});
+
+it('answers the project list from a fixture exactly as fixture mode does, never as a read', async () => {
+  const fixture: DataSource = await loadFixtureDataSource('F1');
+  const first = await fixture.projects?.();
+  expect(first).toEqual({ state: 'not_configured' });
+  expect(first).toEqual(shell.projects);
+  // An isolated copy: a view that edits its answer changes no later one.
+  if (first) (first as { state: string }).state = 'failed';
+  expect(await fixture.projects?.()).toEqual(shell.projects);
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+it('invokes the grading commands with only a project path, a skill ID or a run ID', async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  const source = await nativeSource();
+  const answers: Record<string, unknown> = {
+    [commands.gradingSkills]: { state: 'not_configured' },
+    [commands.gradingOverview]: { state: 'failed' },
+    [commands.gradingRuns]: { state: 'loaded', runs: [] },
+    [commands.gradingStart]: { state: 'busy' },
+    [commands.gradingCancel]: true,
+    [commands.gradingRubricMake]: { state: 'busy' },
+  };
+  vi.mocked(invoke).mockImplementation(async (cmd: string) => answers[cmd]);
+  expect(await source.grading?.skills()).toEqual({ state: 'not_configured' });
+  expect(await source.grading?.overview()).toEqual({ state: 'failed' });
+  expect(await source.grading?.runs()).toEqual({ state: 'loaded', runs: [] });
+  expect(await source.grading?.start('/code/app', 'claude-md-doctor')).toEqual({ state: 'busy' });
+  expect(await source.grading?.cancel('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(true);
+  expect(await source.grading?.makeRubric('plugin:tools@market/lint')).toEqual({ state: 'busy' });
+  expect(vi.mocked(invoke).mock.calls).toEqual([
+    [commands.gradingSkills],
+    [commands.gradingOverview],
+    [commands.gradingRuns],
+    [commands.gradingStart, { projectPath: '/code/app', skillId: 'claude-md-doctor' }],
+    [commands.gradingCancel, { runId: '0f8fad5b-d9cb-469f-a165-70867728950e' }],
+    [commands.gradingRubricMake, { location: 'plugin:tools@market/lint' }],
+  ]);
+  expect([
+    commands.gradingSkills,
+    commands.gradingOverview,
+    commands.gradingRuns,
+    commands.gradingStart,
+    commands.gradingCancel,
+    commands.gradingRubricMake,
+  ]).toEqual([
+    'grading_skills',
+    'grading_overview',
+    'grading_runs',
+    'grading_start',
+    'grading_cancel',
+    'grading_rubric_make',
+  ]);
+});
+
+it('invokes the link commands with only the pasted link, a look-up ID and the chosen paths', async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  const source = await nativeSource();
+  const answers: Record<string, unknown> = {
+    [commands.gradingLinkLookup]: { state: 'rate_limited' },
+    [commands.gradingLinkCancel]: false,
+    [commands.gradingLinkKeep]: { state: 'expired' },
+    [commands.gradingLinkDiscard]: true,
+  };
+  vi.mocked(invoke).mockImplementation(async (cmd: string) => answers[cmd]);
+  expect(await source.grading?.linkLookup('https://github.com/octo/skills')).toEqual({
+    state: 'rate_limited',
+  });
+  expect(await source.grading?.linkCancel()).toBe(false);
+  expect(await source.grading?.linkKeep('id-1', ['skills/pdf'])).toEqual({ state: 'expired' });
+  expect(await source.grading?.linkDiscard('id-1')).toBe(true);
+  expect(vi.mocked(invoke).mock.calls).toEqual([
+    [commands.gradingLinkLookup, { link: 'https://github.com/octo/skills' }],
+    [commands.gradingLinkCancel],
+    [commands.gradingLinkKeep, { lookupId: 'id-1', paths: ['skills/pdf'] }],
+    [commands.gradingLinkDiscard, { lookupId: 'id-1' }],
+  ]);
+  expect([
+    commands.gradingLinkLookup,
+    commands.gradingLinkCancel,
+    commands.gradingLinkKeep,
+    commands.gradingLinkDiscard,
+  ]).toEqual([
+    'grading_link_lookup',
+    'grading_link_cancel',
+    'grading_link_keep',
+    'grading_link_discard',
+  ]);
+  // A fixture never looks anything up.
+  const fixture: DataSource = await loadFixtureDataSource('F1');
+  vi.mocked(invoke).mockClear();
+  expect(await fixture.grading?.linkLookup('https://github.com/octo/skills')).toEqual({
+    state: 'not_configured',
+  });
+  expect(await fixture.grading?.linkKeep('id-1', ['skills/pdf'])).toEqual({
+    state: 'not_configured',
+  });
+  expect(await fixture.grading?.linkCancel()).toBe(false);
+  expect(await fixture.grading?.linkDiscard('id-1')).toBe(false);
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+it('answers grading from a fixture exactly as fixture mode does and never runs anything', async () => {
+  const fixture: DataSource = await loadFixtureDataSource('F1');
+  expect(await fixture.grading?.skills()).toEqual({ state: 'not_configured' });
+  expect(await fixture.grading?.skills()).toEqual(shell.grading_skills);
+  expect(await fixture.grading?.runs()).toEqual(shell.grading_runs);
+  expect(await fixture.grading?.overview()).toEqual({ state: 'not_configured' });
+  expect(await fixture.grading?.overview()).toEqual(shell.grading_overview);
+  expect(await fixture.grading?.start('/code/app', 'claude-md-doctor')).toEqual({
+    state: 'not_configured',
+  });
+  expect(await fixture.grading?.cancel('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(false);
+  expect(await fixture.grading?.makeRubric('/skills/x')).toEqual({ state: 'not_configured' });
+  expect(invoke).not.toHaveBeenCalled();
+});
+
 it('offers no rule activity in browser preview', async () => {
   vi.mocked(isTauri).mockReturnValue(false);
   const source = await createDataSource();
   expect(source.kind).toBe('preview');
   expect(source.ruleActivity).toBeUndefined();
+  expect(source.projects).toBeUndefined();
+  expect(source.grading).toBeUndefined();
   expect(invoke).not.toHaveBeenCalled();
 });

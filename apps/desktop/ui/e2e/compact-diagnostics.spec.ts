@@ -48,15 +48,16 @@ combined.native_index = {
   hosts: [
     {
       host: 'claude',
+      // Read with gaps and no session read: the app flags it.
       state: 'incomplete',
       needs_attention: true,
       detail: null,
-      sessions_imported: 1,
-      sessions_partial: 1,
+      sessions_imported: 0,
+      sessions_partial: 0,
       sessions_skipped: 0,
       skipped_conversations: [],
       skipped_conversations_omitted: 0,
-      records_new: 25,
+      records_new: 0,
       records_enriched: 0,
       diagnostics: 1,
     },

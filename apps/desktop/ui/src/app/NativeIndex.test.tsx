@@ -120,7 +120,7 @@ it('shows the typed native index status as reported and refreshes it on its even
   mount(source);
   const card = await screen.findByTestId('native-index');
   expect(within(card).getByText('Ready (3 reconciliations)')).toBeTruthy();
-  expect(within(card).getByText('Live: changes are reconciled as they happen')).toBeTruthy();
+  expect(within(card).getByText('Live: new activity is added as it happens')).toBeTruthy();
   expect(within(card).getByText('/opt/homebrew/bin/python3')).toBeTruthy();
   expect(within(card).getByText('Bundled memhub 0.55.0 at d7c94227cc9b')).toBeTruthy();
   expect(

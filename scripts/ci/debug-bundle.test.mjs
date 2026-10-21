@@ -139,7 +139,7 @@ test('fixture smoke fixes F1 and disables provider-related background work witho
 async function bundleFixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'smoke-id-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const source = join(root, 'source', 'XTrace Desktop.app');
+  const source = join(root, 'source', 'XTrace.app');
   const directory = join(root, 'copy');
   await mkdir(join(source, 'Contents/MacOS'), { recursive: true });
   await mkdir(directory);
@@ -182,7 +182,7 @@ test('explicit fixture mode reaches the launched child and reported evidence', a
 
 test('unregistering a smoke copy cannot name the original app or a production identity', () => {
   const directory = '/owned/staging.noindex';
-  const bundle = join(directory, 'XTrace Desktop.app');
+  const bundle = join(directory, 'XTrace.app');
   const prepared = { bundle, identifier: 'ai.xtrace.app.test.abc123' };
   const calls = [];
   unregisterSmokeBundle(prepared, directory, (command, args) => {
@@ -192,6 +192,7 @@ test('unregistering a smoke copy cannot name the original app or a production id
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].args, ['-u', bundle]);
   for (const invalid of [
+    { ...prepared, bundle: '/Applications/XTrace.app' },
     { ...prepared, bundle: '/Applications/XTrace Desktop.app' },
     { ...prepared, identifier: 'ai.xtrace.app' },
   ])
@@ -366,7 +367,7 @@ for (const mode of ['debug', 'release', 'fixture']) {
       },
       spawnProcess: (command, args, options) => {
         copy = command.slice(0, command.indexOf('/Contents/MacOS/'));
-        assert.match(copy, /\/staging\.noindex\/XTrace Desktop\.app$/);
+        assert.match(copy, /\/staging\.noindex\/XTrace\.app$/);
         assert.equal(options.env.XTRACE_FIXTURE, mode === 'fixture' ? 'F1' : undefined);
         assert.equal(options.env.XTRACE_DATA_DIR, join(copy, '..', 'data'));
         assert.equal(options.env.XTRACE_NATIVE_HOME, join(copy, '..', 'home'));

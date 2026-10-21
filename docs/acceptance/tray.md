@@ -9,9 +9,9 @@ and menu-bar interaction still require the manual native checks below.
 ## As built
 
 SPEC 1.7. One template icon in the macOS menu bar. A left click toggles a
-360×540 popover anchored under the icon. The icon's menu has **Open XTrace
-Desktop**, which shows, restores and focuses the existing main window, and
-**Quit XTrace Desktop**, which calls `AppHandle::exit` so the normal
+360×540 popover anchored under the icon. The icon's menu has **Open XTrace**,
+which shows, restores and focuses the existing main window, and **Quit
+XTrace**, which calls `AppHandle::exit` so the normal
 `RunEvent::Exit` shutdown still stops the index and closes the database.
 
 The popover is its own webview window (`tray`, route `#/tray`) outside the

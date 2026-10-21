@@ -11,7 +11,10 @@ host: string, state: NativeHostState,
  * This host's last scan leaves the index short of it. Settled scans
  * (`complete`, and `missing_source`: no local history to read) and a
  * host still waiting while the scan runs (`pending` during `scanning`)
- * do not; every other state does, `cancelled` included. Decided once,
+ * do not. A scan that read with gaps (`incomplete`) does only when it
+ * read no session at all (none imported, none partly read); a few
+ * sessions skipped or partly read, or diagnostics, are shown as counts
+ * instead. Every other state does, `cancelled` included. Decided once,
  * in `native_index::mark_attention`, for every screen.
  */
 needs_attention: boolean, detail: string | null, sessions_imported: number, sessions_partial: number, sessions_skipped: number, skipped_conversations: Array<NativeSkippedConversation>, skipped_conversations_omitted: number, records_new: number, records_enriched: number, diagnostics: number, };
