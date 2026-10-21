@@ -236,11 +236,47 @@ test('exact observed unregister failure needs independent absence; other failure
   }
 });
 
+test('hosted macOS 14 dump rows (named bundle ids, root volume path) establish cleanup', async () => {
+  // Excerpt shapes from the real hosted dump of run 39531328355.
+  const hosted = Buffer.from(
+    [
+      'Status: Database is seeded.',
+      'bundle id:                  SSMenuAgent (0x17a0)',
+      'path:                       / (0x4)',
+      'path:                       /System/Library/CoreServices/SSMenuAgent.app (0x1f2c)',
+      'bundle id:                  Rosetta 2 Updater (0x17a4)',
+      'path:                       /Library/Apple/System/Library/CoreServices/Rosetta 2 Updater.app (0x1f30)',
+      '',
+    ].join('\n'),
+  );
+  const fixture = await registryFixture({ dump: () => hosted });
+  try {
+    await fixture.cleanup();
+    assert.equal(fixture.report.registryCleanup.dump.usable, true);
+    assert.equal(fixture.report.registryCleanup.absenceConfirmed, true);
+    assert.equal(await registryExists(fixture.parent), false);
+  } finally {
+    await fixture.dispose();
+  }
+});
+
 test('dump errors, malformed/partial output and failed removal cannot establish cleanup', async () => {
+  const status = 'Status: Database is seeded\n';
   for (const change of [
     { dump: () => Buffer.alloc(0) },
     { dump: () => Buffer.from('Status: seeded\n') },
     { dump: () => Buffer.from('Status: seeded\nbundle id: 42\npath: file:///unsupported\n') },
+    // Rows without the native address suffix are not recognized.
+    {
+      dump: () =>
+        Buffer.from(`${status}bundle id: 42\npath: /System/Applications/TextEdit.app (0x1)\n`),
+    },
+    {
+      dump: () =>
+        Buffer.from(`${status}bundle id: Name (0x2a)\npath: /System/Applications/TextEdit.app\n`),
+    },
+    { dump: () => Buffer.from(`${status}bundle id: Name (0x2a)\npath: / \n`) },
+    { dump: () => Buffer.from(`${status}bundle id: (0x2a)\npath: / (0x4)\n`) },
     { dump: () => registryDump('/System/Applications/TextEdit.app').subarray(0, -1) },
     { dump: () => Buffer.from([255, 254]) },
     { dumpResult: { status: 1 } },

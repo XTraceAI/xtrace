@@ -344,9 +344,11 @@ async function main() {
       stderr ||
       !raw.equals(Buffer.from(dumpText, 'utf8')) ||
       !/^Status:\s+\S.+$/m.test(dumpText) ||
-      !/^bundle id:\s+\d+\b/m.test(dumpText) ||
+      // Hosted macOS 14 rows (run 39531328355): "bundle id:   SSMenuAgent (0x17a0)",
+      // and the root volume as "path:   / (0x4)". Every native row ends in its address.
+      !/^bundle id:\s+\S.*\(0x[0-9a-f]+\)$/m.test(dumpText) ||
       !pathRows.length ||
-      pathRows.some((row) => !/^path:\s+\/\S.+$/.test(row)) ||
+      pathRows.some((row) => !/^path:\s+\/.*\(0x[0-9a-f]+\)$/.test(row)) ||
       !dumpText.endsWith('\n')
     )
       throw new Error('Launch Services dump is incomplete or unrecognized; staging retained');
