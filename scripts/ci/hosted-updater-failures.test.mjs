@@ -647,11 +647,27 @@ test(
           }).stdout.trim(),
         );
       assert.equal(check(good), 2);
+      // Shape captured from the real hosted macOS 14 password prompt.
+      const hosted = [
+        { AXRole: 'AXWindow', AXSubrole: 'AXStandardWindow', AXTitle: 'Untitled' },
+        { AXRole: 'AXImage', enabled: 'true' },
+        { AXRole: 'AXStaticText', AXValue: name, enabled: 'true' },
+        { AXRole: 'AXStaticText', AXValue: `${name} wants to make changes.`, enabled: 'true' },
+        { AXRole: 'AXStaticText', AXValue: 'Enter your password to allow this.', enabled: 'true' },
+        { AXRole: 'AXTextField', enabled: 'true' },
+        { AXRole: 'AXTextField', AXSubrole: 'AXSecureTextField', enabled: 'true' },
+        { AXRole: 'AXButton', AXTitle: 'Cancel', enabled: 'true' },
+        { AXRole: 'AXButton', AXTitle: 'OK', enabled: 'true' },
+      ];
+      assert.equal(check(hosted), 7);
       for (const rows of [
         [],
         good.slice(0, 2),
         [...good, good[2]],
         [{ AXRole: 'AXWindow' }, ...good.slice(1)],
+        [{ AXRole: 'AXWindow', AXSubrole: 'AXFloatingWindow' }, ...good.slice(1)],
+        [hosted[0], ...hosted.slice(4)],
+        [...hosted, hosted[7]],
         [good[0], { AXRole: 'AXTextField', AXValue: name }, good[2]],
         [good[0], { AXRole: 'AXStaticText', AXHelp: name }, good[2]],
         [good[0], { AXRole: 'AXStaticText', AXValue: `prefix${name}` }, good[2]],
