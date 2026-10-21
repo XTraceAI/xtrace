@@ -980,6 +980,63 @@ fn quitting_waits_for_a_keep_only_within_its_bound() {
 }
 
 #[test]
+fn quitting_waits_for_a_keep_even_after_a_new_lookup_replaced_its_preview() {
+    let server = github(skills_repo());
+    let held = HeldClock::default();
+    let setup = setup_config(&server, |config| config.clock = held.clock());
+    let preview = found(look(&setup, "https://github.com/octo/skills"));
+    let (entered, release) = held.arm();
+    let service = setup.service.clone();
+    let id = preview.lookup_id.clone();
+    let keeping = std::thread::spawn(move || service.keep(&id, &["skills/pdf".to_owned()]));
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    // A second look-up while the keep is going leaves its own preview.
+    let again = found(look(&setup, "https://github.com/octo/skills"));
+    assert_ne!(again.lookup_id, preview.lookup_id);
+    let service = setup.service.clone();
+    let quitting = std::thread::spawn(move || service.shutdown());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !quitting.is_finished(),
+        "quitting must wait for the keep going"
+    );
+    release.send(()).unwrap();
+    keeping.join().unwrap();
+    assert!(quitting.join().unwrap());
+    assert!(!setup.home.path().join(".agents/skills/pdf").exists());
+    assert_eq!(keeping_copies(&setup), 0);
+    assert_eq!(staged(&setup), 0);
+}
+
+#[test]
+fn a_keep_that_panics_does_not_hold_quitting() {
+    let server = github(skills_repo());
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let setup = setup_config(&server, |config| {
+        let fail = fail.clone();
+        config.clock = Arc::new(move || {
+            assert!(!fail.load(Ordering::SeqCst), "the clock failed");
+            1_791_193_200_000
+        });
+        config.shutdown_bound = Duration::from_secs(5);
+    });
+    let preview = found(look(&setup, "https://github.com/octo/skills"));
+    fail.store(true, Ordering::SeqCst);
+    let service = setup.service.clone();
+    let id = preview.lookup_id.clone();
+    let kept = std::thread::spawn(move || service.keep(&id, &["skills/pdf".to_owned()])).join();
+    assert!(kept.is_err(), "the keep panicked after taking the preview");
+    let started = Instant::now();
+    assert!(setup.service.shutdown());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!setup.home.path().join(".agents/skills/pdf").exists());
+}
+
+#[test]
 fn fixture_mode_answers_not_configured() {
     let service = SkillLinkService::not_configured();
     assert_eq!(

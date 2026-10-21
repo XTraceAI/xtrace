@@ -224,9 +224,35 @@ struct Inner {
     changed: Publish,
     /// Held only briefly: never across a request, the unpacking or a keep.
     slot: Mutex<Slot>,
-    /// Signalled whenever a keep lets go of its preview, for quitting.
+    /// How many keeps are going, whatever the slot holds now (a look-up
+    /// started meanwhile replaces it). Counted under the slot's lock, so
+    /// quitting sees every keep that took a preview before it stopped.
+    keeps: Mutex<usize>,
+    /// Signalled whenever a keep ends, for quitting.
     idle: Condvar,
+    /// Set under the slot's lock; a keep checks it there before it starts.
     stopped: std::sync::atomic::AtomicBool,
+}
+
+/// One keep going: counted from when it takes its preview until it ends,
+/// on every return and when it panics.
+struct KeepGoing<'a>(&'a Inner);
+
+impl<'a> KeepGoing<'a> {
+    /// Count a keep; call with the slot's lock held.
+    fn start(inner: &'a Inner) -> Self {
+        *lock(&inner.keeps) += 1;
+        Self(inner)
+    }
+}
+
+impl Drop for KeepGoing<'_> {
+    fn drop(&mut self) {
+        let mut keeps = lock(&self.0.keeps);
+        *keeps = keeps.saturating_sub(1);
+        drop(keeps);
+        self.0.idle.notify_all();
+    }
 }
 
 #[derive(Clone)]
@@ -257,6 +283,7 @@ impl SkillLinkService {
                 config,
                 changed,
                 slot: Mutex::new(Slot::Idle),
+                keeps: Mutex::new(0),
                 idle: Condvar::new(),
                 stopped: std::sync::atomic::AtomicBool::new(false),
             }),
@@ -345,9 +372,11 @@ impl SkillLinkService {
         if paths.is_empty() {
             return GradingLinkKeep::NothingChosen;
         }
-        let lookup = {
+        let (lookup, going) = {
             let mut slot = lock(&inner.slot);
-            if !matches!(&*slot, Slot::Ready(lookup) if lookup.id == lookup_id) {
+            if inner.stopped.load(std::sync::atomic::Ordering::SeqCst)
+                || !matches!(&*slot, Slot::Ready(lookup) if lookup.id == lookup_id)
+            {
                 return GradingLinkKeep::Expired;
             }
             let Slot::Ready(lookup) = std::mem::replace(
@@ -358,19 +387,17 @@ impl SkillLinkService {
             ) else {
                 return GradingLinkKeep::Expired;
             };
-            lookup
+            (lookup, KeepGoing::start(inner))
         };
         // Put an unkept preview back, unless another look-up began meanwhile.
         let give_back = |lookup: Lookup| {
             let mut slot = lock(&inner.slot);
             if matches!(&*slot, Slot::Keeping { id } if id == lookup_id) {
                 *slot = Slot::Ready(lookup);
-                drop(slot);
             } else {
                 drop(slot);
                 skill_link::remove_all(&lookup.unpacked.root);
             }
-            inner.idle.notify_all();
         };
         let states = skill_link::keep_states(&lookup.found.skills, &config.home);
         let chosen: Vec<usize> = lookup
@@ -447,44 +474,49 @@ impl SkillLinkService {
                 *slot = Slot::Idle;
             }
         }
-        inner.idle.notify_all();
+        // Quitting may go on before the change is published.
+        drop(going);
         if kept_any {
             (inner.changed)();
         }
         GradingLinkKeep::Done { skills, recorded }
     }
 
-    /// Quitting: nothing starts afterwards. A keep going is waited for,
+    /// Quitting: nothing starts afterwards. Every keep going is waited for,
+    /// even one whose preview a later look-up replaced,
     /// within [`LinkConfig::shutdown_bound`] (see the module docs); then a
     /// look-up going is cancelled and a preview and its staging folder
     /// dropped. False when the wait ran out (a hidden copy left then is
     /// removed at the next start).
     pub fn shutdown(&self) -> bool {
         let inner = &self.inner;
-        inner
-            .stopped
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        {
+            let _slot = lock(&inner.slot);
+            inner
+                .stopped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         let bound = inner
             .config
             .as_ref()
             .map_or(Duration::ZERO, |config| config.shutdown_bound);
         let deadline = Instant::now() + bound;
-        let mut slot = lock(&inner.slot);
+        let mut keeps = lock(&inner.keeps);
         let mut finished = true;
-        while matches!(&*slot, Slot::Keeping { .. }) {
+        while *keeps > 0 {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 finished = false;
                 break;
             }
-            slot = inner
+            keeps = inner
                 .idle
-                .wait_timeout(slot, remaining)
+                .wait_timeout(keeps, remaining)
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .0;
         }
-        let dropped = std::mem::replace(&mut *slot, Slot::Idle);
-        drop(slot);
+        drop(keeps);
+        let dropped = std::mem::replace(&mut *lock(&inner.slot), Slot::Idle);
         drop_slot(dropped);
         finished
     }
