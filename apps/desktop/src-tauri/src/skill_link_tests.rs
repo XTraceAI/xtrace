@@ -1036,6 +1036,44 @@ fn a_keep_that_panics_does_not_hold_quitting() {
     assert!(!setup.home.path().join(".agents/skills/pdf").exists());
 }
 
+/// Run `run` once when a look-up on this thread reaches `point`.
+fn at(point: &'static str, run: impl FnOnce() + 'static) {
+    HOOKS.with(|hooks| hooks.borrow_mut().push((point, Box::new(run))));
+}
+
+#[test]
+fn quitting_just_before_a_lookup_takes_the_slot_stops_it() {
+    let server = github(skills_repo());
+    let setup = setup(&server);
+    let service = setup.service.clone();
+    at("before_slot", move || {
+        assert!(service.shutdown());
+    });
+    assert_eq!(
+        look(&setup, "https://github.com/octo/skills"),
+        GradingLinkLookup::Failed
+    );
+    assert!(server.paths().is_empty(), "nothing is sent after quitting");
+    assert_eq!(staged(&setup), 0);
+    assert!(!setup.service.cancel(), "nothing is going");
+}
+
+#[test]
+fn a_lookup_cancelled_after_it_finished_leaves_nothing_going() {
+    let server = github(skills_repo());
+    let setup = setup(&server);
+    let service = setup.service.clone();
+    at("after_fetch", move || {
+        assert!(service.cancel());
+    });
+    assert_eq!(
+        look(&setup, "https://github.com/octo/skills"),
+        GradingLinkLookup::Cancelled
+    );
+    assert_eq!(staged(&setup), 0);
+    assert!(!setup.service.cancel(), "nothing is going");
+}
+
 #[test]
 fn fixture_mode_answers_not_configured() {
     let service = SkillLinkService::not_configured();

@@ -196,6 +196,30 @@ async fn race<T>(work: impl Future<Output = T>, cancel: &Cancel) -> Option<T> {
     .await
 }
 
+/// Tests: a named point of a look-up and the code to run there once.
+#[cfg(test)]
+type Hook = (&'static str, Box<dyn FnOnce()>);
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: code to run once when a look-up on this thread reaches the
+    /// named point.
+    static HOOKS: std::cell::RefCell<Vec<Hook>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run the test code waiting at `point`, if any.
+#[cfg(test)]
+fn test_hook(point: &'static str) {
+    let taken = HOOKS.with(|hooks| {
+        let mut hooks = hooks.borrow_mut();
+        let at = hooks.iter().position(|(seen, _)| *seen == point)?;
+        Some(hooks.remove(at).1)
+    });
+    if let Some(run) = taken {
+        run();
+    }
+}
+
 /// A finished look-up, held for keeping.
 struct Lookup {
     id: String,
@@ -230,7 +254,8 @@ struct Inner {
     keeps: Mutex<usize>,
     /// Signalled whenever a keep ends, for quitting.
     idle: Condvar,
-    /// Set under the slot's lock; a keep checks it there before it starts.
+    /// Set under the slot's lock; [`Inner::open_slot`] checks it there
+    /// before a look-up or a keep starts.
     stopped: std::sync::atomic::AtomicBool,
 }
 
@@ -243,6 +268,16 @@ impl<'a> KeepGoing<'a> {
     fn start(inner: &'a Inner) -> Self {
         *lock(&inner.keeps) += 1;
         Self(inner)
+    }
+}
+
+impl Inner {
+    /// The slot, locked, when new work may start: none once quitting has
+    /// begun. The one check of whether a look-up or a keep may start;
+    /// [`SkillLinkService::shutdown`] sets `stopped` under this same lock.
+    fn open_slot(&self) -> Option<MutexGuard<'_, Slot>> {
+        let slot = lock(&self.slot);
+        (!self.stopped.load(std::sync::atomic::Ordering::SeqCst)).then_some(slot)
     }
 }
 
@@ -300,22 +335,28 @@ impl SkillLinkService {
         let Ok(link) = skill_link::parse(text) else {
             return GradingLinkLookup::NotGithubLink;
         };
-        if inner.stopped.load(std::sync::atomic::Ordering::SeqCst) {
-            return GradingLinkLookup::Failed;
-        }
         let Some(id) = crate::telemetry::random_uuid() else {
             return GradingLinkLookup::Failed;
         };
         let cancel = Arc::new(Cancel::default());
-        let replaced = std::mem::replace(
-            &mut *lock(&inner.slot),
-            Slot::Looking {
-                id: id.clone(),
-                cancel: cancel.clone(),
-            },
-        );
+        #[cfg(test)]
+        test_hook("before_slot");
+        let replaced = {
+            let Some(mut slot) = inner.open_slot() else {
+                return GradingLinkLookup::Failed;
+            };
+            std::mem::replace(
+                &mut *slot,
+                Slot::Looking {
+                    id: id.clone(),
+                    cancel: cancel.clone(),
+                },
+            )
+        };
         drop_slot(replaced);
         let answer = fetch(config, &id, &link, &cancel).await;
+        #[cfg(test)]
+        test_hook("after_fetch");
         let mut slot = lock(&inner.slot);
         let ours = matches!(&*slot, Slot::Looking { id: going, .. } if *going == id);
         match answer {
@@ -325,6 +366,10 @@ impl SkillLinkService {
                 GradingLinkLookup::Found(dto)
             }
             Ok(lookup) => {
+                // Cancelled after it finished: nothing is going any more.
+                if ours {
+                    *slot = Slot::Idle;
+                }
                 drop(slot);
                 skill_link::remove_all(&lookup.unpacked.root);
                 GradingLinkLookup::Cancelled
@@ -373,10 +418,10 @@ impl SkillLinkService {
             return GradingLinkKeep::NothingChosen;
         }
         let (lookup, going) = {
-            let mut slot = lock(&inner.slot);
-            if inner.stopped.load(std::sync::atomic::Ordering::SeqCst)
-                || !matches!(&*slot, Slot::Ready(lookup) if lookup.id == lookup_id)
-            {
+            let Some(mut slot) = inner.open_slot() else {
+                return GradingLinkKeep::Expired;
+            };
+            if !matches!(&*slot, Slot::Ready(lookup) if lookup.id == lookup_id) {
                 return GradingLinkKeep::Expired;
             }
             let Slot::Ready(lookup) = std::mem::replace(
