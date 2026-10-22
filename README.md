@@ -22,7 +22,11 @@ in the sidebar.
 
 <img src="docs/images/readme/dashboard-dark.png" alt="XTrace Dashboard with API-equivalent spend, estimated human time, populated Claude and Codex usage, a Codex forecast, and session compaction counts and markers" width="100%">
 
-<sub>Screenshots show the app with made-up sample projects and account usage, not real work.</sub>
+**See it in 44 seconds**
+
+https://github.com/user-attachments/assets/a8e7619c-85a3-40d7-8a0b-50d9dc94f215
+
+<sub>Screenshots and the video show the app with made-up sample projects and account usage, not real work.</sub>
 
 </div>
 
