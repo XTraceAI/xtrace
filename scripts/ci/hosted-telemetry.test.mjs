@@ -25,6 +25,7 @@ import {
   stopTelemetryProxies,
   claimTelemetryProfiles,
   removeTelemetryProfiles,
+  requireNoTelemetryAttempt,
 } from './hosted-telemetry-run.mjs';
 import {
   pollTelemetry,
@@ -264,6 +265,8 @@ test('notice phase presses Open Dashboard and needs the corner card before the b
   const notice = runner.split("if (phase === 'notice') {")[1].split('} else {')[0];
   const order = [
     "ui('telemetry-notice')",
+    'phaseReport.beforeDashboard = await telemetryProxyState(proxy)',
+    'requireNoTelemetryAttempt(',
     "ui('telemetry-dashboard-notice')",
     'attempt()',
     "ui('telemetry-turn-off')",
@@ -284,6 +287,25 @@ test('notice phase presses Open Dashboard and needs the corner card before the b
   assert.match(driver, /"telemetry-dashboard-notice"/);
   assert.doesNotMatch(driver, /"telemetry-dashboard"[,\]]/);
   assert.doesNotMatch(driver, /Telemetry UI phase \\\(mode\) observed/);
+});
+
+test('an attempt before Open Dashboard, or before saved-off enabling, fails the phase', () => {
+  const quiet = { telemetry: 0, github: 1, probe: 2 };
+  assert.equal(requireNoTelemetryAttempt(quiet, 'early'), quiet);
+  // A taller window could let the Welcome notice count as shown and send
+  // before the press; that must not pass as the corner card's attempt.
+  for (const state of [
+    { telemetry: 1 },
+    { telemetry: 3, github: 0 },
+    {},
+    undefined,
+    { telemetry: '0' },
+  ])
+    assert.throws(
+      () =>
+        requireNoTelemetryAttempt(state, 'from the Welcome page before Open Dashboard was pressed'),
+      /Telemetry was attempted from the Welcome page before Open Dashboard was pressed/,
+    );
 });
 
 test('updater warning requires rejection from the proxy belonging to this phase', () => {
@@ -1042,6 +1064,7 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
     'telemetryProxyState',
     'proxy',
     'phaseReport',
+    'requireNoTelemetryAttempt',
     source.slice(start, end),
   );
   for (const [name, count, error] of [
@@ -1067,12 +1090,15 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
       },
       proxy,
       report,
+      requireNoTelemetryAttempt,
     );
     if (name === 'zero') await run;
     else
       await assert.rejects(
         run,
-        error ? /Proxy observation failed/ : /Saved-off startup attempted telemetry/,
+        error
+          ? /Proxy observation failed/
+          : /Telemetry was attempted by the saved-off startup before enabling/,
       );
     assert.deepEqual(
       calls,
@@ -1081,5 +1107,48 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
         : ['telemetry-settings-off', 'snapshot'],
     );
     assert.equal(report.beforeEnable, error ? undefined : snapshot);
+  }
+  // The actual notice branch: an attempt before the press fails the phase
+  // before Open Dashboard is pressed or the attempt is awaited.
+  for (const [name, count] of [
+    ['quiet', 0],
+    ['early', 1],
+  ]) {
+    const calls = [],
+      report = {},
+      proxy = { phase: 'notice' };
+    const snapshot = { telemetry: count, github: 0, probe: 1 };
+    const run = actual(
+      'notice',
+      async (mode) => calls.push(mode),
+      async () => calls.push('attempt'),
+      async (selected) => {
+        assert.equal(selected, proxy);
+        calls.push('snapshot');
+        return snapshot;
+      },
+      proxy,
+      report,
+      requireNoTelemetryAttempt,
+    );
+    if (name === 'quiet') await run;
+    else
+      await assert.rejects(
+        run,
+        /Telemetry was attempted from the Welcome page before Open Dashboard was pressed/,
+      );
+    assert.deepEqual(
+      calls,
+      name === 'quiet'
+        ? [
+            'telemetry-notice',
+            'snapshot',
+            'telemetry-dashboard-notice',
+            'attempt',
+            'telemetry-turn-off',
+          ]
+        : ['telemetry-notice', 'snapshot'],
+    );
+    assert.equal(report.beforeDashboard, snapshot);
   }
 });

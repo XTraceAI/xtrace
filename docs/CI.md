@@ -619,7 +619,8 @@ saved-on restart followed by Settings off. In the notice phase the driver only
 finds the Welcome notice in the accessibility tree, which also lists content that
 is not on screen. Since 0.1.8 the notice counts as shown only when half of it is
 visible above the Welcome page's pinned bar, which it is not in the default
-window, so nothing is sent from Welcome. The driver therefore presses Open
+window, so nothing is sent from Welcome. The runner first requires that the
+phase's proxy has seen no telemetry attempt yet; the driver then presses Open
 Dashboard once, requires the Dashboard's corner card (its "on by default" title,
 what is sent and never sent, and one enabled Turn off), and only then waits for
 the blocked telemetry attempt; it then presses Turn off in that card. Each step
