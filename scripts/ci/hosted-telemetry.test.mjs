@@ -13,6 +13,7 @@ import {
   telemetryDataDirectory,
   verifyTelemetryDatabase,
   acceptTelemetryUI,
+  telemetryUIReasons,
 } from './hosted-telemetry.mjs';
 import {
   cleanupTelemetry,
@@ -232,10 +233,63 @@ c.commit();c.close()`,
   }
 });
 
+test('each phase reports what it established, never a bare "observed"', () => {
+  for (const [mode, reason] of Object.entries(telemetryUIReasons)) {
+    const evidence = { code: 0, reason, nodes: [], telemetry: { expectedUpdaterWarning: false } };
+    assert.equal(acceptTelemetryUI(evidence, { github: 0 }, mode).established, reason);
+    for (const other of [`Telemetry UI phase ${mode} observed`, `${reason}.`, ''])
+      assert.throws(() => acceptTelemetryUI({ ...evidence, reason: other }, { github: 0 }, mode));
+  }
+  assert.match(
+    telemetryUIReasons['telemetry-notice'],
+    /accessibility tree; visibility was not checked/,
+  );
+  assert.match(telemetryUIReasons['telemetry-dashboard-notice'], /^Pressed Open Dashboard once/);
+  assert.match(
+    telemetryUIReasons['telemetry-turn-off'],
+    /^Pressed Turn off once in the corner card/,
+  );
+  // The old Welcome-only Dashboard phase no longer exists.
+  assert.throws(() =>
+    acceptTelemetryUI(
+      { code: 0, reason: 'x', nodes: [], telemetry: { expectedUpdaterWarning: false } },
+      { github: 0 },
+      'telemetry-dashboard',
+    ),
+  );
+});
+
+test('notice phase presses Open Dashboard and needs the corner card before the blocked attempt', async () => {
+  const runner = await readFile(new URL('./hosted-telemetry-run.mjs', import.meta.url), 'utf8');
+  const notice = runner.split("if (phase === 'notice') {")[1].split('} else {')[0];
+  const order = [
+    "ui('telemetry-notice')",
+    "ui('telemetry-dashboard-notice')",
+    'attempt()',
+    "ui('telemetry-turn-off')",
+  ];
+  let prior = -1;
+  for (const needle of order) {
+    const at = notice.indexOf(needle);
+    assert.ok(at > prior, needle);
+    prior = at;
+  }
+  assert.equal((notice.match(/attempt\(\)/g) || []).length, 1);
+  assert.doesNotMatch(runner, /ui\('telemetry-dashboard'\)/);
+  // saved-on still waits for its startup attempt; saved-off and environment-off never do.
+  const later = runner.split("if (phase === 'notice') {")[1].split('} else {')[1];
+  assert.match(later, /if \(phase === 'saved-on'\) await attempt\(\);/);
+  assert.equal((later.match(/attempt\(\)/g) || []).length, 1);
+  const driver = await readFile(new URL('./hosted-ax.swift', import.meta.url), 'utf8');
+  assert.match(driver, /"telemetry-dashboard-notice"/);
+  assert.doesNotMatch(driver, /"telemetry-dashboard"[,\]]/);
+  assert.doesNotMatch(driver, /Telemetry UI phase \\\(mode\) observed/);
+});
+
 test('updater warning requires rejection from the proxy belonging to this phase', () => {
   const evidence = {
     code: 0,
-    reason: 'Telemetry UI phase telemetry-notice observed',
+    reason: telemetryUIReasons['telemetry-notice'],
     nodes: [],
     telemetry: { expectedUpdaterWarning: true },
   };
@@ -338,6 +392,9 @@ test(
       const ran = spawnSync(binary, [], { encoding: 'utf8', timeout: 5000 });
       assert.equal(ran.status, 0, ran.stderr);
       assert.match(ran.stdout, /controls passed/);
+      // The driver's own words for each phase are the ones the runner accepts.
+      const reasons = ran.stdout.split('\n').find((line) => line.startsWith('TELEMETRY-REASONS '));
+      assert.deepEqual(JSON.parse(reasons.slice('TELEMETRY-REASONS '.length)), telemetryUIReasons);
     } catch (error) {
       diagnoseCompiler(compiler, deadline);
       throw error;

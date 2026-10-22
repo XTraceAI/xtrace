@@ -418,11 +418,16 @@ export async function runTelemetryPhases(context, session) {
         'Blocked default telemetry attempt',
       );
     if (phase === 'notice') {
+      // The notice is in the Welcome page's tree, but the pinned bar keeps it
+      // from counting as shown. Opening the Dashboard shows the corner card,
+      // which records it; only then may the blocked attempt happen.
       await ui('telemetry-notice');
+      await ui('telemetry-dashboard-notice');
       await attempt();
       await ui('telemetry-turn-off');
-      await ui('telemetry-dashboard');
     } else {
+      // Later restarts open on the Dashboard: Welcome is completed and the
+      // disclosure is recorded, so saved-on sends at startup without a click.
       if (phase === 'saved-on') await attempt();
       await ui(
         phase === 'environment-off'

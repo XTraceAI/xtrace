@@ -20,7 +20,7 @@ let bundle = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL.
 let identifier = CommandLine.arguments[3]
 let mode = CommandLine.arguments[4]
 let updateMode = ["update-ready", "update-press", "updated-dashboard", "reopened-dashboard"].contains(mode)
-let telemetryModes = ["telemetry-notice", "telemetry-turn-off", "telemetry-dashboard", "telemetry-settings-off", "telemetry-settings-on", "telemetry-settings-enable", "telemetry-settings-disable", "telemetry-environment-off"]
+let telemetryModes = ["telemetry-notice", "telemetry-dashboard-notice", "telemetry-turn-off", "telemetry-settings-off", "telemetry-settings-on", "telemetry-settings-enable", "telemetry-settings-disable", "telemetry-environment-off"]
 let telemetryMode = telemetryModes.contains(mode)
 let releaseMode = mode == "first-launch" || updateMode || telemetryMode
 let authorization = ProcessInfo.processInfo.environment
@@ -197,6 +197,49 @@ func telemetryNotice(_ rows: [[String: String]]) -> Bool {
      "Repository names, file paths, prompts or other conversation text, pull-request links, token counts or costs."]
         .allSatisfy { hasText(rows, $0) } && rows.filter { isButton($0, "Turn off") && $0["captureEnabled"] == "true" }.count == 1
 }
+// The Dashboard's corner card. The candidate records the disclosure as shown, and
+// may then send, only once half of a notice is visible: on the Welcome page
+// the pinned bar covers it, so the card is where a first launch records it.
+func telemetryCard(_ rows: [[String: String]]) -> Bool {
+    ["Anonymous usage data is on by default", "A random ID made on this Mac", "Prompts or conversation text"]
+        .allSatisfy { hasText(rows, $0) } &&
+        rows.filter { isButton($0, "Turn off") && $0["captureEnabled"] == "true" }.count == 1
+}
+func telemetryDashboard(_ rows: [[String: String]]) -> Bool {
+    !hasText(rows, "Welcome to XTrace") && hasText(rows, "What your agents did")
+}
+// One step of a phase: press its control, finish, or keep reading. A finish
+// needs this run's own press first, so finding the notice is never enough.
+enum TelemetryStep: Equatable { case press(String), done, wait }
+func telemetryDashboardNoticeStep(_ rows: [[String: String]], pressed: Bool) -> TelemetryStep {
+    if !pressed {
+        return hasText(rows, "Welcome to XTrace") && hasText(rows, "The initial scan finished.") &&
+            hasText(rows, "Bundled readers verified") && hasText(rows, "In the local database now") &&
+            !rows.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) &&
+            telemetryNotice(rows) ? .press("Open Dashboard") : .wait
+    }
+    return telemetryDashboard(rows) && telemetryCard(rows) ? .done : .wait
+}
+func telemetryTurnOffStep(_ rows: [[String: String]], pressed: Bool) -> TelemetryStep {
+    if !pressed { return telemetryDashboard(rows) && telemetryCard(rows) ? .press("Turn off") : .wait }
+    return telemetryDashboard(rows) && hasText(rows, "Anonymous usage data is off") &&
+        hasText(rows, "Telemetry is off. Nothing is sent.") &&
+        !rows.contains(where: { isButton($0, "Turn off") }) ? .done : .wait
+}
+// What each phase's success establishes, in the words the runner reports.
+func telemetryReason(_ mode: String) -> String {
+    switch mode {
+    case "telemetry-notice": return "Welcome notice text and one enabled Turn off are in the accessibility tree; visibility was not checked"
+    case "telemetry-dashboard-notice": return "Pressed Open Dashboard once; the Dashboard and the corner-card notice with one enabled Turn off are in the accessibility tree"
+    case "telemetry-turn-off": return "Pressed Turn off once in the corner card; the card then said telemetry is off and no Turn off remained"
+    case "telemetry-settings-off": return "Opened Settings; the telemetry switch is off and enabled"
+    case "telemetry-settings-on": return "Opened Settings; the telemetry switch is on and enabled"
+    case "telemetry-settings-enable": return "Pressed the enabled telemetry switch once; it is now on"
+    case "telemetry-settings-disable": return "Pressed the enabled telemetry switch once; it is now off"
+    case "telemetry-environment-off": return "Opened Settings; the telemetry switch is off and disabled, with the environment-off explanation"
+    default: return "Unsupported telemetry phase"
+    }
+}
 func telemetrySwitches(_ rows: [[String: String]]) -> [[String: String]] {
     rows.filter { ["AXCheckBox", "AXSwitch"].contains($0[kAXRoleAttribute] ?? "") &&
         [$0[kAXTitleAttribute], $0[kAXDescriptionAttribute]].contains("Send anonymous usage data") }
@@ -246,16 +289,12 @@ while Date() < deadline {
                 guard buttons.count == 1, ownedApplication() != nil else { finish(5, "Telemetry action ownership or uniqueness failed", last) }
                 guard AXUIElementPerformAction(buttons[0].0, kAXPressAction as CFString) == .success else { finish(6, "Telemetry action was not accepted", last) }
             }
-            let complete = { finish(0, "Telemetry UI phase \(mode) observed", last) }
+            let complete = { finish(0, telemetryReason(mode), last) }
             if mode == "telemetry-notice", ready, hasText("Welcome to XTrace"), hasText("The initial scan finished."), hasText("Bundled readers verified"), telemetryNotice(last) { complete() }
-            if mode == "telemetry-turn-off", ready {
-                if !pressed, telemetryNotice(last) { pressUnique("Turn off"); pressed = true }
-                else if pressed, hasText("Telemetry is off. Nothing is sent. You can turn it back on in Settings."), !last.contains(where: { isButton($0, "Turn off") }) { complete() }
-            }
-            if mode == "telemetry-dashboard", ready {
-                if !pressed, hasText("Welcome to XTrace"), hasText("The initial scan finished."), hasText("Bundled readers verified"), hasText("In the local database now"), !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) { pressUnique("Open Dashboard"); pressed = true }
-                else if !hasText("Welcome to XTrace"), hasText("What your agents did"), hasText("No agent activity was recorded in this range. Measured zeros are shown as 0.") { complete() }
-            }
+            let step = mode == "telemetry-dashboard-notice" ? telemetryDashboardNoticeStep(last, pressed: pressed) :
+                mode == "telemetry-turn-off" ? telemetryTurnOffStep(last, pressed: pressed) : TelemetryStep.wait
+            if ready, case .press(let title) = step { pressUnique(title); pressed = true }
+            else if ready, step == .done { complete() }
             if mode.hasPrefix("telemetry-settings-") || mode == "telemetry-environment-off", ready, !hasText("Welcome to XTrace") {
                 if telemetrySwitches(last).isEmpty, !navigatedSettings { pressUnique("Settings", workspace: true); navigatedSettings = true }
                 else if mode == "telemetry-environment-off", telemetrySwitchState(last, on: false, enabled: false),

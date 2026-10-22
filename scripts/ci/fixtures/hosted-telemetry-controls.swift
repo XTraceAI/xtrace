@@ -123,3 +123,49 @@ for sample in supportedAlertCases {
     unrelatedGroup["captureParent"] = "1"
     assert(!telemetryAlerts(sample + [unrelatedGroup]).safe)
 }
+
+// Notice phase on 0.1.8: the Welcome notice is only found in the tree (the
+// pinned bar keeps it from counting as shown). The phase must press Open
+// Dashboard itself and then find the corner card; finding is never a pass.
+func screen(_ texts: [String], _ buttons: [(String, Bool)]) -> [[String: String]] {
+    [[kAXRoleAttribute: kAXWindowRole], [kAXRoleAttribute: "AXWebArea"]] + texts.map { [kAXValueAttribute: $0] } +
+        buttons.map { [kAXRoleAttribute: kAXButtonRole, kAXTitleAttribute: $0.0, "captureEnabled": $0.1 ? "true" : "false"] }
+}
+let welcomeTexts = ["Welcome to XTrace", "The initial scan finished.", "Bundled readers verified", "In the local database now"] + noticeWords
+let welcome = screen(welcomeTexts, [("Open Dashboard", true), ("Turn off", true)])
+let cardTexts = ["Anonymous usage data is on by default", "App and macOS version", "A random ID made on this Mac", "Prompts or conversation text"]
+let dashboardCard = screen(["What your agents did"] + cardTexts, [("Got it", true), ("Turn off", true)])
+assert(telemetryDashboardNoticeStep(welcome, pressed: false) == .press("Open Dashboard"))
+// Found without this run's press: never done, whatever the tree holds.
+for rows in [welcome, dashboardCard, welcome + dashboardCard] { assert(telemetryDashboardNoticeStep(rows, pressed: false) != .done) }
+assert(telemetryDashboardNoticeStep(dashboardCard, pressed: false) == .wait)
+assert(telemetryDashboardNoticeStep(dashboardCard, pressed: true) == .done)
+// After the press: still Welcome, no card, the Welcome notice only, a missing
+// card fact, or a disabled/duplicate Turn off keeps waiting.
+for rows in [welcome, screen(["What your agents did"], []), screen(["What your agents did"] + noticeWords, [("Turn off", true)]),
+             screen(["What your agents did"] + cardTexts.dropLast(), [("Turn off", true)]),
+             screen(["What your agents did"] + cardTexts, [("Turn off", false)]),
+             screen(["What your agents did"] + cardTexts, [("Turn off", true), ("Turn off", true)]),
+             dashboardCard + [[kAXValueAttribute: "Welcome to XTrace"]]] {
+    assert(telemetryDashboardNoticeStep(rows, pressed: true) == .wait)
+}
+var loadingWelcome = welcome; loadingWelcome.append([kAXDescriptionAttribute: "Reading database counts"])
+assert(telemetryDashboardNoticeStep(loadingWelcome, pressed: false) == .wait)
+// Turn off happens in the card on the Dashboard, by this run's own press.
+assert(telemetryTurnOffStep(dashboardCard, pressed: false) == .press("Turn off"))
+assert(telemetryTurnOffStep(welcome, pressed: false) == .wait)
+let cardOff = screen(["What your agents did", "Anonymous usage data is off", "App and macOS version", "Telemetry is off. Nothing is sent."], [("Got it", true)])
+assert(telemetryTurnOffStep(cardOff, pressed: false) == .wait)
+assert(telemetryTurnOffStep(cardOff, pressed: true) == .done)
+for rows in [dashboardCard, cardOff + [[kAXRoleAttribute: kAXButtonRole, kAXTitleAttribute: "Turn off"]],
+             screen(["What your agents did", "Telemetry is off. Nothing is sent. You can turn it back on in Settings."], []),
+             cardOff + [[kAXValueAttribute: "Welcome to XTrace"]]] {
+    assert(telemetryTurnOffStep(rows, pressed: true) == .wait)
+}
+assert(!telemetryCard(welcome) && telemetryCard(dashboardCard) && !telemetryCard(cardOff))
+let reasonModes = ["telemetry-notice", "telemetry-dashboard-notice", "telemetry-turn-off", "telemetry-settings-off",
+                   "telemetry-settings-on", "telemetry-settings-enable", "telemetry-settings-disable", "telemetry-environment-off"]
+let reasons = Dictionary(uniqueKeysWithValues: reasonModes.map { ($0, telemetryReason($0)) })
+assert(!reasons.values.contains { $0.contains("observed") || $0 == telemetryReason("unknown") })
+print("TELEMETRY-REASONS " + String(decoding: try! JSONSerialization.data(withJSONObject: reasons, options: [.sortedKeys]), as: UTF8.self))
+print("Telemetry notice-card step controls passed")
