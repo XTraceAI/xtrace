@@ -19,13 +19,13 @@ guard CommandLine.arguments.count == 5,
 let bundle = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL.resolvingSymlinksInPath()
 let identifier = CommandLine.arguments[3]
 let mode = CommandLine.arguments[4]
-let updateMode = ["update-ready", "update-press", "updated-dashboard"].contains(mode)
+let updateMode = ["update-ready", "update-press", "updated-dashboard", "reopened-dashboard"].contains(mode)
 let telemetryModes = ["telemetry-notice", "telemetry-turn-off", "telemetry-dashboard", "telemetry-settings-off", "telemetry-settings-on", "telemetry-settings-enable", "telemetry-settings-disable", "telemetry-environment-off"]
 let telemetryMode = telemetryModes.contains(mode)
 let releaseMode = mode == "first-launch" || updateMode || telemetryMode
 let authorization = ProcessInfo.processInfo.environment
 let releaseAuthorized = releaseMode && identifier == "ai.xtrace.app" &&
-    bundle.path == "/Applications/XTrace Desktop.app" &&
+    bundle.path == Release.bundle(mode) &&
     authorization["ALLOW_RELEASE_IDENTITY"] == "true" &&
     authorization["GITHUB_ACTIONS"] == "true" &&
     authorization["GITHUB_EVENT_NAME"] == "workflow_dispatch" &&
@@ -91,6 +91,19 @@ func snapshot(_ root: AXUIElement) -> [(AXUIElement, [String: String])] {
 }
 
 // BEGIN UPDATE UI POLICY: offline controls call these with synthetic rows.
+// The one place naming the release pair and each mode's bundle folder. The
+// update starts from the published earlier version in its earlier folder; the
+// updater writes the candidate into that folder, and a normal quit renames it.
+enum Release {
+    static let candidate = "0.1.8"
+    static let earlier = "0.1.7"
+    static let candidateBundle = "/Applications/XTrace.app"
+    static let earlierBundle = "/Applications/XTrace Desktop.app"
+    static func bundle(_ mode: String) -> String {
+        ["update-ready", "update-press", "updated-dashboard"].contains(mode) ? earlierBundle : candidateBundle
+    }
+    static let readyText = "Update \(candidate) is ready. Your local data stays on this Mac."
+}
 func hasText(_ rows: [[String: String]], _ text: String) -> Bool {
     rows.contains { $0.values.contains(text) }
 }
@@ -134,8 +147,8 @@ func updateDashboard(_ rows: [[String: String]], _ version: String) -> Bool {
         hasText(rows, "No agent activity was recorded in this range. Measured zeros are shown as 0.")
 }
 func updateReady(_ rows: [[String: String]]) -> Bool {
-    updateDashboard(rows, "0.1.6") &&
-        hasText(rows, "Update 0.1.7 is ready. Your local data stays on this Mac.") &&
+    updateDashboard(rows, Release.earlier) &&
+        hasText(rows, Release.readyText) &&
         rows.filter { isButton($0, "Restart to update") }.count == 1
 }
 // END UPDATE UI POLICY
@@ -227,7 +240,7 @@ while Date() < deadline {
             let alerts = telemetryAlerts(last)
             guard alerts.safe else { finish(6, "Telemetry phase displayed an unrelated error or dialog", last) }
             telemetryEvidence = ["expectedUpdaterWarning": alerts.updaterWarning, "samePhaseProxyEvidenceRequired": alerts.updaterWarning]
-            let ready = sawWindow && sawWebContent && displayedVersion(last, "0.1.7")
+            let ready = sawWindow && sawWebContent && displayedVersion(last, Release.candidate)
             func pressUnique(_ title: String, workspace: Bool = false) {
                 let buttons = elements.filter { isButton($0.1, title) && $0.1["captureEnabled"] == "true" && (!workspace || $0.1["captureWorkspace"] == "true") }
                 guard buttons.count == 1, ownedApplication() != nil else { finish(5, "Telemetry action ownership or uniqueness failed", last) }
@@ -262,23 +275,30 @@ while Date() < deadline {
             }
         } else if updateMode {
             if nativeError(last) { finish(6, "Released app displayed an error or dialog", last) }
-            if mode == "updated-dashboard" {
-                if updateDashboard(last, "0.1.7") {
-                    finish(0, "Observed usable native 0.1.7 Dashboard and retained completed Welcome", last)
+            if mode == "updated-dashboard" || mode == "reopened-dashboard" {
+                // Completed Welcome must survive the update and the rename; the
+                // start page never shows Welcome first when it was completed.
+                if sawWebContent && hasText("Welcome to XTrace") {
+                    finish(6, "Welcome was shown again after the update", last)
+                }
+                if updateDashboard(last, Release.candidate) {
+                    finish(0, mode == "updated-dashboard"
+                        ? "Observed usable native \(Release.candidate) Dashboard after restart and retained completed Welcome"
+                        : "Observed usable native \(Release.candidate) Dashboard after reopening the renamed app without Welcome", last)
                 }
             } else if updateReady(last) {
                 if mode == "update-ready" {
-                    finish(0, "Observed usable 0.1.6 Dashboard and target 0.1.7 ready", last)
+                    finish(0, "Observed usable \(Release.earlier) Dashboard and target \(Release.candidate) ready", last)
                 }
                 let restart = elements.filter { isButton($0.1, "Restart to update") }
                 guard restart.count == 1, ownedApplication() != nil else { finish(5, "Identity or restart control changed", last) }
                 guard AXUIElementPerformAction(restart[0].0, kAXPressAction as CFString) == .success else {
                     finish(6, "Restart to update AXPress failed", last)
                 }
-                finish(0, "Pressed real Restart to update once for target 0.1.7", last)
+                finish(0, "Pressed real Restart to update once for target \(Release.candidate)", last)
             } else if mode == "update-ready", sawWindow, sawWebContent, !pressed,
                       hasText("Welcome to XTrace"), hasText("The initial scan finished."),
-                      hasText("Bundled readers verified"), displayedVersion(last, "0.1.6"),
+                      hasText("Bundled readers verified"), displayedVersion(last, Release.earlier),
                       hasText("In the local database now"),
                       !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
                 let buttons = elements.filter { isButton($0.1, "Open Dashboard") }
@@ -293,7 +313,7 @@ while Date() < deadline {
             if nativeError(last) { finish(6, "The released app displayed a startup or native-data error", last) }
             if sawWindow, sawWebContent, !pressed, let button,
                hasText("Welcome to XTrace"), hasText("The initial scan finished."),
-               hasText("Bundled readers verified"), displayedVersion(last, "0.1.7"),
+               hasText("Bundled readers verified"), displayedVersion(last, Release.candidate),
                hasText("In the local database now"),
                !last.contains(where: { $0.values.contains(where: { $0.contains("Reading database counts") }) }) {
                 guard ownedApplication() != nil else { finish(5, "Identity changed before press", last) }
@@ -302,10 +322,10 @@ while Date() < deadline {
                     finish(6, "Open Dashboard AXPress failed", last)
                 }
                 pressed = true
-            } else if sawWindow, sawWebContent, pressed, displayedVersion(last, "0.1.7"),
+            } else if sawWindow, sawWebContent, pressed, displayedVersion(last, Release.candidate),
                       !hasText("Welcome to XTrace"), hasText("What your agents did"),
                       hasText("No agent activity was recorded in this range. Measured zeros are shown as 0.") {
-                finish(0, "Observed native-ready Welcome, Open Dashboard action and usable 0.1.7 Dashboard",
+                finish(0, "Observed native-ready Welcome, Open Dashboard action and usable \(Release.candidate) Dashboard",
                        [["evidence": "Welcome before action"]] + welcomeEvidence +
                        [["evidence": "Dashboard after action"]] + last)
             }

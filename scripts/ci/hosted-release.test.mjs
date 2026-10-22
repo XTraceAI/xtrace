@@ -22,6 +22,9 @@ import {
   firstLaunchBaselinePaths,
   appInventory,
   verifyAppInventory,
+  missingReleaseValues,
+  releaseValueNames,
+  requireReleaseValues,
   sha256,
   verifyDownload,
   verifyTag,
@@ -138,16 +141,69 @@ test('first launch adds fresh provider, preference and current/old WebKit baseli
     assert.equal(key in env, false);
 });
 
+// Synthetic stand-ins for the signed build values; never the real ones.
+const syntheticValues = () => ({
+  ...release,
+  bytes: 7,
+  sha256: sha256('content'),
+  inventoryEntries: 2,
+  inventorySha256: 'b'.repeat(64),
+  archiveBytes: 1,
+  archiveSha256: 'c'.repeat(64),
+  signatureBytes: 1,
+  signatureSha256: 'd'.repeat(64),
+  feedBytes: 1,
+  feedSha256: 'e'.repeat(64),
+});
+
+test('the candidate is 0.1.8 from its merged source, installed as XTrace.app', () => {
+  assert.equal(release.version, '0.1.8');
+  assert.equal(release.tag, 'v0.1.8');
+  assert.equal(release.source, '75d49d54f6717d32d72eeb7a933eebb13f5be148');
+  assert.equal(release.bundle, '/Applications/XTrace.app');
+  assert.equal(release.identifier, 'ai.xtrace.app');
+  assert.equal(release.dmg, 'XTrace-0.1.8-macos-arm64.dmg');
+  assert.equal(release.archive, 'XTrace-0.1.8-macos-arm64.app.tar.gz');
+  assert.ok(Object.isFrozen(release));
+});
+
+test('build values: every unfilled, malformed or missing value is named and refused', () => {
+  const values = syntheticValues();
+  assert.deepEqual(missingReleaseValues(values), []);
+  assert.doesNotThrow(() => requireReleaseValues(values));
+  assert.deepEqual(releaseValueNames.length, 10);
+  for (const name of releaseValueNames)
+    for (const bad of [null, undefined, 0, -1, 1.5, '1', 'A'.repeat(64), 'a'.repeat(63), '']) {
+      if (typeof values[name] === 'string' && typeof bad === 'number' && bad > 0) continue;
+      const changed = { ...values, [name]: bad };
+      assert.deepEqual(missingReleaseValues(changed), [name], `${name}=${bad}`);
+      assert.throws(() => requireReleaseValues(changed), new RegExp(`not filled.*${name}`));
+    }
+});
+
+test('the committed build values are either all filled or the runners refuse', () => {
+  const missing = missingReleaseValues();
+  if (missing.length) {
+    // Before the coordinator fills them from the signed build: all ten unset.
+    assert.deepEqual(missing, [...releaseValueNames]);
+    assert.throws(() => requireReleaseValues(), /Signed 0\.1\.8 build values are not filled/);
+  } else assert.doesNotThrow(() => requireReleaseValues());
+});
+
 test('download and lightweight-tag checks reject different bytes, size or source identity', async () => {
   assert.throws(() => verifyDownload(Buffer.alloc(0)));
-  assert.throws(() => verifyDownload(Buffer.alloc(release.bytes)));
+  assert.throws(() => verifyDownload(Buffer.from('content')), 'unfilled or different real pins');
+  const values = syntheticValues();
+  assert.doesNotThrow(() => verifyDownload(Buffer.from('content'), values));
+  for (const changed of ['contenT', 'content\n', 'conten'])
+    assert.throws(() => verifyDownload(Buffer.from(changed), values));
   const tag = { ref: `refs/tags/${release.tag}`, object: { type: 'commit', sha: release.source } };
   assert.equal(
     await verifyTag(tag, () => assert.fail('Lightweight tags need no lookup')),
     release.source,
   );
   for (const changed of [
-    { ...tag, ref: 'refs/tags/v0.1.5' },
+    { ...tag, ref: 'refs/tags/v0.1.7' },
     { ...tag, object: { type: 'commit', sha } },
     { ...tag, object: { type: 'tree', sha: release.source } },
     {},
@@ -158,12 +214,12 @@ test('download and lightweight-tag checks reject different bytes, size or source
 test('synthetic annotated release tag resolves once through a fixed repository URL', async () => {
   const annotationSHA = 'c'.repeat(40);
   const ref = {
-    ref: 'refs/tags/v0.1.7',
+    ref: `refs/tags/${release.tag}`,
     object: { type: 'tag', sha: annotationSHA, url: 'https://untrusted.invalid/tag' },
   };
   const annotation = {
     sha: annotationSHA,
-    tag: 'v0.1.7',
+    tag: release.tag,
     object: { type: 'commit', sha: release.source, url: 'https://untrusted.invalid/commit' },
   };
   const requests = [];
@@ -178,7 +234,7 @@ test('synthetic annotated release tag resolves once through a fixed repository U
     `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/tags/${annotationSHA}`,
   ]);
   for (const changed of [
-    { ...ref, ref: 'refs/tags/v0.1.5' },
+    { ...ref, ref: 'refs/tags/v0.1.7' },
     { ...ref, object: { type: 'tree', sha: annotationSHA } },
     { ...ref, object: { type: 'tag', sha: '../other-repository' } },
     { ...ref, object: { type: 'tag', sha: 'A'.repeat(40) } },
@@ -186,7 +242,7 @@ test('synthetic annotated release tag resolves once through a fixed repository U
     await assert.rejects(verifyTag(changed, () => assert.fail('Invalid refs must not be fetched')));
   for (const changed of [
     { ...annotation, sha: 'b'.repeat(40) },
-    { ...annotation, tag: 'v0.1.5' },
+    { ...annotation, tag: 'v0.1.7' },
     { ...annotation, object: { type: 'commit', sha: 'b'.repeat(40) } },
     { ...annotation, object: { type: 'tag', sha: annotationSHA } },
     { ...annotation, object: { type: 'blob', sha: release.source } },
@@ -241,6 +297,38 @@ test('canonical inventory binds every path, byte, size, directory and mode and r
     assert.equal((await appInventory(app)).entries, 3);
     await symlink('/outside', join(app, 'link'));
     await assert.rejects(appInventory(app), /link or special/);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('the candidate inventory names paths after XTrace.app wherever the folder is', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'hosted-inventory-root-'));
+  try {
+    const earlier = join(temporary, 'XTrace Desktop.app');
+    await mkdir(earlier, { mode: 0o755 });
+    await chmod(earlier, 0o755);
+    await writeFile(join(earlier, 'file'), 'content');
+    await chmod(join(earlier, 'file'), 0o644);
+    const labelled = await appInventory(earlier, 'XTrace.app');
+    assert.equal(
+      labelled.sha256,
+      sha256(
+        JSON.stringify([
+          ['XTrace.app', true, 0, 0o755, null],
+          ['XTrace.app/file', false, 7, 0o644, sha256('content')],
+        ]),
+      ),
+    );
+    const values = { ...syntheticValues(), inventorySha256: labelled.sha256 };
+    // The updater writes the candidate into the earlier folder; a quit renames it.
+    assert.deepEqual(await verifyAppInventory(earlier, values), labelled);
+    const renamed = join(temporary, 'XTrace.app');
+    await rename(earlier, renamed);
+    assert.deepEqual(await appInventory(renamed), labelled);
+    assert.deepEqual(await verifyAppInventory(renamed, values), labelled);
+    await writeFile(join(renamed, 'file'), 'changed');
+    await assert.rejects(verifyAppInventory(renamed, values), /differ/);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

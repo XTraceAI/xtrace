@@ -5,7 +5,27 @@ let productReceipt = owned.deletingLastPathComponent().deletingLastPathComponent
 let probe = try! launchContext("probe-launch", environment: envURL, receipt: probeReceipt)
 let product = try! launchContext("telemetry-launch", environment: envURL, receipt: productReceipt)
 assert(probe.identifier == "ai.xtrace.app.test.telemetry-proxy")
-assert(product.identifier == "ai.xtrace.app" && product.bundle.path == "/Applications/XTrace Desktop.app")
+assert(product.identifier == "ai.xtrace.app" && product.bundle.path == "/Applications/XTrace.app")
+// Product commands use the current folder; `earlier-` commands the folder
+// releases through 0.1.7 installed under. Only the earlier folder is updated.
+let anyReceipt = URL(fileURLWithPath: "/owned/artifacts/hosted-update/launch-receipt.json")
+let anyEnvironment = URL(fileURLWithPath: "/owned/artifacts/hosted-update/run-x/staging.noindex/environment.json")
+for (raw, path, command) in [("launch", "/Applications/XTrace.app", "launch"), ("quit", "/Applications/XTrace.app", "quit"),
+                             ("absent", "/Applications/XTrace.app", "absent"),
+                             ("earlier-launch", "/Applications/XTrace Desktop.app", "launch"),
+                             ("earlier-quit", "/Applications/XTrace Desktop.app", "quit"),
+                             ("earlier-arm-update", "/Applications/XTrace Desktop.app", "arm-update"),
+                             ("earlier-adopt-update", "/Applications/XTrace Desktop.app", "adopt-update")] {
+    let selected = try! launchContext(raw, environment: anyEnvironment, receipt: anyReceipt)
+    assert(selected.command == command && selected.bundle.path == path && selected.identifier == "ai.xtrace.app" && !selected.telemetry)
+    assert(selected.executable.path == path + "/Contents/MacOS/xtrace-desktop")
+}
+for raw in ["arm-update", "adopt-update", "telemetry-quit", "probe-quit", "earlier-telemetry-launch", "earlier-unknown", "earlier-", "later-launch"] {
+    do { _ = try launchContext(raw, environment: anyEnvironment, receipt: anyReceipt); fatalError("Unsupported product command accepted: \(raw)") } catch {}
+}
+let earlierReceipt = Receipt(pid: 10, startTime: 100, bundle: ProductBundle.earlier, executable: ProductBundle.earlier + "/Contents/MacOS/xtrace-desktop", identifier: "ai.xtrace.app")
+let earlierContext = try! launchContext("earlier-stop", environment: anyEnvironment, receipt: anyReceipt)
+assert(receiptMatchesContext(earlierReceipt, earlierContext) && !receiptMatchesContext(earlierReceipt, product))
 assert(probeMetadataMatches(["CFBundleIdentifier":probe.identifier,"CFBundleExecutable":"TelemetryProxyProbe"]))
 for wrong in [["CFBundleIdentifier":"ai.xtrace.app","CFBundleExecutable":"TelemetryProxyProbe"], ["CFBundleIdentifier":probe.identifier,"CFBundleExecutable":"xtrace-desktop"]] { assert(!probeMetadataMatches(wrong)) }
 let receipt = Receipt(pid: 10, startTime: 100, bundle: probe.bundle.path, executable: probe.executable.path, identifier: probe.identifier)

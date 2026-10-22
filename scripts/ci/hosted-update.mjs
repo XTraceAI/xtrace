@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireFreshBaseline } from './hosted-validation.mjs';
 import { signatureProblems, notarizedByGatekeeper } from './release-dmg.mjs';
@@ -10,6 +10,7 @@ import {
   signedLaunchLimits,
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
+  requireReleaseValues,
   verifyAppInventory,
   verifyHostedDatabase,
   executionBudget,
@@ -20,6 +21,10 @@ import {
   productionFeed,
   sentinel,
   requireUpdateHost,
+  requireBundleStep,
+  requireAppIdentity,
+  requireSameDatabase,
+  updaterLeftovers,
   verifyPreviousDownload,
   verifyPreviousInventory,
   verifyProductionFeed,
@@ -27,6 +32,10 @@ import {
 } from './hosted-update-checks.mjs';
 
 const systemEnvironment = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8' };
+// The published earlier app is installed, and updated in place, here; a
+// normal quit of the updated app renames it to the candidate's folder.
+const earlierBundle = previousRelease.bundle;
+const renamedBundle = release.bundle;
 async function exists(path) {
   try {
     await lstat(path);
@@ -44,6 +53,7 @@ async function main() {
     status: 'failed',
     mode: 'update',
     release,
+    previousRelease,
     validationLimits: signedLaunchLimits,
     releasedAppLaunched: false,
     commandBudget: updateBudget,
@@ -53,8 +63,9 @@ async function main() {
     installed = false,
     launchAttempted = false,
     pressAttempted = false,
+    reopenAttempted = false,
     failure;
-  let helper, receipt, successorReceipt, environmentFile, automationEnvironment;
+  let helper, receipt, successorReceipt, reopenReceipt, environmentFile, automationEnvironment;
   const run = (command, args, timeout = 30_000, env = systemEnvironment) =>
     spawnSync(command, args, {
       encoding: 'utf8',
@@ -100,6 +111,19 @@ async function main() {
       ? checked(`${name}-quarantine`, '/usr/bin/xattr', ['-p', 'com.apple.quarantine', path])
       : null;
   };
+  const appIdentity = async (bundle, version, name) =>
+    requireAppIdentity(
+      JSON.parse(
+        await checked(name, '/usr/bin/plutil', [
+          '-convert',
+          'json',
+          '-o',
+          '-',
+          join(bundle, 'Contents/Info.plist'),
+        ]),
+      ),
+      version,
+    );
   try {
     if (process.argv.length !== 2) throw new Error('Update runner accepts no positional overrides');
     const head = run('/usr/bin/git', ['rev-parse', 'HEAD']).stdout?.trim();
@@ -116,6 +140,7 @@ async function main() {
       env: process.env,
       head,
     });
+    requireReleaseValues();
     Object.assign(report, {
       head,
       osVersion,
@@ -158,7 +183,9 @@ async function main() {
     await writeFile(environmentFile, JSON.stringify(env));
     receipt = join(output, 'launch-receipt.json');
     successorReceipt = receipt + '.successor.json';
-    if (await exists(receipt)) throw new Error('A prior launch receipt exists');
+    reopenReceipt = join(output, 'reopen-receipt.json');
+    if ((await exists(receipt)) || (await exists(reopenReceipt)))
+      throw new Error('A prior launch receipt exists');
     automationEnvironment = {
       ...systemEnvironment,
       ALLOW_RELEASE_IDENTITY: 'true',
@@ -227,7 +254,6 @@ async function main() {
       previousRelease.bytes,
     );
     verifyPreviousDownload(await readFile(archive));
-    report.previousRelease = previousRelease;
     report.downloadVerified = true;
     report.quarantine = {
       downloadMethod: 'anonymous curl; metadata unchanged by harness',
@@ -238,45 +264,41 @@ async function main() {
     // Only the exact reviewed hash above can reach extraction. Its 79-member
     // regular-file/directory map was checked before this pin was committed.
     await checked('old-extract', '/usr/bin/tar', ['-xzf', archive, '-C', owned], 60_000);
-    report.extractedInventory = await verifyPreviousInventory(join(owned, 'XTrace Desktop.app'));
-    if (await exists(release.bundle)) throw new Error('Installation path appeared after baseline');
+    const extracted = join(owned, basename(earlierBundle));
+    report.extractedInventory = await verifyPreviousInventory(extracted);
+    if ((await exists(earlierBundle)) || (await exists(renamedBundle)))
+      throw new Error('Installation path appeared after baseline');
     installed = true;
-    await checked(
-      'install',
-      '/usr/bin/ditto',
-      [join(owned, 'XTrace Desktop.app'), release.bundle],
-      60_000,
-    );
-    report.installedInventory = await verifyPreviousInventory(release.bundle);
-    const plist = JSON.parse(
-      await checked('old-plist', '/usr/bin/plutil', [
-        '-convert',
-        'json',
-        '-o',
-        '-',
-        join(release.bundle, 'Contents/Info.plist'),
-      ]),
-    );
-    if (
-      plist.CFBundleIdentifier !== release.identifier ||
-      plist.CFBundleShortVersionString !== previousRelease.version ||
-      plist.CFBundleVersion !== previousRelease.version ||
-      plist.CFBundleExecutable !== 'xtrace-desktop'
-    )
-      throw new Error('Old app identity/version mismatch');
-    await validateSignature(release.bundle, 'old-app');
+    await checked('install', '/usr/bin/ditto', [extracted, earlierBundle], 60_000);
+    report.installedInventory = await verifyPreviousInventory(earlierBundle);
+    requireBundleStep('installed', await readdir('/Applications'));
+    await appIdentity(earlierBundle, previousRelease.version, 'old-plist');
+    await validateSignature(earlierBundle, 'old-app');
     report.quarantine.installedBeforeLaunch = await quarantineAt(
-      release.bundle,
+      earlierBundle,
       'installed-before-launch',
     );
-    await writeFile(join(env.XTRACE_DATA_DIR, 'update-sentinel.txt'), sentinel, { flag: 'wx' });
-    if (await exists(join(env.XTRACE_DATA_DIR, 'xtrace.db')))
-      throw new Error('Synthetic database must start absent');
+    const sentinelPath = join(env.XTRACE_DATA_DIR, 'update-sentinel.txt');
+    const databasePath = join(env.XTRACE_DATA_DIR, 'xtrace.db');
+    await writeFile(sentinelPath, sentinel, { flag: 'wx' });
+    if (await exists(databasePath)) throw new Error('Synthetic database must start absent');
+    const databaseIdentity = async () => {
+      const { ino, dev, birthtimeMs } = await lstat(databasePath);
+      return { ino, dev, birthtimeMs };
+    };
+    const dataKept = async (step) => {
+      if ((await readFile(sentinelPath, 'utf8')) !== sentinel)
+        throw new Error(`${step}: synthetic sentinel changed`);
+      requireSameDatabase(report.databaseIdentity, await databaseIdentity(), step);
+      for (const id of ['ai.xtrace.app', 'ai.xtrace.desktop'])
+        if (await exists(join(homedir(), 'Library/Application Support', id, 'xtrace.db')))
+          throw new Error('App wrote a database outside the owned data directory');
+    };
     launchAttempted = true;
     await checked(
       'launch-services',
       helper,
-      ['launch', receipt, environmentFile],
+      ['earlier-launch', receipt, environmentFile],
       55_000,
       automationEnvironment,
     );
@@ -286,14 +308,14 @@ async function main() {
     await checked(
       'process-environment',
       helper,
-      ['inspect', receipt, environmentFile],
+      ['earlier-inspect', receipt, environmentFile],
       10_000,
       automationEnvironment,
     );
-    const observe = async (mode, pid, timeout, reason) => {
+    const observe = async (mode, pid, bundle, timeout, reason) => {
       const result = run(
         driver,
-        [String(pid), release.bundle, release.identifier, mode],
+        [String(pid), bundle, release.identifier, mode],
         timeout,
         automationEnvironment,
       );
@@ -311,16 +333,20 @@ async function main() {
     await observe(
       'update-ready',
       ownership.pid,
+      earlierBundle,
       185_000,
-      'Observed usable 0.1.6 Dashboard and target 0.1.7 ready',
+      `Observed usable ${previousRelease.version} Dashboard and target ${release.version} ready`,
     );
+    // The earlier version made the database while showing Welcome. Every later
+    // step must find this same file.
+    report.databaseIdentity = await databaseIdentity();
     // Ready means verified download, not installation. Prove old bytes remain
     // immediately before asking the shipped UI to install and restart itself.
-    report.beforePressInventory = await verifyPreviousInventory(release.bundle);
+    report.beforePressInventory = await verifyPreviousInventory(earlierBundle);
     await checked(
       'arm-update',
       helper,
-      ['arm-update', receipt, environmentFile],
+      ['earlier-arm-update', receipt, environmentFile],
       10_000,
       automationEnvironment,
     );
@@ -328,14 +354,15 @@ async function main() {
     await observe(
       'update-press',
       ownership.pid,
+      earlierBundle,
       15_000,
-      'Pressed real Restart to update once for target 0.1.7',
+      `Pressed real Restart to update once for target ${release.version}`,
     );
     report.restartPressed = true;
     await checked(
       'adopt-update',
       helper,
-      ['adopt-update', receipt, environmentFile],
+      ['earlier-adopt-update', receipt, environmentFile],
       60_000,
       automationEnvironment,
     );
@@ -345,48 +372,118 @@ async function main() {
     await checked(
       'successor-environment',
       helper,
-      ['inspect', successorReceipt, environmentFile],
+      ['earlier-inspect', successorReceipt, environmentFile],
       10_000,
       automationEnvironment,
     );
     await observe(
       'updated-dashboard',
       successor.pid,
+      earlierBundle,
       95_000,
-      'Observed usable native 0.1.7 Dashboard and retained completed Welcome',
+      `Observed usable native ${release.version} Dashboard after restart and retained completed Welcome`,
     );
-    report.updatedInventory = await verifyAppInventory(release.bundle);
-    await validateSignature(release.bundle, 'updated-app');
+    // (a) After the restart: still the earlier folder, now holding the
+    // candidate's exact files, relaunched as a distinct process, data kept.
+    report.restarted = {
+      applications: requireBundleStep('restarted', await readdir('/Applications')),
+      inventory: await verifyAppInventory(earlierBundle),
+    };
+    await appIdentity(earlierBundle, release.version, 'updated-plist');
+    await validateSignature(earlierBundle, 'updated-app');
+    await dataKept('After restart');
+    report.restarted.dataKept = true;
+    // A normal quit (the Quit Apple event, never forced) runs the app's own
+    // exit path, which renames the earlier folder.
     await checked(
-      'stop-successor',
+      'quit-updated',
       helper,
-      ['stop', successorReceipt, environmentFile],
-      20_000,
+      ['earlier-quit', successorReceipt, environmentFile],
+      25_000,
       automationEnvironment,
     );
     await checked(
       'all-exited',
       helper,
-      ['absent', receipt, environmentFile],
+      ['earlier-absent', receipt, environmentFile],
       10_000,
       automationEnvironment,
     );
     report.exitConfirmed = true;
-    report.afterExitInventory = await verifyAppInventory(release.bundle);
+    report.normalQuit = true;
+    // (b) After the quit: only the candidate's folder name, identical files,
+    // a valid signature, ticket and Gatekeeper assessment, data kept.
+    report.renamed = {
+      applications: requireBundleStep('quit', await readdir('/Applications')),
+      inventory: await verifyAppInventory(renamedBundle),
+    };
+    if (JSON.stringify(report.renamed.inventory) !== JSON.stringify(report.restarted.inventory))
+      throw new Error('Renamed app contents differ from the updated app');
+    await appIdentity(renamedBundle, release.version, 'renamed-plist');
+    await validateSignature(renamedBundle, 'renamed-app');
+    report.quarantine.renamedAfterQuit = await quarantineAt(renamedBundle, 'renamed-after-quit');
+    await dataKept('After quit');
+    report.databaseAfterUpdate = await verifyHostedDatabase(source, env.XTRACE_DATA_DIR, checked);
+    report.renamed.dataKept = true;
+    // Reopen the renamed folder as a person would: Dashboard, no Welcome.
+    reopenAttempted = true;
+    await checked(
+      'reopen',
+      helper,
+      ['launch', reopenReceipt, environmentFile],
+      55_000,
+      automationEnvironment,
+    );
+    const reopened = JSON.parse(await readFile(reopenReceipt, 'utf8'));
+    report.reopenedPid = reopened.pid;
+    await checked(
+      'reopen-environment',
+      helper,
+      ['inspect', reopenReceipt, environmentFile],
+      10_000,
+      automationEnvironment,
+    );
+    await observe(
+      'reopened-dashboard',
+      reopened.pid,
+      renamedBundle,
+      95_000,
+      `Observed usable native ${release.version} Dashboard after reopening the renamed app without Welcome`,
+    );
+    await checked(
+      'quit-reopened',
+      helper,
+      ['quit', reopenReceipt, environmentFile],
+      25_000,
+      automationEnvironment,
+    );
+    await checked(
+      'reopened-exited',
+      helper,
+      ['absent', reopenReceipt, environmentFile],
+      10_000,
+      automationEnvironment,
+    );
+    report.reopenExitConfirmed = true;
+    report.reopened = {
+      applications: requireBundleStep('reopened', await readdir('/Applications')),
+      inventory: await verifyAppInventory(renamedBundle),
+    };
     report.quarantine.installedAfterExit = await quarantineAt(
-      release.bundle,
+      renamedBundle,
       'installed-after-exit',
     );
-    if ((await readFile(join(env.XTRACE_DATA_DIR, 'update-sentinel.txt'), 'utf8')) !== sentinel)
-      throw new Error('Synthetic sentinel changed across update');
+    await dataKept('After reopening');
     report.sentinelRetained = true;
-    if (!(await exists(join(env.XTRACE_DATA_DIR, 'xtrace.db'))))
-      throw new Error('Owned data directory has no database');
-    for (const id of ['ai.xtrace.app', 'ai.xtrace.desktop'])
-      if (await exists(join(homedir(), 'Library/Application Support', id, 'xtrace.db')))
-        throw new Error('App wrote a database outside the owned data directory');
     report.database = await verifyHostedDatabase(source, env.XTRACE_DATA_DIR, checked);
     report.nativeDatabaseVerified = true;
+    // (c) No copy the updater set aside or extracted is left behind.
+    const leftovers = [
+      ...updaterLeftovers(await readdir(env.TMPDIR)).map((name) => join(env.TMPDIR, name)),
+      ...updaterLeftovers(await readdir(tmpdir())).map((name) => join(tmpdir(), name)),
+    ];
+    if (leftovers.length) throw new Error(`Updater copies were left: ${leftovers.join(', ')}`);
+    report.noLeftoverCopies = { applications: true, temporaryFolders: [env.TMPDIR, tmpdir()] };
   } catch (error) {
     if (error.message.startsWith('Production feed prerequisite unmet:'))
       report.status = 'prerequisite-unmet';
@@ -404,7 +501,7 @@ async function main() {
             checked(
               'cleanup-adopt',
               helper,
-              ['adopt-update', receipt, environmentFile],
+              ['earlier-adopt-update', receipt, environmentFile],
               60_000,
               automationEnvironment,
             ),
@@ -412,7 +509,7 @@ async function main() {
             checked(
               'cleanup-stop-original',
               helper,
-              ['stop', receipt, environmentFile],
+              ['earlier-stop', receipt, environmentFile],
               20_000,
               automationEnvironment,
             ),
@@ -420,7 +517,7 @@ async function main() {
             checked(
               'cleanup-stop-successor',
               helper,
-              ['stop', successorReceipt, environmentFile],
+              ['earlier-stop', successorReceipt, environmentFile],
               20_000,
               automationEnvironment,
             ),
@@ -428,7 +525,7 @@ async function main() {
             checked(
               'cleanup-all-exited',
               helper,
-              ['absent', receipt, environmentFile],
+              ['earlier-absent', receipt, environmentFile],
               10_000,
               automationEnvironment,
             ),
@@ -436,14 +533,40 @@ async function main() {
       );
       report.exitConfirmed = true;
     }
-    if (installed) {
+    if (reopenAttempted && !report.reopenExitConfirmed) {
+      if (!(await exists(reopenReceipt)))
+        throw new Error('Reopen outcome has no ownership receipt; app retained');
       await checked(
-        'unregister',
-        '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
-        ['-u', release.bundle],
+        'cleanup-stop-reopened',
+        helper,
+        ['stop', reopenReceipt, environmentFile],
+        20_000,
+        automationEnvironment,
       );
-      await rm(release.bundle, { recursive: true });
+      await checked(
+        'cleanup-reopened-exited',
+        helper,
+        ['absent', reopenReceipt, environmentFile],
+        10_000,
+        automationEnvironment,
+      );
+      report.reopenExitConfirmed = true;
     }
+    // Baseline proved neither folder existed, so whichever exists now is this
+    // run's: the installed earlier folder or the app's own rename of it.
+    if (installed)
+      for (const [name, bundle] of [
+        ['unregister-earlier', earlierBundle],
+        ['unregister-renamed', renamedBundle],
+      ]) {
+        if (!(await exists(bundle))) continue;
+        await checked(
+          name,
+          '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
+          ['-u', bundle],
+        );
+        await rm(bundle, { recursive: true });
+      }
     if (staging) await rm(staging, { recursive: true });
     report.cleanupConfirmed = true;
   } catch (error) {
@@ -456,7 +579,7 @@ async function main() {
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (failure) throw failure;
   console.log(
-    'Pinned signed 0.1.6 updated through its real UI to 0.1.7 with synthetic data and telemetry disabled; distinct restart, retained sentinel and empty native database verified. The default telemetry notice and default telemetry behavior were not validated.',
+    `Pinned signed ${previousRelease.version} updated through its real UI to ${release.version} with synthetic data and telemetry disabled: distinct restart in "${basename(earlierBundle)}", rename to "${basename(renamedBundle)}" on a normal quit with identical signed contents, reopened Dashboard without Welcome, retained sentinel and database, no updater copies left. The default telemetry notice and default telemetry behavior were not validated.`,
   );
 }
 

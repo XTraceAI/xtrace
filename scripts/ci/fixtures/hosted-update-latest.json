@@ -1,10 +1,3 @@
 {
-  "version": "0.1.7",
-  "notes": "XTrace Desktop 0.1.7 beta adds anonymous usage telemetry. It is on by default, sends nothing until the notice is shown, and can be turned off in the notice or Settings. Events cover app opens and daily/hourly activity; prompts, conversation text, titles and file paths are not sent. See TELEMETRY.md for the full details.\n\nThis update also includes six reviewed fixes and maintenance changes:\n- Correct parent links and Human input counts for agent launches, and bound transcript detail reads.\n- Stop leftover usage-helper processes and keep native validation copies isolated.\n- Keep manual pull-request refresh available when no linked pull request is found.\n- Correct the documentation for supported transcripts and conversation details.\n- Update three development dependencies to patched versions.\n- Keep historical work before midnight and retain the most recently active child conversations in capped lists.\n\nBeta limits: some nested Guardian conversations can still appear under their root conversation instead of their immediate parent.",
-  "platforms": {
-    "darwin-aarch64": {
-      "url": "https://github.com/XTraceAI/xtrace-desktop/releases/download/v0.1.7/XTrace-Desktop-0.1.7-macos-arm64.app.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRY000TkV4UllHT3lycDg3NityMTh3TlBYQVZ5M0hZYzJKUDFLTmNsVG9tQVNnSkJ2M2FqeCt1bWpRVzVKWTIrdnlTYm0yMWdDYWtIMllSNDYyTjhBb2YrTkY3YUM2clF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNDQ0OTY1CWZpbGU6WFRyYWNlLURlc2t0b3AtMC4xLjctbWFjb3MtYXJtNjQuYXBwLnRhci5negl2ZXJzaW9uOjAuMS43CkpROVhZTkdJdHZhNnlXcy9vNEw3VnlVVkxRTjgzTFBOb2s0NjRKL0hURmFCbVBpV0dlNDNnQW5qcUVGVDZocllhUFBCRm15Q3R0SHNCdVgzK0RSNENnPT0K"
-    }
-  }
+  "placeholder": "Replace this whole file with the exact published 0.1.8 latest.json bytes before any hosted run. See docs/UPDATES.md."
 }

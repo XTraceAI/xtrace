@@ -10,6 +10,8 @@ apps/desktop/ui/src/data/generated/
 apps/desktop/ui/fixtures/F1.json
 apps/desktop/ui/src/app/scores/scores.synthetic.json
 apps/desktop/ui/src/app/scores/picker.synthetic.json
+# Preserve the exact published update feed bytes the hosted checks pin.
+scripts/ci/fixtures/hosted-update-latest.json
 
 **/playwright-report/
 **/test-results/

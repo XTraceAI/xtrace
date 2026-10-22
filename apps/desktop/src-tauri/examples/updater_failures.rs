@@ -38,6 +38,47 @@ fn text<'a>(config: &'a Value, key: &str) -> Result<&'a str, String> {
     config[key].as_str().ok_or_else(|| format!("Missing {key}"))
 }
 
+/// The release pair and archive size the harness pins in one place
+/// (scripts/ci/hosted-release.mjs); this helper only checks their shape.
+struct Pins {
+    old: String,
+    target: String,
+    mismatch: String,
+    archive_bytes: usize,
+}
+
+fn pins(config: &Value) -> Result<Pins, String> {
+    let versions = &config["versions"];
+    let version = |key: &str| -> Result<String, String> {
+        let value = versions[key]
+            .as_str()
+            .ok_or_else(|| format!("Missing version {key}"))?;
+        let parts: Vec<_> = value.split('.').collect();
+        if parts.len() != 3
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return Err(format!("Version {key} is not MAJOR.MINOR.PATCH"));
+        }
+        Ok(value.to_string())
+    };
+    let (old, target, mismatch) = (version("old")?, version("target")?, version("mismatch")?);
+    if old == target || target == mismatch || old == mismatch {
+        return Err("The old, target and mismatch versions must differ".into());
+    }
+    let archive_bytes = config["archiveBytes"]
+        .as_u64()
+        .filter(|bytes| *bytes > 0)
+        .ok_or("Missing archive size")? as usize;
+    Ok(Pins {
+        old,
+        target,
+        mismatch,
+        archive_bytes,
+    })
+}
+
 fn process_identity() -> Result<Value, String> {
     #[cfg(target_os = "macos")]
     {
@@ -107,6 +148,7 @@ fn execute(config: &Value) -> Result<Value, String> {
         owned(&root, &std::env::var(key).map_err(|e| e.to_string())?)?;
     }
     let case = text(config, "case")?;
+    let pins = pins(config)?;
     if case == "probe" {
         if fs::canonicalize(std::env::current_exe().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?
@@ -154,7 +196,7 @@ fn execute(config: &Value) -> Result<Value, String> {
     }
     let mut context = mock_context(noop_assets());
     context.config_mut().identifier = identifier.into();
-    context.package_info_mut().version = "0.1.6".parse().unwrap();
+    context.package_info_mut().version = pins.old.parse().map_err(|e| format!("{e}"))?;
     context.config_mut().plugins.0.insert(
         "updater".into(),
         json!({"pubkey": text(config, "pubkey")?, "endpoints":[endpoint],
@@ -180,7 +222,12 @@ fn execute(config: &Value) -> Result<Value, String> {
     let expected_download = endpoint.join("archive").map_err(|e| e.to_string())?;
     if update.download_url != expected_download
         || update.signature != text(config, "signature")?
-        || update.version != if case == "version" { "0.1.8" } else { "0.1.7" }
+        || update.version
+            != if case == "version" {
+                pins.mismatch.as_str()
+            } else {
+                pins.target.as_str()
+            }
     {
         return Err("SDK response differs from the owned fixture".into());
     }
@@ -204,7 +251,7 @@ fn execute(config: &Value) -> Result<Value, String> {
             let expected = match (case, &error) {
                 ("corrupt", Error::Minisign(_)) => true,
                 ("version", Error::SignedVersionMismatch { signed, announced }) => {
-                    signed == "0.1.7" && announced == "0.1.8"
+                    *signed == pins.target && *announced == pins.mismatch
                 }
                 ("timeout", Error::Reqwest(e)) => {
                     e.is_timeout() && (599_000..=630_000).contains(&elapsed) && transferred > 0
@@ -223,7 +270,7 @@ fn execute(config: &Value) -> Result<Value, String> {
                 result["error"] = json!("A rejection case unexpectedly returned verified bytes");
                 return Ok(result);
             }
-            if bytes.len() != 11_064_049 {
+            if bytes.len() != pins.archive_bytes {
                 return Err("Verified archive length differs from pinned release".into());
             }
             // Only verified SDK download output can enter installation.
