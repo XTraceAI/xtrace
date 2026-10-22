@@ -160,14 +160,16 @@ after Restart to update the folder keeps its earlier name; after a normal quit
 only `XTrace.app` remains, with identical signed contents; reopening it opens the
 Dashboard without Welcome.
 
-### Values to fill before any hosted run
+### Signed build values
 
-The signed build values are not committed yet. They are ten `null` values in the
-`release` object of `scripts/ci/hosted-release.mjs`, between `BEGIN SIGNED BUILD
-VALUES` and `END SIGNED BUILD VALUES`. Until all ten are filled, every hosted
-runner (first launch, telemetry, updater failures and update) refuses before it
-downloads, installs or launches anything. Fill them from the final signed,
-notarized and stapled files, the same files that are published:
+The ten signed build values are in the `release` object of
+`scripts/ci/hosted-release.mjs`, between `BEGIN SIGNED BUILD VALUES` and `END
+SIGNED BUILD VALUES`. They were computed from the files published on the v0.1.8
+pre-release, downloaded anonymously: DMG 12,527,084 bytes, app inventory 101
+entries, updater archive 11,843,476 bytes, signature 448 bytes, `latest.json`
+1,500 bytes. If any value is missing or malformed, every hosted runner (first
+launch, telemetry, updater failures and update) refuses before it downloads,
+installs or launches anything. Each value comes from the published file:
 
 | Value                                 | Computed from                                                               |
 | ------------------------------------- | --------------------------------------------------------------------------- |
@@ -183,13 +185,12 @@ Compute the inventory with the harness's own function, from the repository root:
 node --input-type=module -e 'import { appInventory } from "./scripts/ci/hosted-release.mjs"; console.log(JSON.stringify(await appInventory(process.argv[1])));' "/path/to/mounted/XTrace.app"
 ```
 
-It must give the same result for the app that `/usr/bin/tar -xzf` extracts from
-the updater archive (for 0.1.7 both gave 79 entries and the same SHA-256), and the
-archive must hold exactly `inventoryEntries` members under one `XTrace.app` folder.
-Also replace `scripts/ci/fixtures/hosted-update-latest.json` (now a placeholder)
-with the exact `latest.json` bytes; the tests then require it to match
-`feedBytes` and `feedSha256`, name version 0.1.8, and point only at the public
-v0.1.8 archive. `fixture.lockSha256` in `scripts/ci/hosted-updater-failures.mjs`
+The app that `/usr/bin/tar -xzf` extracts from the updater archive gives the same
+result (0.1.7: 79 entries; 0.1.8: 101 entries, the same SHA-256 as the DMG app),
+and the archive holds exactly `inventoryEntries` members under one `XTrace.app`
+folder. `scripts/ci/fixtures/hosted-update-latest.json` holds the exact published
+`latest.json` bytes; the tests require it to match `feedBytes` and `feedSha256`,
+name version 0.1.8, and point only at the public v0.1.8 archive. `fixture.lockSha256` in `scripts/ci/hosted-updater-failures.mjs`
 is this checkout's `Cargo.lock` (the 0.1.8 product lock); change it only if the
 harness branch changes `Cargo.lock`.
 
@@ -200,7 +201,7 @@ except the separate telemetry mode. This suppresses the default telemetry notice
 as well as telemetry sending. Their reports and success messages identify that
 scope.
 
-At preparation, 0.1.8 is unpublished and none of its hosted checks have run.
+0.1.8 is published as a pre-release; none of its hosted checks have run yet.
 They require the existing reviewed workflow guards and exact public assets; the
 update additionally requires separate authorization to promote the pinned
 production feed. Not covered by the update check: a Mac that already has

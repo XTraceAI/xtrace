@@ -430,8 +430,9 @@ opt-in; the update job described below has the same explicit opt-in.
 The harness targets the 0.1.8 candidate from source
 `75d49d54f6717d32d72eeb7a933eebb13f5be148`, installed as `XTrace.app`. Its signed
 build values (DMG, app inventory, updater archive, signature and feed sizes and
-SHA-256s) are not in the harness yet: every runner refuses until they are filled
-in `scripts/ci/hosted-release.mjs` (see [updates](UPDATES.md#prepared-018-acceptance)).
+SHA-256s) are pinned in `scripts/ci/hosted-release.mjs` from the published
+pre-release files; every runner refuses if any is missing (see
+[updates](UPDATES.md#prepared-018-acceptance)).
 These pins prepare future validation; they do not establish public availability
 or runtime success. First launch requires its exact public source tag and DMG.
 The update check also requires the exact candidate feed to be promoted through a

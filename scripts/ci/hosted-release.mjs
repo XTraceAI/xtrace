@@ -7,10 +7,10 @@ import { baselinePaths, probeEnvironment, requireProbeHost } from './hosted-vali
 // exact public DMG, archive, signature and feed bytes. The harness commit is
 // separate from the released product source commit.
 //
-// FILL BEFORE ANY HOSTED RUN. The ten null values below come from the final
-// signed 0.1.8 build; docs/UPDATES.md says how each one is computed. Until all
-// are filled, requireReleaseValues() refuses before any download, install or
-// launch. This object is the only place these build values are written.
+// The ten build values below were computed from the published v0.1.8 files
+// (docs/UPDATES.md says how). requireReleaseValues() refuses before any
+// download, install or launch if any is missing or malformed. This object is
+// the only place these build values are written.
 export const release = Object.freeze({
   version: '0.1.8',
   tag: 'v0.1.8',
@@ -21,16 +21,16 @@ export const release = Object.freeze({
   dmg: 'XTrace-0.1.8-macos-arm64.dmg',
   archive: 'XTrace-0.1.8-macos-arm64.app.tar.gz',
   // BEGIN SIGNED BUILD VALUES
-  bytes: null, // DMG size in bytes
-  sha256: null, // DMG SHA-256
-  inventoryEntries: null, // appInventory() of the DMG's XTrace.app
-  inventorySha256: null,
-  archiveBytes: null, // updater archive size in bytes
-  archiveSha256: null,
-  signatureBytes: null, // the archive's .sig file
-  signatureSha256: null,
-  feedBytes: null, // latest.json, byte-identical to fixtures/hosted-update-latest.json
-  feedSha256: null,
+  bytes: 12527084, // DMG size in bytes
+  sha256: 'fa0931c6fb71f3a9cd7f6c330d3a3f3c3182a5022bdb1e8fc3b626f2be6ef595', // DMG SHA-256
+  inventoryEntries: 101, // appInventory() of the DMG's XTrace.app
+  inventorySha256: '68c08e83836c518fcc27f1571bb28114b3ca3435c01a2a9b53cd0312bf4df524',
+  archiveBytes: 11843476, // updater archive size in bytes
+  archiveSha256: 'ba52098989d15ab6aab7600609b030460c2840d0757dff06e88beab5f5412c2e',
+  signatureBytes: 448, // the archive's .sig file
+  signatureSha256: '8057249f3a267fe136c991001dacdce70aad94fff81d16d93318c23c86d2769a',
+  feedBytes: 1500, // latest.json, byte-identical to fixtures/hosted-update-latest.json
+  feedSha256: 'e20c172e23ed0b36701f80715ab8840f7c634fd4136d6e77104e2e20fee757bf',
   // END SIGNED BUILD VALUES
 });
 
