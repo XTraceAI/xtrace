@@ -404,7 +404,7 @@ pub fn settings(project: &str, grade: &str) -> String {
 /// programs it starts, and as `Read` deny rules ([`secret_read_rules`]),
 /// which Claude Code's own file tools (Read, Grep, Glob) follow; the sandbox
 /// does not cover those tools.
-pub const SECRET_LOCATIONS: [&str; 41] = [
+pub const SECRET_LOCATIONS: [&str; 47] = [
     // Keys and signing.
     "~/.ssh",
     "~/.gnupg",
@@ -422,15 +422,22 @@ pub const SECRET_LOCATIONS: [&str; 41] = [
     "~/.config/gh",
     "~/.config/hub",
     "~/.git-credentials",
+    "~/.config/git/credentials",
     "~/.netrc",
     "~/.npmrc",
     "~/.pypirc",
     "~/.cargo/credentials",
     "~/.cargo/credentials.toml",
     "~/.gem/credentials",
+    // Database passwords.
+    "~/.pgpass",
+    "~/.my.cnf",
     // Other coding tools' sign-ins.
+    "~/.claude.json",
     "~/.claude/.credentials.json",
     "~/.codex/auth.json",
+    "~/.gemini",
+    "~/.config/github-copilot",
     // Keychains.
     "~/Library/Keychains",
     "~/.local/share/keyrings",
@@ -456,8 +463,7 @@ pub const SECRET_LOCATIONS: [&str; 41] = [
 
 /// The `Read` deny rules for [`SECRET_LOCATIONS`]: for each, the location
 /// itself and everything inside it (`~/.ssh` gives `Read(~/.ssh)` and
-/// `Read(~/.ssh/**)`). A `Read` deny rule also refuses Claude Code's
-/// file-writing tools on the same path.
+/// `Read(~/.ssh/**)`).
 pub fn secret_read_rules() -> Vec<String> {
     SECRET_LOCATIONS
         .iter()
