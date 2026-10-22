@@ -13,6 +13,7 @@ import {
   telemetryDataDirectory,
   verifyTelemetryDatabase,
   acceptTelemetryUI,
+  telemetryUIReasons,
 } from './hosted-telemetry.mjs';
 import {
   cleanupTelemetry,
@@ -24,6 +25,7 @@ import {
   stopTelemetryProxies,
   claimTelemetryProfiles,
   removeTelemetryProfiles,
+  requireNoTelemetryAttempt,
 } from './hosted-telemetry-run.mjs';
 import {
   pollTelemetry,
@@ -232,10 +234,84 @@ c.commit();c.close()`,
   }
 });
 
+test('each phase reports what it established, never a bare "observed"', () => {
+  for (const [mode, reason] of Object.entries(telemetryUIReasons)) {
+    const evidence = { code: 0, reason, nodes: [], telemetry: { expectedUpdaterWarning: false } };
+    assert.equal(acceptTelemetryUI(evidence, { github: 0 }, mode).established, reason);
+    for (const other of [`Telemetry UI phase ${mode} observed`, `${reason}.`, ''])
+      assert.throws(() => acceptTelemetryUI({ ...evidence, reason: other }, { github: 0 }, mode));
+  }
+  assert.match(
+    telemetryUIReasons['telemetry-notice'],
+    /accessibility tree; visibility was not checked/,
+  );
+  assert.match(telemetryUIReasons['telemetry-dashboard-notice'], /^Pressed Open Dashboard once/);
+  assert.match(
+    telemetryUIReasons['telemetry-turn-off'],
+    /^Pressed Turn off once in the corner card/,
+  );
+  // The old Welcome-only Dashboard phase no longer exists.
+  assert.throws(() =>
+    acceptTelemetryUI(
+      { code: 0, reason: 'x', nodes: [], telemetry: { expectedUpdaterWarning: false } },
+      { github: 0 },
+      'telemetry-dashboard',
+    ),
+  );
+});
+
+test('notice phase presses Open Dashboard and needs the corner card before the blocked attempt', async () => {
+  const runner = await readFile(new URL('./hosted-telemetry-run.mjs', import.meta.url), 'utf8');
+  const notice = runner.split("if (phase === 'notice') {")[1].split('} else {')[0];
+  const order = [
+    "ui('telemetry-notice')",
+    'phaseReport.beforeDashboard = await telemetryProxyState(proxy)',
+    'requireNoTelemetryAttempt(',
+    "ui('telemetry-dashboard-notice')",
+    'attempt()',
+    "ui('telemetry-turn-off')",
+  ];
+  let prior = -1;
+  for (const needle of order) {
+    const at = notice.indexOf(needle);
+    assert.ok(at > prior, needle);
+    prior = at;
+  }
+  assert.equal((notice.match(/attempt\(\)/g) || []).length, 1);
+  assert.doesNotMatch(runner, /ui\('telemetry-dashboard'\)/);
+  // saved-on still waits for its startup attempt; saved-off and environment-off never do.
+  const later = runner.split("if (phase === 'notice') {")[1].split('} else {')[1];
+  assert.match(later, /if \(phase === 'saved-on'\) await attempt\(\);/);
+  assert.equal((later.match(/attempt\(\)/g) || []).length, 1);
+  const driver = await readFile(new URL('./hosted-ax.swift', import.meta.url), 'utf8');
+  assert.match(driver, /"telemetry-dashboard-notice"/);
+  assert.doesNotMatch(driver, /"telemetry-dashboard"[,\]]/);
+  assert.doesNotMatch(driver, /Telemetry UI phase \\\(mode\) observed/);
+});
+
+test('an attempt before Open Dashboard, or before saved-off enabling, fails the phase', () => {
+  const quiet = { telemetry: 0, github: 1, probe: 2 };
+  assert.equal(requireNoTelemetryAttempt(quiet, 'early'), quiet);
+  // A taller window could let the Welcome notice count as shown and send
+  // before the press; that must not pass as the corner card's attempt.
+  for (const state of [
+    { telemetry: 1 },
+    { telemetry: 3, github: 0 },
+    {},
+    undefined,
+    { telemetry: '0' },
+  ])
+    assert.throws(
+      () =>
+        requireNoTelemetryAttempt(state, 'from the Welcome page before Open Dashboard was pressed'),
+      /Telemetry was attempted from the Welcome page before Open Dashboard was pressed/,
+    );
+});
+
 test('updater warning requires rejection from the proxy belonging to this phase', () => {
   const evidence = {
     code: 0,
-    reason: 'Telemetry UI phase telemetry-notice observed',
+    reason: telemetryUIReasons['telemetry-notice'],
     nodes: [],
     telemetry: { expectedUpdaterWarning: true },
   };
@@ -338,6 +414,9 @@ test(
       const ran = spawnSync(binary, [], { encoding: 'utf8', timeout: 5000 });
       assert.equal(ran.status, 0, ran.stderr);
       assert.match(ran.stdout, /controls passed/);
+      // The driver's own words for each phase are the ones the runner accepts.
+      const reasons = ran.stdout.split('\n').find((line) => line.startsWith('TELEMETRY-REASONS '));
+      assert.deepEqual(JSON.parse(reasons.slice('TELEMETRY-REASONS '.length)), telemetryUIReasons);
     } catch (error) {
       diagnoseCompiler(compiler, deadline);
       throw error;
@@ -985,6 +1064,7 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
     'telemetryProxyState',
     'proxy',
     'phaseReport',
+    'requireNoTelemetryAttempt',
     source.slice(start, end),
   );
   for (const [name, count, error] of [
@@ -1010,12 +1090,15 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
       },
       proxy,
       report,
+      requireNoTelemetryAttempt,
     );
     if (name === 'zero') await run;
     else
       await assert.rejects(
         run,
-        error ? /Proxy observation failed/ : /Saved-off startup attempted telemetry/,
+        error
+          ? /Proxy observation failed/
+          : /Telemetry was attempted by the saved-off startup before enabling/,
       );
     assert.deepEqual(
       calls,
@@ -1024,5 +1107,48 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
         : ['telemetry-settings-off', 'snapshot'],
     );
     assert.equal(report.beforeEnable, error ? undefined : snapshot);
+  }
+  // The actual notice branch: an attempt before the press fails the phase
+  // before Open Dashboard is pressed or the attempt is awaited.
+  for (const [name, count] of [
+    ['quiet', 0],
+    ['early', 1],
+  ]) {
+    const calls = [],
+      report = {},
+      proxy = { phase: 'notice' };
+    const snapshot = { telemetry: count, github: 0, probe: 1 };
+    const run = actual(
+      'notice',
+      async (mode) => calls.push(mode),
+      async () => calls.push('attempt'),
+      async (selected) => {
+        assert.equal(selected, proxy);
+        calls.push('snapshot');
+        return snapshot;
+      },
+      proxy,
+      report,
+      requireNoTelemetryAttempt,
+    );
+    if (name === 'quiet') await run;
+    else
+      await assert.rejects(
+        run,
+        /Telemetry was attempted from the Welcome page before Open Dashboard was pressed/,
+      );
+    assert.deepEqual(
+      calls,
+      name === 'quiet'
+        ? [
+            'telemetry-notice',
+            'snapshot',
+            'telemetry-dashboard-notice',
+            'attempt',
+            'telemetry-turn-off',
+          ]
+        : ['telemetry-notice', 'snapshot'],
+    );
+    assert.equal(report.beforeDashboard, snapshot);
   }
 });

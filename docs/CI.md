@@ -613,9 +613,20 @@ phase has a fresh proxy and receipt; the actual signed process environment is
 inspected immediately after launch. This is a controlled proxy configuration,
 not an OS-wide network sandbox.
 
-The four phases check the visible default notice and Turn off action; saved-off
-restart followed by Settings on; environment-off precedence while the saved
-preference remains on; then normal saved-on restart followed by Settings off.
+The four phases are: the default notice; saved-off restart followed by Settings
+on; environment-off precedence while the saved preference remains on; then normal
+saved-on restart followed by Settings off. In the notice phase the driver only
+finds the Welcome notice in the accessibility tree, which also lists content that
+is not on screen. Since 0.1.8 the notice counts as shown only when half of it is
+visible above the Welcome page's pinned bar, which it is not in the default
+window, so nothing is sent from Welcome. The runner first requires that the
+phase's proxy has seen no telemetry attempt yet; the driver then presses Open
+Dashboard once, requires the Dashboard's corner card (its "on by default" title,
+what is sent and never sent, and one enabled Turn off), and only then waits for
+the blocked telemetry attempt; it then presses Turn off in that card. Each step
+reports what it established (found in the tree, pressed, card present), not that
+anything was seen on screen. Saved-on starts on the Dashboard with the disclosure
+already recorded, so its startup attempt needs no click.
 Each signed process must stop before read-only database assertions check saved
 preferences, disclosure and the absence of sent ledger rows. Blocked connection
 counts may vary. An exact updater warning is accepted only inside its Workspace

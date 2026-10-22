@@ -253,6 +253,13 @@ export function telemetryCleanupFacts(session) {
     cleanupFailed: session.cleanupFailed,
   };
 }
+// The one check that no telemetry attempt reached the phase's rejecting proxy
+// yet. Returns the proxy state it read, for the phase report.
+export function requireNoTelemetryAttempt(state, moment) {
+  if (state?.telemetry !== 0) throw new Error(`Telemetry was attempted ${moment}`);
+  return state;
+}
+
 export async function runTelemetryPhases(context, session) {
   const { source, owned, output, home, checked, helper, driver, automationEnvironment, budget } =
     context;
@@ -418,11 +425,24 @@ export async function runTelemetryPhases(context, session) {
         'Blocked default telemetry attempt',
       );
     if (phase === 'notice') {
+      // The notice is in the Welcome page's tree, but the pinned bar keeps it
+      // from counting as shown. Opening the Dashboard shows the corner card,
+      // which records it; only then may the blocked attempt happen.
       await ui('telemetry-notice');
+      // Nothing may be sent while only Welcome is open: the attempt this phase
+      // waits for must come from the corner card that the press brings up.
+      // The snapshot is kept in the report even when the check fails.
+      phaseReport.beforeDashboard = await telemetryProxyState(proxy);
+      requireNoTelemetryAttempt(
+        phaseReport.beforeDashboard,
+        'from the Welcome page before Open Dashboard was pressed',
+      );
+      await ui('telemetry-dashboard-notice');
       await attempt();
       await ui('telemetry-turn-off');
-      await ui('telemetry-dashboard');
     } else {
+      // Later restarts open on the Dashboard: Welcome is completed and the
+      // disclosure is recorded, so saved-on sends at startup without a click.
       if (phase === 'saved-on') await attempt();
       await ui(
         phase === 'environment-off'
@@ -433,8 +453,10 @@ export async function runTelemetryPhases(context, session) {
       );
       if (phase === 'saved-off') {
         phaseReport.beforeEnable = await telemetryProxyState(proxy);
-        if (phaseReport.beforeEnable.telemetry !== 0)
-          throw new Error('Saved-off startup attempted telemetry before enabling');
+        requireNoTelemetryAttempt(
+          phaseReport.beforeEnable,
+          'by the saved-off startup before enabling',
+        );
         await ui('telemetry-settings-enable');
       }
       if (phase === 'saved-on') await ui('telemetry-settings-disable');

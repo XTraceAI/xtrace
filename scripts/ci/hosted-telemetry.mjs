@@ -77,10 +77,28 @@ export async function verifyTelemetryDatabase(source, directory, checked, phase,
   return result;
 }
 
+// What each driver phase establishes; the Swift driver reports these words
+// (telemetryReason in hosted-ax.swift), and the tests compare the two.
+export const telemetryUIReasons = Object.freeze({
+  'telemetry-notice':
+    'Welcome notice text and one enabled Turn off are in the accessibility tree; visibility was not checked',
+  'telemetry-dashboard-notice':
+    'Pressed Open Dashboard once; the Dashboard and the corner-card notice with one enabled Turn off are in the accessibility tree',
+  'telemetry-turn-off':
+    'Pressed Turn off once in the corner card; the card then said telemetry is off and no Turn off remained',
+  'telemetry-settings-off': 'Opened Settings; the telemetry switch is off and enabled',
+  'telemetry-settings-on': 'Opened Settings; the telemetry switch is on and enabled',
+  'telemetry-settings-enable': 'Pressed the enabled telemetry switch once; it is now on',
+  'telemetry-settings-disable': 'Pressed the enabled telemetry switch once; it is now off',
+  'telemetry-environment-off':
+    'Opened Settings; the telemetry switch is off and disabled, with the environment-off explanation',
+});
+
 export function acceptTelemetryUI(evidence, state, mode) {
   if (
+    !Object.hasOwn(telemetryUIReasons, mode) ||
     evidence.code !== 0 ||
-    evidence.reason !== `Telemetry UI phase ${mode} observed` ||
+    evidence.reason !== telemetryUIReasons[mode] ||
     !Array.isArray(evidence.nodes) ||
     typeof evidence.telemetry?.expectedUpdaterWarning !== 'boolean' ||
     (evidence.telemetry.expectedUpdaterWarning && !(state.github > 0))
@@ -88,6 +106,7 @@ export function acceptTelemetryUI(evidence, state, mode) {
     throw new Error('Telemetry UI evidence lacks required same-phase proxy confirmation');
   return {
     mode,
+    established: telemetryUIReasons[mode],
     expectedUpdaterWarning: evidence.telemetry.expectedUpdaterWarning,
     blockedUpdaterAuthority: evidence.telemetry.expectedUpdaterWarning ? 'github.com:443' : null,
   };
