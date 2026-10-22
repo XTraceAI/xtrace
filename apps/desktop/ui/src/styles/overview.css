@@ -427,12 +427,22 @@
   opacity: 0.55;
   pointer-events: none;
 }
-/* Your total heads the totals column, in your colour. */
+/* Two totals columns: your time, then the agents' as wide again; each
+   headed by its icon in its own colour. */
+.xt-human[data-variant='paired'] :is(.xt-human-axis, .xt-human-row) {
+  grid-template-columns: 52px minmax(0, 1fr) 64px 64px;
+}
+.xt-human-total[data-key='agents'] {
+  color: var(--accent-ink);
+}
 .xt-human-total-head {
   display: flex;
   align-items: flex-end;
   justify-content: flex-end;
   color: var(--human);
+}
+.xt-human-total-head[data-key='agents'] {
+  color: var(--accent-ink);
 }
 /* The headline's three totals, each after its icon and a key drawn like
    its mark. */

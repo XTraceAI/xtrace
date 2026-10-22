@@ -154,9 +154,18 @@ export function HumanTimeline({
             ))}
           </span>
           {withAgents ? (
-            <span className="xt-human-total-head" data-testid="human-total-head">
-              <Icon name="person" size={13} />
-            </span>
+            <>
+              <span className="xt-human-total-head" data-testid="human-total-head">
+                <Icon name="person" size={13} />
+              </span>
+              <span
+                className="xt-human-total-head"
+                data-key="agents"
+                data-testid="agent-total-head"
+              >
+                <Icon name="bot" size={13} />
+              </span>
+            </>
           ) : (
             <span />
           )}
@@ -355,6 +364,11 @@ function Row({
         </span>
         {track}
         <span className="xt-human-total">{row.total ?? '—'}</span>
+        {paired && (
+          <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
+            {line ? line.total : UNMEASURED}
+          </span>
+        )}
       </Tooltip.Trigger>
       <Tooltip.Portal data-theme={theme}>
         <Tooltip.Positioner

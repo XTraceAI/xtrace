@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
+import { agentTime as agentTimeText } from '../src/app/agent-duration';
 import { syntheticMergedPage, syntheticOverview } from '../src/app/dashboard/overview.synthetic';
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
 
@@ -195,30 +196,66 @@ for (const scheme of ['light', 'dark'] as const)
     );
     await expect(headline.getByRole('img', { name: 'Your time' })).toBeVisible();
     await expect(headline.getByRole('img', { name: 'Agent time' })).toBeVisible();
-    // The person icon heads the totals column, in your colour.
+    // The person icon heads your column, in your colour, and the robot the
+    // agents' column beside it.
     const head = page.getByTestId('human-total-head');
     await expect(head.locator('svg')).toBeVisible();
+    await expect(page.getByTestId('agent-total-head').locator('svg')).toBeVisible();
     const columns = await page.evaluate(() => {
       const head = document.querySelector('[data-testid="human-total-head"]')!;
-      const total = document.querySelector('[data-testid="human-day"] .xt-human-total')!;
+      const agentHead = document.querySelector('[data-testid="agent-total-head"]')!;
+      const totals = document
+        .querySelector('[data-testid="human-day"]')!
+        .querySelectorAll('.xt-human-total');
       const swatch = document.querySelector('.xt-paired-swatch[data-key="band"]')!;
       return {
         headRight: head.getBoundingClientRect().right,
-        totalRight: total.getBoundingClientRect().right,
+        totalRight: totals[0]!.getBoundingClientRect().right,
+        agentHeadRight: agentHead.getBoundingClientRect().right,
+        agentTotalRight: totals[1]!.getBoundingClientRect().right,
+        humanRightOfLeft:
+          totals[1]!.getBoundingClientRect().left - totals[0]!.getBoundingClientRect().right,
         headColor: getComputedStyle(head).color,
         human: getComputedStyle(swatch).getPropertyValue('--human').trim(),
       };
     });
     expect(Math.abs(columns.headRight - columns.totalRight)).toBeLessThanOrEqual(1);
+    expect(Math.abs(columns.agentHeadRight - columns.agentTotalRight)).toBeLessThanOrEqual(1);
+    expect(columns.humanRightOfLeft).toBeGreaterThanOrEqual(0);
     expect(columns.human).toBe(scheme === 'dark' ? '#2dd4bf' : '#0d9488');
     expect(columns.headColor).toBe(scheme === 'dark' ? 'rgb(45, 212, 191)' : 'rgb(13, 148, 136)');
     await expect(page.getByTestId('effort-leverage')).toHaveText(/^[\d.]+×$/);
     await expect(headline).not.toContainText('break threshold');
-    // The right column is your time only.
+    // Each row: your total, then the agents' whole-day total from the
+    // report, both whole on one line and centred with the track.
     await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
-    const humanTotals = await days.locator('.xt-human-total').allTextContents();
-    expect(humanTotals).toHaveLength(report.leverage.by_day.length);
-    for (const total of humanTotals) expect(total).toMatch(/^(\d+ h \d+ m|—)$/);
+    const rowTotals = await days.evaluateAll((rows) =>
+      rows.map((row) => {
+        const track = row.querySelector('.xt-human-track')!.getBoundingClientRect();
+        const totals = [...row.querySelectorAll<HTMLElement>('.xt-human-total')];
+        return {
+          texts: totals.map((total) => total.textContent),
+          centres: totals.map((total) => {
+            const box = total.getBoundingClientRect();
+            return box.top + box.height / 2 - (track.top + track.height / 2);
+          }),
+          whole: totals.every((total) => total.scrollWidth <= total.clientWidth),
+          oneLine: totals.every((total) => total.getBoundingClientRect().height < 20),
+          agentColor: getComputedStyle(totals[1]!).color,
+          humanColor: getComputedStyle(totals[0]!).color,
+        };
+      }),
+    );
+    expect(rowTotals).toHaveLength(report.leverage.by_day.length);
+    rowTotals.forEach((row, index) => {
+      expect(row.texts).toHaveLength(2);
+      expect(row.texts[0]).toMatch(/^(\d+ h \d+ m|—)$/);
+      expect(row.texts[1]).toBe(agentTimeText(report.leverage.by_day[index]!.agent_ms));
+      for (const centre of row.centres) expect(Math.abs(centre)).toBeLessThanOrEqual(1);
+      expect(row.whole).toBe(true);
+      expect(row.oneLine).toBe(true);
+      expect(row.agentColor).not.toBe(row.humanColor);
+    });
     // The line's highest point is the day's busiest average on the report's
     // one scale, in its box from 25 (no agents) up to 2 (the top); your time
     // is full-height bands in its own colour behind it.
@@ -284,6 +321,9 @@ for (const scheme of ['light', 'dark'] as const)
     await expect(timelineView).not.toHaveAttribute('data-variant', 'paired');
     await expect(page.getByTestId('agent-line')).toHaveCount(0);
     await expect(page.getByTestId('human-total-head')).toHaveCount(0);
+    await expect(page.getByTestId('agent-total-head')).toHaveCount(0);
+    await expect(page.getByTestId('agent-row-total')).toHaveCount(0);
+    await expect(page.getByTestId('human-day').last().locator('.xt-human-total')).toHaveCount(1);
     await expect(page.getByTestId('effort-headline')).toContainText('break threshold');
     const plainBar = await page
       .getByTestId('human-day')

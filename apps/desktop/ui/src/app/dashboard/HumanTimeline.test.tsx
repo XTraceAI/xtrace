@@ -294,7 +294,7 @@ it('human + agent: the headline sets your time beside the agents’ and the leve
   expect(screen.queryByText(/break threshold/)).toBeNull();
 });
 
-it('human + agent: one track per day, your bands and the agents line in it, only your total beside it', () => {
+it('human + agent: one track per day, your bands and the agents line in it, your total and the agents’ beside it', () => {
   mountPaired(paired());
   const rows = screen.getAllByTestId('human-day');
   expect(rows).toHaveLength(7);
@@ -315,15 +315,23 @@ it('human + agent: one track per day, your bands and the agents line in it, only
   const track = rows[6]!.querySelector('.xt-human-track')!;
   expect(track.lastElementChild).toBe(lines[0]);
   expect(track.querySelectorAll('[data-testid="human-stretch"]')).toHaveLength(2);
-  // The right column is your time only; the agents' total is in the card.
-  expect(rows[6]!.querySelector('.xt-human-total')!.textContent).toBe('0 h 30 m');
-  expect(rows[6]!.textContent).toBe('Sep 70 h 30 m');
+  // Your total, then the agents' (the report's whole-day agent time), on
+  // the row; the card keeps its own agent time too.
+  expect(
+    [...rows[6]!.querySelectorAll('.xt-human-total')].map((total) => total.textContent),
+  ).toEqual(['0 h 30 m', '1 h 18 m']);
+  expect(rows[6]!.textContent).toBe('Sep 70 h 30 m1 h 18 m');
+  expect(screen.getAllByTestId('agent-row-total').map((total) => total.textContent)).toEqual([
+    ...Array(6).fill('0 h 0 m'),
+    '1 h 18 m',
+  ]);
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
   expect(rows[6]!.getAttribute('aria-label')).toBe(
     'Sep 7: 30 minutes; 12:00 AM–12:30 AM, one message at 2:00 AM; agents: 1 hour 18 minutes, busiest 15 minutes at 12:30 AM · 3 agents',
   );
-  // The person icon heads the totals column.
+  // The person icon heads your column, the robot the agents'.
   expect(screen.getByTestId('human-total-head').querySelector('svg')).not.toBeNull();
+  expect(screen.getByTestId('agent-total-head').querySelector('svg')).not.toBeNull();
 });
 
 it('human + agent: the headline keys are named icons, without the words you and agents', () => {
@@ -384,7 +392,12 @@ it('the plain human h view draws no agents line, agent totals, person icon or po
   expect(screen.getByTestId('human-timeline').dataset.variant).toBeUndefined();
   expect(screen.queryAllByTestId('agent-line')).toHaveLength(0);
   expect(screen.queryByTestId('human-total-head')).toBeNull();
+  expect(screen.queryByTestId('agent-total-head')).toBeNull();
+  expect(screen.queryAllByTestId('agent-row-total')).toHaveLength(0);
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
+  expect(
+    screen.getAllByTestId('human-day').at(-1)!.querySelectorAll('.xt-human-total'),
+  ).toHaveLength(1);
   const track = screen
     .getAllByTestId('human-day')
     .at(-1)!
