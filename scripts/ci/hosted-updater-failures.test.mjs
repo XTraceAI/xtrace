@@ -15,13 +15,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { appInventory, executionBudget, sha256 } from './hosted-release.mjs';
+import { appInventory, executionBudget, release, sha256 } from './hosted-release.mjs';
 import {
   acceptResult,
   fixture,
   requireFailureHost,
   serveFixtures,
   verifyFixture,
+  versions,
 } from './hosted-updater-failures.mjs';
 
 const sha = 'a'.repeat(40);
@@ -129,6 +130,7 @@ async function registryFixture(overrides = {}) {
     parent,
     helperName,
     cases: ['valid'],
+    oldBundleName: 'XTrace Desktop.app',
     output,
     report,
     Buffer,
@@ -387,16 +389,56 @@ test('local entrypoint refuses before fixture/download/process preparation', asy
   }
 });
 
-test('fixture pins reject substituted content and dependency lock', () => {
-  assert.throws(() =>
-    verifyFixture(
-      Buffer.alloc(fixture.bytes),
-      Buffer.alloc(fixture.signatureBytes),
-      Buffer.from('lock'),
-    ),
-  );
+test('fixture pins reject substituted content and dependency lock', async () => {
+  const archive = Buffer.from('synthetic archive'),
+    signature = Buffer.from('synthetic signature'),
+    lock = await readFile(new URL('../../Cargo.lock', import.meta.url));
+  const synthetic = {
+    ...fixture,
+    bytes: archive.length,
+    sha256: sha256(archive),
+    signatureBytes: signature.length,
+    signatureSha256: sha256(signature),
+  };
+  assert.doesNotThrow(() => verifyFixture(archive, signature, lock, synthetic));
+  for (const [a, s, l] of [
+    [Buffer.from('synthetic archivE'), signature, lock],
+    [archive, Buffer.from('synthetic signaturE'), lock],
+    [archive, signature, Buffer.from('lock')],
+    [archive.subarray(1), signature, lock],
+  ])
+    assert.throws(() => verifyFixture(a, s, l, synthetic));
+  // This checkout's Cargo.lock is the one the tests-only helper is built from.
+  assert.equal(sha256(lock), fixture.lockSha256);
+  assert.throws(() => verifyFixture(archive, signature, lock), 'unfilled or different real pins');
   assert.throws(() => verifyFixture(Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)));
-  assert.match(source, /sha256\(lock\) !== fixture.lockSha256/);
+  assert.match(source, /sha256\(lock\) !== pins.lockSha256/);
+});
+
+test('the SDK cases target the candidate archive from the earlier folder and version', () => {
+  assert.deepEqual(versions, { old: '0.1.7', target: '0.1.8', mismatch: '0.1.9' });
+  assert.equal(fixture.archive, release.archive);
+  assert.equal(fixture.root, 'XTrace.app');
+  for (const key of ['bytes', 'sha256', 'signatureBytes', 'signatureSha256', 'members'])
+    assert.equal(
+      fixture[key],
+      release[
+        {
+          bytes: 'archiveBytes',
+          sha256: 'archiveSha256',
+          signatureBytes: 'signatureBytes',
+          signatureSha256: 'signatureSha256',
+          members: 'inventoryEntries',
+        }[key]
+      ],
+      key,
+    );
+  assert.match(source, /releases\/download\/\$\{release\.tag\}\/\$\{fixture\.archive\}/);
+  assert.match(source, /join\(targetParent, oldBundleName\)/);
+  assert.match(source, /requireReleaseValues\(\);/);
+  // The helper takes the versions and archive size from its owned configuration.
+  assert.doesNotMatch(rust, /"0\.1\.\d"|11_064_049/);
+  assert.match(rust, /archive_bytes/);
 });
 
 test('actual owned HTTP routes serve exact, corrupt, stalled and truncated fixture bodies without redirects', async () => {
@@ -409,7 +451,7 @@ test('actual owned HTTP routes serve exact, corrupt, stalled and truncated fixtu
       assert.equal(response.status, 200);
       assert.equal(response.headers.get('location'), null);
       const manifest = await response.json();
-      assert.equal(manifest.version, name === 'version' ? '0.1.8' : '0.1.7');
+      assert.equal(manifest.version, name === 'version' ? '0.1.9' : '0.1.8');
       assert.equal(manifest.platforms['darwin-aarch64'].signature, 'owned-signature');
       const download = await fetch(manifest.platforms['darwin-aarch64'].url, {
         redirect: 'error',
@@ -571,6 +613,9 @@ test('actual final-case closure retains changed/missing inventories, raw attempt
 });
 
 const receipt = (name) => [{ path: `/${name}/latest.json` }, { path: `/${name}/archive` }];
+// Synthetic archive pins: the real ones come from the signed build values.
+const pins = { ...fixture, bytes: 11064049, signatureBytes: 456 };
+const accept = (name, sdk, rows, cancellation) => acceptResult(name, sdk, rows, cancellation, pins);
 const result = (name) => ({
   status: 'passed',
   case: name,
@@ -587,7 +632,7 @@ const result = (name) => ({
 
 test('acceptance rejects missing transfers, shortened timers, watchdogs and unexpected verified downloads', () => {
   for (const name of ['corrupt', 'version', 'timeout', 'interrupted']) {
-    assert.doesNotThrow(() => acceptResult(name, result(name), receipt(name)));
+    assert.doesNotThrow(() => accept(name, result(name), receipt(name)));
     for (const change of [
       { status: 'failed' },
       { verifiedDownload: true },
@@ -597,29 +642,27 @@ test('acceptance rejects missing transfers, shortened timers, watchdogs and unex
       { pid: 0 },
       { downloadTimeoutMs: 1000 },
     ])
-      assert.throws(() => acceptResult(name, { ...result(name), ...change }, receipt(name)));
-    assert.throws(() => acceptResult(name, result(name), []));
-    assert.throws(() => acceptResult(name, result(name), [...receipt(name), ...receipt(name)]));
+      assert.throws(() => accept(name, { ...result(name), ...change }, receipt(name)));
+    assert.throws(() => accept(name, result(name), []));
+    assert.throws(() => accept(name, result(name), [...receipt(name), ...receipt(name)]));
   }
   for (const elapsedMs of [1000, 598999, 630001])
-    assert.throws(() =>
-      acceptResult('timeout', { ...result('timeout'), elapsedMs }, receipt('timeout')),
-    );
+    assert.throws(() => accept('timeout', { ...result('timeout'), elapsedMs }, receipt('timeout')));
   for (const name of ['timeout', 'interrupted'])
     for (const change of [
       { transferred: 0 },
-      { transferred: fixture.bytes },
+      { transferred: pins.bytes },
       { transferFinishedCallback: true },
     ])
-      assert.throws(() => acceptResult(name, { ...result(name), ...change }, receipt(name)));
+      assert.throws(() => accept(name, { ...result(name), ...change }, receipt(name)));
 });
 
 test('permission result requires verified download plus independent Cancel and disappearance evidence', () => {
   const sdk = {
     ...result('permission'),
     verifiedDownload: true,
-    verifiedBytes: fixture.bytes,
-    transferred: fixture.bytes,
+    verifiedBytes: pins.bytes,
+    transferred: pins.bytes,
     installAttempted: true,
   };
   const cancel = {
@@ -629,7 +672,7 @@ test('permission result requires verified download plus independent Cancel and d
     action: {},
     after: [],
   };
-  assert.doesNotThrow(() => acceptResult('permission', sdk, receipt('permission'), cancel));
+  assert.doesNotThrow(() => accept('permission', sdk, receipt('permission'), cancel));
   for (const change of [
     { status: 'failed' },
     { cancelPressed: false },
@@ -638,10 +681,8 @@ test('permission result requires verified download plus independent Cancel and d
     { action: null },
     { after: [{}] },
   ])
-    assert.throws(() =>
-      acceptResult('permission', sdk, receipt('permission'), { ...cancel, ...change }),
-    );
-  assert.throws(() => acceptResult('permission', sdk, receipt('permission')));
+    assert.throws(() => accept('permission', sdk, receipt('permission'), { ...cancel, ...change }));
+  assert.throws(() => accept('permission', sdk, receipt('permission')));
 });
 
 test(

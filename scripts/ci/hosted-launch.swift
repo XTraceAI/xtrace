@@ -24,6 +24,10 @@ guard CommandLine.arguments.count == 4 else { fail("Invalid command") }
 let environmentURL = URL(fileURLWithPath: CommandLine.arguments[3])
 let receiptURL = URL(fileURLWithPath: CommandLine.arguments[2])
 // BEGIN LAUNCH CONTEXT POLICY: fixed product and fixed owned telemetry probe only.
+// `earlier-` commands act on the folder releases through 0.1.7 installed under
+// (the update starts there and the updater writes the new version into it);
+// all other product commands act on the current folder. Arm/adopt exist only
+// for the earlier folder, the one that is updated in place.
 struct LaunchContext {
     let command: String
     let bundle: URL
@@ -34,12 +38,14 @@ struct LaunchContext {
 }
 enum ContextError: Error { case invalid }
 func launchContext(_ raw: String, environment: URL, receipt: URL) throws -> LaunchContext {
-    let productCommands = ["launch", "inspect", "stop", "arm-update", "adopt-update", "absent"]
+    let earlierCommands = ["launch", "inspect", "stop", "quit", "arm-update", "adopt-update", "absent"]
+    let productCommands = ["launch", "inspect", "stop", "quit", "absent"]
     let lifecycle = ["launch", "inspect", "stop", "absent"]
     let probe = raw.hasPrefix("probe-")
     let telemetry = probe || raw.hasPrefix("telemetry-")
-    let command = telemetry ? String(raw.dropFirst(probe ? 6 : 10)) : raw
-    guard (telemetry ? lifecycle : productCommands).contains(command) else { throw ContextError.invalid }
+    let earlier = raw.hasPrefix("earlier-")
+    let command = telemetry ? String(raw.dropFirst(probe ? 6 : 10)) : earlier ? String(raw.dropFirst(8)) : raw
+    guard (telemetry ? lifecycle : earlier ? earlierCommands : productCommands).contains(command) else { throw ContextError.invalid }
     let owned = environment.deletingLastPathComponent()
     if telemetry {
         let phases = ["notice", "saved-off", "environment-off", "saved-on"]
@@ -52,7 +58,8 @@ func launchContext(_ raw: String, environment: URL, receipt: URL) throws -> Laun
               receipt.lastPathComponent == "\(probe ? "probe" : "launch")-receipt-\(phase).json",
               receipt.deletingLastPathComponent() == (probe ? owned : owned.deletingLastPathComponent().deletingLastPathComponent()) else { throw ContextError.invalid }
     }
-    let bundle = probe ? owned.appendingPathComponent("Telemetry Proxy Probe.app") : URL(fileURLWithPath: "/Applications/XTrace Desktop.app")
+    let bundle = probe ? owned.appendingPathComponent("Telemetry Proxy Probe.app") :
+        URL(fileURLWithPath: earlier ? ProductBundle.earlier : ProductBundle.current)
     let executable = bundle.appendingPathComponent(probe ? "Contents/MacOS/TelemetryProxyProbe" : "Contents/MacOS/xtrace-desktop")
     return LaunchContext(command: command, bundle: bundle, executable: executable,
                          identifier: probe ? "ai.xtrace.app.test.telemetry-proxy" : "ai.xtrace.app", probe: probe, telemetry: telemetry)
@@ -118,6 +125,13 @@ struct Receipt: Codable {
     let executable: String
     let identifier: String
 }
+// The installed app's two fixed bundle folders: "XTrace Desktop.app" through
+// release 0.1.7, "XTrace.app" since (an updated earlier copy renames itself on
+// a normal quit). Static, so it is ready wherever top-level code reads it.
+enum ProductBundle {
+    static let earlier = "/Applications/XTrace Desktop.app"
+    static let current = "/Applications/XTrace.app"
+}
 // BEGIN TRANSITION POLICY: compiled directly by offline value-only controls.
 struct Transition: Codable {
     let original: Receipt
@@ -127,8 +141,8 @@ enum TransitionError: Error { case unexpectedIdentity }
 func successor(_ transition: Transition, _ candidates: [Receipt], originalAlive: Bool) throws -> Receipt? {
     let old = transition.original
     func fixed(_ candidate: Receipt) -> Bool {
-        candidate.pid > 0 && candidate.bundle == "/Applications/XTrace Desktop.app" &&
-        candidate.executable == "/Applications/XTrace Desktop.app/Contents/MacOS/xtrace-desktop" &&
+        candidate.pid > 0 && candidate.bundle == ProductBundle.earlier &&
+        candidate.executable == ProductBundle.earlier + "/Contents/MacOS/xtrace-desktop" &&
         candidate.identifier == "ai.xtrace.app"
     }
     guard fixed(old), old.startTime > 0, transition.armedAt >= old.startTime else { throw TransitionError.unexpectedIdentity }
@@ -435,6 +449,20 @@ do {
             requireNoLegacyProcess()
             guard !kernelAlive(receipt), candidates().isEmpty else { fail("XTrace process remains after cleanup") }
             print("No current or legacy XTrace process remains")
+        } else if command == "quit" {
+            // One normal quit request, the Quit Apple event the Dock and Cmd-Q
+            // send, so the app runs its own exit path. Never forced: a quit that
+            // does not finish fails here and cleanup's stop decides the rest.
+            guard let app = owned(receipt) else { fail("Owned application exited before the quit request") }
+            print("Owned quit request accepted=\(app.terminate())")
+            do {
+                guard try waitForExit(20, observe: {
+                    try exitObservation(readProcess(receipt.pid), expected: receipt.startTime)
+                }, now: { ProcessInfo.processInfo.systemUptime }, pause: { seconds in
+                    RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+                }) else { fail("The app did not finish a normal quit within 20 seconds; it was not forced") }
+            } catch { fail("Owned process identity changed while quitting: \(error)") }
+            print("Owned process quit normally")
         } else if command == "inspect" {
             guard owned(receipt) != nil else { fail("Owned application exited before inspection") }
             let actual = processEnvironment(receipt.pid)

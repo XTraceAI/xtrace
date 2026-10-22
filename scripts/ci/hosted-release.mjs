@@ -3,22 +3,57 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { baselinePaths, probeEnvironment, requireProbeHost } from './hosted-validation.mjs';
 
-// Immutable 0.1.7 candidate inputs, independently checked before publication.
-// Runtime still requires the matching public tag and exact public DMG bytes.
-// The harness commit is separate from the released product source commit.
+// The 0.1.8 candidate. Runtime still requires the matching public tag and the
+// exact public DMG, archive, signature and feed bytes. The harness commit is
+// separate from the released product source commit.
+//
+// The ten build values below were computed from the published v0.1.8 files
+// (docs/UPDATES.md says how). requireReleaseValues() refuses before any
+// download, install or launch if any is missing or malformed. This object is
+// the only place these build values are written.
 export const release = Object.freeze({
-  version: '0.1.7',
-  tag: 'v0.1.7',
-  source: 'e743e900fb40d32bdbe90709bd54b7d9bde32540',
+  version: '0.1.8',
+  tag: 'v0.1.8',
+  source: '75d49d54f6717d32d72eeb7a933eebb13f5be148',
   identifier: 'ai.xtrace.app',
-  bundle: '/Applications/XTrace Desktop.app',
+  bundle: '/Applications/XTrace.app',
   team: '3C8BCX5J3H',
-  dmg: 'XTrace-Desktop-0.1.7-macos-arm64.dmg',
-  bytes: 11748749,
-  sha256: '2ec76b267a79ac20fd216306bd33c3b04715199f1c4ba086bc2a12664d0c1fe9',
-  inventoryEntries: 79,
-  inventorySha256: '250d82fc255fd691aac182207dde84f39abeeef1d49ca603dd1965f54fd891bd',
+  dmg: 'XTrace-0.1.8-macos-arm64.dmg',
+  archive: 'XTrace-0.1.8-macos-arm64.app.tar.gz',
+  // BEGIN SIGNED BUILD VALUES
+  bytes: 12527084, // DMG size in bytes
+  sha256: 'fa0931c6fb71f3a9cd7f6c330d3a3f3c3182a5022bdb1e8fc3b626f2be6ef595', // DMG SHA-256
+  inventoryEntries: 101, // appInventory() of the DMG's XTrace.app
+  inventorySha256: '68c08e83836c518fcc27f1571bb28114b3ca3435c01a2a9b53cd0312bf4df524',
+  archiveBytes: 11843476, // updater archive size in bytes
+  archiveSha256: 'ba52098989d15ab6aab7600609b030460c2840d0757dff06e88beab5f5412c2e',
+  signatureBytes: 448, // the archive's .sig file
+  signatureSha256: '8057249f3a267fe136c991001dacdce70aad94fff81d16d93318c23c86d2769a',
+  feedBytes: 1500, // latest.json, byte-identical to fixtures/hosted-update-latest.json
+  feedSha256: 'e20c172e23ed0b36701f80715ab8840f7c634fd4136d6e77104e2e20fee757bf',
+  // END SIGNED BUILD VALUES
 });
+
+const sizeNames = ['bytes', 'inventoryEntries', 'archiveBytes', 'signatureBytes', 'feedBytes'];
+const digestNames = ['sha256', 'inventorySha256', 'archiveSha256', 'signatureSha256', 'feedSha256'];
+export const releaseValueNames = Object.freeze([...sizeNames, ...digestNames]);
+
+// Names of build values that are still unfilled or not a size/SHA-256.
+export function missingReleaseValues(values = release) {
+  return releaseValueNames.filter((name) =>
+    sizeNames.includes(name)
+      ? !Number.isSafeInteger(values[name]) || values[name] <= 0
+      : typeof values[name] !== 'string' || !/^[0-9a-f]{64}$/.test(values[name]),
+  );
+}
+
+export function requireReleaseValues(values = release) {
+  const missing = missingReleaseValues(values);
+  if (missing.length)
+    throw new Error(
+      `Signed ${values.version} build values are not filled in scripts/ci/hosted-release.mjs: ${missing.join(', ')}`,
+    );
+}
 
 export function requireFirstLaunchHost(input) {
   if (input.mode !== 'first-launch' || input.allowReleaseIdentity !== 'true')
@@ -80,14 +115,16 @@ export function firstLaunchBaselinePaths(home) {
 
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-export function verifyDownload(bytes) {
-  if (bytes.length !== release.bytes || sha256(bytes) !== release.sha256)
+export function verifyDownload(bytes, pins = release) {
+  if (bytes.length !== pins.bytes || sha256(bytes) !== pins.sha256)
     throw new Error('Downloaded DMG does not match the pinned public release');
 }
 
 // Inventory includes every literal byte, path, size and permission mode. Extended
 // attributes (including quarantine) are reported separately; they are not code bytes.
-export async function appInventory(bundle) {
+// Paths start at `root`, the bundle folder's own name unless a caller names it:
+// the same app contents give the same inventory under XTrace Desktop.app or XTrace.app.
+export async function appInventory(bundle, root = basename(bundle)) {
   const rows = [];
   const visit = async (path, relative) => {
     const info = await lstat(path);
@@ -103,17 +140,15 @@ export async function appInventory(bundle) {
     if (info.isDirectory())
       for (const name of await readdir(path)) await visit(join(path, name), `${relative}/${name}`);
   };
-  await visit(bundle, basename(bundle));
+  await visit(bundle, root);
   rows.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return { entries: rows.length, sha256: sha256(JSON.stringify(rows)) };
 }
 
-export async function verifyAppInventory(bundle) {
-  const inventory = await appInventory(bundle);
-  if (
-    inventory.entries !== release.inventoryEntries ||
-    inventory.sha256 !== release.inventorySha256
-  )
+// The candidate's contents, wherever its folder is and whatever it is named.
+export async function verifyAppInventory(bundle, pins = release) {
+  const inventory = await appInventory(bundle, basename(pins.bundle));
+  if (inventory.entries !== pins.inventoryEntries || inventory.sha256 !== pins.inventorySha256)
     throw new Error('App file bytes, paths or modes differ from the pinned signed release');
   return inventory;
 }

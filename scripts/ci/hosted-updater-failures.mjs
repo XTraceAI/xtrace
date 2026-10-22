@@ -14,7 +14,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   appInventory,
@@ -22,19 +22,35 @@ import {
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
   release,
+  requireReleaseValues,
   sha256,
   verifyAppInventory,
 } from './hosted-release.mjs';
+import { previousRelease, verifyProductionFeed } from './hosted-update-checks.mjs';
 import { requireFreshBaseline, requireProbeHost } from './hosted-validation.mjs';
 
+// The candidate's public updater archive and signature, from the one set of
+// build values in hosted-release.mjs. The lock is this checkout's Cargo.lock
+// (0.1.8 product source), which the tests-only SDK helper is built from.
 export const fixture = Object.freeze({
-  archive: 'XTrace-Desktop-0.1.7-macos-arm64.app.tar.gz',
-  bytes: 11064049,
-  sha256: 'cef0e375a22290b6064c5871920ab8710107cc9d802e4ff3227c9b1dea7a151f',
-  signatureBytes: 456,
-  signatureSha256: 'b366cd31178b0de00f802efc8a56f88f5dd61bb67674d780eada2e655901c617',
-  lockSha256: '68fb471b960114fdfad21445650871b46d0752aa20ba50db44bf13f49b15e621',
+  archive: release.archive,
+  bytes: release.archiveBytes,
+  sha256: release.archiveSha256,
+  signatureBytes: release.signatureBytes,
+  signatureSha256: release.signatureSha256,
+  members: release.inventoryEntries,
+  root: basename(release.bundle),
+  lockSha256: '6fc4133ae9ee10cdb4e8785d62843de3862b0578781a88055c5cf58e52a7ab7d',
 });
+// The synthetic old app reports the published earlier version and sits in the
+// earlier folder name, as a 0.1.7 install does. The "version" case announces a
+// version the signed archive was not signed for.
+export const versions = Object.freeze({
+  old: previousRelease.version,
+  target: release.version,
+  mismatch: '0.1.9',
+});
+const oldBundleName = basename(previousRelease.bundle);
 export const limits = Object.freeze({ workMs: 16 * 60_000, cleanupMs: 2 * 60_000 });
 const cases = ['valid', 'corrupt', 'version', 'timeout', 'interrupted', 'permission'];
 const systemEnvironment = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8' };
@@ -58,13 +74,13 @@ export function requireFailureHost(input) {
     throw new Error('SDK failure tests require the exact reviewed default branch');
   requireProbeHost({ ...input, mode: 'probe' });
 }
-export function verifyFixture(archive, signature, lock) {
+export function verifyFixture(archive, signature, lock, pins = fixture) {
   if (
-    archive.length !== fixture.bytes ||
-    sha256(archive) !== fixture.sha256 ||
-    signature.length !== fixture.signatureBytes ||
-    sha256(signature) !== fixture.signatureSha256 ||
-    sha256(lock) !== fixture.lockSha256
+    archive.length !== pins.bytes ||
+    sha256(archive) !== pins.sha256 ||
+    signature.length !== pins.signatureBytes ||
+    sha256(signature) !== pins.signatureSha256 ||
+    sha256(lock) !== pins.lockSha256
   )
     throw new Error('Archive, signature or dependency lock differs from pinned inputs');
 }
@@ -79,7 +95,7 @@ function cancelledInstall(cancellation, pid) {
     cancellation.after?.length === 0
   );
 }
-export function acceptResult(name, result, receipt, cancellation) {
+export function acceptResult(name, result, receipt, cancellation, pins = fixture) {
   if (
     !cases.includes(name) ||
     result.status !== 'passed' ||
@@ -94,8 +110,8 @@ export function acceptResult(name, result, receipt, cancellation) {
   if (['valid', 'permission'].includes(name)) {
     if (
       !result.verifiedDownload ||
-      result.verifiedBytes !== fixture.bytes ||
-      result.transferred !== fixture.bytes ||
+      result.verifiedBytes !== pins.bytes ||
+      result.transferred !== pins.bytes ||
       !result.installAttempted
     )
       throw new Error(`${name}: verified download/install not established`);
@@ -112,15 +128,13 @@ export function acceptResult(name, result, receipt, cancellation) {
     (result.elapsedMs < 599000 ||
       result.elapsedMs > 630000 ||
       result.transferred <= 0 ||
-      result.transferred >= fixture.bytes ||
+      result.transferred >= pins.bytes ||
       result.transferFinishedCallback)
   )
     throw new Error('Timeout did not exercise the full production download limit');
   if (
     name === 'interrupted' &&
-    (result.transferred <= 0 ||
-      result.transferred >= fixture.bytes ||
-      result.transferFinishedCallback)
+    (result.transferred <= 0 || result.transferred >= pins.bytes || result.transferFinishedCallback)
   )
     throw new Error('Interrupted response did not establish an incomplete download');
   if (name === 'permission' && !cancelledInstall(cancellation, result.pid))
@@ -151,7 +165,7 @@ export async function serveFixtures(archive, signature) {
     if (resource === 'latest.json') {
       const body = Buffer.from(
         JSON.stringify({
-          version: name === 'version' ? '0.1.8' : '0.1.7',
+          version: name === 'version' ? versions.mismatch : versions.target,
           platforms: {
             'darwin-aarch64': {
               signature,
@@ -268,7 +282,7 @@ async function main() {
       throw new Error('Cleanup paths are not the canonical owned staging directories');
     const paths = [
       ...(helperName ? [join(owned, `${helperName}.app`)] : []),
-      ...cases.map((name) => join(owned, `${name}-target`, 'XTrace Desktop.app')),
+      ...cases.map((name) => join(owned, `${name}-target`, oldBundleName)),
     ];
     const register =
       '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
@@ -520,6 +534,7 @@ async function main() {
       head,
       env: process.env,
     });
+    requireReleaseValues();
     Object.assign(report, {
       head,
       osVersion,
@@ -571,7 +586,7 @@ async function main() {
     await mkdir(dirname(requesterPath), { recursive: true });
     await copyFile(sourceBinary, requesterPath);
     await chmod(requesterPath, 0o755);
-    const plist = `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${identifier}</string><key>CFBundleName</key><string>${helperName}</string><key>CFBundleDisplayName</key><string>${helperName}</string><key>CFBundleExecutable</key><string>${helperName}</string><key>CFBundleVersion</key><string>0.1.6</string><key>CFBundleShortVersionString</key><string>0.1.6</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`;
+    const plist = `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${identifier}</string><key>CFBundleName</key><string>${helperName}</string><key>CFBundleDisplayName</key><string>${helperName}</string><key>CFBundleExecutable</key><string>${helperName}</string><key>CFBundleVersion</key><string>${versions.old}</string><key>CFBundleShortVersionString</key><string>${versions.old}</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`;
     await writeFile(join(driverBundle, 'Contents/Info.plist'), plist);
     command(
       'sign-helper',
@@ -640,7 +655,7 @@ async function main() {
           String(bytes),
           '--output',
           destination,
-          `https://github.com/XTraceAI/xtrace-desktop/releases/download/v0.1.7/${fixture.archive}${name === 'signature' ? '.sig' : ''}`,
+          `https://github.com/XTraceAI/xtrace-desktop/releases/download/${release.tag}/${fixture.archive}${name === 'signature' ? '.sig' : ''}`,
         ],
         95000,
       );
@@ -654,9 +669,12 @@ async function main() {
     verifyFixture(archive, signatureBytes, lock);
     report.lockSha256 = sha256(lock);
     const signature = signatureBytes.toString().trim();
-    const feed = JSON.parse(
-      await readFile(new URL('./fixtures/hosted-update-latest.json', import.meta.url)),
+    // The committed feed must be the exact pinned candidate feed.
+    const feedBytes = await readFile(
+      new URL('./fixtures/hosted-update-latest.json', import.meta.url),
     );
+    verifyProductionFeed(feedBytes);
+    const feed = JSON.parse(feedBytes);
     if (feed.platforms['darwin-aarch64'].signature !== signature)
       throw new Error('Pinned signature differs from reviewed feed');
     const overlay = JSON.parse(await readFile('apps/desktop/src-tauri/tauri.updater.release.json'));
@@ -665,8 +683,10 @@ async function main() {
       command('archive-members', '/usr/bin/python3', [
         '-I',
         '-c',
-        'import json,sys,tarfile,pathlib\nwith tarfile.open(sys.argv[1],"r:gz") as t:\n m=t.getmembers()\n assert len(m)==79 and sum(x.size for x in m)<100_000_000\n names=set()\n for x in m:\n  p=pathlib.PurePosixPath(x.name)\n  assert not p.is_absolute() and ".." not in p.parts and p.parts[0]=="XTrace Desktop.app"\n  assert x.isfile() or x.isdir()\n  assert x.name not in names\n  names.add(x.name)\n print(json.dumps([{"path":x.name,"size":x.size,"mode":x.mode,"directory":x.isdir()} for x in m]))',
+        'import json,sys,tarfile,pathlib\nwith tarfile.open(sys.argv[1],"r:gz") as t:\n m=t.getmembers()\n assert len(m)==int(sys.argv[2]) and sum(x.size for x in m)<100_000_000\n names=set()\n for x in m:\n  p=pathlib.PurePosixPath(x.name)\n  assert not p.is_absolute() and ".." not in p.parts and p.parts[0]==sys.argv[3]\n  assert x.isfile() or x.isdir()\n  assert x.name not in names\n  names.add(x.name)\n print(json.dumps([{"path":x.name,"size":x.size,"mode":x.mode,"directory":x.isdir()} for x in m]))',
         archivePath,
+        String(fixture.members),
+        fixture.root,
       ]),
     );
     server = await serveFixtures(archive, signature);
@@ -682,7 +702,7 @@ async function main() {
     const dataBefore = await appInventory(childEnv.XTRACE_DATA_DIR);
     for (const name of cases) {
       targetParent = join(owned, `${name}-target`);
-      const target = join(targetParent, 'XTrace Desktop.app');
+      const target = join(targetParent, oldBundleName);
       const targetExecutable = join(target, 'Contents/MacOS', helperName);
       await mkdir(dirname(targetExecutable), { recursive: true });
       await copyFile(requesterPath, targetExecutable);
@@ -704,6 +724,8 @@ async function main() {
         signature,
         sentinel,
         installReceipt,
+        archiveBytes: fixture.bytes,
+        versions,
       };
       const configPath = join(owned, `${name}.config.json`);
       await writeFile(configPath, JSON.stringify(config));

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   telemetryBudget,
@@ -29,6 +29,7 @@ import {
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
   requireFirstLaunchHost,
+  requireReleaseValues,
   verifyAppInventory,
   verifyHostedDatabase,
   verifyDownload,
@@ -145,6 +146,7 @@ async function main() {
       env: process.env,
       head,
     });
+    requireReleaseValues();
     Object.assign(report, {
       head,
       osVersion,
@@ -317,20 +319,13 @@ async function main() {
       ['attach', dmg, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mount],
       60_000,
     );
-    report.mountedInventory = await verifyAppInventory(join(mount, 'XTrace Desktop.app'));
-    report.quarantine.mountedApp = await quarantineAt(
-      join(mount, 'XTrace Desktop.app'),
-      'mounted-app',
-    );
+    const mountedApp = join(mount, basename(release.bundle));
+    report.mountedInventory = await verifyAppInventory(mountedApp);
+    report.quarantine.mountedApp = await quarantineAt(mountedApp, 'mounted-app');
     if (await exists(release.bundle))
       throw new Error('Installation path appeared after baseline check');
     installed = true;
-    await checked(
-      'install',
-      '/usr/bin/ditto',
-      [join(mount, 'XTrace Desktop.app'), release.bundle],
-      60_000,
-    );
+    await checked('install', '/usr/bin/ditto', [mountedApp, release.bundle], 60_000);
     await checked('dmg-detach', '/usr/bin/hdiutil', ['detach', mount], 30_000);
     attached = false;
     report.installedInventory = await verifyAppInventory(release.bundle);
@@ -409,7 +404,7 @@ async function main() {
       if (
         evidence.code !== 0 ||
         evidence.reason !==
-          'Observed native-ready Welcome, Open Dashboard action and usable 0.1.7 Dashboard'
+          `Observed native-ready Welcome, Open Dashboard action and usable ${release.version} Dashboard`
       )
         throw new Error('Driver returned no required first-launch evidence');
       await writeFile(join(output, 'ui.json'), `${JSON.stringify(evidence, null, 2)}\n`);
@@ -525,8 +520,8 @@ async function main() {
   if (failure) throw failure;
   console.log(
     telemetry
-      ? 'Pinned signed 0.1.7 passed default telemetry notice, saved preferences, restart/override and rejected-attempt checks. Successful HTTP delivery, real PostHog delivery and before-first-pixel ordering were not validated.'
-      : 'Pinned signed 0.1.7 passed hosted first-launch UI and empty native database checks with synthetic data and telemetry disabled. The default telemetry notice and default telemetry behavior were not validated. Updater was not tested.',
+      ? `Pinned signed ${release.version} passed default telemetry notice, saved preferences, restart/override and rejected-attempt checks. Successful HTTP delivery, real PostHog delivery and before-first-pixel ordering were not validated.`
+      : `Pinned signed ${release.version} passed hosted first-launch UI and empty native database checks with synthetic data and telemetry disabled. The default telemetry notice and default telemetry behavior were not validated. Updater was not tested.`,
   );
 }
 

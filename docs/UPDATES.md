@@ -149,22 +149,63 @@ each release. They remain unverified unless that release's notes record the exac
 checks and results. Signed packaging, native fixture/source checks and updater
 download checks do not establish those results.
 
-## Prepared 0.1.7 acceptance
+## Prepared 0.1.8 acceptance
 
-The hosted harness now pins the independently checked updater-enabled 0.1.7
-artifacts from source `e743e900fb40d32bdbe90709bd54b7d9bde32540`, with the public
-0.1.6 app as the update baseline. App, updater archive and DMG app inventories
-match. Signature and wrong-version/tampered-byte verifier checks passed; these
-checks do not establish SDK behavior or a successful app launch/update.
+The hosted harness targets the 0.1.8 candidate from source
+`75d49d54f6717d32d72eeb7a933eebb13f5be148`, installed as `XTrace.app`, and uses
+the published 0.1.7 (`XTrace Desktop.app`, archive
+`XTrace-Desktop-0.1.7-macos-arm64.app.tar.gz`, 11,064,049 bytes, 79 entries) as
+the update starting point. The update check covers the rename described above:
+after Restart to update the folder keeps its earlier name; after a normal quit
+only `XTrace.app` remains, with identical signed contents; reopening it opens the
+Dashboard without Welcome.
 
-Both hosted runners intentionally use synthetic data with `XTRACE_TELEMETRY=0`.
-This suppresses the default telemetry notice as well as telemetry sending.
-Their reports and success messages identify that scope; the default 0.1.7
-telemetry notice and default telemetry behavior remain unvalidated even if
-these hosted checks pass.
+### Signed build values
 
-The candidate remains unpublished at preparation. Its signed first launch and
-real 0.1.6-to-0.1.7 update/restart have not run. They require the existing reviewed
-workflow guards and exact public assets; the update additionally requires separate
-authorization to promote the pinned production feed. Timeout, interruption,
-permission-failure and real-history migration checks remain unverified.
+The ten signed build values are in the `release` object of
+`scripts/ci/hosted-release.mjs`, between `BEGIN SIGNED BUILD VALUES` and `END
+SIGNED BUILD VALUES`. They were computed from the files published on the v0.1.8
+pre-release, downloaded anonymously: DMG 12,527,084 bytes, app inventory 101
+entries, updater archive 11,843,476 bytes, signature 448 bytes, `latest.json`
+1,500 bytes. If any value is missing or malformed, every hosted runner (first
+launch, telemetry, updater failures and update) refuses before it downloads,
+installs or launches anything. Each value comes from the published file:
+
+| Value                                 | Computed from                                                               |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| `bytes`, `sha256`                     | `XTrace-0.1.8-macos-arm64.dmg`: `stat -f %z` and `shasum -a 256`            |
+| `inventoryEntries`, `inventorySha256` | `XTrace.app` inside that DMG, mounted read-only                             |
+| `archiveBytes`, `archiveSha256`       | `XTrace-0.1.8-macos-arm64.app.tar.gz`: `stat -f %z` and `shasum -a 256`     |
+| `signatureBytes`, `signatureSha256`   | `XTrace-0.1.8-macos-arm64.app.tar.gz.sig`: `stat -f %z` and `shasum -a 256` |
+| `feedBytes`, `feedSha256`             | `latest.json`: `stat -f %z` and `shasum -a 256`                             |
+
+Compute the inventory with the harness's own function, from the repository root:
+
+```sh
+node --input-type=module -e 'import { appInventory } from "./scripts/ci/hosted-release.mjs"; console.log(JSON.stringify(await appInventory(process.argv[1])));' "/path/to/mounted/XTrace.app"
+```
+
+The app that `/usr/bin/tar -xzf` extracts from the updater archive gives the same
+result (0.1.7: 79 entries; 0.1.8: 101 entries, the same SHA-256 as the DMG app),
+and the archive holds exactly `inventoryEntries` members under one `XTrace.app`
+folder. `scripts/ci/fixtures/hosted-update-latest.json` holds the exact published
+`latest.json` bytes; the tests require it to match `feedBytes` and `feedSha256`,
+name version 0.1.8, and point only at the public v0.1.8 archive. `fixture.lockSha256` in `scripts/ci/hosted-updater-failures.mjs`
+is this checkout's `Cargo.lock` (the 0.1.8 product lock); change it only if the
+harness branch changes `Cargo.lock`.
+
+### Limits
+
+All hosted runners intentionally use synthetic data with `XTRACE_TELEMETRY=0`,
+except the separate telemetry mode. This suppresses the default telemetry notice
+as well as telemetry sending. Their reports and success messages identify that
+scope.
+
+0.1.8 is published as a pre-release; none of its hosted checks have run yet.
+They require the existing reviewed workflow guards and exact public assets; the
+update additionally requires separate authorization to promote the pinned
+production feed. Not covered by the update check: a Mac that already has
+`XTrace.app` next to `XTrace Desktop.app` (both should stay unchanged), an account
+that cannot change `/Applications`, quitting from the menu-bar item, the Dock or
+Login Item entries after the rename, browser-download quarantine, and real-history
+migration.
