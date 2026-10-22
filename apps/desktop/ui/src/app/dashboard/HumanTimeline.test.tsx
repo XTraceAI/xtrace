@@ -294,7 +294,7 @@ it('human + agent: the headline sets your time beside the agents’ and the leve
   expect(screen.queryByText(/break threshold/)).toBeNull();
 });
 
-it('human + agent: one track per day, amber bands and the agents line in it, only your total beside it', () => {
+it('human + agent: one track per day, your bands and the agents line in it, only your total beside it', () => {
   mountPaired(paired());
   const rows = screen.getAllByTestId('human-day');
   expect(rows).toHaveLength(7);

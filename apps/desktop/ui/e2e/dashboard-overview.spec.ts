@@ -154,7 +154,7 @@ test('the Effort switch and a day of the timeline work from the keyboard', async
 });
 
 for (const scheme of ['light', 'dark'] as const)
-  test(`the human + agent tab: first option, one track per day with amber bands and an agents line, icon keys, totals and the plain human h view unchanged, ${scheme}`, async ({
+  test(`the human + agent tab: first option, one track per day with your bands and an agents line, icon keys, totals and the plain human h view unchanged, ${scheme}`, async ({
     page,
   }) => {
     const errors: string[] = [];
@@ -210,8 +210,8 @@ for (const scheme of ['light', 'dark'] as const)
       };
     });
     expect(Math.abs(columns.headRight - columns.totalRight)).toBeLessThanOrEqual(1);
-    expect(columns.human).toBe(scheme === 'dark' ? '#e6a23c' : '#b7791f');
-    expect(columns.headColor).toBe(scheme === 'dark' ? 'rgb(230, 162, 60)' : 'rgb(183, 121, 31)');
+    expect(columns.human).toBe(scheme === 'dark' ? '#2dd4bf' : '#0d9488');
+    expect(columns.headColor).toBe(scheme === 'dark' ? 'rgb(45, 212, 191)' : 'rgb(13, 148, 136)');
     await expect(page.getByTestId('effort-leverage')).toHaveText(/^[\d.]+×$/);
     await expect(headline).not.toContainText('break threshold');
     // The right column is your time only.
@@ -221,7 +221,7 @@ for (const scheme of ['light', 'dark'] as const)
     for (const total of humanTotals) expect(total).toMatch(/^(\d+ h \d+ m|—)$/);
     // The line's highest point is the day's busiest average on the report's
     // one scale, in its box from 25 (no agents) up to 2 (the top); your time
-    // is full-height amber bands behind it.
+    // is full-height bands in its own colour behind it.
     const last = report.leverage.by_day.at(-1)!;
     const geometry = await days.last().evaluate((row) => {
       const track = row.querySelector('.xt-human-track')!;
@@ -254,7 +254,7 @@ for (const scheme of ['light', 'dark'] as const)
     expect(geometry.barHeights.length).toBeGreaterThan(0);
     for (const height of geometry.barHeights) expect(height).toBeCloseTo(geometry.track, 0);
     for (const top of geometry.barTops) expect(Math.abs(top)).toBeLessThanOrEqual(1);
-    // A see-through colour mix (amber at about a fifth), not a solid fill.
+    // A see-through colour mix (your colour at about a fifth), not a solid fill.
     expect(geometry.barColor).toMatch(/^(color\(srgb|rgba\(|oklab)/);
     // Pointing at a day's track draws the hairline and names that quarter;
     // the card keeps the day's agent total.

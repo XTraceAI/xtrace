@@ -369,7 +369,7 @@
   filter: brightness(1.15);
 }
 
-/* ---- Effort: "human + agent", one track per day: soft amber bands where
+/* ---- Effort: "human + agent", one track per day: soft bands (--human) where
    you were working, and the agents as a thin purple line over them ---- */
 /* The track grows with the row up to the human view's 30px. */
 .xt-human[data-variant='paired'] .xt-human-body {

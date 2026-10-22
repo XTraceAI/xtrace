@@ -236,7 +236,10 @@ it('the human + agent method note explains the human timeline, the bands and the
   fireEvent.click(measure('human + agent'));
   const notes = within(await method()).getByTestId('effort-notes').textContent;
   expect(notes).toContain('Human time comes from the times you sent messages to agents');
-  expect(notes).toContain('the soft amber bands are when you were working');
+  expect(notes).toContain(
+    'the soft bands, in the colour of the person icon above them, are when you were working',
+  );
+  expect(notes).not.toMatch(/amber|teal/);
   expect(notes).toContain('the thin purple line across each day is that whole day’s agent time');
   expect(notes).toContain('how many agents ran then on average, on one scale for every day');
   expect(notes).toContain('at the top at 10 agents');
