@@ -1,0 +1,287 @@
+{
+  "one": {
+    "state": "found",
+    "lookup_id": "00000000-0000-4000-8000-0000000000c1",
+    "source": {
+      "repository": "github.com/octo/skills",
+      "path": "skills/pdf",
+      "reference": "main",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "short_commit": "0123456"
+    },
+    "skills": [
+      {
+        "path": "skills/pdf",
+        "name": "pdf",
+        "description": "Fills and checks PDF forms.",
+        "files": 3,
+        "bytes": 233,
+        "rubric": {
+          "state": "ready",
+          "id": "pdf"
+        },
+        "folder_name": "pdf",
+        "keep": {
+          "state": "keepable"
+        }
+      }
+    ],
+    "keepable": 1,
+    "incomplete": false
+  },
+  "several": {
+    "state": "found",
+    "lookup_id": "00000000-0000-4000-8000-0000000000c1",
+    "source": {
+      "repository": "github.com/octo/team-skills",
+      "path": "",
+      "reference": null,
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "short_commit": "0123456"
+    },
+    "skills": [
+      {
+        "path": "skills/api-review",
+        "name": "api-review",
+        "description": "Reviews a project's public API for breaking changes.",
+        "files": 2,
+        "bytes": 272,
+        "rubric": {
+          "state": "ready",
+          "id": "api-review"
+        },
+        "folder_name": "api-review",
+        "keep": {
+          "state": "keepable"
+        }
+      },
+      {
+        "path": "skills/changelog",
+        "name": "changelog",
+        "description": "Checks that the changelog covers every release.",
+        "files": 1,
+        "bytes": 99,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "changelog",
+        "keep": {
+          "state": "keepable"
+        }
+      },
+      {
+        "path": "skills/claude-taken",
+        "name": "claude-taken",
+        "description": "Shares a name with a Claude Code skill.",
+        "files": 1,
+        "bytes": 94,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "claude-taken",
+        "keep": {
+          "state": "name_in_claude",
+          "folder": "~/.claude/skills/claude-taken"
+        }
+      },
+      {
+        "path": "skills/docs-check",
+        "name": "docs-check",
+        "description": "Finds docs that no longer match the code.",
+        "files": 2,
+        "bytes": 104,
+        "rubric": {
+          "state": "problem",
+          "reason": "no_header"
+        },
+        "folder_name": "docs-check",
+        "keep": {
+          "state": "keepable"
+        }
+      },
+      {
+        "path": "skills/taken",
+        "name": "taken",
+        "description": "Shares a name with a skill you have.",
+        "files": 1,
+        "bytes": 84,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "taken",
+        "keep": {
+          "state": "name_in_agents",
+          "folder": "~/.agents/skills/taken"
+        }
+      },
+      {
+        "path": "skills/test-plan",
+        "name": "test-plan",
+        "description": "Writes a test plan for a change.",
+        "files": 2,
+        "bytes": 2132,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "test-plan",
+        "keep": {
+          "state": "keepable"
+        }
+      }
+    ],
+    "keepable": 4,
+    "incomplete": false
+  },
+  "kept_one": {
+    "state": "done",
+    "skills": [
+      {
+        "path": "skills/pdf",
+        "name": "pdf",
+        "result": {
+          "state": "kept",
+          "folder": "~/.agents/skills/pdf",
+          "claude": {
+            "state": "linked",
+            "link": "~/.claude/skills/pdf"
+          }
+        }
+      }
+    ],
+    "recorded": true
+  },
+  "kept_several": {
+    "state": "done",
+    "skills": [
+      {
+        "path": "skills/api-review",
+        "name": "api-review",
+        "result": {
+          "state": "kept",
+          "folder": "~/.agents/skills/api-review",
+          "claude": {
+            "state": "linked",
+            "link": "~/.claude/skills/api-review"
+          }
+        }
+      },
+      {
+        "path": "skills/changelog",
+        "name": "changelog",
+        "result": {
+          "state": "kept",
+          "folder": "~/.agents/skills/changelog",
+          "claude": {
+            "state": "name_taken"
+          }
+        }
+      }
+    ],
+    "recorded": true
+  },
+  "changed": {
+    "state": "changed",
+    "lookup_id": "00000000-0000-4000-8000-0000000000c1",
+    "source": {
+      "repository": "github.com/octo/team-skills",
+      "path": "",
+      "reference": null,
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "short_commit": "0123456"
+    },
+    "skills": [
+      {
+        "path": "skills/api-review",
+        "name": "api-review",
+        "description": "Reviews a project's public API for breaking changes.",
+        "files": 2,
+        "bytes": 272,
+        "rubric": {
+          "state": "ready",
+          "id": "api-review"
+        },
+        "folder_name": "api-review",
+        "keep": {
+          "state": "name_in_agents",
+          "folder": "~/.agents/skills/api-review"
+        }
+      },
+      {
+        "path": "skills/changelog",
+        "name": "changelog",
+        "description": "Checks that the changelog covers every release.",
+        "files": 1,
+        "bytes": 99,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "changelog",
+        "keep": {
+          "state": "name_in_agents",
+          "folder": "~/.agents/skills/changelog"
+        }
+      },
+      {
+        "path": "skills/claude-taken",
+        "name": "claude-taken",
+        "description": "Shares a name with a Claude Code skill.",
+        "files": 1,
+        "bytes": 94,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "claude-taken",
+        "keep": {
+          "state": "name_in_claude",
+          "folder": "~/.claude/skills/claude-taken"
+        }
+      },
+      {
+        "path": "skills/docs-check",
+        "name": "docs-check",
+        "description": "Finds docs that no longer match the code.",
+        "files": 2,
+        "bytes": 104,
+        "rubric": {
+          "state": "problem",
+          "reason": "no_header"
+        },
+        "folder_name": "docs-check",
+        "keep": {
+          "state": "keepable"
+        }
+      },
+      {
+        "path": "skills/taken",
+        "name": "taken",
+        "description": "Shares a name with a skill you have.",
+        "files": 1,
+        "bytes": 84,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "taken",
+        "keep": {
+          "state": "name_in_agents",
+          "folder": "~/.agents/skills/taken"
+        }
+      },
+      {
+        "path": "skills/test-plan",
+        "name": "test-plan",
+        "description": "Writes a test plan for a change.",
+        "files": 2,
+        "bytes": 2132,
+        "rubric": {
+          "state": "missing"
+        },
+        "folder_name": "test-plan",
+        "keep": {
+          "state": "keepable"
+        }
+      }
+    ],
+    "keepable": 2,
+    "incomplete": false
+  }
+}

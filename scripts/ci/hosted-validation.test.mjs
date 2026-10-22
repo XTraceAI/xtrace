@@ -109,6 +109,8 @@ test('fresh baseline rejects installed apps, old/live data, provider paths and X
   const paths = baselinePaths('/synthetic-home');
   for (const required of [
     '/Applications/XTrace Desktop.app',
+    '/Applications/XTrace.app',
+    '/synthetic-home/Applications/XTrace.app',
     '/synthetic-home/Library/Application Support/ai.xtrace.app',
     '/synthetic-home/Library/Application Support/ai.xtrace.desktop',
     '/synthetic-home/.claude/local/claude',
@@ -122,6 +124,7 @@ test('fresh baseline rejects installed apps, old/live data, provider paths and X
   for (const path of paths) assert.throws(() => requireFreshBaseline([path], ''));
   for (const process of [
     '42 /Applications/XTrace Desktop.app/Contents/MacOS/xtrace-desktop',
+    '43 /Applications/XTrace.app/Contents/MacOS/xtrace-desktop --flag',
     '90 /tmp/xtrace-desktop',
     '90 xtrace-desktop',
   ])

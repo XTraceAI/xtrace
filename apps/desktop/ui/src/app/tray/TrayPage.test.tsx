@@ -665,9 +665,33 @@ it('keeps children without a verified parent and sessions still being checked ou
   mount({ ...source, titles, liveSessions: live });
   await show();
   await flush();
-  expect(within(tile('Recent sessions')).getByText('No recent sessions to show.')).toBeTruthy();
+  // Two are hidden while their check is unfinished: the empty list says why.
+  expect(
+    within(tile('Recent sessions')).getByText(
+      'No recent session to show yet. Sessions are hidden while XTrace has not finished checking whether another session started them.',
+    ),
+  ).toBeTruthy();
   expect(titles.read).not.toHaveBeenCalled();
   expect(live.read).not.toHaveBeenCalled();
+});
+
+it('keeps the plain empty text when only sub-sessions without a verified parent are hidden', async () => {
+  const { source, show } = nativeTray();
+  const base = { ...exported.sessions[0].rows[0], host: 'codex', parent: null };
+  source.sessionsList.mockResolvedValue({
+    window: exported.sessions[0].window,
+    rows: [
+      { ...base, id: 'child-no-parent', known_child: false, child_check: 'child' },
+      { ...base, id: 'known-child-no-parent', known_child: true, child_check: 'checked' },
+    ],
+    next: null,
+  });
+  mount(source);
+  await show();
+  await flush();
+  const recent = within(tile('Recent sessions'));
+  expect(recent.getByText('No recent sessions to show.')).toBeTruthy();
+  expect(recent.queryByText(/has not finished checking/)).toBeNull();
 });
 
 it('shows an empty recent list when the page contains only verified sub-sessions', async () => {
@@ -843,6 +867,29 @@ it('renders a committed import while shown, and keeps the figures when a refresh
   expect(within(tile('Today’s cost')).getByText('$41.27')).toBeTruthy();
 });
 
+it('reads Recent sessions again when a check finishes, so the empty text does not go stale', async () => {
+  vi.useRealTimers();
+  const { source, emit, show } = nativeTray();
+  const base = { ...exported.sessions[0].rows[0], id: 'session-a', host: 'codex', parent: null };
+  const page = (check: 'checking' | 'checked') => ({
+    window: exported.sessions[0].window,
+    rows: [{ ...base, title: 'Saved title', known_child: false, child_check: check }],
+    next: null,
+  });
+  source.sessionsList.mockResolvedValue(page('checking'));
+  mount(source);
+  await show();
+  const recent = () => within(tile('Recent sessions'));
+  await waitFor(() => expect(recent().getByText(/has not finished checking/)).toBeTruthy());
+  // The check finishes and the app publishes one creations change.
+  source.sessionsList.mockResolvedValue(page('checked'));
+  const before = source.sessionsList.mock.calls.length;
+  emit(events.sessionCreationsChanged);
+  await waitFor(() => expect(recent().getAllByRole('listitem')).toHaveLength(1));
+  expect(recent().queryByText(/has not finished checking/)).toBeNull();
+  expect(source.sessionsList.mock.calls.length).toBeGreaterThan(before);
+});
+
 it('keeps one midnight timer while shown and reads the new date when it fires', async () => {
   const { source, tray, show } = nativeTray(
     summary({ next_midnight_ms: Date.parse('2026-09-20T15:10:00Z') }),
@@ -891,7 +938,7 @@ it('hides on Escape and opens the main window from its button', async () => {
   expect(tray.hide).toHaveBeenCalledTimes(1);
   await show();
   await flush();
-  fireEvent.click(screen.getByRole('button', { name: 'Open XTrace Desktop' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open XTrace' }));
   await flush();
   expect(tray.openMain).toHaveBeenCalledTimes(1);
   // Hidden now, so Escape asks nothing more.
@@ -924,7 +971,7 @@ it('in a fixture preview it is always shown and opens the Dashboard route', asyn
   mount(preview);
   await flush();
   expect(source.today).toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Open XTrace Desktop' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open XTrace' }));
   await flush();
   expect(screen.getByText('Dashboard route')).toBeTruthy();
 });
@@ -940,7 +987,7 @@ it('shows its own failed live updates and reconnects them, catching up without a
   expect(screen.getByRole('alert').textContent).toBe('Live updates are unavailable.');
   expect(document.body.textContent).not.toContain('adapter detail');
   expect(heard().every((count) => count === 0)).toBe(true);
-  expect(screen.getByRole('button', { name: 'Open XTrace Desktop' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Open XTrace' })).toBeTruthy();
   const mounts = tray.onShown.mock.calls.length;
 
   // A change the failed attempt could not hear.

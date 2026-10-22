@@ -17,7 +17,7 @@ pub struct StartupFailure {
 }
 
 const DATA_TITLE: &str = "XTrace can't open its data";
-const START_TITLE: &str = "XTrace Desktop couldn't start";
+const START_TITLE: &str = "XTrace couldn't start";
 
 /// Decides the alert for a startup error. It looks through the whole chain of
 /// sources for the database the store refused: one whose migration history
@@ -289,7 +289,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![b'x'; 4096]).unwrap();
         let failure = message(start(root.path()).as_ref());
-        assert_eq!(failure.title, "XTrace Desktop couldn't start");
+        assert_eq!(failure.title, "XTrace couldn't start");
         assert_eq!(failure.database.as_deref(), Some(path.as_path()));
         // SQLite's own message is not repeated after the store's, which
         // prints it; the code below it is a different message and is shown.
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(
             message(unopened.as_ref()),
             StartupFailure {
-                title: "XTrace Desktop couldn't start".into(),
+                title: "XTrace couldn't start".into(),
                 body: "application data directory is unavailable: no access".into(),
                 database: None,
             }
@@ -330,7 +330,7 @@ mod tests {
         );
         let wrapped = tauri::Error::Setup(start(root.path()).into());
         let failure = message(&wrapped);
-        assert_eq!(failure.title, "XTrace Desktop couldn't start");
+        assert_eq!(failure.title, "XTrace couldn't start");
         assert_eq!(failure.database, None);
     }
 }

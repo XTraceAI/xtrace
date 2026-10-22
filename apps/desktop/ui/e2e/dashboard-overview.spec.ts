@@ -28,7 +28,7 @@ async function open(page: Page, scheme: 'light' | 'dark', width = 1440, height =
 }
 const range = (page: Page, value: '7d' | '14d' | '30d') =>
   page.getByRole('radio', { name: value, exact: true }).click();
-const measure = (page: Page, name: 'agent h' | 'human h' | 'cost') =>
+const measure = (page: Page, name: 'human + agent' | 'agent h' | 'human h' | 'cost') =>
   page.getByRole('radio', { name, exact: true }).click();
 const effortCard = (page: Page) =>
   page.locator('section.xt-dash-card').filter({
@@ -152,3 +152,109 @@ test('the Effort switch and a day of the timeline work from the keyboard', async
   await page.keyboard.press('Home');
   await expect(days.first()).toBeFocused();
 });
+
+for (const scheme of ['light', 'dark'] as const)
+  test(`the human + agent tab: first option, one track with a ridge per day, totals and the plain human h view unchanged, ${scheme}`, async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await open(page, scheme);
+    const options = page.getByRole('radiogroup', { name: 'Effort measure' }).getByRole('radio');
+    await expect(options).toHaveText(['human + agent', 'agent h', 'human h', 'cost']);
+    // The default stays agent h.
+    await expect(page.getByRole('radio', { name: 'agent h', exact: true })).toBeChecked();
+    await expect(page.getByTestId('effort-chart')).toBeVisible();
+    const report = synthetic.dashboards.find((r) => r.window.days === 7)!;
+    const top = report.leverage.ridge_top_agents;
+    await measure(page, 'human + agent');
+    const timelineView = page.getByTestId('human-timeline');
+    await expect(timelineView).toHaveAttribute('data-variant', 'paired');
+    const days = page.getByTestId('human-day');
+    await expect(days).toHaveCount(report.leverage.by_day.length);
+    // One track per day; a ridge on every day with agent time; no strip.
+    await expect(timelineView.locator('.xt-human-track')).toHaveCount(
+      report.leverage.by_day.length,
+    );
+    await expect(page.getByTestId('agent-ridge')).toHaveCount(
+      report.leverage.by_day.filter((day) => day.quarter_agents.some((agents) => agents > 0))
+        .length,
+    );
+    await expect(page.locator('.xt-agent-strip')).toHaveCount(0);
+    // Headline: you, agents, leverage; no break threshold.
+    const headline = page.getByTestId('effort-headline');
+    await expect(headline).toHaveText(
+      /^\d+ h \d+ myou\d+ h \d+ magents[\d.]+×agent time per hour of yours$/,
+    );
+    await expect(page.getByTestId('effort-leverage')).toHaveText(/^[\d.]+×$/);
+    await expect(headline).not.toContainText('break threshold');
+    // The right column is your time only.
+    await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
+    const humanTotals = await days.locator('.xt-human-total').allTextContents();
+    expect(humanTotals).toHaveLength(report.leverage.by_day.length);
+    for (const total of humanTotals) expect(total).toMatch(/^(\d+ h \d+ m|—)$/);
+    // The ridge rises from the bottom of the track as high as the day's
+    // busiest average on the report's one scale; your time is a 4px line
+    // along the bottom.
+    const last = report.leverage.by_day.at(-1)!;
+    const geometry = await days.last().evaluate((row) => {
+      const track = row.querySelector('.xt-human-track')!.getBoundingClientRect();
+      const ridge = row.querySelector('[data-testid="agent-ridge"] path')!.getBoundingClientRect();
+      const bars = [...row.querySelectorAll('.xt-human-bar')].map((bar) =>
+        bar.getBoundingClientRect(),
+      );
+      return {
+        row: row.getBoundingClientRect().height,
+        track: track.height,
+        ridgeBottom: track.bottom - ridge.bottom,
+        ridgeShare: ridge.height / track.height,
+        barHeights: bars.map((bar) => bar.height),
+        barGaps: bars.map((bar) => track.bottom - bar.bottom),
+      };
+    });
+    expect(geometry.row).toBeGreaterThanOrEqual(34);
+    expect(geometry.track).toBeGreaterThanOrEqual(26);
+    expect(Math.abs(geometry.ridgeBottom)).toBeLessThanOrEqual(1);
+    expect(geometry.ridgeShare).toBeCloseTo(
+      Math.min(Math.max(...last.quarter_agents), top) / top,
+      1,
+    );
+    expect(geometry.barHeights.length).toBeGreaterThan(0);
+    for (const height of geometry.barHeights) expect(height).toBeCloseTo(4, 0);
+    for (const gap of geometry.barGaps) expect(Math.abs(gap)).toBeLessThanOrEqual(1);
+    // Pointing at a day's track draws the hairline and names that quarter;
+    // the card keeps the day's agent total.
+    const track = days.last().locator('.xt-human-track');
+    const box = (await track.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.5 + 2, box.y + box.height / 2);
+    await expect(page.getByTestId('agent-hairline')).toBeVisible();
+    await expect(page.getByTestId('agent-quarter')).toBeVisible();
+    const card = page.locator('.xt-effort-tip[data-open]');
+    await expect(card).toContainText('Agent time');
+    await expect(card.getByTestId('agent-day-total')).toHaveText(/^\d+ h \d+ m$/);
+    if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-${scheme}.png` });
+    await page.mouse.move(0, 0);
+    // 30 days scroll, opened on today.
+    await range(page, '30d');
+    const body = page.getByTestId('human-timeline-body');
+    const scroll = await body.evaluate((element) => ({
+      top: element.scrollTop,
+      client: element.clientHeight,
+      height: element.scrollHeight,
+    }));
+    expect(scroll.height).toBeGreaterThan(scroll.client);
+    expect(scroll.top + scroll.client).toBeGreaterThanOrEqual(scroll.height - 1);
+    // The plain human h view has no ridge and keeps its headline and bars.
+    await measure(page, 'human h');
+    await expect(timelineView).not.toHaveAttribute('data-variant', 'paired');
+    await expect(page.getByTestId('agent-ridge')).toHaveCount(0);
+    await expect(page.getByTestId('effort-headline')).toContainText('break threshold');
+    const plainBar = await page
+      .getByTestId('human-day')
+      .last()
+      .locator('.xt-human-bar')
+      .first()
+      .evaluate((bar) => bar.getBoundingClientRect().height);
+    expect(plainBar).toBeGreaterThan(4);
+    expect(errors).toEqual([]);
+  });

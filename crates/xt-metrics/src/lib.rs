@@ -11,6 +11,7 @@ mod human_hours;
 mod pr_analytics;
 mod pr_effort;
 mod prices;
+mod quarters;
 mod repeats;
 mod report;
 mod session;
@@ -49,6 +50,7 @@ pub use pr_effort::{
     PrEffortReport, PrFreshness, PrFreshnessSummary, PrMarker,
 };
 pub use prices::{COST_BASIS, PriceCatalog};
+pub use quarters::{DayQuarters, QUARTER_MS, QUARTERS_PER_DAY, QuarterHour};
 pub use repeats::{
     DEFAULT_ACTIVE_MS, DEFAULT_REPEATS, RepeatDensity, RepeatGroup, RepeatThresholds,
     SessionRepeats, StretchRepeats, UnknownRepeats,

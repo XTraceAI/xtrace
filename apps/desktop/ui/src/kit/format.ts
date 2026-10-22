@@ -13,6 +13,12 @@ export function isMeasured(value: MetricValue): value is number | string {
   return typeof value === 'string' ? value.trim().length > 0 : finite(value);
 }
 
+/** A byte figure a reader can compare: whole MB from 1 MB, otherwise whole KB (at least 1). */
+export function byteSize(value: number): string {
+  const mib = value / (1024 * 1024);
+  return mib >= 1 ? `${Math.round(mib)} MB` : `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
 export function tokens(value: NumericValue): string {
   if (!finite(value)) return UNMEASURED;
   const magnitude = Math.abs(value);

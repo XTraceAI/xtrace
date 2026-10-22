@@ -104,7 +104,7 @@ async function fakeRelease(
     layouts,
     notarization = 'Accepted',
     tool = () => undefined,
-    finalIcons = [iloc('Applications', 480, 170), iloc('XTrace Desktop.app', 180, 170)],
+    finalIcons = [iloc('Applications', 480, 170), iloc('XTrace.app', 180, 170)],
   },
 ) {
   const repo = await mkdtemp(join(tmpdir(), 'xtrace-release-dmg-test-'));
@@ -113,7 +113,7 @@ async function fakeRelease(
   await mkdir(dirname(config), { recursive: true });
   await copyFile(join(root, 'apps/desktop/src-tauri/tauri.conf.json'), config);
   const volume = join(repo, 'volume');
-  await mkdir(join(volume, 'XTrace Desktop.app'), { recursive: true });
+  await mkdir(join(volume, 'XTrace.app'), { recursive: true });
   await mkdir(join(volume, '.background'));
   await writeFile(join(volume, '.background/background.tiff'), '');
   await symlink('/Applications', join(volume, 'Applications'));
@@ -129,7 +129,7 @@ async function fakeRelease(
       assert.equal(readFileSync(options.env.APPLE_API_KEY_PATH, 'utf8'), env.APPLE_API_PRIVATE_KEY);
       const dmg = join(repo, 'target/release/bundle/dmg');
       mkdirSync(dmg, { recursive: true });
-      writeFileSync(join(dmg, 'XTrace Desktop_0.1.0_aarch64.dmg'), 'disk image bytes');
+      writeFileSync(join(dmg, 'XTrace_0.1.0_aarch64.dmg'), 'disk image bytes');
       return { status: 0 };
     }
     if (command === 'codesign' && args[0] === '-dvv') return { status: 0, stderr: signed };
@@ -156,9 +156,9 @@ async function fakeRelease(
 }
 
 test('packaging rebuilds a misplaced layout, then notarizes, staples and names the image', async (t) => {
-  const fake = await fakeRelease(t, { layouts: [['XTrace Desktop.app is at 208,151.'], []] });
+  const fake = await fakeRelease(t, { layouts: [['XTrace.app is at 208,151.'], []] });
   const result = await packageDmg(fake.options);
-  assert.equal(result.name, 'XTrace-Desktop-0.1.7-macos-arm64.dmg');
+  assert.equal(result.name, 'XTrace-0.1.8-macos-arm64.dmg');
   assert.equal(fake.calls.filter((call) => call.startsWith('pnpm tauri bundle')).length, 2);
   assert.equal(fake.keys.length, 2);
   const order = [
@@ -178,7 +178,7 @@ test('packaging rebuilds a misplaced layout, then notarizes, staples and names t
   assert.equal(await readFile(output, 'utf8'), 'disk image bytes');
   assert.equal(
     await readFile(`${output}.sha256`, 'utf8'),
-    `${result.sha256}  XTrace-Desktop-0.1.7-macos-arm64.dmg\n`,
+    `${result.sha256}  XTrace-0.1.8-macos-arm64.dmg\n`,
   );
   // The key never appears on a command line, and its file is gone afterwards.
   assert.equal(
@@ -189,7 +189,7 @@ test('packaging rebuilds a misplaced layout, then notarizes, staples and names t
 });
 
 test(`packaging stops after ${LAYOUT_ATTEMPTS} misplaced layouts and before notarizing`, async (t) => {
-  const wrong = ['XTrace Desktop.app is at 208,151.'];
+  const wrong = ['XTrace.app is at 208,151.'];
   const fake = await fakeRelease(t, {
     layouts: Array.from({ length: LAYOUT_ATTEMPTS }, () => wrong),
   });
@@ -263,7 +263,7 @@ test('the app inside the final disk image is checked again', async (t) => {
 test('a misplaced icon in the final disk image is never copied out', async (t) => {
   const fake = await fakeRelease(t, {
     layouts: [[]],
-    finalIcons: [iloc('Applications', 480, 170), iloc('XTrace Desktop.app', 208, 151)],
+    finalIcons: [iloc('Applications', 480, 170), iloc('XTrace.app', 208, 151)],
   });
   await assert.rejects(packageDmg(fake.options), /Final disk image layout: .*208,151/);
   assert.equal(existsSync(join(fake.repo, 'artifacts/release')), false);

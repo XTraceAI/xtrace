@@ -1,11 +1,18 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { DashboardLane } from '../../data/generated/DashboardLane';
 import {
+  CHECKING_REASON,
+  checkingEmpty,
+  checkingHidden,
+  checkingHiddenShort,
+  countStillChecking,
   groupSessionLanes,
   laneRows,
   listedLanes,
+  notListed,
   type LaneParent,
   type SessionLane,
+  type ShownContext,
 } from './lanes';
 
 const lane = (
@@ -231,4 +238,51 @@ it('ends the walk at a loop, and matches a hidden session by host as well as id'
   expect(
     ids(listedLanes(sessions, link, unresolvedOf({ session_id: 'y', host: 'claude' }))),
   ).toEqual(['c1', 'x', 'p', 'c2']);
+});
+
+describe('sessions hidden while their check is unfinished', () => {
+  type Listed = { id: string; host: string; context?: ShownContext };
+  const sessions: Listed[] = [
+    { id: 'checking', host: 'claude', context: { host: 'claude', child_check: 'checking' } },
+    { id: 'no-field', host: 'claude', context: { host: 'claude', child_check: null } },
+    { id: 'unknown', host: 'claude' },
+    { id: 'other-host', host: 'claude', context: { host: 'codex', child_check: 'checked' } },
+    { id: 'checked', host: 'claude', context: { host: 'claude', child_check: 'checked' } },
+    { id: 'child', host: 'codex', context: { host: 'codex', child_check: 'child' } },
+    {
+      id: 'known-child',
+      host: 'codex',
+      context: { host: 'codex', child_check: 'checked', known_child: true },
+    },
+  ];
+
+  it('counts exactly the sessions the same rule leaves out as still being checked', () => {
+    expect(countStillChecking(sessions, (session) => session.context)).toBe(4);
+    // Each one counted is one a list leaves out, whatever its parent link says.
+    for (const session of sessions.slice(0, 4))
+      expect(notListed(session.context, session.host, true)).toBe(true);
+    // A known sub-session without a verified parent is hidden, but not counted.
+    expect(notListed(sessions[6].context, 'codex', false)).toBe(true);
+    expect(countStillChecking(sessions.slice(4), (session) => session.context)).toBe(0);
+    expect(countStillChecking([], () => undefined)).toBe(0);
+  });
+
+  it('says one sentence, with the app number format, and never promises the sessions appear', () => {
+    expect(checkingHidden(1)).toBe(
+      '1 session is hidden because XTrace has not finished checking whether another session started it.',
+    );
+    expect(checkingHidden(12)).toBe(
+      '12 sessions are hidden because XTrace has not finished checking whether another session started them.',
+    );
+    expect(checkingHidden(1234)).toMatch(/^1,234 sessions are hidden because/);
+    expect(checkingHiddenShort(1234)).toBe('1,234 hidden: check not finished');
+    expect(checkingEmpty()).toBe(
+      'No session to show yet. Sessions are hidden while XTrace has not finished checking whether another session started them.',
+    );
+    expect(checkingEmpty('No recent session to show yet')).toBe(
+      `No recent session to show yet. ${CHECKING_REASON}`,
+    );
+    for (const text of [checkingHidden(2), checkingHiddenShort(2), checkingEmpty()])
+      expect(text).not.toMatch(/will|appear|soon|minute/i);
+  });
 });

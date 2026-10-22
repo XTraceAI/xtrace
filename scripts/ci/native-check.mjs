@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,11 @@ export async function checkNative({
     execute('cp', ['-c', '-R', join(repo, 'target'), testTarget]);
     env.CARGO_TARGET_DIR = testTarget;
     const testConfig = JSON.stringify({ identifier: testIdentifier });
+    // Tauri names the bundle after productName; read it rather than keep a copy.
+    const { productName } = JSON.parse(
+      await readFile(join(repo, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
+    );
+    const bundleName = `${productName}.app`;
     execute('pnpm', ['tauri', 'build', '--debug', '--bundles', 'app', '--config', testConfig]);
     // Keep the normal build above checked, but launch only the explicitly
     // requested fixture build. Its provider readers return synthetic data.
@@ -125,7 +130,7 @@ export async function checkNative({
       ]);
     execute('node', [
       'scripts/ci/debug-bundle.mjs',
-      join(testTarget, 'debug/bundle/macos/XTrace Desktop.app'),
+      join(testTarget, 'debug/bundle/macos', bundleName),
       testIdentifier,
       ...(fixtureSmoke ? ['--fixture-smoke'] : []),
     ]);
@@ -133,7 +138,7 @@ export async function checkNative({
       execute('pnpm', ['tauri', 'build', '--bundles', 'app', '--config', testConfig]);
       execute('node', [
         'scripts/ci/debug-bundle.mjs',
-        join(testTarget, 'release/bundle/macos/XTrace Desktop.app'),
+        join(testTarget, 'release/bundle/macos', bundleName),
         testIdentifier,
       ]);
     }

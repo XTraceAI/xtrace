@@ -29,6 +29,7 @@ xt-metrics = { path = "../../../crates/xt-metrics" }
 xt-store = { path = "../../../crates/xt-store" }
 xt-ingest = { path = "../../../crates/xt-ingest" }
 xt-probes = { path = "../../../crates/xt-probes" }
+xt-judge = { path = "../../../crates/xt-judge" }
 xt-rulebook = { path = "../../../crates/xt-rulebook" }
 xt-fixtures = { path = "../../../crates/xt-fixtures", optional = true }
 tempfile = "=3.27.0"
@@ -36,6 +37,10 @@ thiserror = "=2.0.20"
 tauri = { version = "=2.11.5", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-single-instance = "=2.4.4"
 tauri-plugin-updater = "=2.12.0"
+# "Add from a link" downloads a public GitHub archive: the client and TLS
+# provider the updater already uses, at its locked versions.
+reqwest = { version = "=0.13.4", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "=0.23.45", default-features = false, features = ["ring"] }
 base64 = "=0.22.1"
 minisign-verify = "=0.2.5"
 url = "=2.5.8"
@@ -46,6 +51,9 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSString"] }
 
 [dev-dependencies]
+# Tests only: "Add from a link" archives made for a local test server.
+flate2 = "=1.1.10"
+tar = { version = "=0.4.46", default-features = false }
 # Tests only: creating a stored pull request that no session links any more,
 # which no public writer can do.
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"] }

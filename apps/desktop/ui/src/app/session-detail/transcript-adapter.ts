@@ -35,6 +35,7 @@ import type { SourcePayload } from '../../data/generated/SourcePayload';
 import type { SourceRecord } from '../../data/generated/SourceRecord';
 import type { SourceResultPart } from '../../data/generated/SourceResultPart';
 import { clock, isInstant } from '../../kit/clock';
+import { byteSize } from '../../kit/format';
 import type {
   ToolOutcome,
   TranscriptBlock,
@@ -90,7 +91,7 @@ export function unavailableNote(reason: SessionSourceReason): string {
     case 'too_large':
       return reason.limit === 'records'
         ? `This session holds more records than this view reads at once (${reason.reached.toLocaleString()} of ${reason.ceiling.toLocaleString()}).`
-        : `This session is larger than this view reads at once (${bytes(reason.reached)} of ${bytes(reason.ceiling)}).`;
+        : `This session is larger than this view reads at once (${byteSize(reason.reached)} of ${byteSize(reason.ceiling)}).`;
     case 'cancelled':
       return 'Reading this transcript was stopped, so none of it was kept.';
     case 'invalid_identifier':
@@ -157,12 +158,6 @@ const identificationLimit: Record<IdentificationLimit, string> = {
 
 const isIdentificationLimit = (limit: ReaderLimit): limit is IdentificationLimit =>
   Object.hasOwn(identificationLimit, limit);
-
-/** A byte figure a reader can compare, at the scale the ceilings are set in. */
-function bytes(value: number): string {
-  const mib = value / (1024 * 1024);
-  return mib >= 1 ? `${Math.round(mib)} MB` : `${Math.max(1, Math.round(value / 1024))} KB`;
-}
 
 /**
  * What this text is missing, said once and plainly.

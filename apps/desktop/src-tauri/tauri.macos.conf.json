@@ -5,7 +5,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "XTrace Desktop",
+        "title": "XTrace",
         "width": 1440,
         "height": 900,
         "minWidth": 1120,

@@ -478,10 +478,13 @@ impl Drop for Tailer {
 /// between and what the failure left unread is then gone (the counts still
 /// add up); a session the earlier pass imported that the later pass could
 /// not read reads partial, the earlier counts carried and the later failure
-/// as its rejection, since its rows stay indexed; a host the earlier pass could not scan at all (its reader or
-/// runtime failed, its pin mismatched, or it was incomplete with no session
-/// or diagnostic to say why) stays incomplete even if the later pass
-/// completed, since what the failed pass missed may be gone, while an
+/// as its rejection, since its rows stay indexed; a host the earlier pass could not scan at all keeps
+/// that failure even if the later pass read it, since what the failed pass
+/// missed may be gone: one whose reader or runtime failed, whose pin
+/// mismatched or whose scan was cancelled keeps that state and its reason
+/// (unless the later pass failed itself or found no source), and one that
+/// was incomplete with no session or diagnostic to say why stays incomplete
+/// with its reason, while an
 /// incompleteness that sessions or diagnostics explain is decided by their
 /// retention or resolution; and a host with a retained session that was not
 /// imported, or a retained diagnostic, stays incomplete, as the earlier pass
@@ -613,8 +616,9 @@ fn carry_counts(earlier: &HostReport, mut later: HostReport) -> HostReport {
         }
     }
     // A host-wide failure of the earlier pass: one its reader, runtime or pin
-    // reported, or an incomplete status without session or diagnostic
-    // evidence. Incompleteness that came from sessions or diagnostics is
+    // reported, or a cancellation (each kept as its own state below), or an
+    // incomplete status without session or diagnostic evidence (kept as
+    // incomplete). Incompleteness that came from sessions or diagnostics is
     // carried by those, retained or resolved above, not by the status.
     let failed_earlier = matches!(
         earlier.status,
@@ -622,9 +626,10 @@ fn carry_counts(earlier: &HostReport, mut later: HostReport) -> HostReport {
             | HostStatus::MissingRuntime
             | HostStatus::PinMismatch
             | HostStatus::Cancelled
-    ) || (earlier.status == HostStatus::Incomplete
+    );
+    let unexplained_earlier = earlier.status == HostStatus::Incomplete
         && earlier.sessions.is_empty()
-        && earlier.diagnostics.is_empty());
+        && earlier.diagnostics.is_empty();
     // Origin evidence reads as the later pass read it, except the proofs the
     // earlier pass recorded: a proof is kept only with its record's first
     // insertion, so a later pass cannot record it again (it abstains, and
@@ -640,11 +645,25 @@ fn carry_counts(earlier: &HostReport, mut later: HostReport) -> HostReport {
         later.origin.as_mut().unwrap().human_inputs.conflicted += earlier.human_inputs.conflicted;
         later.origin.as_mut().unwrap().human_inputs.failed += earlier.human_inputs.failed;
     }
-    if later.status == HostStatus::Complete
-        && (failed_earlier || !all_imported(&later.sessions) || !later.diagnostics.is_empty())
+    // A later pass that read the host does not clear a failure of the
+    // earlier pass that its reader, runtime or pin reported, or a
+    // cancellation: the merged host keeps that state, with its reason, so it
+    // still reads as a host the index could not read however many sessions
+    // the later pass imported. A later pass that itself failed, or found no
+    // source, reports its own state. Otherwise a completed later pass stays
+    // incomplete after an unexplained incompleteness of the earlier pass, its
+    // reason carried, or around a retained session that was not imported or
+    // a retained diagnostic.
+    if failed_earlier && matches!(later.status, HostStatus::Complete | HostStatus::Incomplete) {
+        later.status = earlier.status;
+        if let Some(detail) = &earlier.detail {
+            later.detail = Some(format!("initial scan: {detail}"));
+        }
+    } else if later.status == HostStatus::Complete
+        && (unexplained_earlier || !all_imported(&later.sessions) || !later.diagnostics.is_empty())
     {
         later.status = HostStatus::Incomplete;
-        if failed_earlier && later.detail.is_none() {
+        if unexplained_earlier && later.detail.is_none() {
             later.detail = earlier
                 .detail
                 .as_ref()
@@ -1650,15 +1669,48 @@ mod tests {
             merged.detail.as_deref(),
             Some("initial scan: root unavailable")
         );
-        // A reader failure likewise.
+        // A reader failure keeps its own state and reason, whether the later
+        // pass completed or read with gaps, with the sessions it read.
         let earlier = host(
             HostStatus::ReaderFailed,
             Some("producer died"),
             vec![],
             vec![],
         );
-        let later = host(HostStatus::Complete, None, vec![], vec![]);
-        assert_eq!(carry_counts(&earlier, later).status, HostStatus::Incomplete);
+        for status in [HostStatus::Complete, HostStatus::Incomplete] {
+            let later = host(
+                status,
+                Some("pinned producer"),
+                vec![],
+                vec![session("/h/p/s.jsonl", imported())],
+            );
+            let merged = carry_counts(&earlier, later);
+            assert_eq!(merged.status, HostStatus::ReaderFailed, "{merged:?}");
+            assert_eq!(
+                merged.detail.as_deref(),
+                Some("initial scan: producer died")
+            );
+            assert_eq!(merged.sessions.len(), 1);
+        }
+        for failed in [
+            HostStatus::MissingRuntime,
+            HostStatus::PinMismatch,
+            HostStatus::Cancelled,
+        ] {
+            let earlier = host(failed, Some("why"), vec![], vec![]);
+            let later = host(HostStatus::Complete, None, vec![], vec![]);
+            assert_eq!(carry_counts(&earlier, later).status, failed);
+        }
+        // A later pass that found no source, or failed itself, reports that.
+        let later = host(HostStatus::MissingSource, Some("gone"), vec![], vec![]);
+        let merged = carry_counts(&earlier, later);
+        assert_eq!(merged.status, HostStatus::MissingSource);
+        assert_eq!(merged.detail.as_deref(), Some("gone"));
+        let later = host(HostStatus::PinMismatch, Some("pin"), vec![], vec![]);
+        assert_eq!(
+            carry_counts(&earlier, later).status,
+            HostStatus::PinMismatch
+        );
         // A session the earlier pass imported that the later pass skipped:
         // partial, the earlier counts carried, the later failure kept.
         let earlier = host(

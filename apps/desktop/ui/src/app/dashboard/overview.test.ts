@@ -8,6 +8,8 @@ import type { MetricHumanHoursDay } from '../../data/generated/MetricHumanHoursD
 import type { MetricPrAnalyticsRow } from '../../data/generated/MetricPrAnalyticsRow';
 import type { MetricPrMarker } from '../../data/generated/MetricPrMarker';
 import {
+  agentRidges,
+  agentsText,
   clockHours,
   concurrencyTakeaway,
   handsOffTakeaway,
@@ -16,6 +18,8 @@ import {
   mergedTakeaway,
   leverageSpanText,
   previousWholeDaysText,
+  quarterSpan,
+  ridgePath,
   timelineRows,
   wholeDaysText,
 } from './overview';
@@ -282,4 +286,53 @@ it('names what a whole-day change compares with from the days it covers', () => 
     'Both sides cover Sep 28–Oct 5, whole days. Its change compares with the previous 8 whole days.',
   );
   expect(leverageSpanText([])).toBeUndefined();
+});
+
+const Q = 15 * 60_000;
+it('writes a quarter’s agents and span on the shared scale, and builds ridges from the report', () => {
+  expect(agentsText(0)).toBe('no agents');
+  expect(agentsText(1)).toBe('1 agent');
+  expect(agentsText(0.01)).toBe('<0.1 agents');
+  expect(agentsText(3.2)).toBe('3.2 agents');
+  expect(quarterSpan(0)).toBe('12:00 AM–12:15 AM');
+  expect(quarterSpan(95)).toBe('11:45 PM–12:00 AM');
+  const day = report().leverage.by_day.at(-1)!;
+  day.quarter_agents = Array.from({ length: 96 }, (_, index) =>
+    index === 40 || index === 41 ? 2 : index === 43 ? 0.5 : 0,
+  );
+  day.agent_ms = 4.5 * Q;
+  day.busiest_quarter = 40;
+  const ridge = agentRidges([day], 10).get(day.date)!;
+  expect(ridge.total).toBe('1 h 8 m');
+  expect(ridge.busiest).toBe('10:00 AM · 2 agents');
+  expect(ridge.quarter(43)).toEqual({ span: '10:45 AM–11:00 AM', agents: '0.5 agents' });
+  expect(ridge.quarter(42).agents).toBe('no agents');
+  // A positive average below the scale, sent unrounded, never reads as zero.
+  day.quarter_agents[43] = 0.01;
+  expect(agentRidges([day], 10).get(day.date)!.quarter(43).agents).toBe('<0.1 agents');
+  day.busiest_quarter = null;
+  expect(agentRidges([day], 10).get(day.date)!.busiest).toBeNull();
+});
+
+/** The heights a ridge outline reaches, in its 0–100 box (100 is the bottom). */
+const heights = (path: string) =>
+  [...path.matchAll(/[ML ]?(-?[\d.]+),(-?[\d.]+)/g)].map((match) => Number(match[2]));
+
+it('draws a ridge as tall as each quarter’s agents on one scale, clipped at the top', () => {
+  const agents = Array.from({ length: 96 }, () => 0);
+  expect(ridgePath(agents, 10)).toBeNull();
+  agents[10] = 5;
+  agents[11] = 14;
+  const path = ridgePath(agents, 10)!;
+  expect(path.startsWith('M0,100 L0,100')).toBe(true);
+  expect(path.endsWith('L960,100 L960,100 Z')).toBe(true);
+  const ys = heights(path);
+  // Half the top is half the height; above the top is drawn at the top.
+  expect(ys).toContain(50);
+  expect(Math.min(...ys)).toBe(0);
+  expect(Math.max(...ys)).toBe(100);
+  // Each quarter's point sits at its centre: quarter 10 at 105, quarter 11 at 115.
+  expect(path).toContain(' 105,50');
+  expect(path).toContain(' 115,0');
+  expect(ridgePath(agents, 0)).toBeNull();
 });

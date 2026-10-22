@@ -12,14 +12,16 @@ import type { NativeIndexStatus } from '../src/data/generated/NativeIndexStatus'
  * row as it was. So does the note naming the Codex histories the sub-session
  * launch search skipped, after it.
  */
-const scan = (host: string, state: NativeHostState, imported: number) => ({
+// Every host here read sessions, so the app flags none of them: a host read
+// with gaps that skipped a few sessions is counted in Settings, not flagged.
+const scan = (host: string, state: NativeHostState, imported: number, skipped = 0) => ({
   host,
   state,
-  needs_attention: state !== 'complete',
+  needs_attention: false,
   detail: null,
   sessions_imported: imported,
   sessions_partial: 0,
-  sessions_skipped: 0,
+  sessions_skipped: skipped,
   skipped_conversations: [],
   skipped_conversations_omitted: 0,
   records_new: 3,
@@ -33,10 +35,10 @@ const status: NativeIndexStatus = {
   readers: { state: 'verified', commit: '0'.repeat(40), plugin_version: '0.0.0' },
   hosts: [
     scan('claude', 'complete', 2),
-    scan('codex', 'incomplete', 1),
+    scan('codex', 'incomplete', 1, 3),
     scan('cursor', 'complete', 4),
   ],
-  needs_attention: true,
+  needs_attention: false,
   reconciles: 2,
   files_scanned: 3,
   codex_history_gaps: {
@@ -113,14 +115,18 @@ for (const scheme of ['dark', 'light'] as const)
     await expect(note).toHaveText(
       "“Read” and “Read with gaps” describe each host's last scan of the sources this index reads, not all of that host's history. Conversations kept only in the Cursor IDE's database are not read, so they are not in Cursor's counts.",
     );
-    // The reported rows are unchanged.
+    // The reported rows are unchanged. Codex skipped 3 conversations, so its row
+    // also carries the closed skipped-details disclosure (no IDs reported here).
     expect(await list.locator('dd').allTextContents()).toEqual([
       'Ready (2 reconciliations)',
-      'Live: changes are reconciled as they happen',
+      'Live: new activity is added as it happens',
       '/synthetic/python3',
       `Bundled memhub 0.0.0 at ${'0'.repeat(12)}`,
       'Read · 2 imported, 0 partial, 0 skipped, 3 new records, 0 enriched',
-      'Read with gaps · 1 imported, 0 partial, 0 skipped, 3 new records, 0 enriched',
+      'Read with gaps · 1 imported, 0 partial, 3 skipped, 3 new records, 0 enriched' +
+        'Skipped conversation details (codex)' +
+        'These are skips reported by this scan, including earlier outcomes it retained. ' +
+        'A skip can still have records in the index. IDs and reasons are shown only when available.',
       'Read · 4 imported, 0 partial, 0 skipped, 3 new records, 0 enriched',
     ]);
     const gaps = page.getByTestId('native-index-codex-gaps');

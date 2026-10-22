@@ -251,3 +251,129 @@ it('is one tab stop, today at first; arrow keys move between days and open their
   expect(document.activeElement).toBe(rows[6]);
   expect(stops()).toEqual([rows[6]]);
 });
+
+const Q = 15 * 60_000;
+/** The "human + agent" report: synthetic agent time (not real history) on the last day. */
+function paired(edit?: (report: DashboardMetrics) => void) {
+  return report((r) => {
+    for (const day of r.leverage.by_day) {
+      day.agent_ms = 0;
+      day.quarter_agents = Array.from({ length: 96 }, () => 0);
+      day.busiest_quarter = null;
+    }
+    const last = r.leverage.by_day.at(-1)!;
+    // 00:00–00:30 one agent, 00:30–00:45 three, 08:00 a fifth of one.
+    for (const [index, agents] of [
+      [0, 1],
+      [1, 1],
+      [2, 3],
+      [32, 0.2],
+    ] as const)
+      last.quarter_agents[index] = agents;
+    last.agent_ms = 5 * Q + Q / 5;
+    last.busiest_quarter = 2;
+    r.leverage.agent_ms = last.agent_ms;
+    r.tiles.leverage = { ...r.tiles.leverage, value: 3.4 };
+    edit?.(r);
+  });
+}
+const mountPaired = (r: DashboardMetrics) =>
+  render(
+    <ThemeProvider>
+      <HumanTimeline report={r} withAgents />
+    </ThemeProvider>,
+  );
+
+it('human + agent: the headline sets your time beside the agents’ and the leverage', () => {
+  mountPaired(paired());
+  expect(screen.getByTestId('human-timeline').dataset.variant).toBe('paired');
+  expect(screen.getByTestId('effort-headline').textContent).toBe(
+    '1 h 30 myou1 h 18 magents3.4×agent time per hour of yours',
+  );
+  // No break threshold here, and no colour legend.
+  expect(screen.queryByText(/break threshold/)).toBeNull();
+});
+
+it('human + agent: one track per day, the agents’ ridge in it and only your total beside it', () => {
+  mountPaired(paired());
+  const rows = screen.getAllByTestId('human-day');
+  expect(rows).toHaveLength(7);
+  for (const row of rows) expect(row.querySelectorAll('.xt-human-track')).toHaveLength(1);
+  // A day with no agent time draws no ridge.
+  const ridges = screen.getAllByTestId('agent-ridge');
+  expect(ridges).toHaveLength(1);
+  expect(rows[6]!.contains(ridges[0]!)).toBe(true);
+  expect(ridges[0]!.getAttribute('viewBox')).toBe('0 0 960 100');
+  // 3 agents on the report's scale of 10: 30% up, the 08:00 fifth of one 2%.
+  const path = ridges[0]!.querySelector('path')!;
+  expect(path.getAttribute('d')).toContain(' 25,70');
+  expect(path.getAttribute('d')).toContain(' 325,98');
+  expect(path.getAttribute('fill')).toMatch(/^url\(#xt-ridge-[\w-]+\)$/);
+  const gradient = path.getAttribute('fill')!.slice(5, -1);
+  expect(ridges[0]!.querySelector(`linearGradient[id="${gradient}"]`)).not.toBeNull();
+  // The right column is your time only; the agents' total is in the card.
+  expect(rows[6]!.querySelector('.xt-human-total')!.textContent).toBe('0 h 30 m');
+  expect(rows[6]!.textContent).toBe('Sep 70 h 30 m');
+  expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
+  expect(rows[6]!.getAttribute('aria-label')).toBe(
+    'Sep 7: 30 minutes; 12:00 AM–12:30 AM, one message at 2:00 AM; agents: 1 hour 18 minutes, busiest 15 minutes at 12:30 AM · 3 agents',
+  );
+});
+
+it('human + agent: a taller quarter than the scale is drawn at the top', () => {
+  mountPaired(paired((r) => (r.leverage.by_day.at(-1)!.quarter_agents[2] = 14)));
+  expect(screen.getByTestId('agent-ridge').querySelector('path')!.getAttribute('d')).toContain(
+    ' 25,0',
+  );
+});
+
+it('human + agent: the day card adds agent time, the busiest quarter and the quarter under the pointer', async () => {
+  mountPaired(paired());
+  const last = screen.getAllByTestId('human-day').at(-1)!;
+  // Keyboard focus: the day's card without a pointer line.
+  fireEvent.focus(last);
+  await screen.findByText('Busiest 15 min');
+  expect(screen.getByText('12:30 AM · 3 agents')).toBeTruthy();
+  expect(screen.getByText('Agent time').nextSibling!.textContent).toBe('1 h 18 m');
+  expect(screen.getByTestId('agent-day-total').textContent).toBe('1 h 18 m');
+  expect(screen.queryByTestId('agent-quarter')).toBeNull();
+  expect(screen.queryByTestId('agent-hairline')).toBeNull();
+  // The pointer over 08:00–08:15 (a third of the track) names that quarter.
+  const lane = last.querySelector<HTMLElement>('.xt-human-track')!;
+  lane.getBoundingClientRect = () => ({ left: 0, width: 960, top: 0 }) as DOMRect;
+  fireEvent.pointerMove(lane, { clientX: 321 });
+  expect(screen.getByTestId('agent-hairline').style.left).toBe('321px');
+  expect(screen.getByTestId('agent-quarter').textContent).toBe('8:00 AM–8:15 AM0.2 agents');
+  fireEvent.pointerMove(lane, { clientX: 500 });
+  expect(screen.getByTestId('agent-quarter').textContent).toBe('12:30 PM–12:45 PMno agents');
+  fireEvent.pointerLeave(lane);
+  expect(screen.queryByTestId('agent-quarter')).toBeNull();
+});
+
+it('human + agent: unknown human time still says so', () => {
+  mountPaired(
+    paired((r) => {
+      r.human_hours.current.active_ms = null;
+      r.tiles.leverage = { ...r.tiles.leverage, value: null };
+    }),
+  );
+  expect(screen.getByTestId('effort-total').textContent).toBe('human time unknown');
+  expect(screen.getByTestId('effort-leverage').textContent).toBe('—');
+  expect(screen.getByTestId('effort-headline').textContent).toContain(
+    'Could not tell which messages a person sent.',
+  );
+});
+
+it('the plain human h view draws no agent ridge, agent totals or pointer line', () => {
+  mount(paired());
+  expect(screen.getByTestId('human-timeline').dataset.variant).toBeUndefined();
+  expect(screen.queryAllByTestId('agent-ridge')).toHaveLength(0);
+  expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
+  const track = screen
+    .getAllByTestId('human-day')
+    .at(-1)!
+    .querySelector<HTMLElement>('.xt-human-track')!;
+  track.getBoundingClientRect = () => ({ left: 0, width: 960, top: 0 }) as DOMRect;
+  fireEvent.pointerMove(track, { clientX: 321 });
+  expect(screen.queryByTestId('agent-hairline')).toBeNull();
+});

@@ -479,15 +479,18 @@ it('converts F11 percentage-point deltas exactly once and hides suppressed ones'
   expect(change('Hands-off median')!.textContent).toBe('▼25%');
   expect(change('Concurrency')).toBeNull();
   // Leverage compares whole days with as many whole days before, and says so
-  // in its definition and accessible description, not on the tile's face;
-  // the rolling tiles keep the card's own "vs. previous N days".
+  // in its accessible description, not on the tile's face or in its
+  // definition, which is only the equation; the rolling tiles keep the
+  // card's own "vs. previous N days".
   const compared = `Its change compares with the previous ${wholeDays} whole ${wholeDays === 1 ? 'day' : 'days'}.`;
   expect(wholeDays).toBeGreaterThan(0);
   expect(`${tileValue('Leverage')} ${tileSub('Leverage')}`).not.toContain('previous');
   const described = tileNamed('Leverage').getAttribute('aria-describedby');
   expect(document.getElementById(described!)!.textContent).toContain(compared);
   fireEvent.focus(tileInfo('Leverage'));
-  expect((await screen.findByRole('tooltip')).textContent).toContain(compared);
+  const tip = await screen.findByRole('tooltip');
+  expect(tip.textContent).toContain('Leverage = agent time ÷ human time');
+  expect(tip.textContent).not.toContain(compared);
   fireEvent.blur(tileInfo('Leverage'));
   await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   expect(tileNamed('Hands-off median').getAttribute('aria-describedby')).toBeNull();
@@ -713,7 +716,7 @@ it('moves Dashboard reports to the selected range without a quota caption', asyn
   fireEvent.click(screen.getByRole('button', { name: 'Pull requests' }));
   expect(screen.getByRole('radio', { name: '14d' }).getAttribute('aria-checked')).toBe('true');
   // A route with no window of its own keeps the selection without the control.
-  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Scores' }));
   expect(screen.queryByRole('radiogroup', { name: 'Date range' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
   expect((await screen.findByRole('radio', { name: '14d' })).getAttribute('aria-checked')).toBe(
@@ -1393,7 +1396,7 @@ it('hides the TopBar period off windowed routes and while a range is loading', a
   // that measures no window shows none.
   fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
   expect(screen.getByTestId('report-period').textContent).toMatch(/^Aug 9\s–\sSep 7, 2026/);
-  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Scores' }));
   expect(screen.queryByTestId('report-period')).toBeNull();
 });
 
@@ -1493,12 +1496,19 @@ it('shows the generated report leverage with a point for each day of every range
     within(tileNamed('Leverage')).getByRole('img', { name: /^Leverage by day/ });
   expect(tileValue('Leverage')).toMatch(/^\d+\.\d×/);
   expect(tileSub('Leverage')).toMatch(/^[\d,]+ h \d+ m agent ÷ [\d,]+ h \d+ m human · whole days$/);
-  // The exact days are stated in its definition and accessible description.
+  // The exact days are stated in its accessible description.
   expect(
     document.getElementById(tileNamed('Leverage').getAttribute('aria-describedby')!)!.textContent,
   ).toBe(
     'Both sides cover Sep 1–Sep 7, whole days. Its change compares with the previous 7 whole days.',
   );
+  // Its definition is only the equation, not the days.
+  fireEvent.focus(tileInfo('Leverage'));
+  const tip = await screen.findByRole('tooltip');
+  expect(tip.firstElementChild!.textContent).toBe('Leverage = agent time ÷ human time');
+  expect(tip.textContent).not.toContain('Both sides cover');
+  fireEvent.blur(tileInfo('Leverage'));
+  await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   // No footer line under Leverage, as under the other charted tiles' numbers.
   expect(within(tileNamed('Leverage')).queryByTestId('overview-takeaway')).toBeNull();
   const first = tileValue('Leverage');

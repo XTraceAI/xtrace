@@ -15,10 +15,10 @@ import { clockTime, plural } from './present';
 
 /** Presentation only: every count, subtotal and day value is the Rust report's. */
 
-/** The Effort card's measure: agent hours, human time or cost. */
-export type EffortMetric = 'agent' | 'human' | 'dollars';
-/** The bar chart's measures; human time is drawn as a timeline instead. */
-export type BarMetric = Exclude<EffortMetric, 'human'>;
+/** The Effort card's measure: human time with agent time, agent hours, human time or cost. */
+export type EffortMetric = 'paired' | 'agent' | 'human' | 'dollars';
+/** The bar chart's measures; human time, alone or with agent time, is drawn as a timeline instead. */
+export type BarMetric = Exclude<EffortMetric, 'human' | 'paired'>;
 
 /** The refresh command's own bound on one selection. */
 export const REFRESH_LIMIT = 20;

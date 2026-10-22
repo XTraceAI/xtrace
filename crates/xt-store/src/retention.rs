@@ -139,6 +139,10 @@ impl Default for ContentRegistry {
                 ("tool_uses", BTreeSet::from(["input_json"])),
                 // Kept whatever the retention mode; deleted with the rest.
                 ("record_previews", BTreeSet::from(["text"])),
+                // A grading run's result, which the user asked for: kept
+                // whatever the retention mode; deleted with the rest. The
+                // app removes the runs' kept report files after a purge.
+                ("grades", BTreeSet::from(crate::grades::CONTENT_COLUMNS)),
             ]
             .into_iter()
             .collect(),

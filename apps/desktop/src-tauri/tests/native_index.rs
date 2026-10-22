@@ -440,12 +440,16 @@ fn an_unreadable_project_directory_is_reported_by_the_index_status() {
     let ready = wait_for(&index, |s| s.phase == NativeIndexPhase::Ready);
     fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
     // The readable transcript is indexed; the sealed directory is a diagnostic
-    // that keeps the host incomplete, visible in the status.
+    // that keeps the host incomplete, visible in the status. Claude was read,
+    // so the gap is counted, not flagged.
     let claude = host(&ready, "claude");
     assert_eq!(claude.state, NativeHostState::Incomplete, "{ready:?}");
     assert_eq!((claude.sessions_imported, claude.records_new), (1, 2));
     assert!(claude.diagnostics >= 1, "{claude:?}");
-    assert!(claude.needs_attention && ready.needs_attention, "{ready:?}");
+    assert!(
+        !claude.needs_attention && !ready.needs_attention,
+        "{ready:?}"
+    );
     assert!(index.shutdown());
 }
 

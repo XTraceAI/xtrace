@@ -74,10 +74,6 @@
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     time::Duration,
 };
 use xt_store::pr_link::{
@@ -165,29 +161,8 @@ impl AttemptClock for SystemClock {
     }
 }
 
-/// Cancels an attempt from another thread. A cancel before the spawn refuses
-/// to start the child; a cancel while it runs kills its process group and
-/// reaps it. Cancellation is permanent for the flag.
-///
-/// This is deliberately smaller than the ingest reader's `CancelToken`: this
-/// client awaits its own single child in the calling thread, so a flag the
-/// wait loop polls is enough and no registry of live children is needed.
-#[derive(Clone, Debug, Default)]
-pub struct CancelFlag(Arc<AtomicBool>);
-
-impl CancelFlag {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
-    }
-}
+/// Cancels an attempt from another thread; see [`crate::process::CancelFlag`].
+pub use crate::process::CancelFlag;
 
 /// One `gh` executable with one set of bounds.
 #[derive(Clone, Debug)]
@@ -442,24 +417,8 @@ fn interpret(
 #[cfg(unix)]
 mod unix {
     use super::{CancelFlag, GhClient, PrIdentity, PrRefreshError, RefreshOutcome, failure};
-    use std::{
-        io::Read,
-        process::{Child, Command, Stdio},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        thread::JoinHandle,
-        time::{Duration, Instant},
-    };
-
-    /// How often the attempt is polled while the child runs.
-    const POLL: Duration = Duration::from_millis(10);
-    /// How long a terminated group is given to close the pipes it holds
-    /// before its drains are abandoned. The child itself is always reaped.
-    const DRAIN_GRACE: Duration = Duration::from_secs(5);
-    /// Read size; unrelated to the retained bounds.
-    const CHUNK: usize = 8 * 1024;
+    use crate::process::{self, Bounds, Ended};
+    use std::process::{Command, Stdio};
 
     pub(super) fn attempt(
         client: &GhClient,
@@ -475,7 +434,7 @@ mod unix {
         command.args(&argv[1..]);
         harden(&mut command);
         // An executable that cannot be started is not a failed GitHub call.
-        let Ok(child) = spawn_grouped(&mut command) else {
+        let Ok(child) = process::spawn_grouped(&mut command) else {
             return failure(identity, attempted_at, PrRefreshError::Unavailable);
         };
         match collect(child, client.limits(), cancel) {
@@ -515,236 +474,46 @@ mod unix {
             .env_remove("GLAMOUR_STYLE");
     }
 
-    /// Start the child as the leader of its own process group, so a deadline
-    /// or cancel can terminate everything it spawned.
-    fn spawn_grouped(command: &mut Command) -> std::io::Result<Child> {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-        command.spawn()
-    }
-
-    /// Whether the child has terminated, observed **without reaping it**.
-    ///
-    /// This is the whole reason the attempt does not poll with `try_wait`:
-    /// that reaps the leader the moment it exits, which releases its pid, and
-    /// the pid of a group leader is what reserves that group's ID. A launcher
-    /// that exits while a descendant still holds the pipes would then leave
-    /// this client holding an ID it no longer owns. `WNOWAIT` leaves the
-    /// leader waitable — a zombie the kernel keeps, and a member of its own
-    /// group — so the ID stays reserved until [`terminate`] or the final reap
-    /// gives it up, exactly once.
-    fn exit_observed(pid: u32) -> std::io::Result<bool> {
-        let id = libc::id_t::try_from(pid)
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-        // Zeroed first: with `WNOHANG` a report of no state change is a zero
-        // `si_pid`, and not every implementation writes that zero itself.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        // SAFETY: `info` is a valid, initialized siginfo_t for this call, and
-        // the options are the POSIX non-blocking, non-consuming pair.
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                id,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == -1 {
-            let error = std::io::Error::last_os_error();
-            return match error.raw_os_error() {
-                // An interrupted observation is simply not an observation.
-                Some(libc::EINTR) => Ok(false),
-                _ => Err(error),
-            };
-        }
-        Ok(reported_pid(&info) != 0)
-    }
-
-    /// `si_pid` is a plain field on the BSDs and an accessor on Linux.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    fn reported_pid(info: &libc::siginfo_t) -> libc::pid_t {
-        // SAFETY: the union is read as the child-status member the `WEXITED`
-        // report fills, and as the zeroes it was initialized with otherwise.
-        unsafe { info.si_pid() }
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    fn reported_pid(info: &libc::siginfo_t) -> libc::pid_t {
-        info.si_pid
-    }
-
-    /// Kill every process in the group the child leads, then reap the leader
-    /// exactly once.
-    ///
-    /// This is only ever reached with the leader still unreaped: running, or
-    /// exited and kept waitable by [`exit_observed`]. Its pid is therefore
-    /// still allocated and still names this group, so `-pid` cannot reach any
-    /// other group, and the group is never empty at this point — even a
-    /// zombie leader is a member of it. The signal is sent deliberately when
-    /// the leader has already exited, because that is exactly the case where
-    /// a descendant is still holding the pipes and terminating the leader
-    /// alone would leave it running. The reap comes after the signal, and is
-    /// the only one: it is what finally releases the pid and the group ID.
-    fn terminate(pid: u32, child: &mut Child) {
-        if let Ok(pid) = i32::try_from(pid) {
-            // SAFETY: a plain signal to the unreaped child's own group.
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-            }
-        }
-        let _ = child.wait();
-    }
-
-    /// One bounded, concurrently drained stream. The thread reads to the end
-    /// whatever the bound, so the child can never block on a full pipe;
-    /// bytes past the bound are dropped instead of retained.
-    struct Drain {
-        handle: Option<JoinHandle<Vec<u8>>>,
-        overflowed: Arc<AtomicBool>,
-    }
-
-    impl Drain {
-        fn spawn(mut stream: impl Read + Send + 'static, limit: usize) -> Self {
-            let overflowed = Arc::new(AtomicBool::new(false));
-            let flag = Arc::clone(&overflowed);
-            let handle = std::thread::spawn(move || {
-                let mut kept: Vec<u8> = Vec::new();
-                let mut buffer = [0u8; CHUNK];
-                let mut total: usize = 0;
-                loop {
-                    match stream.read(&mut buffer) {
-                        // A read error ends this stream exactly as its end does.
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => {
-                            total = total.saturating_add(read);
-                            if total > limit {
-                                flag.store(true, Ordering::SeqCst);
-                            }
-                            let room = limit.saturating_sub(kept.len());
-                            kept.extend_from_slice(&buffer[..read.min(room)]);
-                        }
-                    }
-                }
-                kept
-            });
-            Self {
-                handle: Some(handle),
-                overflowed,
-            }
-        }
-
-        fn overflowed(&self) -> bool {
-            self.overflowed.load(Ordering::SeqCst)
-        }
-
-        fn finished(&self) -> bool {
-            self.handle
-                .as_ref()
-                .is_none_or(std::thread::JoinHandle::is_finished)
-        }
-
-        fn take(&mut self) -> Vec<u8> {
-            self.handle
-                .take()
-                .and_then(|handle| handle.join().ok())
-                .unwrap_or_default()
-        }
-    }
-
-    /// Await the child and its drains within the bounds. Returns how the
-    /// child exited and the retained stdout and stderr; a bound that ended
-    /// the attempt returns its code instead, with the group terminated and
-    /// the child reaped.
+    /// Await the child within the bounds ([`process::collect`]): a stdout
+    /// past its bound ends the attempt, and the drains are awaited until the
+    /// deadline. Returns how the child exited and the retained stdout and
+    /// stderr; a bound that ended the attempt returns its code instead, with
+    /// the group terminated and the child reaped.
     fn collect(
-        mut child: Child,
+        child: std::process::Child,
         limits: super::Limits,
         cancel: Option<&CancelFlag>,
     ) -> Result<(super::Exited, Vec<u8>, super::Stderr), PrRefreshError> {
-        // The leader's pid is also its process group's ID. Nothing below
-        // reaps it — the poll observes its exit without consuming it — so
-        // this ID stays reserved until the single reap at the end.
-        let pid = child.id();
-        let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        let (Some(stdout), Some(stderr)) = (stdout, stderr) else {
-            terminate(pid, &mut child);
-            return Err(PrRefreshError::ExecutionFailed);
+        let bounds = Bounds {
+            deadline: limits.deadline,
+            max_stdout_bytes: limits.max_stdout_bytes,
+            max_stderr_bytes: limits.max_stderr_bytes,
+            stdout_overflow_ends: true,
+            exit_grace: None,
+            term_grace: None,
         };
-        let mut stdout = Drain::spawn(stdout, limits.max_stdout_bytes);
-        let mut stderr = Drain::spawn(stderr, limits.max_stderr_bytes);
-        let deadline = Instant::now() + limits.deadline;
-        let mut exited = false;
-        let mut ended: Option<PrRefreshError> = None;
-        loop {
-            if !exited {
-                match exit_observed(pid) {
-                    Ok(seen) => exited = seen,
-                    Err(_) => {
-                        ended = Some(PrRefreshError::ExecutionFailed);
-                        break;
-                    }
-                }
-            }
-            // A response past the bound is truncated, so it is unusable even
-            // if the rest of the attempt completed.
-            if stdout.overflowed() {
-                ended = Some(PrRefreshError::OutputTooLarge);
-                break;
-            }
-            // Finished means exited *and* drained: a child that exited while
-            // a descendant still holds the pipes is not done, and its exit
-            // has not been consumed, so the group can still be terminated.
-            if exited && stdout.finished() && stderr.finished() {
-                break;
-            }
-            if cancel.is_some_and(CancelFlag::is_cancelled) {
-                ended = Some(PrRefreshError::Cancelled);
-                break;
-            }
-            if Instant::now() >= deadline {
-                ended = Some(PrRefreshError::Timeout);
-                break;
-            }
-            std::thread::sleep(POLL);
-        }
-        if let Some(error) = ended {
-            // The whole group goes, leader exited or not, and only then is
-            // the leader reaped; a killed group's readers reach the end of
-            // their pipes, and are abandoned only if they do not.
-            terminate(pid, &mut child);
-            abandon_after(DRAIN_GRACE, [stdout, stderr]);
-            return Err(error);
-        }
-        // Nothing is left to signal: the child exited and every writer has
-        // closed its pipe. This is the one reap of the whole attempt, and
-        // what it returns is the exit status the response is judged by.
-        let exited = match child.wait() {
-            Ok(status) if status.success() => super::Exited::Success,
-            Ok(status) if status.code() == Some(super::GH_EXIT_AUTH) => {
-                super::Exited::NeedsAuthentication
-            }
-            Ok(status) if status.code() == Some(super::GH_EXIT_ERROR) => super::Exited::Error,
-            _ => super::Exited::Failed,
+        let finished = process::collect(child, bounds, cancel).map_err(|ended| match ended {
+            Ended::Timeout => PrRefreshError::Timeout,
+            Ended::Cancelled => PrRefreshError::Cancelled,
+            Ended::OutputTooLarge => PrRefreshError::OutputTooLarge,
+            Ended::Unobservable => PrRefreshError::ExecutionFailed,
+        })?;
+        // What the one reap returned is the exit status the response is
+        // judged by.
+        let status = finished.status;
+        let exited = if status.success() {
+            super::Exited::Success
+        } else if status.code() == Some(super::GH_EXIT_AUTH) {
+            super::Exited::NeedsAuthentication
+        } else if status.code() == Some(super::GH_EXIT_ERROR) {
+            super::Exited::Error
+        } else {
+            super::Exited::Failed
         };
-        let output = stdout.take();
         let diagnostic = super::Stderr {
-            overflowed: stderr.overflowed(),
-            kept: stderr.take(),
+            overflowed: finished.stderr.overflowed,
+            kept: finished.stderr.bytes,
         };
-        Ok((exited, output, diagnostic))
-    }
-
-    /// Wait out the drains of a terminated group, then let them go. Only a
-    /// descendant that left the group on its own can still hold a pipe here;
-    /// its reader keeps a bounded buffer and ends when that pipe closes.
-    fn abandon_after(grace: Duration, drains: [Drain; 2]) {
-        let deadline = Instant::now() + grace;
-        while Instant::now() < deadline && !drains.iter().all(Drain::finished) {
-            std::thread::sleep(POLL);
-        }
-        for mut drain in drains {
-            if drain.finished() {
-                drop(drain.take());
-            }
-        }
+        Ok((exited, finished.stdout.bytes, diagnostic))
     }
 }

@@ -19,6 +19,17 @@ import type { SessionTitles } from './generated/SessionTitles';
 import type { SessionCompactions } from './generated/SessionCompactions';
 import type { DashboardSpanDetail } from './generated/DashboardSpanDetail';
 import type { RuleActivityResult } from './generated/RuleActivityResult';
+import type { ProjectList } from './generated/ProjectList';
+import type { GradingSkills } from './generated/GradingSkills';
+import type { GradingOverview } from './generated/GradingOverview';
+import type { GradingRuns } from './generated/GradingRuns';
+import type { GradingStart } from './generated/GradingStart';
+import type { GradingInstalledSkills } from './generated/GradingInstalledSkills';
+import type { GradingSkillAdd } from './generated/GradingSkillAdd';
+import type { GradingSkillRemove } from './generated/GradingSkillRemove';
+import type { GradingRubricMake } from './generated/GradingRubricMake';
+import type { GradingLinkLookup } from './generated/GradingLinkLookup';
+import type { GradingLinkKeep } from './generated/GradingLinkKeep';
 import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
@@ -175,6 +186,65 @@ export interface RuleActivityControls {
   cancel(readId: string): Promise<void>;
 }
 /**
+ * Grading runs: a grading skill (built in, or added from the skills the user
+ * installed) run on one project, on request.
+ * Every decision is native: which skills exist, whether a run may start (the
+ * folder must be exactly a project a fresh project list names; one run at a
+ * time), how it ended and its score. `grading://changed` follows every
+ * committed status change and `grading://progress` reports elapsed seconds.
+ * A rubric-making job shares the one slot.
+ */
+export interface GradingControls {
+  skills(): Promise<GradingSkills>;
+  /**
+   * The Scores page's answer, decided natively over a fresh project list and
+   * the stored runs: each skill's shown scores, average and top insights,
+   * and the run going now. Reading starts nothing.
+   */
+  overview(): Promise<GradingOverview>;
+  /** The recent runs, newest first. Reading starts nothing. */
+  runs(): Promise<GradingRuns>;
+  /** Sends only the project's path and the skill's ID. */
+  start(projectPath: string, skillId: string): Promise<GradingStart>;
+  /** False when that run is not the one going now. */
+  cancel(runId: string): Promise<boolean>;
+  /**
+   * The skills installed on this Mac, each with its rubric status and
+   * whether it can be added to Scores, decided natively. Reading writes
+   * nothing.
+   */
+  installed(): Promise<GradingInstalledSkills>;
+  /** Sends only the location the installed list named; native re-checks it. */
+  addSkill(location: string): Promise<GradingSkillAdd>;
+  /** Takes an added skill off Scores; its grades and files stay. */
+  removeSkill(skillId: string): Promise<GradingSkillRemove>;
+  /**
+   * Starts making a rubric for the installed skill at `location` (one the
+   * installed list named) with the bundled rubric maker, in the one grading
+   * slot. `cancel(jobId)` stops it; `grading://rubric-progress` reports its
+   * elapsed seconds and `grading://changed` follows its start, a saved
+   * rubric and its end.
+   */
+  makeRubric(location: string): Promise<GradingRubricMake>;
+  /**
+   * "Add from a link": looks up a public GitHub link the user pasted (the
+   * only network use of the dialog, from GitHub without signing in), and
+   * answers the skills it holds with whether each can be kept, decided
+   * natively. A new look-up replaces the previous one.
+   */
+  linkLookup(link: string): Promise<GradingLinkLookup>;
+  /** Cancels the look-up going now; false when none is. */
+  linkCancel(): Promise<boolean>;
+  /**
+   * Keeps the skills at `paths` (ones the preview named) in
+   * `~/.agents/skills`, each linked in `~/.claude/skills` when that name is
+   * free; native checks each again first. `grading://changed` follows.
+   */
+  linkKeep(lookupId: string, paths: string[]): Promise<GradingLinkKeep>;
+  /** Drops a preview and its downloaded files. */
+  linkDiscard(lookupId: string): Promise<boolean>;
+}
+/**
  * The automatic pull-request check. The native side runs it by itself on
  * window focus and about once an hour, only reading GitHub through the same
  * bounded batch as the manual refresh; `request` also asks it to look when
@@ -299,4 +369,17 @@ export interface DataSource {
   readonly compactions?: SessionCompactionControls;
   /** Present natively and in a fixture, which answers as fixture mode does. */
   readonly ruleActivity?: RuleActivityControls;
+  /**
+   * The user's projects, read natively from the coding apps' own saved files
+   * only (no Git, no conversations). Nothing is sent: the native side chooses
+   * the home folder and decides every name, merge, skip, worktree fold and
+   * the order. Each source's own status says whether it gave anything.
+   * Present natively and in a fixture, which answers as fixture mode does.
+   */
+  projects?(): Promise<ProjectList>;
+  /**
+   * Grading runs. Present natively and in a fixture, which answers as
+   * fixture mode does (`not_configured`, never a run).
+   */
+  readonly grading?: GradingControls;
 }

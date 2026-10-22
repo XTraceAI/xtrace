@@ -30,6 +30,17 @@ import type { SessionTitles } from './generated/SessionTitles';
 import type { SessionCompactions } from './generated/SessionCompactions';
 import type { DashboardSpanDetail } from './generated/DashboardSpanDetail';
 import type { RuleActivityResult } from './generated/RuleActivityResult';
+import type { ProjectList } from './generated/ProjectList';
+import type { GradingSkills } from './generated/GradingSkills';
+import type { GradingOverview } from './generated/GradingOverview';
+import type { GradingRuns } from './generated/GradingRuns';
+import type { GradingStart } from './generated/GradingStart';
+import type { GradingInstalledSkills } from './generated/GradingInstalledSkills';
+import type { GradingSkillAdd } from './generated/GradingSkillAdd';
+import type { GradingSkillRemove } from './generated/GradingSkillRemove';
+import type { GradingRubricMake } from './generated/GradingRubricMake';
+import type { GradingLinkLookup } from './generated/GradingLinkLookup';
+import type { GradingLinkKeep } from './generated/GradingLinkKeep';
 import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
@@ -115,6 +126,28 @@ export class TauriDataSource implements DataSource {
   readonly ruleActivity = {
     read: (readId: string) => invoke<RuleActivityResult>(commands.ruleActivityRead, { readId }),
     cancel: (readId: string) => invoke<void>(commands.ruleActivityCancel, { readId }),
+  };
+  projects() {
+    return invoke<ProjectList>(commands.projectsList);
+  }
+  readonly grading = {
+    skills: () => invoke<GradingSkills>(commands.gradingSkills),
+    overview: () => invoke<GradingOverview>(commands.gradingOverview),
+    runs: () => invoke<GradingRuns>(commands.gradingRuns),
+    start: (projectPath: string, skillId: string) =>
+      invoke<GradingStart>(commands.gradingStart, { projectPath, skillId }),
+    cancel: (runId: string) => invoke<boolean>(commands.gradingCancel, { runId }),
+    installed: () => invoke<GradingInstalledSkills>(commands.gradingInstalledSkills),
+    addSkill: (location: string) => invoke<GradingSkillAdd>(commands.gradingSkillAdd, { location }),
+    removeSkill: (skillId: string) =>
+      invoke<GradingSkillRemove>(commands.gradingSkillRemove, { skillId }),
+    makeRubric: (location: string) =>
+      invoke<GradingRubricMake>(commands.gradingRubricMake, { location }),
+    linkLookup: (link: string) => invoke<GradingLinkLookup>(commands.gradingLinkLookup, { link }),
+    linkCancel: () => invoke<boolean>(commands.gradingLinkCancel),
+    linkKeep: (lookupId: string, paths: string[]) =>
+      invoke<GradingLinkKeep>(commands.gradingLinkKeep, { lookupId, paths }),
+    linkDiscard: (lookupId: string) => invoke<boolean>(commands.gradingLinkDiscard, { lookupId }),
   };
   readonly typingSpeed = {
     read: () => invoke<number>(commands.typingSpeed),

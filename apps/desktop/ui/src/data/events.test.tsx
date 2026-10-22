@@ -455,3 +455,54 @@ it('reads a Sessions list again when its first read began before a committed ref
     '#11:Synthetic fixture pull request 11 #12:- #13:Synthetic fixture pull request 13',
   );
 });
+
+it('re-reads grading runs after a committed status change or a purge, never for progress alone', async () => {
+  vi.useFakeTimers();
+  const source = new FixtureDataSource(exported);
+  const runs = vi.fn().mockResolvedValue(1);
+  const metrics = vi.fn().mockResolvedValue(1);
+  function Surface() {
+    const graded = useQuery({ queryKey: queryKeys.gradingRuns, queryFn: runs, initialData: 0 });
+    const measured = useQuery({
+      queryKey: ['metrics', 'test-surface'],
+      queryFn: metrics,
+      initialData: 0,
+    });
+    return (
+      <output aria-label="grading">
+        {graded.data}/{measured.data}
+      </output>
+    );
+  }
+  render(
+    <DataProvider source={source}>
+      <Surface />
+    </DataProvider>,
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  runs.mockClear();
+  metrics.mockClear();
+  await act(async () => {
+    source.emit(events.gradingProgress, {
+      run_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
+      state: 'running',
+      elapsed_seconds: 5,
+    });
+    await vi.advanceTimersByTimeAsync(501);
+  });
+  expect(runs).not.toHaveBeenCalled();
+  expect(metrics).not.toHaveBeenCalled();
+  await act(async () => {
+    source.emit(events.gradingChanged);
+    await vi.advanceTimersByTimeAsync(501);
+  });
+  expect(runs).toHaveBeenCalledOnce();
+  expect(metrics).not.toHaveBeenCalled();
+  await act(async () => {
+    source.emit(events.contentPurged);
+    await vi.advanceTimersByTimeAsync(501);
+  });
+  expect(runs).toHaveBeenCalledTimes(2);
+});

@@ -86,7 +86,11 @@ acquiring content. Changing the mode never calls purge.
 
 `purge_content(&ContentRegistry)` is the separate deletion boundary. The default
 inventory clears `sessions.title`, `records.content_json` (including embedded tool
-results) and `tool_uses.input_json`. Compiled table owners register additional
+results), `tool_uses.input_json`, `record_previews.text` and a grading run's
+result (`grades.summary`, `grades.insights_json`, `grades.report_file`). The
+skills added to Scores (`grading_added_skills`, migration 26: rubric id, folder
+path or plugin skill name, rubric name, description and version, time added) hold no conversation
+content and are not registered. Compiled table owners register additional
 nullable content fields through `register(table, columns)`; no SQL callback or
 raw connection is exposed. All registrations are validated, then cleared in one
 transaction. Only a committed result can request content-view invalidation.

@@ -71,13 +71,13 @@ to GitHub.
 - **Menu bar:** today's activity one click away.
 - **Usage:** Claude and Codex account limits, where your local tools can report them.
 - **Rulebook:** recorded activity from your local agent rules.
-- **Settings:** light, dark or system appearance, typing speed, index status,
-  storage controls and the telemetry switch.
+- **Settings:** light, dark or system appearance, index status, storage
+  controls and the telemetry switch.
 
 ## Install
 
 1. Download the `.dmg` from the [latest release](https://github.com/XTraceAI/xtrace-desktop/releases/latest).
-2. Drag **XTrace Desktop** into **Applications**.
+2. Drag **XTrace** into **Applications**.
 3. Open it. The first scan reads your existing history and shows its progress.
 
 Requires an Apple Silicon Mac with macOS 14 or newer. Claude Code history is read
@@ -99,7 +99,8 @@ See the [setup guide](docs/SETUP.md) for first launch and troubleshooting.
   gets new previews.
 - **Network use is limited.** The app contacts the network only for anonymous
   usage telemetry (see [Telemetry](#telemetry)), account usage readings, GitHub
-  pull request checks and app updates. Claude usage checks run your local Claude
+  pull request checks, app updates, and GitHub look-ups you start with "Add from
+  a link" when adding a skill. Claude usage checks run your local Claude
   Code about every ten minutes, which adds small entries to Claude Code's own
   settings and history.
 

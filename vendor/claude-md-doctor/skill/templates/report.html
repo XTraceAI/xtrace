@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLAUDE.md checkup — {{REPO_NAME}}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Crect x='4' y='1' width='4' height='10' fill='%23c0492f'/%3E%3Crect x='1' y='4' width='10' height='4' fill='%23c0492f'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#f6f7f5; --card:#ffffff; --ink:#1c2024; --ink2:#5b6470; --ink3:#8a93a0;
+  --line:#e3e6e2; --accent:#2f6f5e; --accent-soft:#e7f1ee;
+  --crit:#b23c2e; --crit-soft:#f9e9e6; --warn:#9a6d1f; --warn-soft:#f7efdd;
+  --ok:#2c7a5c; --ok-soft:#e4f1eb; --info:#2a6fb8; --info-soft:#e6eef7;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --bot-body:#93a0af; --bot-visor:#2b3440; --bot-eye:#5fd4c8;
+  --bot-coat:#fdfdfc; --bot-mirror:#d4a04c;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#15171a; --card:#1d2025; --ink:#e8eaed; --ink2:#a8b0ba; --ink3:#717a86;
+    --line:#2c3138; --accent:#5eb094; --accent-soft:#20302b;
+    --crit:#e07a6c; --crit-soft:#3a2320; --warn:#d4a04c; --warn-soft:#362c17;
+    --ok:#66b394; --ok-soft:#1e3229; --info:#6ba3dd; --info-soft:#1d2b3d;
+    --bot-body:#7b8794; --bot-visor:#12181f; --bot-eye:#5fd4c8;
+    --bot-coat:#e4e7ea; --bot-mirror:#d4a04c;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:880px;margin:0 auto;padding:32px 20px 64px}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+.masthead{display:flex;align-items:flex-end;gap:16px}
+.bot{flex:none;image-rendering:pixelated}
+.clinic{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink2);
+  font-family:var(--mono)}
+h1{font-size:26px;margin:2px 0 4px}
+.sub{color:var(--ink2);font-size:13px}
+.grade{min-width:96px;text-align:center;border:3px solid var(--line);
+  border-radius:2px;padding:8px 14px 10px;background:var(--card);
+  box-shadow:4px 4px 0 var(--line)}
+.grade b{display:block;font-size:34px;line-height:1;font-family:var(--mono)}
+.grade span{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink2)}
+.grade .hearts{margin-top:6px;line-height:0}
+.grade.g-a{border-color:var(--ok);color:var(--ok)}
+.grade.g-b{border-color:var(--accent);color:var(--accent)}
+.grade.g-c{border-color:var(--warn);color:var(--warn)}
+.grade.g-d,.grade.g-f{border-color:var(--crit);color:var(--crit)}
+.ecg{display:block;width:100%;height:18px;margin:10px 0 14px;color:var(--accent)}
+.chief{background:var(--card);border-left:4px solid var(--accent);border-radius:0 8px 8px 0;
+  padding:12px 16px;margin:18px 0;font-size:15px}
+.chief b{color:var(--ink2);font-size:11px;letter-spacing:.12em;text-transform:uppercase;display:block;margin-bottom:4px}
+section{margin:28px 0}
+h2{font-size:13px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink2);
+  border-bottom:1px solid var(--line);padding-bottom:6px;margin:0 0 14px;
+  font-family:var(--mono)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.card .v{font-size:22px;font-weight:650;font-family:var(--mono)}
+.card .k{font-size:12px;color:var(--ink2);margin-top:2px}
+.card .n{font-size:11px;color:var(--ink3);margin-top:4px}
+.card.bad .v{color:var(--crit)} .card.warned .v{color:var(--warn)} .card.fine .v{color:var(--ok)}
+.tablebox{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);text-align:left}
+th,td{padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+.pill{display:inline-block;font-size:11px;font-weight:600;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.p-crit{background:var(--crit-soft);color:var(--crit)}
+.p-warn{background:var(--warn-soft);color:var(--warn)}
+.p-ok{background:var(--ok-soft);color:var(--ok)}
+.p-info{background:var(--info-soft);color:var(--info)}
+.dx{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:10px}
+.dx-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.dx-title{font-weight:650}
+.dx-loc{color:var(--ink3);font-size:12px;font-family:var(--mono)}
+.dx p{margin:8px 0 0;color:var(--ink2);font-size:14px}
+.dx .rx{margin-top:10px;padding:10px 12px;background:var(--accent-soft);border-radius:6px;font-size:13.5px}
+.dx .rx b{color:var(--accent);font-size:11px;letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:3px}
+details{margin-top:8px}
+summary{cursor:pointer;font-size:12.5px;color:var(--info)}
+details pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;
+  padding:10px;font-size:12px;overflow-x:auto;white-space:pre-wrap}
+sup a{color:var(--info);text-decoration:none;font-size:10.5px}
+.foot{font-size:12.5px;color:var(--ink2)}
+.foot li{margin-bottom:6px}
+.note{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:10px 14px;
+  font-size:13px;margin:14px 0}
+.privacy{font-size:12px;color:var(--ink3);margin-top:36px;
+  border-top:1px solid var(--line);padding-top:14px}
+ul.plain{margin:0;padding-left:20px}
+ul.plain li{margin-bottom:6px}
+.tl-block{margin:8px 0 12px;padding:8px 10px;background:var(--bg);
+  border:1px solid var(--line);border-radius:6px}
+.tl{display:flex;height:14px;border-radius:3px;overflow:hidden;margin:7px 0 5px;
+  min-width:240px;max-width:560px}
+.tl-seg{min-width:3px}
+.tl-e{background:var(--warn)} .tl-b{background:var(--info)} .tl-o{background:var(--ink3);opacity:.45}
+.tl-seg.tl-after{box-shadow:inset 0 -4px 0 var(--crit)}
+.tl-sum{font-size:12.5px;color:var(--ink2)}
+.tl-sum b{color:var(--ink);font-family:var(--mono)}
+.tl-x{color:var(--crit);font-weight:700}
+.tl-ok{color:var(--ok);font-weight:700}
+.tl-legend{font-size:11px;color:var(--ink3);margin-top:5px;display:flex;
+  align-items:center;gap:5px;flex-wrap:wrap}
+.tl-key{display:inline-block;width:14px;height:9px;border-radius:2px}
+ul.rxlist{list-style:none;margin:0;padding:0}
+ul.rxlist>li{display:flex;gap:10px;margin-bottom:10px;align-items:flex-start}
+ul.rxlist .pe{flex:none;font-size:16px;line-height:1.4}
+@media (max-width:560px){header{flex-wrap:wrap}.grade{order:-1;margin-left:auto}}
+@media print{body{background:#fff}.wrap{max-width:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="masthead">
+      <svg class="bot" width="64" height="60" viewBox="0 0 64 60" shape-rendering="crispEdges" aria-label="pixel robot doctor" role="img">
+        <!-- antenna -->
+        <rect x="28" y="0" width="8" height="4" fill="var(--bot-eye)"/>
+        <rect x="30" y="4" width="4" height="4" fill="var(--bot-body)"/>
+        <!-- head -->
+        <rect x="12" y="8" width="40" height="24" fill="var(--bot-body)"/>
+        <!-- head mirror -->
+        <rect x="40" y="8" width="4" height="4" fill="var(--bot-mirror)"/>
+        <rect x="44" y="4" width="8" height="8" fill="var(--bot-mirror)"/>
+        <rect x="46" y="6" width="4" height="4" fill="var(--bot-coat)"/>
+        <!-- visor + eyes -->
+        <rect x="16" y="16" width="32" height="8" fill="var(--bot-visor)"/>
+        <rect x="20" y="18" width="6" height="4" fill="var(--bot-eye)"/>
+        <rect x="38" y="18" width="6" height="4" fill="var(--bot-eye)"/>
+        <!-- mouth -->
+        <rect x="26" y="27" width="12" height="2" fill="var(--bot-visor)"/>
+        <!-- neck -->
+        <rect x="26" y="32" width="12" height="4" fill="var(--bot-body)"/>
+        <!-- coat (backplate = outline) -->
+        <rect x="14" y="34" width="36" height="24" fill="var(--bot-body)"/>
+        <rect x="16" y="36" width="32" height="20" fill="var(--bot-coat)"/>
+        <!-- red cross -->
+        <rect x="30" y="40" width="4" height="12" fill="var(--crit)"/>
+        <rect x="26" y="44" width="12" height="4" fill="var(--crit)"/>
+      </svg>
+      <div>
+        <div class="clinic">claude-md-doctor · checkup report</div>
+        <h1>{{REPO_NAME}}</h1>
+        <div class="sub">Examined {{EXAM_DATE}} · claude-md-doctor v{{VERSION}}</div>
+      </div>
+    </div>
+    <div class="grade g-{{GRADE_CLASS}}"><b>{{GRADE}}</b><span>chart grade</span>
+      <div class="hearts">{{HEARTS}}</div>
+    </div>
+  </header>
+
+  <svg class="ecg" viewBox="0 0 400 16" preserveAspectRatio="none" shape-rendering="crispEdges" aria-hidden="true">
+    <path d="M0 11 H56 V6 H60 V11 H72 V14 H76 V11 H120 V2 H124 V14 H128 V11 H196 V6 H200 V11 H212 V14 H216 V11 H268 V2 H272 V14 H276 V11 H336 V6 H340 V11 H352 V14 H356 V11 H400"
+      fill="none" stroke="currentColor" stroke-width="2"/>
+  </svg>
+
+  {{EXAM_NOTE}}
+
+  <div class="chief"><b>Chief complaint</b>{{CHIEF_COMPLAINT}}</div>
+
+  <section><h2>Patient chart</h2>
+    <div class="tablebox"><table>{{PATIENT_ROWS}}</table></div>
+  </section>
+
+  <section><h2>Vitals</h2>
+    <div class="cards">{{VITALS_CARDS}}</div>
+    <div style="height:12px"></div>
+    <div class="tablebox"><table>
+      <tr><th>File</th><th>Lines</th><th>~Tokens</th><th>Markers</th></tr>
+      {{FILES_TABLE}}
+    </table></div>
+  </section>
+
+  <section><h2>Lab results — records check</h2>{{LAB_HTML}}</section>
+
+  <section><h2>Rulebook — adherence &amp; enforcement</h2>{{RULEBOOK_HTML}}</section>
+
+  {{CHART_HTML}}
+
+  <section><h2>Diagnoses</h2>{{DIAGNOSES_HTML}}</section>
+
+  <section><h2>Prescriptions</h2>{{PRESCRIPTIONS_HTML}}</section>
+
+  <section><h2>Follow-up</h2>{{FOLLOWUP_HTML}}</section>
+
+  <section><h2>Evidence</h2><ol class="foot">{{FOOTNOTES_HTML}}</ol></section>
+
+  <div class="privacy">This exam ran entirely on this machine; no file left it.
+  Quotes from repository files are limited to short excerpts. The report may still
+  contain repository-private strings — review before sharing.
+  claude-md-doctor is an independent open-source tool, not affiliated with Anthropic.</div>
+</div>
+</body>
+</html>

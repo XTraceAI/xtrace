@@ -16,7 +16,11 @@ Font notices remain alongside the bundled fonts. The Codex/Cursor reader sources
 bundled with the app (`vendor/agent-plugins`, the pinned `agent-plugins` scripts
 tree under Apache-2.0) ship with that repository's `LICENSE` and `NOTICE` beside
 them, as the `agent-plugins` app resource; `vendor/agent-plugins/README.md`
-records their provenance and refresh procedure. Sidebar host logos are bundled
+records their provenance and refresh procedure. The built-in grading skill
+(`vendor/claude-md-doctor`, the pinned `agent-clinic/claude-md-doctor` skill
+under MIT with XTrace's listed changes) keeps that repository's `LICENSE`
+beside it; its `README.md` and `pin.json` record provenance, changes and
+refresh, and `pnpm notices` adds it to the generated notices. Sidebar host logos are bundled
 locally with their pinned source locations and full Apache-2.0/MIT license texts in
 `apps/desktop/ui/public/hosts/LICENSES.txt`; Vite includes this file with the assets.
 

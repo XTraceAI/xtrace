@@ -147,7 +147,7 @@ any Apple values, then one step runs `node scripts/ci/release-dmg.mjs`, which:
 4. notarizes and staples the disk image, then requires
    `spctl -a -t open --context context:primary-signature`, `xcrun stapler validate`
    and `hdiutil verify` to pass and checks the mounted app again;
-5. writes `artifacts/release/XTrace-Desktop-VERSION-macos-arm64.dmg` and its
+5. writes `artifacts/release/XTrace-VERSION-macos-arm64.dmg` and its
    SHA-256 file, which the workflow uploads as the `dmg-CANDIDATE_SHA` artifact.
 
 The workflow never creates or edits a GitHub release; attaching the disk image to

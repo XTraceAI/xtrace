@@ -759,6 +759,21 @@
   font-style: normal;
   text-align: right;
 }
+.xt-effort-tip-divider {
+  height: 1px;
+  margin: 3px 0;
+  background: var(--divider);
+}
+.xt-effort-tip-row[data-agent] b {
+  color: var(--accent-ink);
+}
+/* The quarter under the pointer, below the day's own lines. */
+.xt-effort-tip-row[data-pointer] {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--divider);
+  color: var(--ink);
+}
 .xt-effort-tip-note {
   padding-top: 2px;
   color: var(--secondary);

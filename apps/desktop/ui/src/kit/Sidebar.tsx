@@ -11,7 +11,8 @@ import { sidebarIcons } from './sidebar-icons';
 import type { Theme } from '../theme/ThemeProvider';
 import '../styles/sidebar.css';
 
-export type SidebarKey = 'dashboard' | 'sessions' | 'prs' | 'rulebook' | 'leaderboard' | 'team';
+export type SidebarKey =
+  'dashboard' | 'sessions' | 'scores' | 'prs' | 'rulebook' | 'leaderboard' | 'team';
 export type SidebarIcon = SidebarKey | 'hub' | 'theme' | 'settings';
 export interface SurfaceStatus {
   host: string;
@@ -202,6 +203,7 @@ export function Sidebar({
           <h2>Observe</h2>
           {navItem('dashboard', 'Dashboard')}
           {navItem('sessions', 'Sessions')}
+          {navItem('scores', 'Scores')}
           {navItem('prs', 'Pull requests')}
         </div>
         <div className="xt-nav-group">

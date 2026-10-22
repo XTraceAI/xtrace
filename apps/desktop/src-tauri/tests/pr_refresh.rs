@@ -807,7 +807,7 @@ fn other_state_reads_keep_working_while_a_batch_is_blocked_on_an_attempt() {
         .expect("state reads must not wait for the batch");
     assert!(counts);
     assert_eq!(listed.unwrap(), 2);
-    assert_eq!(info, "XTrace Desktop");
+    assert_eq!(info, "XTrace");
     gate.open();
     assert_eq!(
         outcomes(&running.join().unwrap()),

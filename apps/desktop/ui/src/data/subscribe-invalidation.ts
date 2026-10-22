@@ -16,7 +16,14 @@ export const eventPrefixes: Record<DataEvent, readonly string[]> = {
   [events.prsAutoCheck]: ['prs-auto'],
   [events.nativeIndexStatus]: ['native', ...ingest],
   // Published only after a committed purge: views that can show stored content.
-  [events.contentPurged]: ['sessions', 'metrics'],
+  [events.contentPurged]: ['sessions', 'metrics', 'grading'],
+  // A grading run's status changed and was committed.
+  [events.gradingChanged]: ['grading'],
+  // Elapsed time only; a status change also sends `grading://changed`.
+  [events.gradingProgress]: [],
+  // A rubric-making job's elapsed time only; its start, a saved rubric and
+  // its end also send `grading://changed`.
+  [events.gradingRubricProgress]: [],
   // Only the narrower keys below: no top-level key is wholly its.
   [events.sessionCreationsChanged]: [],
 };
@@ -66,8 +73,9 @@ export const eventKeyPrefixes: Partial<Record<DataEvent, readonly QueryKey[]>> =
   ],
   /**
    * A background pass committed a new sub-session relation, or withheld one as
-   * conflicted: the parent the Sessions list, the exact session row and every
-   * Dashboard range's lane context carry. These relations also change Human
+   * conflicted, or finished a display check: the parent and check the Sessions
+   * list, the exact session row, the menu-bar list and every Dashboard
+   * range's lane context carry. These relations also change Human
    * eligibility, so refresh Human totals and linked-session Human counts.
    * A pass can also commit a Codex session's pull-request link, including the
    * first link to a pull request, so it re-reads the stored inventory too.
@@ -76,6 +84,7 @@ export const eventKeyPrefixes: Partial<Record<DataEvent, readonly QueryKey[]>> =
     ...inventory,
     queryKeys.sessions(7).slice(0, 2),
     queryKeys.session(7, '').slice(0, 2),
+    queryKeys.trayRecent(7).slice(0, 2),
     queryKeys.dashboards,
     queryKeys.today,
     queryKeys.prAnalytics(7, true).slice(0, 2),

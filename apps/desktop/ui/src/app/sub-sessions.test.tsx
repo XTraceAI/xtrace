@@ -1691,3 +1691,156 @@ describe('replayed public snapshots', () => {
     expect(drawnAlone(table, id)).toBe(false);
   });
 });
+
+/**
+ * Sessions left out while their check is unfinished, on the screens that hide
+ * them: the Sessions page says how many by the Rust count beside the table and
+ * says why an empty table is empty; the Dashboard card says both from its own
+ * returned sessions. A session hidden for another reason keeps its own words.
+ */
+describe('sessions hidden while their check is unfinished', () => {
+  const CHECKING_EMPTY =
+    'No session to show yet. Sessions are hidden while XTrace has not finished checking whether another session started them.';
+  const UNKNOWN_EMPTY =
+    'No session to list: every loaded session is a sub-session whose main session is unknown.';
+  const checking = { child_check: 'checking', known_child: false, parent: null } as const;
+  const unlinked = { known_child: true, parent: null } as const;
+  /** The same source, with the Rust summary for these filters (or none). */
+  const summarised = (data: DataSource, checkingSessions: number | null): DataSource => ({
+    ...data,
+    sessionsList: async (...args) => {
+      const page = await data.sessionsList(...args);
+      return {
+        ...page,
+        summary:
+          checkingSessions === null
+            ? null
+            : { ...exported.sessions[0].summary!, checking_sessions: checkingSessions },
+      };
+    },
+  });
+  const line = () => document.querySelector('.xt-sessions-checking');
+
+  it('says how many are hidden, and why the table is empty, without a second number', async () => {
+    const { data } = source({ pages: [[row(CHILD, 1, checking), row(OTHER, 2, checking)]] });
+    mount(summarised(data, 2), '/sessions?range=7d');
+    await within(await findTable()).findByText(CHECKING_EMPTY);
+    expect(line()?.textContent).toBe(
+      '2 sessions are hidden because XTrace has not finished checking whether another session started them.',
+    );
+    // Plain text, not a live region: each finished check would be announced.
+    expect(line()?.getAttribute('role')).toBeNull();
+    expect(line()?.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    absentFrom(sessionsTable(), CHILD, OTHER);
+  });
+
+  it('uses the checking text when some hidden rows are checking and others are sub-sessions of an unknown session', async () => {
+    const { data } = source({ pages: [[row(CHILD, 1, unlinked), row(OTHER, 2, checking)]] });
+    mount(summarised(data, 1), '/sessions?range=7d');
+    await within(await findTable()).findByText(CHECKING_EMPTY);
+    expect(line()?.textContent).toBe(
+      '1 session is hidden because XTrace has not finished checking whether another session started it.',
+    );
+  });
+
+  it('keeps the sub-session text, and no line, when no hidden row is being checked', async () => {
+    const { data } = source({ pages: [[row(CHILD, 1, unlinked)]] });
+    mount(summarised(data, 0), '/sessions?range=7d');
+    await within(await findTable()).findByText(UNKNOWN_EMPTY);
+    expect(line()).toBeNull();
+    expect(sessionsTable().textContent).not.toContain('has not finished checking');
+  });
+
+  it('shows no line, never a zero, when the summary is unavailable', async () => {
+    const { data } = source({ pages: [[row(CHILD, 1, checking)]] });
+    mount(summarised(data, null), '/sessions?range=7d');
+    // The loaded rows still explain the empty table.
+    await within(await findTable()).findByText(CHECKING_EMPTY);
+    expect(await screen.findByText(/Session summary unavailable/)).toBeTruthy();
+    expect(line()).toBeNull();
+    expect(document.body.textContent).not.toMatch(/sessions? (is|are) hidden because/);
+  });
+
+  it('counts sessions on pages not loaded, in the app number format, beside a listed row', async () => {
+    const { data } = source({
+      pages: [[row(PARENT, 1, { title: 'Shown main session' }), row(CHILD, 2, checking)]],
+    });
+    mount(summarised(data, 1234), '/sessions?range=7d');
+    await within(await findTable()).findByText('Shown main session');
+    expect(line()?.textContent).toBe(
+      '1,234 sessions are hidden because XTrace has not finished checking whether another session started them.',
+    );
+    absentFrom(sessionsTable(), CHILD);
+  });
+
+  const meta = () =>
+    screen
+      .getByRole('region', { name: 'Sessions' })
+      .querySelector<HTMLElement>('.xt-section-meta')!;
+  /** What is drawn: the parts not hidden from assistive technology are not drawn. */
+  const shownMeta = () =>
+    [...meta().childNodes]
+      .filter((node) => !(node instanceof HTMLElement && node.classList.contains('sr-only')))
+      .map((node) => node.textContent)
+      .join('');
+  /** What a screen reader reads: everything not hidden from it. */
+  const readMeta = () =>
+    [...meta().childNodes]
+      .filter((node) => !(node instanceof HTMLElement && node.getAttribute('aria-hidden')))
+      .map((node) => node.textContent)
+      .join('');
+
+  it('says why the Dashboard card is empty when every returned session is being checked', async () => {
+    const { data } = source({
+      dashboard: (days) =>
+        lanesReport(days, [
+          { id: CHILD, context: checking },
+          // No context at all reads as still being checked too.
+          { id: OTHER, context: null },
+        ]),
+    });
+    mount(data, '/dashboard');
+    await screen.findByRole('table', { name: 'Session lanes' });
+    expect(
+      within(laneTable()).getByText(
+        /^No session to show yet in the last 48 hours \(.+\)\. Sessions are hidden while XTrace has not finished checking whether another session started them\.$/,
+      ),
+    ).toBeTruthy();
+    const full =
+      'Active in the last 48 hours · 2 hidden: check not finished. 2 sessions are hidden because XTrace has not finished checking whether another session started them.';
+    expect(shownMeta()).toBe('Active in the last 48 hours · 2 hidden: check not finished');
+    expect(meta().getAttribute('title')).toBe(full);
+    // A screen reader reads the full sentence in place of the short line.
+    expect(readMeta()).toBe(full);
+    absentFrom(laneTable(), CHILD, OTHER);
+  });
+
+  it('notes hidden sessions in the card subtitle while others are listed', async () => {
+    const { data } = source({
+      dashboard: (days) =>
+        lanesReport(days, [
+          { id: PARENT, context: { title: 'Listed session' } },
+          { id: CHILD, context: checking },
+        ]),
+    });
+    mount(data, '/dashboard');
+    await screen.findByRole('table', { name: 'Session lanes' });
+    expect(laneRows().map(([name]) => name)).toEqual(['Listed session']);
+    expect(shownMeta()).toBe('Active in the last 48 hours · 1 hidden: check not finished');
+    expect(readMeta()).toBe(
+      'Active in the last 48 hours · 1 hidden: check not finished. 1 session is hidden because XTrace has not finished checking whether another session started it.',
+    );
+  });
+
+  it('keeps the card’s own words when the only hidden session is a sub-session of an unknown session', async () => {
+    const { data } = source({
+      dashboard: (days) => lanesReport(days, [{ id: CHILD, context: unlinked }]),
+    });
+    mount(data, '/dashboard');
+    await screen.findByRole('table', { name: 'Session lanes' });
+    expect(within(laneTable()).getByText(/^No session to list in the last 48 hours/)).toBeTruthy();
+    expect(meta().textContent).toBe('Active in the last 48 hours');
+    expect(meta().getAttribute('title')).toBe('Active in the last 48 hours');
+    expect(meta().querySelector('[aria-hidden="true"], .sr-only')).toBeNull();
+  });
+});

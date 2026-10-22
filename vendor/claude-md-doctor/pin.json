@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/agent-clinic/claude-md-doctor.git",
+  "commit": "749206557f24531865cd9761f013ce7ea42291c9",
+  "skill_root": "skills/claude-md-doctor",
+  "skill_tree": "852a8c5ac28bba7b2df954668ec4fd66f628977b",
+  "upstream_version": "0.5.1",
+  "license": "MIT",
+  "license_blob": "c14815de559071960e42746c0c6a2868d738d776",
+  "fetched": "git clone https://github.com/agent-clinic/claude-md-doctor.git && git archive 749206557f24531865cd9761f013ce7ea42291c9 skills/claude-md-doctor LICENSE (2026-10-18)",
+  "upstream_files": {
+    "SKILL.md": "cca6cf309a87be8b35a6d2d45559f7db4fdc6515",
+    "scripts/_common.py": "c0db3a2f022c312069baf079e9304947bb020a97",
+    "scripts/backtest.py": "69e22e872594bd411df62105fac86aae986b76e8",
+    "scripts/card.py": "27a7a1734f906097a284d20f008786ffe67a5df2",
+    "scripts/compile.py": "68469068d2bbbcee97ce687c9477222f296c7233",
+    "scripts/generate.py": "449390910d62c619450f6bcd8dde54bb9f24b4c2",
+    "scripts/intake.py": "8064184302902751bef4a05c3f4e123827d2204c",
+    "scripts/mine.py": "4e8400740e4f219ba03e29a2ca08ff9a5b8abc9b",
+    "scripts/refcheck.py": "4a426eb3468eda2c8ec2d22e5484417ea1b74076",
+    "scripts/report.py": "79cb7fbe85ce6cf4ca0419a61ea422f9b3be7a41",
+    "scripts/sessions.py": "7d02956aec6fbe2de05c9e82c580c35b4db01465",
+    "scripts/vitals.py": "05d677770fbab2bff08c65437a6e7dc99cea954b",
+    "templates/report.html": "f19fa03472fde80728e417c2317797e5c732963b"
+  },
+  "added": ["xtrace-rubric.md"]
+}

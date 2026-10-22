@@ -80,6 +80,8 @@ test('reloads every route and preserves canonical PR query context', async ({ pa
     ['/first-launch', 'Welcome to XTrace'],
     ['/dashboard', 'What your agents did'],
     ['/sessions', 'Sessions'],
+    ['/scores', 'Scores'],
+    ['/scores/claude-md-doctor', 'Skill scores'],
     ['/prs', 'Pull requests'],
     ['/rulebook', 'Rulebook'],
     ['/rulebook/sample-rule', 'Rule detail'],

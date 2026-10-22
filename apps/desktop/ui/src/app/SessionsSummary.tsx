@@ -30,7 +30,7 @@ export function SessionsSummary({
     ? 'Summary unavailable for these filters'
     : 'Session summary is still being read';
   const classification = data
-    ? `${count(data.checking_sessions)} still being checked; ${count(data.unlinked_sub_sessions)} sub-sessions without a verified parent. These sessions can be hidden from the table.`
+    ? `${count(data.checking_sessions)} still being checked for whether another session started them; ${count(data.unlinked_sub_sessions)} sub-sessions without a verified parent. The table hides both.`
     : undefined;
   return (
     <section

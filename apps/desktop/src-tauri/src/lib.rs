@@ -12,11 +12,17 @@ mod account_usage_codex;
 mod account_usage_dto;
 mod account_usage_history;
 mod account_usage_process;
+mod bundle_rename;
 pub mod dashboard;
 mod dashboard_dto;
 pub mod dto;
 mod earlier_install;
 pub mod gh_cli;
+pub mod grading;
+mod grading_dto;
+mod grading_link_dto;
+pub mod grading_overview;
+pub mod grading_picker;
 pub mod human_break;
 pub mod live_codex_status;
 mod local_updates;
@@ -27,11 +33,14 @@ mod pr_dto;
 mod pr_effort_dto;
 pub mod pr_refresh;
 pub mod privacy;
+pub mod projects;
+mod projects_dto;
 pub mod rule_activity;
 mod rule_activity_dto;
 pub mod session_compactions;
 mod session_source_dto;
 pub mod session_titles;
+pub mod skill_link;
 pub mod startup_failure;
 pub mod state;
 pub mod telemetry;
@@ -64,6 +73,16 @@ pub const CONTENT_PURGED_EVENT: &str = "store://content-purged";
 /// withheld as conflicted), with no payload. It re-reads the Sessions list,
 /// the exact session row and the Dashboard reports, never the index status.
 pub const SESSION_CREATIONS_EVENT: &str = "sessions://creations-changed";
+/// A grading run's progress (`dto::GradingProgress`): when it starts, about
+/// every five seconds while it runs, and once when it is over.
+pub const GRADING_PROGRESS_EVENT: &str = "grading://progress";
+/// Published, with no payload, after every committed change of a grading
+/// run's status, never before the commit; and when a rubric-making job
+/// starts, saves its rubric and ends.
+pub const GRADING_CHANGED_EVENT: &str = "grading://changed";
+/// A rubric-making job's progress (`dto::GradingRubricProgress`): when it
+/// starts, about every five seconds while it runs, and once when it is over.
+pub const GRADING_RUBRIC_PROGRESS_EVENT: &str = "grading://rubric-progress";
 
 /// The exact private mode is intercepted before Tauri, fixtures, or the
 /// database start. No other argument combination can enter this mode.
@@ -459,6 +478,228 @@ fn rule_activity_cancel(
     service.cancel(&read_id);
 }
 
+/// The user's projects, read only from the coding apps' own saved files under
+/// the native home startup selected. The view sends nothing; the read runs on
+/// the blocking pool, holds no database lock, and every outcome is a typed
+/// state. Fixture mode answers `not_configured`.
+#[tauri::command]
+async fn projects_list<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::ProjectList {
+    match app.try_state::<projects::ProjectsService>() {
+        Some(service) => projects::list_on_worker(&service).await,
+        None => dto::ProjectList::Failed,
+    }
+}
+
+/// The grading skills: the built-in ones, from their bundled rubric's
+/// header, then the added ones. Fixture mode answers `not_configured`.
+#[tauri::command]
+async fn grading_skills<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::GradingSkills {
+    on_grading_worker(app, dto::GradingSkills::Failed, |service| service.skills()).await
+}
+
+/// The Scores page's answer: each built-in skill's shown scores over a fresh
+/// project list, their average and top insights, and the run going now, all
+/// decided natively. Reading this starts nothing. Fixture mode answers
+/// `not_configured`.
+#[tauri::command]
+async fn grading_overview<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::GradingOverview {
+    on_grading_worker(app, dto::GradingOverview::Failed, |service| {
+        service.overview()
+    })
+    .await
+}
+
+/// The skills installed under the native home, for the "Add a skill"
+/// dialog: each one's rubric status and whether it can be added, decided
+/// natively. Reading this starts and writes nothing. Fixture mode answers
+/// `not_configured`.
+#[tauri::command]
+async fn grading_installed_skills<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> dto::GradingInstalledSkills {
+    on_grading_worker(app, dto::GradingInstalledSkills::Failed, |service| {
+        service.installed()
+    })
+    .await
+}
+
+/// Add the installed skill at `location` to Scores. Only a location a fresh
+/// read of the installed skills marks addable is stored.
+#[tauri::command]
+async fn grading_skill_add<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    location: String,
+) -> dto::GradingSkillAdd {
+    on_grading_worker(app, dto::GradingSkillAdd::Failed, move |service| {
+        service.add_skill(&location)
+    })
+    .await
+}
+
+/// Make a rubric for the installed skill at `location` with the bundled
+/// rubric maker: Claude Code runs in the background, in the one grading
+/// slot, and XTrace saves the rubric once it reads as valid. Returns once
+/// the job has started. Fixture mode answers `not_configured`.
+#[tauri::command]
+async fn grading_rubric_make<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    location: String,
+) -> dto::GradingRubricMake {
+    on_grading_worker(app, dto::GradingRubricMake::Failed, move |service| {
+        service.make_rubric(&location)
+    })
+    .await
+}
+
+/// Take an added skill off Scores. Its stored grades and files stay;
+/// built-in skills cannot be removed.
+#[tauri::command]
+async fn grading_skill_remove<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    skill_id: String,
+) -> dto::GradingSkillRemove {
+    on_grading_worker(app, dto::GradingSkillRemove::Failed, move |service| {
+        service.remove_skill(&skill_id)
+    })
+    .await
+}
+
+/// Look a public GitHub link up for the Add a skill dialog: GitHub's API
+/// names the commit, its archive is downloaded and unpacked within bounds
+/// into a private staging folder, and the skills it holds are answered with
+/// whether each can be kept. The only network use of the dialog, started
+/// by its Look up. A new look-up replaces the previous one. Fixture mode
+/// answers `not_configured`.
+#[tauri::command]
+async fn grading_link_lookup<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    link: String,
+) -> dto::GradingLinkLookup {
+    let Some(service) = app
+        .try_state::<skill_link::SkillLinkService>()
+        .map(|service| service.inner().clone())
+    else {
+        return dto::GradingLinkLookup::Failed;
+    };
+    service.lookup(&link).await
+}
+
+/// Cancel the link look-up going now. False when none is going.
+#[tauri::command]
+fn grading_link_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> bool {
+    app.try_state::<skill_link::SkillLinkService>()
+        .is_some_and(|service| service.cancel())
+}
+
+/// Keep the skills at `paths` of the link preview `lookupId` in
+/// `~/.agents/skills` (and link each in `~/.claude/skills` when that name is
+/// free). Only skills a fresh check finds keepable are kept.
+#[tauri::command]
+async fn grading_link_keep<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    lookup_id: String,
+    paths: Vec<String>,
+) -> dto::GradingLinkKeep {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        app.try_state::<skill_link::SkillLinkService>()
+            .map(|service| service.keep(&lookup_id, &paths))
+    })
+    .await;
+    match joined {
+        Ok(Some(answer)) => answer,
+        _ => dto::GradingLinkKeep::Failed,
+    }
+}
+
+/// Drop the link preview `lookupId` and its staging folder. False when it
+/// is not the preview kept.
+#[tauri::command]
+async fn grading_link_discard<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    lookup_id: String,
+) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.try_state::<skill_link::SkillLinkService>()
+            .is_some_and(|service| service.discard(&lookup_id))
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// The recent grading runs, newest first. Reading this starts nothing.
+#[tauri::command]
+async fn grading_runs<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::GradingRuns {
+    on_grading_worker(app, dto::GradingRuns::Failed, |service| service.runs()).await
+}
+
+/// Grade one listed project with one grading skill. The path must be exactly
+/// a project a fresh project list names; one run at a time. Returns once the
+/// run's `running` row is saved; the run continues on its own thread.
+#[tauri::command]
+async fn grading_start<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    skill_id: String,
+) -> dto::GradingStart {
+    on_grading_worker(app, dto::GradingStart::Failed, move |service| {
+        service.start(&project_path, &skill_id)
+    })
+    .await
+}
+
+/// Ask the grading run or rubric-making job `run_id` to stop. False when it
+/// is not the one going.
+#[tauri::command]
+fn grading_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>, run_id: String) -> bool {
+    app.try_state::<grading::GradingService>()
+        .is_some_and(|service| service.cancel(&run_id))
+}
+
+/// A grading call on the blocking pool; `failed` when the service is not
+/// managed or the worker did not finish.
+async fn on_grading_worker<R: tauri::Runtime, T: Send + 'static>(
+    app: tauri::AppHandle<R>,
+    failed: T,
+    call: impl FnOnce(&grading::GradingService) -> T + Send + 'static,
+) -> T {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        app.try_state::<grading::GradingService>()
+            .map(|service| call(&service))
+    })
+    .await;
+    match joined {
+        Ok(Some(answer)) => answer,
+        _ => failed,
+    }
+}
+
+/// The grading service's three publishers: the progress events of a run
+/// and of a rubric-making job with their payloads, and the change event
+/// without one. A window not open yet, or already gone, drops the event;
+/// the runs and jobs stay queryable.
+fn grading_publishers<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+) -> (
+    grading::Publish,
+    grading::PublishProgress,
+    grading::PublishRubricProgress,
+) {
+    let changed = handle.clone();
+    let progress = handle.clone();
+    let rubric = handle.clone();
+    (
+        Arc::new(move || {
+            let _ = changed.emit(GRADING_CHANGED_EVENT, ());
+        }),
+        Arc::new(move |report: &dto::GradingProgress| {
+            let _ = progress.emit(GRADING_PROGRESS_EVENT, report);
+        }),
+        Arc::new(move |report: &dto::GradingRubricProgress| {
+            let _ = rubric.emit(GRADING_RUBRIC_PROGRESS_EVENT, report);
+        }),
+    )
+}
+
 /// Every stored pull request a session still links, with the refresh status
 /// storage holds for it. Reading this starts nothing.
 #[tauri::command]
@@ -764,10 +1005,20 @@ fn curl_transport(
 #[tauri::command]
 async fn purge_stored_content(app: tauri::AppHandle) -> Result<privacy::ContentPurge, String> {
     let publisher = app.clone();
+    let grading = app.clone();
     write_on_worker(app, move |state| {
-        state.purge_stored_content(move || {
-            let _ = publisher.emit(CONTENT_PURGED_EVENT, ());
-        })
+        let purge = || {
+            state.purge_stored_content(move || {
+                let _ = publisher.emit(CONTENT_PURGED_EVENT, ());
+            })
+        };
+        // The kept grade folders hold the content the purge clears from the
+        // grade rows; they go after a committed purge, never meanwhile
+        // written by a finishing run.
+        match grading.try_state::<grading::GradingService>() {
+            Some(service) => service.purge_with_folders(purge),
+            None => purge(),
+        }
     })
     .await
 }
@@ -939,6 +1190,56 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // selected; none in fixture mode. Nothing is read until a view
     // asks.
     app.manage(rule_activity::RuleActivityService::new(state.native_home()));
+    // The coding apps' saved files under the same native home; none in
+    // fixture mode. Nothing is read until a view asks.
+    app.manage(projects::ProjectsService::new(state.native_home()));
+    // Grading runs a built-in or added skill on a listed project, on
+    // request only, and lists the skills installed under the same native
+    // home when the Add a skill dialog asks. Fixture startup has no native
+    // home and no bundled skill: its service answers `not_configured`,
+    // never runs anything and never reads a home folder.
+    let grading = match (state.fixture_now_ms(), state.native_home()) {
+        (None, Some(home)) => {
+            let home = home.to_path_buf();
+            let (changed, progress, rubric_progress) = grading_publishers(app.handle());
+            grading::GradingService::new(
+                grading::GradingConfig::new(
+                    app.path()
+                        .resource_dir()
+                        .map_err(|_| state::StateError::InvalidOption)?
+                        .join(grading::BUNDLE_RESOURCE),
+                    home.clone(),
+                    std::path::Path::new(&state.app_info().data_dir),
+                    Arc::new(move || projects::ProjectsService::new(Some(&home)).list()),
+                ),
+                Arc::new(grading::ManagedState(app.handle().clone())),
+                changed,
+                progress,
+                rubric_progress,
+            )
+        }
+        _ => grading::GradingService::not_configured(),
+    };
+    // "Add from a link" looks public GitHub links up for the Add a skill
+    // dialog, only when its Look up is pressed, and keeps chosen skills in
+    // the same native home's `~/.agents/skills`. Fixture startup's service
+    // answers `not_configured` and never uses the network.
+    let links = match (state.fixture_now_ms(), state.native_home()) {
+        (None, Some(home)) if !state.app_info().data_dir.is_empty() => {
+            let changed = app.handle().clone();
+            skill_link::SkillLinkService::new(
+                skill_link::LinkConfig::new(
+                    home.to_path_buf(),
+                    std::path::Path::new(&state.app_info().data_dir),
+                ),
+                Arc::new(move || {
+                    let _ = changed.emit(GRADING_CHANGED_EVENT, ());
+                }),
+            )
+        }
+        _ => skill_link::SkillLinkService::not_configured(),
+    };
+    app.manage(links);
     // Live startup reads Claude usage automatically through the user's
     // own Claude Code, from a probe folder in the app's data folder.
     // Fixture startup never starts a probe.
@@ -975,6 +1276,10 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(dashboard::SpanDetailReads::default());
     app.manage(refresh);
     app.manage(auto_worker);
+    // With the state managed: runs a crash left `running` are saved
+    // interrupted, and their staging folders removed.
+    grading.recover();
+    app.manage(grading);
     tray::setup(app)?;
     app.state::<telemetry::Telemetry>().opened();
     Ok(())
@@ -997,6 +1302,28 @@ fn fail_setup(app: &tauri::App, error: &(dyn std::error::Error + 'static)) -> ! 
 /// Stops every service in the order quitting needs, each one only if it was
 /// started.
 fn stop_services(app: &tauri::AppHandle) {
+    // A grading run is cancelled first and waited for on its own thread:
+    // its process group gets SIGTERM, then SIGKILL after a short grace, and
+    // the run is saved interrupted and its staging folder removed, within
+    // its bound, while the other services stop. It is joined before
+    // storage closes.
+    // Without a thread, it is waited for here instead.
+    let grading = app
+        .try_state::<grading::GradingService>()
+        .and_then(|grading| {
+            let waiting = grading.shutdown_in_background();
+            if waiting.is_none() {
+                grading.shutdown();
+            }
+            waiting
+        });
+    // A link keep going is waited for (within the same bound as a grading
+    // run), so it never stops between claiming a skill's name and filling
+    // it; then a look-up is cancelled and its preview's staging folder
+    // removed.
+    if let Some(links) = app.try_state::<skill_link::SkillLinkService>() {
+        links.shutdown();
+    }
     // Open transcript reads end first: each is cancelled, and
     // this waits (within its bound) until each has returned — a
     // pinned reader one started killed with its group and reaped
@@ -1040,6 +1367,9 @@ fn stop_services(app: &tauri::AppHandle) {
     // is cancelled and anything still queued is never sent.
     if let Some(telemetry) = app.try_state::<telemetry::Telemetry>() {
         telemetry.shutdown();
+    }
+    if let Some(grading) = grading {
+        let _ = grading.join();
     }
     if let Some(state) = app.try_state::<state::AppState>() {
         state.shutdown();
@@ -1106,6 +1436,20 @@ pub fn run() {
             cancel_session_compactions,
             rule_activity_read,
             rule_activity_cancel,
+            projects_list,
+            grading_skills,
+            grading_overview,
+            grading_runs,
+            grading_start,
+            grading_cancel,
+            grading_installed_skills,
+            grading_skill_add,
+            grading_skill_remove,
+            grading_rubric_make,
+            grading_link_lookup,
+            grading_link_cancel,
+            grading_link_keep,
+            grading_link_discard,
             prs_list,
             prs_analytics,
             prs_sessions,
@@ -1142,8 +1486,14 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { .. } = event {
                 tray::show_main(app);
             }
+            if let tauri::RunEvent::ExitRequested { code, .. } = &event {
+                updates::exit_requested(*code);
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 stop_services(app);
+                // A restart reopens the app from the folder it started in,
+                // so only a normal quit renames it.
+                bundle_rename::rename_on_quit(app.config(), updates::restarting());
             }
         });
 }
@@ -2034,6 +2384,332 @@ mod tests {
                 serde_json::json!({"readId": "read-5"})
             ),
             Ok(serde_json::json!({"state": "closed"}))
+        );
+    }
+
+    /// The project list command through Tauri's own IPC dispatch: it takes no
+    /// argument (an extra one naming another folder is ignored), reads only
+    /// the home folder its service was built over, and answers typed states.
+    #[test]
+    fn projects_list_command_answers_typed_states_over_ipc() {
+        use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
+        // A synthetic home under this workspace's `target/tmp`: the system
+        // temporary folder is skipped as temporary by the rules themselves.
+        let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/tmp");
+        std::fs::create_dir_all(&parent).unwrap();
+        let home = tempfile::Builder::new()
+            .prefix("projects-list-")
+            .tempdir_in(&parent)
+            .unwrap();
+        let project = home.path().join("code/app");
+        let worktree = project.join(".claude/worktrees/fix");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let project = std::fs::canonicalize(&project).unwrap();
+        std::fs::write(
+            home.path().join(".claude.json"),
+            serde_json::json!({"projects": {
+                project.to_str().unwrap(): {},
+                worktree.to_str().unwrap(): {},
+                "/gone/folder": {}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let elsewhere = tempfile::Builder::new()
+            .prefix("projects-elsewhere-")
+            .tempdir_in(&parent)
+            .unwrap();
+        std::fs::write(
+            elsewhere.path().join(".claude.json"),
+            serde_json::json!({"projects": {elsewhere.path().to_str().unwrap(): {}}}).to_string(),
+        )
+        .unwrap();
+
+        let invoke = |app: &tauri::App<tauri::test::MockRuntime>, body: serde_json::Value| {
+            let window = app.get_webview_window("main").unwrap();
+            get_ipc_response(
+                &window,
+                tauri::webview::InvokeRequest {
+                    cmd: "projects_list".into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: "tauri://localhost".parse().unwrap(),
+                    body: tauri::ipc::InvokeBody::Json(body),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.to_string(),
+                },
+            )
+            .map(|body| body.deserialize::<serde_json::Value>().unwrap())
+        };
+        let build = |service: Option<projects::ProjectsService>| {
+            let builder = mock_builder().invoke_handler(tauri::generate_handler![projects_list]);
+            let builder = match service {
+                Some(service) => builder.manage(service),
+                None => builder,
+            };
+            let app = builder.build(mock_context(noop_assets())).unwrap();
+            tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+                .build()
+                .unwrap();
+            app
+        };
+
+        let app = build(Some(projects::ProjectsService::new(Some(home.path()))));
+        let listed = invoke(&app, serde_json::json!({"home": elsewhere.path()})).unwrap();
+        assert_eq!(
+            listed,
+            serde_json::json!({
+                "state": "loaded",
+                "projects": [{
+                    "name": "app",
+                    "path": project.to_str().unwrap(),
+                    "sources": ["claude_code"]
+                }],
+                "sources": [
+                    {"source": "claude_code", "status": {"state": "read", "count": 3}},
+                    {"source": "claude_app", "status": {"state": "missing"}},
+                    {"source": "codex_app", "status": {"state": "missing"}},
+                    {"source": "codex_cli", "status": {"state": "missing"}},
+                    {"source": "cursor", "status": {"state": "missing"}}
+                ],
+                "skipped": {
+                    "invalid_path": 0, "missing_folder": 1, "temporary": 0,
+                    "app_library": 0, "app_internal": 0, "codex_task": 0,
+                    "remote": 0, "multi_root_workspace": 0, "unreadable_entry": 0,
+                    "home_folder": 0, "container_folder": 0
+                }
+            })
+        );
+        // The same answer the service gives on the calling thread.
+        assert_eq!(
+            listed,
+            json(app.state::<projects::ProjectsService>().list())
+        );
+
+        // Fixture startup manages a service over no home.
+        let app = build(Some(projects::ProjectsService::new(None)));
+        assert_eq!(
+            invoke(&app, serde_json::json!({})),
+            Ok(serde_json::json!({"state": "not_configured"}))
+        );
+        // No service at all (never managed) fails without reading anything.
+        let app = build(None);
+        assert_eq!(
+            invoke(&app, serde_json::json!({})),
+            Ok(serde_json::json!({"state": "failed"}))
+        );
+    }
+
+    /// The four link commands through Tauri's own IPC dispatch, with their
+    /// argument names: fixture startup's service answers `not_configured`,
+    /// and a missing service `failed`. Nothing here uses the network.
+    #[test]
+    fn link_commands_go_through_tauri() {
+        use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
+        let invoke =
+            |app: &tauri::App<tauri::test::MockRuntime>, cmd: &str, body: serde_json::Value| {
+                let window = app.get_webview_window("main").unwrap();
+                get_ipc_response(
+                    &window,
+                    tauri::webview::InvokeRequest {
+                        cmd: cmd.into(),
+                        callback: tauri::ipc::CallbackFn(0),
+                        error: tauri::ipc::CallbackFn(1),
+                        url: "tauri://localhost".parse().unwrap(),
+                        body: tauri::ipc::InvokeBody::Json(body),
+                        headers: Default::default(),
+                        invoke_key: INVOKE_KEY.to_string(),
+                    },
+                )
+                .map(|body| body.deserialize::<serde_json::Value>().unwrap())
+            };
+        let build = |service: Option<skill_link::SkillLinkService>| {
+            let builder = mock_builder().invoke_handler(tauri::generate_handler![
+                grading_link_lookup,
+                grading_link_cancel,
+                grading_link_keep,
+                grading_link_discard
+            ]);
+            let builder = match service {
+                Some(service) => builder.manage(service),
+                None => builder,
+            };
+            let app = builder.build(mock_context(noop_assets())).unwrap();
+            tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+                .build()
+                .unwrap();
+            app
+        };
+        let lookup = serde_json::json!({"link": "https://github.com/octo/skills"});
+        let keep = serde_json::json!({"lookupId": "x", "paths": ["skills/pdf"]});
+        let discard = serde_json::json!({"lookupId": "x"});
+        for (service, answer) in [
+            (
+                Some(skill_link::SkillLinkService::not_configured()),
+                serde_json::json!({"state": "not_configured"}),
+            ),
+            (None, serde_json::json!({"state": "failed"})),
+        ] {
+            let app = build(service);
+            assert_eq!(
+                invoke(&app, "grading_link_lookup", lookup.clone()),
+                Ok(answer.clone())
+            );
+            assert_eq!(
+                invoke(&app, "grading_link_keep", keep.clone()),
+                Ok(answer.clone())
+            );
+            assert_eq!(
+                invoke(&app, "grading_link_cancel", serde_json::json!({})),
+                Ok(serde_json::json!(false))
+            );
+            assert_eq!(
+                invoke(&app, "grading_link_discard", discard.clone()),
+                Ok(serde_json::json!(false))
+            );
+        }
+    }
+
+    /// The nine grading commands through Tauri's own IPC dispatch, and the
+    /// three grading events through its emitter. Fixture startup's service is
+    /// not configured; without a managed service every command fails closed.
+    #[test]
+    fn grading_commands_and_events_go_through_tauri() {
+        use tauri::Listener;
+        use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
+        let invoke =
+            |app: &tauri::App<tauri::test::MockRuntime>, cmd: &str, body: serde_json::Value| {
+                let window = app.get_webview_window("main").unwrap();
+                get_ipc_response(
+                    &window,
+                    tauri::webview::InvokeRequest {
+                        cmd: cmd.into(),
+                        callback: tauri::ipc::CallbackFn(0),
+                        error: tauri::ipc::CallbackFn(1),
+                        url: "tauri://localhost".parse().unwrap(),
+                        body: tauri::ipc::InvokeBody::Json(body),
+                        headers: Default::default(),
+                        invoke_key: INVOKE_KEY.to_string(),
+                    },
+                )
+                .map(|body| body.deserialize::<serde_json::Value>().unwrap())
+            };
+        let build = |service: Option<grading::GradingService>| {
+            let builder = mock_builder().invoke_handler(tauri::generate_handler![
+                grading_skills,
+                grading_overview,
+                grading_runs,
+                grading_start,
+                grading_cancel,
+                grading_installed_skills,
+                grading_skill_add,
+                grading_skill_remove,
+                grading_rubric_make
+            ]);
+            let builder = match service {
+                Some(service) => builder.manage(service),
+                None => builder,
+            };
+            let app = builder.build(mock_context(noop_assets())).unwrap();
+            tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+                .build()
+                .unwrap();
+            app
+        };
+        let start = serde_json::json!({"projectPath": "/anywhere", "skillId": "claude-md-doctor"});
+        let cancel = serde_json::json!({"runId": "0f8fad5b-d9cb-469f-a165-70867728950e"});
+        let not_configured = serde_json::json!({"state": "not_configured"});
+        let failed = serde_json::json!({"state": "failed"});
+
+        let add = serde_json::json!({"location": "plugin:tools@market/lint"});
+        let remove = serde_json::json!({"skillId": "x"});
+        let app = build(Some(grading::GradingService::not_configured()));
+        for (cmd, body) in [
+            ("grading_skills", serde_json::json!({})),
+            ("grading_overview", serde_json::json!({})),
+            ("grading_runs", serde_json::json!({})),
+            ("grading_start", start.clone()),
+            ("grading_installed_skills", serde_json::json!({})),
+            ("grading_skill_add", add.clone()),
+            ("grading_skill_remove", remove.clone()),
+            ("grading_rubric_make", add.clone()),
+        ] {
+            assert_eq!(invoke(&app, cmd, body), Ok(not_configured.clone()), "{cmd}");
+        }
+        assert_eq!(
+            invoke(&app, "grading_cancel", cancel.clone()),
+            Ok(serde_json::json!(false))
+        );
+
+        let app = build(None);
+        for (cmd, body) in [
+            ("grading_skills", serde_json::json!({})),
+            ("grading_overview", serde_json::json!({})),
+            ("grading_runs", serde_json::json!({})),
+            ("grading_start", start),
+            ("grading_installed_skills", serde_json::json!({})),
+            ("grading_skill_add", add.clone()),
+            ("grading_skill_remove", remove),
+            ("grading_rubric_make", add),
+        ] {
+            assert_eq!(invoke(&app, cmd, body), Ok(failed.clone()), "{cmd}");
+        }
+        assert_eq!(
+            invoke(&app, "grading_cancel", cancel),
+            Ok(serde_json::json!(false))
+        );
+
+        let heard = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        for event in [
+            GRADING_CHANGED_EVENT,
+            GRADING_PROGRESS_EVENT,
+            GRADING_RUBRIC_PROGRESS_EVENT,
+        ] {
+            let heard = Arc::clone(&heard);
+            app.listen_any(event, move |message| {
+                heard
+                    .lock()
+                    .unwrap()
+                    .push((event.to_owned(), message.payload().to_owned()));
+            });
+        }
+        let (changed, progress, rubric) = grading_publishers(app.handle());
+        changed();
+        progress(&dto::GradingProgress {
+            run_id: "0f8fad5b-d9cb-469f-a165-70867728950e".into(),
+            state: dto::GradingProgressState::Running,
+            elapsed_seconds: 5,
+        });
+        rubric(&dto::GradingRubricProgress {
+            job_id: "0f8fad5b-d9cb-469f-a165-70867728950f".into(),
+            location: "plugin:tools@market/lint".into(),
+            state: dto::GradingProgressState::Finished,
+            elapsed_seconds: 61,
+        });
+        let heard = heard.lock().unwrap().clone();
+        assert_eq!(heard.len(), 3, "{heard:?}");
+        assert_eq!(
+            heard[0],
+            (GRADING_CHANGED_EVENT.to_owned(), "null".to_owned())
+        );
+        assert_eq!(heard[1].0, GRADING_PROGRESS_EVENT);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&heard[1].1).unwrap(),
+            serde_json::json!({
+                "run_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                "state": "running",
+                "elapsed_seconds": 5
+            })
+        );
+        assert_eq!(heard[2].0, GRADING_RUBRIC_PROGRESS_EVENT);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&heard[2].1).unwrap(),
+            serde_json::json!({
+                "job_id": "0f8fad5b-d9cb-469f-a165-70867728950f",
+                "location": "plugin:tools@market/lint",
+                "state": "finished",
+                "elapsed_seconds": 61
+            })
         );
     }
 }

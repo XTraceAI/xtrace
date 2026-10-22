@@ -62,7 +62,8 @@ const states: Record<string, NativeIndexStatus> = {
         records_new: 1_234_567,
         diagnostics: 4,
         detail: 'some transcript lines could not be parsed and were skipped',
-        needs_attention: true,
+        // Sessions were read, so the app does not flag the gaps.
+        needs_attention: false,
       }),
       host('codex', {
         state: 'missing_runtime',

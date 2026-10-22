@@ -185,10 +185,13 @@ the existing writer.
   importing the session at its very path (a directory's diagnostic is never resolved
   by what was imported below it),
   a session the initial scan imported that a later pass could not read reads partial, the earlier counts, dropped records and rejections carried and the later failure added as a rejection; a session the initial scan could not import fully keeps that failure even if a later pass imported it (the source may have been replaced in between, and what the
-  failure left unread is then gone; the counts still add up), a host the initial
-  scan could not scan at all (a reader, runtime or pin failure, or an incomplete
-  status with no session or diagnostic to say why) stays incomplete even if a later
-  pass completed, its reason kept, and a host stays incomplete around any of these. After ready, the tailer is idle only once every
+  failure left unread is then gone; the counts still add up), a host whose initial
+  scan failed on its reader, runtime or pin, or was cancelled, keeps that state
+  (`reader_failed`, `missing_runtime`, `pin_mismatch`, `cancelled`) with its reason
+  even if a later pass read the host, unless that pass failed itself or found no
+  source; one whose initial scan was incomplete with no session or diagnostic to
+  say why stays incomplete even if a later pass completed, its reason kept; and a
+  host stays incomplete around any of these. After ready, the tailer is idle only once every
   change delivered to it, also one delivered while a reconciliation ran, has been
   taken off its queue and reconciled (the delivery count and the idle flag change
   under one lock, and an event is counted, queued and clears idle under that lock
@@ -265,8 +268,10 @@ the existing writer.
   (some host's does), `reconciles` and `files_scanned`. Whether a host's last
   scan needs attention is decided once, in `native_index::mark_attention`:
   `complete` and `missing_source` do not, `pending` does not while the phase is
-  `scanning` and does once it is not, and every other state does, `cancelled`
-  included. The Sessions flag, the sidebar, Welcome and Settings all read that
+  `scanning` and does once it is not, `incomplete` does only when the scan read
+  no session at all (none imported, none partly read: a few skipped or partly
+  read sessions, or diagnostics, are counted in Settings instead), and every
+  other state does, `cancelled` included. The Sessions flag, the sidebar, Welcome and Settings all read that
   flag and word host states from one shared label map
   (`src/app/index-host-state.ts`); none re-decides it. Every change is published
   as `native-index://status` with the same payload: readiness, each

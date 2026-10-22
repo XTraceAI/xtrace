@@ -5,4 +5,21 @@
  * divided by its own human time. `value` is `null` when human time is
  * zero or unknown.
  */
-export type MetricLeverageDay = { date: string, start_ms: number, end_ms: number, agent_ms: number, human_ms: number | null, value: number | null, };
+export type MetricLeverageDay = { date: string, start_ms: number, end_ms: number, agent_ms: number, human_ms: number | null, value: number | null, 
+/**
+ * The average number of agents running in each local wall-clock
+ * quarter-hour of the day, exactly 96 from 00:00 (agent time over the
+ * real time the quarter covered; their agent time adds up to
+ * `agent_ms`, checked when the report is built). A fall-back clock
+ * change folds the repeated hour into the same quarters; a
+ * spring-forward change leaves the skipped ones at 0. Sent at the
+ * screen's display precision: one decimal. A positive average below
+ * 0.05 is sent unrounded, so it still reads as below the scale, never
+ * as zero.
+ */
+quarter_agents: Array<number>, 
+/**
+ * The index of the first quarter with the most agents running on
+ * average; `null` when the day has no agent time.
+ */
+busiest_quarter: number | null, };

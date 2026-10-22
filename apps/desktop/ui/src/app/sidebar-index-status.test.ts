@@ -10,7 +10,8 @@ import {
 
 // Synthetic statuses only: no local history, registry or receipt is read.
 // `needs_attention` is the app's answer; these statuses set it as the app
-// would for a host not waiting on a running scan, unless a case says otherwise.
+// would for a host not waiting on a running scan whose scan read no session
+// (so an `incomplete` host is flagged), unless a case says otherwise.
 const host = (
   name: string,
   state: NativeHostState,
@@ -35,7 +36,7 @@ describe('the state the compact trigger shows', () => {
       'Scanning',
       'idle',
     ],
-    ['ready and watched', facts(ready, live), 'updating', 'Updating', 'live'],
+    ['ready and watched', facts(ready, live), 'live', 'Up to date', 'live'],
     [
       'ready, watching not established',
       facts(ready, { freshness: 'unknown' }),
@@ -169,7 +170,7 @@ describe('host scans qualify a ready index', () => {
     });
     expect(shown).toMatchObject({
       label: 'partial',
-      title: 'Updating · partial',
+      title: 'Live · partial',
       tone: 'attention',
     });
     expect(shown.notes).toEqual([
@@ -184,6 +185,32 @@ describe('host scans qualify a ready index', () => {
         reason: 'reader exited with status 1',
       },
       { host: 'Cursor', state: 'Read' },
+    ]);
+  });
+
+  it('says nothing is partial when the only host read with gaps is not flagged', () => {
+    // The app flags a host read with gaps only when it read no session: one
+    // that skipped a few sessions out of many leaves the index up to date.
+    const shown = sidebarIndexStatus({
+      status: facts(ready, live, [
+        host('claude', 'incomplete', null, false),
+        host('codex', 'complete'),
+        host('cursor', 'missing_source'),
+      ]),
+      ...heard,
+    });
+    expect(shown).toMatchObject({
+      label: 'live',
+      title: 'Up to date',
+      tone: 'live',
+      // Not "all" read: Settings counts the sessions this host skipped.
+      summary: 'Your local history has been read. New activity is added as it happens.',
+    });
+    expect(shown.notes).toBeUndefined();
+    expect(shown.hosts).toEqual([
+      { host: 'Claude Code', state: 'Read with gaps' },
+      { host: 'Codex', state: 'Read' },
+      { host: 'Cursor', state: 'No local history found' },
     ]);
   });
 
@@ -206,7 +233,7 @@ describe('host scans qualify a ready index', () => {
       status: facts(ready, live, [host('claude', 'complete'), host('cursor', 'missing_source')]),
       ...heard,
     });
-    expect(shown).toMatchObject({ label: 'updating', tone: 'live' });
+    expect(shown).toMatchObject({ label: 'live', tone: 'live' });
     expect(shown.notes).toBeUndefined();
     expect(shown.hosts).toEqual([
       { host: 'Claude Code', state: 'Read' },
@@ -282,8 +309,8 @@ describe('a cached status while this renderer does not hear the index', () => {
       live: 'failed',
     });
     expect(shown).toMatchObject({
-      label: 'updating?',
-      title: 'Last known: Updating',
+      label: 'live?',
+      title: 'Last known: Up to date',
       tone: 'attention',
     });
     expect(shown.notes).toEqual([
@@ -298,7 +325,7 @@ describe('a cached status while this renderer does not hear the index', () => {
       caughtUp: true,
       live: 'connecting',
     });
-    expect(shown).toMatchObject({ label: 'updating?', tone: 'attention' });
+    expect(shown).toMatchObject({ label: 'live?', tone: 'attention' });
     expect(shown.notes?.[0]).toMatch(/^Live updates are reconnecting/);
   });
 
@@ -309,7 +336,7 @@ describe('a cached status while this renderer does not hear the index', () => {
       caughtUp: true,
       live: 'connected',
     });
-    expect(shown).toMatchObject({ label: 'updating?', title: 'Last known: Updating' });
+    expect(shown).toMatchObject({ label: 'live?', title: 'Last known: Up to date' });
     expect(shown.notes?.[0]).toMatch(/^The latest status read failed/);
   });
 
@@ -332,8 +359,8 @@ describe('a cached status while this renderer does not hear the index', () => {
       caughtUp: false,
     });
     expect(shown).toMatchObject({
-      label: 'updating?',
-      title: 'Last known: Updating',
+      label: 'live?',
+      title: 'Last known: Up to date',
       tone: 'attention',
     });
     expect(shown.notes).toEqual([
@@ -347,7 +374,7 @@ describe('a cached status while this renderer does not hear the index', () => {
     // Caught up, the same status is current again.
     expect(
       sidebarIndexStatus({ status: cached, readFailed: false, live: 'connected', caughtUp: true }),
-    ).toMatchObject({ label: 'updating', tone: 'live' });
+    ).toMatchObject({ label: 'live', tone: 'live' });
   });
 
   it('claims nothing extra while there is no status to qualify', () => {

@@ -4,7 +4,10 @@ For installation, see [setup](SETUP.md). The [latest release page](https://githu
 identifies the current update release and its download assets. Newer testing
 candidates appear on [all releases](https://github.com/XTraceAI/xtrace-desktop/releases)
 and may not be offered by the latest-release link or automatic updates. If the automatic update
-fails, quit XTrace Desktop and replace it with the latest DMG copy in Applications.
+fails, quit XTrace and replace it with the latest DMG copy in Applications. If
+the copy in Applications is still named **XTrace Desktop**, the new **XTrace** copy
+does not replace it: quit XTrace Desktop, move it to the Trash, then drag in the new
+copy, so only one copy stays (see [setup](SETUP.md#download-and-install)).
 A source version change alone does not publish a release or change the update feed.
 
 The macOS release app checks at startup and every six hours. A newer update
@@ -23,6 +26,15 @@ workers and the database after successful installation. No pre-install shutdown
 or data migration is added here. Tauri handles bundle replacement and may ask
 for administrator permission. A real signed macOS update and restart still need
 release validation; compile and unit checks do not establish that behavior.
+
+Releases through 0.1.7 installed as `XTrace Desktop.app`. An update writes the
+new version into that same folder, so the name stays. The app does not rename
+itself when it restarts to update, because the restart reopens it from that
+folder. It renames the folder to `XTrace.app` the next time it quits normally.
+It does not rename when the app ID is not `ai.xtrace.app` (test copies), or when
+anything is already at `XTrace.app`. If it cannot rename (for example an account
+that cannot change Applications), nothing changes and it keeps working under the
+old name.
 
 ## Release configuration
 
@@ -90,7 +102,7 @@ explicitly:
 
 ```sh
 RELEASE_VERSION="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/src-tauri/tauri.conf.json", "utf8")).version')"
-env -u TAURI_SIGNING_PRIVATE_KEY pnpm tauri signer sign --private-key-path "$TAURI_SIGNING_PRIVATE_KEY" --app-version "$RELEASE_VERSION" "/absolute/path/to/XTrace Desktop.app.tar.gz"
+env -u TAURI_SIGNING_PRIVATE_KEY pnpm tauri signer sign --private-key-path "$TAURI_SIGNING_PRIVATE_KEY" --app-version "$RELEASE_VERSION" "/absolute/path/to/XTrace.app.tar.gz"
 ```
 
 Run this from the exact release source checkout and replace the archive path

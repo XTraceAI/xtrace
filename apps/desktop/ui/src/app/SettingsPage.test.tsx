@@ -125,6 +125,10 @@ it('reads the saved mode, defaults to metrics and indexing, and states what the 
   expect(screen.getByTestId('retention-previews').textContent).toContain(
     'previews cannot be turned off',
   );
+  // Grades are kept in every mode; the purge removes their text, not the score.
+  expect(screen.getByTestId('retention-grades').textContent).toBe(
+    'Grades from the Scores page are kept either way too: each grade’s score, summary and findings, and the saved HTML report of the newest 50 grades; older grades keep no report. Delete stored content removes the summary, findings and report; the score stays. It also removes the reasons Claude gave for not making a rubric for a skill.',
+  );
   // The existing sections stay on the page.
   expect(screen.getByRole('heading', { name: 'Appearance' })).toBeTruthy();
   expect(await screen.findByText(exported.app_info.data_dir)).toBeTruthy();
@@ -190,10 +194,13 @@ it('cancels the deletion by button or Escape without purging, returning focus', 
   fireEvent.click(trigger);
   const dialog = await screen.findByRole('dialog', { name: 'Delete stored content?' });
   expect(dialog.textContent).toContain(
-    'Original host transcripts and other files are not touched.',
+    'Original host transcripts and your projects’ files are not touched.',
   );
   expect(dialog.textContent).toContain(
-    'Counts, usage, tool names, identifiers and source provenance stay.',
+    'and removes each grade’s summary, findings and saved HTML report and the reasons Claude gave for not making a rubric for a skill.',
+  );
+  expect(dialog.textContent).toContain(
+    'Counts, usage, tool names, identifiers, source provenance and grade scores stay.',
   );
   expect(dialog.textContent).toContain('the short message previews');
   expect(dialog.textContent).toContain(
@@ -236,6 +243,7 @@ it('purges only on confirmation and refreshes content views from the committed o
   expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
     ['sessions'],
     ['metrics'],
+    ['grading'],
   ]);
 });
 
@@ -272,6 +280,7 @@ it('keeps the dialog open and invalidates nothing when the purge fails', async (
   expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
     ['sessions'],
     ['metrics'],
+    ['grading'],
   ]);
 });
 
@@ -284,7 +293,7 @@ it('says the controls are unavailable when the source has no app database', asyn
 });
 
 it('refreshes content views when the committed-purge event arrives', async () => {
-  expect(eventPrefixes[events.contentPurged]).toEqual(['sessions', 'metrics']);
+  expect(eventPrefixes[events.contentPurged]).toEqual(['sessions', 'metrics', 'grading']);
   vi.useFakeTimers();
   const { data, listeners } = source();
   const client = new QueryClient();
@@ -300,6 +309,7 @@ it('refreshes content views when the committed-purge event arrives', async () =>
   expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
     ['sessions'],
     ['metrics'],
+    ['grading'],
   ]);
   stop();
 });

@@ -80,14 +80,16 @@ it('renders controlled navigation, groups, badge and disabled Leaderboard withou
   for (const name of ['Observe', 'Govern', 'Community'])
     expect(screen.getByRole('heading', { name })).toBeTruthy();
   const nav = screen.getByRole('navigation', { name: 'Main navigation' });
-  expect(within(nav).getAllByRole('button')).toHaveLength(5);
+  expect(within(nav).getAllByRole('button')).toHaveLength(6);
   fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
   expect(input.onNavigate).toHaveBeenCalledWith('sessions');
+  fireEvent.click(screen.getByRole('button', { name: 'Scores' }));
+  expect(input.onNavigate).toHaveBeenLastCalledWith('scores');
   expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-current')).toBe(
     'page',
   );
   fireEvent.click(screen.getByRole('button', { name: /Leaderboard/ }));
-  expect(input.onNavigate).toHaveBeenCalledTimes(1);
+  expect(input.onNavigate).toHaveBeenCalledTimes(2);
   expect(screen.getByLabelText('3 rulebook items')).toBeTruthy();
   view.rerender(<Sidebar {...input} activeKey="sessions" rulebookCount={0} leaderboardEnabled />);
   expect(screen.getByRole('button', { name: 'Sessions' }).getAttribute('aria-current')).toBe(
@@ -203,10 +205,10 @@ it('keeps missing measurements, listener and capture coverage explicitly unknown
 
 // Synthetic local-index descriptions: the component renders what it is given.
 const updating: LocalIndexStatus = {
-  label: 'updating',
-  title: 'Updating',
+  label: 'live',
+  title: 'Up to date',
   tone: 'live',
-  summary: 'The local index is ready and changes are reconciled as they happen.',
+  summary: 'Your local history has been read. New activity is added as it happens.',
   hosts: [
     { host: 'Claude Code', state: 'Complete' },
     { host: 'Cursor', state: 'No local history found' },
@@ -219,14 +221,14 @@ const openIndex = async () => {
 
 it('describes the local index on the status row and keeps the plugin receiver a separate line', async () => {
   const view = render(<Sidebar {...props()} localIndex={updating} />);
-  const trigger = screen.getByRole('button', { name: 'Local index: Updating' });
-  expect(trigger.textContent).toBe('index · updating');
+  const trigger = screen.getByRole('button', { name: 'Local index: Up to date' });
+  expect(trigger.textContent).toBe('index · live');
   expect(trigger.querySelector('i')?.className).toBe('xt-status-live');
   // The receiver being off is not the row's state and is not shown as one.
   expect(screen.queryByText('plugin · off')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Capture status' })).toBeNull();
   const panel = await openIndex();
-  expect(within(panel).getByText('Updating').className).toContain('xt-index-live');
+  expect(within(panel).getByText('Up to date').className).toContain('xt-index-live');
   expect(within(panel).getByText(updating.summary)).toBeTruthy();
   expect(within(panel).getByText('Claude Code').parentElement?.textContent).toBe(
     'Claude CodeComplete',
@@ -252,9 +254,9 @@ it('shows every qualification in full and marks only the host scans the caller f
       {...props()}
       localIndex={{
         label: 'partial?',
-        title: 'Last known: Updating · partial',
+        title: 'Last known: Live · partial',
         tone: 'attention',
-        summary: 'The local index is ready and changes are reconciled as they happen.',
+        summary: 'New activity is added as it happens.',
         notes: [
           'Last scan not complete for Codex (reader failed).',
           'Live updates are unavailable.',
@@ -267,7 +269,7 @@ it('shows every qualification in full and marks only the host scans the caller f
     />,
   );
   const trigger = screen.getByRole('button', {
-    name: 'Local index: Last known: Updating · partial',
+    name: 'Local index: Last known: Live · partial',
   });
   expect(trigger.textContent).toBe('index · partial?');
   expect(trigger.querySelector('i')?.className).toBe('xt-status-attention');
@@ -324,7 +326,7 @@ it('keeps supplied capture surfaces their own rows beside an index they say noth
     'Not capturing',
   );
   expect(within(panel).queryByText('Plugin delivery')).toBeNull();
-  expect(within(panel).getByText('Updating')).toBeTruthy();
+  expect(within(panel).getByText('Up to date')).toBeTruthy();
 });
 
 it('links to Settings from the panel only when the action exists, closing the panel', async () => {
@@ -342,7 +344,7 @@ it('links to Settings from the panel only when the action exists, closing the pa
 
 it('closes the index panel on Escape and returns focus to its trigger', async () => {
   render(<Sidebar {...props()} localIndex={updating} onSettings={vi.fn()} />);
-  const trigger = screen.getByRole('button', { name: 'Local index: Updating' });
+  const trigger = screen.getByRole('button', { name: 'Local index: Up to date' });
   trigger.focus();
   const panel = await openIndex();
   expect(trigger.getAttribute('aria-expanded')).toBe('true');

@@ -46,7 +46,7 @@ p { position: absolute; left: 0; right: 0; margin: 0; text-align: center; }
   <path d="M376 156 L394 170 L376 184" stroke="#a852ff" stroke-width="5"
         stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
-<p class="title">Drag XTrace Desktop into Applications</p>
+<p class="title">Drag XTrace into Applications</p>
 <p class="hint">Then open it from your Applications folder.</p>
 </body></html>`;
 

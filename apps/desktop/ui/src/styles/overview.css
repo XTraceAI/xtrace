@@ -369,6 +369,107 @@
   filter: brightness(1.15);
 }
 
+/* ---- Effort: "human + agent", one track per day: the agents' ridge rising
+   from its bottom and your time as a thin line along it ---- */
+/* The track grows with the row up to the human view's 30px. */
+.xt-human[data-variant='paired'] .xt-human-body {
+  --row-h: 34px;
+}
+.xt-human[data-variant='paired'] .xt-human-track {
+  height: min(30px, calc(var(--row-h) - 8px));
+  overflow: hidden;
+}
+/* Height is the quarter's average agents on the report's one scale; the
+   fill fades from the bottom up. */
+.xt-agent-ridge {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.xt-agent-ridge-stop {
+  stop-color: var(--accent);
+}
+/* Your time: a 4px line along the bottom; a single message stays a tick. */
+.xt-human[data-variant='paired'] .xt-human-bar {
+  top: auto;
+  bottom: 0;
+  height: 4px;
+  border-radius: 2px;
+}
+/* A stretch through a repeated (fall-back) hour: the second pass is a
+   second thin line just above the first. */
+.xt-human[data-variant='paired'] .xt-human-track[data-fold] .xt-human-bar {
+  top: auto;
+  bottom: 0;
+}
+.xt-human[data-variant='paired'] .xt-human-track[data-fold] .xt-human-bar[data-lane='1'] {
+  top: auto;
+  bottom: 6px;
+}
+/* Follows the pointer along the track; the day's card names its quarter. */
+.xt-human-hair {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--ink);
+  opacity: 0.55;
+  pointer-events: none;
+}
+/* The headline's three totals, each after a key drawn like its line. */
+.xt-paired-headline {
+  gap: 0;
+}
+.xt-paired-headline .xt-paired-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 12px;
+  border-left: 1px solid var(--divider);
+}
+.xt-paired-headline .xt-paired-stat:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.xt-paired-headline .xt-paired-stat strong {
+  font-size: 16px;
+}
+.xt-paired-headline .xt-paired-stat[data-stat='leverage'] strong {
+  color: var(--secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.xt-paired-headline .xt-paired-stat small {
+  color: var(--meta);
+}
+.xt-paired-key {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 14px;
+  border-radius: 2px;
+}
+.xt-paired-key[data-key='you'] {
+  height: 10px;
+  border-radius: 3px;
+  background: var(--info);
+}
+.xt-paired-key[data-key='ridge'] {
+  height: 10px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--accent) 60%, transparent),
+    color-mix(in srgb, var(--accent) 15%, transparent)
+  );
+}
+.xt-paired-headline > small {
+  margin-left: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Short tiles shed detail; placed last so they win over the rules above. */
 @container overview-tile (max-height: 150px) {
   .xt-overview-take {

@@ -46,6 +46,42 @@ exposes `app_info` and `db_counts` as well, but does not start the capture serve
 automatically. Dashboard, Sessions and Pull requests query production Rust
 metrics through typed native commands.
 
+`xt-judge` runs a grading skill (the bundled, unchanged `vendor/claude-md-doctor`,
+or a skill the user installed and added to Scores because its folder has a valid
+rubric) headless with the user's Claude Code on one project folder, without the user's
+personal Claude Code settings, inside Claude Code's sandbox (the project
+read-only, writes only in the run's grade folder, the network always off, no
+hooks or MCP servers, no saved transcript; Claude Code 2.1.296 or newer). A final step of the same run judges the skill's output against the
+skill's rubric, `xtrace-rubric.md` ([format](GRADING-RUBRIC.md)), and writes
+`result.json`, which one strict protocol v1 reader checks. The score rule
+belongs to the rubric; XTrace never recomputes it. The app stores grades and
+shows them on the Scores page; `xtrace-core grade` runs one end to end for
+developers. `xt_judge::installed` lists the skills installed under the native
+home (`~/.claude/skills`, `~/.agents/skills`, `~/.codex/skills` and enabled,
+user-scoped Claude Code plugins), read-only and bounded, never following a link
+out of a folder. `xt_judge::maker` makes a rubric for an installed skill: the
+bundled helper skill `crates/xt-judge/rubric-maker` (shipped as an app
+resource) runs headless on a staged copy of the skill with exactly a grading
+run's command line and containment, and only XTrace writes the result after
+the rubric reader accepts it. One rule, `xt_judge::rubric_store::applicable`,
+decides which rubric applies to a skill (the folder's own `xtrace-rubric.md`,
+else one XTrace keeps in `<data>/rubrics/` for a plugin's skill or an
+unwritable folder) for discovery, opening an added skill and staging a run.
+`xt_judge::refusals` keeps the rubric maker's refusals across restarts in
+`<data>/rubric-refusals.json`, and one rule (`refusals::in_force`) says a kept
+refusal applies only while the skill's fingerprint is unchanged.
+`xt_judge::skill_link` handles "Add from a link" without any network code:
+one reading of a public GitHub link, unpacking a downloaded archive within
+bounds (no absolute paths, `..`, devices, hard links or links out of the
+repository), finding the skills it holds, one rule for whether each can be
+kept, keeping one in `~/.agents/skills` (never over an existing entry) with
+a `~/.claude/skills` link when that name is free, and the source records in
+`<data>/linked-skills.json`. The app's `skill_link` service is the only
+place it uses the network: on the user's Look up it asks GitHub's API
+(unauthenticated) for the link's commit and downloads that commit's archive
+from `codeload.github.com` with the reqwest client the updater already uses.
+Nothing downloaded is run.
+
 The following table names each subsystem's responsibility. A reserved directory
 or compiling placeholder does not establish implemented behavior.
 
@@ -55,9 +91,9 @@ or compiling placeholder does not establish implemented behavior.
 | `crates/xt-ingest/`       | Normalization, parsers, native source import through the pinned readers, and the canonical writer. |
 | `crates/xt-server/`       | Guarded loopback HTTP/MCP endpoints and the headless core interface.                               |
 | `crates/xt-metrics/`      | Metric definitions, SQL views, aggregation, and shared result DTOs.                                |
-| `crates/xt-probes/`       | GitHub pull-request probes; host/plugin discovery and executable resolution remain planned.        |
+| `crates/xt-probes/`       | GitHub pull-request probes, shared executable lookup and bounded process-group runs.               |
 | `crates/xt-rulebook/`     | Rule lifecycle, local proposals, verification, and fire history.                                   |
-| `crates/xt-judge/`        | Isolated configured judge CLI routes and separate judge-usage accounting.                          |
+| `crates/xt-judge/`        | Headless grading runs by Claude Code, the rubric reader and the strict protocol v1 result reader.  |
 | `crates/xt-fixtures/`     | Development-only fixture loading, database construction, and expected-result assertions.           |
 | `xtask/`                  | Developer commands for shared fixture validation, database creation, and export.                   |
 | `apps/desktop/src-tauri/` | Native lifecycle, Tauri commands, window chrome, tray, updater, and telemetry integration.         |

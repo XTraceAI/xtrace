@@ -28,6 +28,15 @@ it('keeps the label from the state and the colour from the flag', () => {
     label: 'No local history found',
     tone: 'meta',
   });
+  // A host read with gaps the app does not flag (it read sessions) is neutral.
+  expect(hostScanText({ state: 'incomplete', needs_attention: false })).toEqual({
+    label: 'Read with gaps',
+    tone: 'meta',
+  });
+  expect(hostScanText({ state: 'incomplete', needs_attention: true })).toEqual({
+    label: 'Read with gaps',
+    tone: 'warning',
+  });
   expect(hostScanText({ state: 'reader_failed', needs_attention: true })).toEqual({
     label: 'Reader failed',
     tone: 'danger',

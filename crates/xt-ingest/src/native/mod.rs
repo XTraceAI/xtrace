@@ -18,6 +18,7 @@ pub mod codex_pr_links;
 mod human_input;
 pub mod origin;
 pub mod readers_cli;
+pub mod saved_projects;
 pub mod session_compactions;
 pub mod session_creation;
 pub mod session_source;

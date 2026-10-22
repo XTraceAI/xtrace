@@ -7,6 +7,7 @@ export function SectionCard({
   title,
   ruleId,
   meta,
+  metaFull,
   right,
   headerHeight = 40,
   padding = '12px 14px 10px',
@@ -16,6 +17,11 @@ export function SectionCard({
   title: string;
   ruleId?: RuleId;
   meta?: string;
+  /**
+   * The subtitle in full, when it says more than the short line: its tooltip,
+   * and what assistive technology reads in place of the short line.
+   */
+  metaFull?: string;
   right?: ReactNode;
   headerHeight?: 36 | 40;
   padding?: CSSProperties['padding'];
@@ -31,8 +37,15 @@ export function SectionCard({
         </h2>
         {ruleId && <RuleChip ruleId={ruleId} subject={title} />}
         {meta && (
-          <span className="xt-section-meta" title={meta}>
-            {meta}
+          <span className="xt-section-meta" title={metaFull ?? meta}>
+            {metaFull ? (
+              <>
+                <span aria-hidden="true">{meta}</span>
+                <span className="sr-only">{metaFull}</span>
+              </>
+            ) : (
+              meta
+            )}
           </span>
         )}
         {right && <span className="xt-section-right">{right}</span>}

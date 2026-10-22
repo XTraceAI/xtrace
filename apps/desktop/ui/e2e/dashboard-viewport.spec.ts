@@ -302,9 +302,15 @@ async function open(
 }
 
 /** The effort chart plots the chosen measure; the card has no cohort line above it. */
-async function expectMeasure(page: Page, measure: 'agent h' | 'human h' | 'cost') {
-  if (measure === 'human h') {
+async function expectMeasure(
+  page: Page,
+  measure: 'human + agent' | 'agent h' | 'human h' | 'cost',
+) {
+  if (measure === 'human h' || measure === 'human + agent') {
     await expect(page.getByTestId('human-timeline')).toBeVisible();
+    await expect(page.getByTestId('agent-ridge').first()).toBeVisible({
+      visible: measure === 'human + agent',
+    });
     await expect(page.getByTestId('effort-chart')).toHaveCount(0);
     return;
   }
@@ -1236,7 +1242,7 @@ for (const scheme of SCHEMES)
       for (const range of ['7d', '30d'] as const) {
         if (range !== '7d') await page.getByRole('radio', { name: range }).click();
         await expect(page.getByTestId('report-period')).toBeVisible();
-        for (const measure of ['agent h', 'human h', 'cost'] as const) {
+        for (const measure of ['human + agent', 'agent h', 'human h', 'cost'] as const) {
           await page.getByRole('radio', { name: measure }).click();
           await expectMeasure(page, measure);
           const g = await page.evaluate(geometry);
@@ -1271,7 +1277,7 @@ for (const scheme of SCHEMES)
     await page.getByRole('radio', { name: '30d' }).click();
     await expect(page.getByTestId('report-period')).toContainText('Aug 9');
     const margins: Record<string, number> = {};
-    for (const measure of ['agent h', 'human h', 'cost'] as const) {
+    for (const measure of ['human + agent', 'agent h', 'human h', 'cost'] as const) {
       await page.getByRole('radio', { name: measure }).click();
       await expectMeasure(page, measure);
       const g = await page.evaluate(geometry);

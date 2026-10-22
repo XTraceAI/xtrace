@@ -168,9 +168,9 @@ test('native evidence binds source, base and actual OS; release mode also launch
     assert.ok(
       f.calls.includes('node scripts/security/scan-secrets.mjs --content artifacts/sbom.cdx.json'),
     );
-    assert.ok(f.calls.some((x) => x.includes('target.noindex/debug/bundle/macos/')));
+    assert.ok(f.calls.some((x) => x.includes('target.noindex/debug/bundle/macos/XTrace.app ')));
     assert.equal(
-      f.calls.some((x) => x.includes('target.noindex/release/bundle/macos/')),
+      f.calls.some((x) => x.includes('target.noindex/release/bundle/macos/XTrace.app ')),
       release,
     );
     const builds = f.calls.filter((call) => call.startsWith('pnpm tauri build'));

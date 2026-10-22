@@ -16,6 +16,15 @@ const run = (command, args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
+const VENDORED = [
+  {
+    dir: 'vendor/claude-md-doctor',
+    name: 'claude-md-doctor',
+    repository: 'github.com/agent-clinic/claude-md-doctor',
+    license: 'MIT',
+  },
+];
+
 async function main() {
   if (process.argv.slice(2).some((arg) => arg !== '--check'))
     throw new Error('Invalid notices option.');
@@ -55,6 +64,17 @@ async function main() {
           });
       }
     }
+  }
+  // Third-party source bundled in this repository outside the Rust and npm
+  // graphs, named by its pin.
+  for (const source of VENDORED) {
+    const dir = join(root, source.dir);
+    const pin = JSON.parse(await readFile(join(dir, 'pin.json'), 'utf8'));
+    entries.push({
+      package: `vendored: ${source.name}@${pin.upstream_version} (${source.repository}@${pin.commit})`,
+      license: source.license,
+      text: await packageText(dir, 'LICENSE'),
+    });
   }
   const output = renderNotices(entries);
   const destination = join(root, 'THIRD_PARTY_NOTICES.md');
