@@ -707,6 +707,25 @@ fn a_result_without_the_rubric_criteria_fails_as_invalid() {
     assert_eq!(row.failure_reason.as_deref(), Some("result_invalid"));
 }
 
+#[test]
+fn a_report_name_the_store_would_refuse_fails_as_invalid_before_anything_is_kept() {
+    // The protocol and the grades table agree on report names: two dots in
+    // a row are refused by both, so the run says its result was invalid
+    // instead of archiving it and then losing it as an internal error.
+    let world = World::new(
+        "r = json.loads(GOOD)\nr['report'] = 'audit..report.html'\n\
+         write('audit..report.html', '<p>report</p>')\n\
+         write('result.json', json.dumps(r))",
+    );
+    let service = world.service();
+    let run_id = started(service.start(world.project_path(), "claude-md-doctor"));
+    let row = world.settle(&service, &run_id);
+    assert_eq!(row.status, GradeStatus::Failed);
+    assert_eq!(row.failure_reason.as_deref(), Some("result_invalid"));
+    assert!(!world.grades.join(&run_id).exists());
+    assert!(!world.staging_root(&run_id).exists());
+}
+
 fn bundled_version() -> String {
     GradingSkill::open_builtin(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../vendor/claude-md-doctor/skill"),

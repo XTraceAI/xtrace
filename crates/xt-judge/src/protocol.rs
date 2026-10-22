@@ -23,7 +23,9 @@
 //! * `report`, when present, is a relative path to an existing regular
 //!   `.html` file inside the grade folder, symlinks resolved, and not inside
 //!   its work folder ([`crate::runner::WORK_DIR`]), which holds the exam's
-//!   working files, transcript excerpts included.
+//!   working files, transcript excerpts included. It never has two dots in
+//!   a row anywhere ([`report_name_storable`]), which the stored grades
+//!   refuse.
 //! * `complete` is required: false when the skill skipped a stage.
 //! * `criteria` is optional (results written before rubrics have none):
 //!   1 to [`crate::rubric::MAX_CRITERIA`] objects with exactly `name`,
@@ -151,6 +153,8 @@ pub enum ResultError {
     Fix,
     #[error("the result report path is not a valid relative path")]
     ReportPath,
+    #[error("the result report path has two dots in a row, which XTrace cannot store")]
+    ReportName,
     #[error("the result report is not a file inside the grade folder")]
     ReportOutside,
     #[error("the result report is not an HTML file")]
@@ -351,6 +355,15 @@ fn insight(value: &Value) -> Result<Insight, ResultError> {
     })
 }
 
+/// Whether a report path can be stored with its run: the grades table
+/// (migration `0025_grades.sql`, which cannot change once applied) refuses a
+/// report name with `..` anywhere in it, such as `audit..report.html`, even
+/// where it is not a parent-folder step. Checked before anything is kept,
+/// so such a run fails as invalid instead of losing its result.
+pub fn report_name_storable(path: &str) -> bool {
+    !path.contains("..")
+}
+
 /// A relative path naming an existing regular `.html` file inside the grade
 /// folder and outside its work folder.
 fn report(path: &str, grade_dir: &Path) -> Result<String, ResultError> {
@@ -363,6 +376,9 @@ fn report(path: &str, grade_dir: &Path) -> Result<String, ResultError> {
             .all(|component| matches!(component, Component::Normal(_)))
     {
         return Err(ResultError::ReportPath);
+    }
+    if !report_name_storable(path) {
+        return Err(ResultError::ReportName);
     }
     if relative.extension().and_then(|ext| ext.to_str()) != Some(REPORT_EXTENSION) {
         return Err(ResultError::ReportNotHtml);
@@ -591,6 +607,19 @@ mod tests {
         ] {
             assert_eq!(parse_report(bad), Err(ResultError::ReportPath), "{bad}");
         }
+        // Real files whose names the stored grades refuse.
+        std::fs::create_dir_all(grade.join("a..b")).unwrap();
+        for unstorable in ["audit..report.html", "a..b/r.html", "report...html"] {
+            std::fs::write(grade.join(unstorable), "<p>").unwrap();
+            assert!(!report_name_storable(unstorable));
+            assert_eq!(
+                parse_report(unstorable),
+                Err(ResultError::ReportName),
+                "{unstorable}"
+            );
+        }
+        assert!(report_name_storable("sub/r.html"));
+        assert!(report_name_storable("audit.report.html"));
         for outside in ["link.html", "up/outside.html", "missing.html"] {
             assert_eq!(
                 parse_report(outside),
