@@ -316,17 +316,24 @@ export function timelineRows(
 
 /** Wall-clock quarter-hours in a day, as the report sends them. */
 export const QUARTERS = 96;
-/** The ridge's drawing box; the track stretches it to its own size. */
-export const RIDGE_WIDTH = 960;
-export const RIDGE_HEIGHT = 100;
+/**
+ * The agents line's drawing box, about the track's own size in pixels; the
+ * track stretches it to fit. The line keeps a small margin at both ends of
+ * its scale so its stroke is never clipped.
+ */
+export const LINE_WIDTH = 960;
+export const LINE_HEIGHT = 26;
+/** Where no agents running sits, and where the top of the scale sits. */
+const LINE_BOTTOM = LINE_HEIGHT - 1;
+const LINE_TOP = 2;
 
 /** A whole day's agent time beside its human time, from the report's leverage day. */
-export interface AgentRidge {
+export interface AgentLine {
   /** The day's agent time, written as all agent time is. */
   total: string;
   /** The same in words, for the row's accessible name. */
   spoken: string;
-  /** The ridge's outline in the `RIDGE_WIDTH` × `RIDGE_HEIGHT` box; null when no agent ran. */
+  /** The line in the `LINE_WIDTH` × `LINE_HEIGHT` box; null when no agent ran. */
   path: string | null;
   /** e.g. `2:15 PM · 3.2 agents`; null when the day has no agent time. */
   busiest: string | null;
@@ -353,59 +360,57 @@ export const quarterSpan = (index: number) =>
 const at = (value: number) => Math.round(value * 100) / 100;
 
 /**
- * A day's agent ridge: a smooth outline through each quarter's centre, at
- * the height of its average agents on the report's one scale
- * (`min(agents, top) / top` of the box), closed along the bottom. Each
- * step is a curve that stays between its two heights, so the top is never
- * passed and a run of quiet quarters is flat at zero. The curve is smoothed
- * between quarter centres: it starts to rise in the half of an empty
- * quarter next to a busy one, where the card still says `no agents`. Null
- * when no agent ran.
+ * A day's agents line: a smooth curve through each quarter's centre, at the
+ * height of its average agents on the report's one scale (`min(agents, top)
+ * / top` of the space between the box's bottom and top margins), level to
+ * both edges. Each step is a curve that stays between its two heights, so
+ * the top is never passed and a run of quiet quarters lies flat along the
+ * bottom. The curve is smoothed between quarter centres: it starts to rise
+ * in the half of an empty quarter next to a busy one, where the card still
+ * says `no agents`. Null when no agent ran.
  */
-export function ridgePath(agents: readonly number[], top: number): string | null {
+export function agentsLinePath(agents: readonly number[], top: number): string | null {
   if (!(top > 0) || !agents.some((value) => value > 0)) return null;
-  const W = RIDGE_WIDTH;
-  const H = RIDGE_HEIGHT;
   const points = agents.map(
     (value, index) =>
       [
-        ((index + 0.5) / agents.length) * W,
-        H - (Math.min(Math.max(value, 0), top) / top) * H,
+        ((index + 0.5) / agents.length) * LINE_WIDTH,
+        LINE_BOTTOM - (Math.min(Math.max(value, 0), top) / top) * (LINE_BOTTOM - LINE_TOP),
       ] as const,
   );
-  let path = `M0,${H} L0,${at(points[0]![1])} L${at(points[0]![0])},${at(points[0]![1])}`;
+  let path = `M0,${at(points[0]![1])} L${at(points[0]![0])},${at(points[0]![1])}`;
   for (let index = 1; index < points.length; index++) {
     const [x0, y0] = points[index - 1]!;
     const [x, y] = points[index]!;
     const middle = at((x0 + x) / 2);
     path += ` C${middle},${at(y0)} ${middle},${at(y)} ${at(x)},${at(y)}`;
   }
-  return `${path} L${W},${at(points.at(-1)![1])} L${W},${H} Z`;
+  return `${path} L${LINE_WIDTH},${at(points.at(-1)![1])}`;
 }
 
 /**
- * Each whole day's agent ridge, keyed by date: the report's quarter averages
+ * Each whole day's agents line, keyed by date: the report's quarter averages
  * drawn on its one scale, its busiest quarter and its total. Every number is
  * the report's; this only arranges and writes them.
  */
-export function agentRidges(
+export function agentLines(
   days: readonly MetricLeverageDay[],
   top: number,
-): Map<string, AgentRidge> {
+): Map<string, AgentLine> {
   return new Map(
     days.map((day) => {
       const agents = (index: number) => agentsText(day.quarter_agents[index] ?? 0);
-      const ridge: AgentRidge = {
+      const line: AgentLine = {
         total: agentTime(day.agent_ms),
         spoken: agentDuration(day.agent_ms).spoken,
-        path: ridgePath(day.quarter_agents, top),
+        path: agentsLinePath(day.quarter_agents, top),
         busiest:
           day.busiest_quarter === null
             ? null
             : `${clockText(day.busiest_quarter / 4)} · ${agents(day.busiest_quarter)}`,
         quarter: (index) => ({ span: quarterSpan(index), agents: agents(index) }),
       };
-      return [day.date, ridge];
+      return [day.date, line];
     }),
   );
 }

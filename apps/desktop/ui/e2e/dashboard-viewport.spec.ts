@@ -308,7 +308,7 @@ async function expectMeasure(
 ) {
   if (measure === 'human h' || measure === 'human + agent') {
     await expect(page.getByTestId('human-timeline')).toBeVisible();
-    await expect(page.getByTestId('agent-ridge').first()).toBeVisible({
+    await expect(page.getByTestId('agent-line').first()).toBeVisible({
       visible: measure === 'human + agent',
     });
     await expect(page.getByTestId('effort-chart')).toHaveCount(0);

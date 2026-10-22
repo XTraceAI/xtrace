@@ -8,7 +8,7 @@ import type { MetricHumanHoursDay } from '../../data/generated/MetricHumanHoursD
 import type { MetricPrAnalyticsRow } from '../../data/generated/MetricPrAnalyticsRow';
 import type { MetricPrMarker } from '../../data/generated/MetricPrMarker';
 import {
-  agentRidges,
+  agentLines,
   agentsText,
   clockHours,
   concurrencyTakeaway,
@@ -19,7 +19,7 @@ import {
   leverageSpanText,
   previousWholeDaysText,
   quarterSpan,
-  ridgePath,
+  agentsLinePath,
   timelineRows,
   wholeDaysText,
 } from './overview';
@@ -289,7 +289,7 @@ it('names what a whole-day change compares with from the days it covers', () => 
 });
 
 const Q = 15 * 60_000;
-it('writes a quarter’s agents and span on the shared scale, and builds ridges from the report', () => {
+it('writes a quarter’s agents and span on the shared scale, and builds lines from the report', () => {
   expect(agentsText(0)).toBe('no agents');
   expect(agentsText(1)).toBe('1 agent');
   expect(agentsText(0.01)).toBe('<0.1 agents');
@@ -302,37 +302,40 @@ it('writes a quarter’s agents and span on the shared scale, and builds ridges 
   );
   day.agent_ms = 4.5 * Q;
   day.busiest_quarter = 40;
-  const ridge = agentRidges([day], 10).get(day.date)!;
-  expect(ridge.total).toBe('1 h 8 m');
-  expect(ridge.busiest).toBe('10:00 AM · 2 agents');
-  expect(ridge.quarter(43)).toEqual({ span: '10:45 AM–11:00 AM', agents: '0.5 agents' });
-  expect(ridge.quarter(42).agents).toBe('no agents');
+  const line = agentLines([day], 10).get(day.date)!;
+  expect(line.total).toBe('1 h 8 m');
+  expect(line.busiest).toBe('10:00 AM · 2 agents');
+  expect(line.quarter(43)).toEqual({ span: '10:45 AM–11:00 AM', agents: '0.5 agents' });
+  expect(line.quarter(42).agents).toBe('no agents');
   // A positive average below the scale, sent unrounded, never reads as zero.
   day.quarter_agents[43] = 0.01;
-  expect(agentRidges([day], 10).get(day.date)!.quarter(43).agents).toBe('<0.1 agents');
+  expect(agentLines([day], 10).get(day.date)!.quarter(43).agents).toBe('<0.1 agents');
   day.busiest_quarter = null;
-  expect(agentRidges([day], 10).get(day.date)!.busiest).toBeNull();
+  expect(agentLines([day], 10).get(day.date)!.busiest).toBeNull();
 });
 
-/** The heights a ridge outline reaches, in its 0–100 box (100 is the bottom). */
+/** The heights a line reaches, in its 26-high box (25 is no agents, 2 the top). */
 const heights = (path: string) =>
-  [...path.matchAll(/[ML ]?(-?[\d.]+),(-?[\d.]+)/g)].map((match) => Number(match[2]));
+  [...path.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map((match) => Number(match[2]));
 
-it('draws a ridge as tall as each quarter’s agents on one scale, clipped at the top', () => {
+it('draws the agents line as high as each quarter’s agents on one scale, inside its margins', () => {
   const agents = Array.from({ length: 96 }, () => 0);
-  expect(ridgePath(agents, 10)).toBeNull();
+  expect(agentsLinePath(agents, 10)).toBeNull();
   agents[10] = 5;
   agents[11] = 14;
-  const path = ridgePath(agents, 10)!;
-  expect(path.startsWith('M0,100 L0,100')).toBe(true);
-  expect(path.endsWith('L960,100 L960,100 Z')).toBe(true);
+  const path = agentsLinePath(agents, 10)!;
+  // An open line, level to both edges at no agents: no fill, no bottom edge.
+  expect(path.startsWith('M0,25 L5,25')).toBe(true);
+  expect(path.endsWith('L960,25')).toBe(true);
+  expect(path).not.toContain('Z');
   const ys = heights(path);
-  // Half the top is half the height; above the top is drawn at the top.
-  expect(ys).toContain(50);
-  expect(Math.min(...ys)).toBe(0);
-  expect(Math.max(...ys)).toBe(100);
+  // Half the top is half way up; above the top is drawn at the top; the
+  // line stays 1 unit off the bottom and 2 off the top.
+  expect(ys).toContain(13.5);
+  expect(Math.min(...ys)).toBe(2);
+  expect(Math.max(...ys)).toBe(25);
   // Each quarter's point sits at its centre: quarter 10 at 105, quarter 11 at 115.
-  expect(path).toContain(' 105,50');
-  expect(path).toContain(' 115,0');
-  expect(ridgePath(agents, 0)).toBeNull();
+  expect(path).toContain(' 105,13.5');
+  expect(path).toContain(' 115,2');
+  expect(agentsLinePath(agents, 0)).toBeNull();
 });

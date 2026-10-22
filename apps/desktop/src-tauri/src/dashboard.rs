@@ -915,15 +915,16 @@ impl Daily {
         Ok(DashboardLeverage {
             agent_ms: self.agent.active_ms,
             previous_agent_ms: self.previous_agent_ms,
-            ridge_top_agents: RIDGE_TOP_AGENTS,
+            agents_scale_top: AGENTS_SCALE_TOP,
             by_day,
         })
     }
 }
 
-/// The average number of agents running that fills a day's agent ridge to
-/// the top, the same for every day; a busier quarter is drawn at the top.
-pub const RIDGE_TOP_AGENTS: u32 = 10;
+/// The average number of agents running at the top of the scale the
+/// screen draws each day's agents on, the same for every day; a busier
+/// quarter is drawn at the top.
+pub const AGENTS_SCALE_TOP: u32 = 10;
 
 /// A whole day's quarter-hours as the screen gets them: each quarter's
 /// average agents at display precision. The day must be the

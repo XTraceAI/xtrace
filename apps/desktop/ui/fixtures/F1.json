@@ -1807,7 +1807,7 @@
       "leverage": {
         "agent_ms": 1380000,
         "previous_agent_ms": 0,
-        "ridge_top_agents": 10,
+        "agents_scale_top": 10,
         "by_day": [
           {
             "date": "2026-09-01",
@@ -4110,7 +4110,7 @@
       "leverage": {
         "agent_ms": 1380000,
         "previous_agent_ms": 0,
-        "ridge_top_agents": 10,
+        "agents_scale_top": 10,
         "by_day": [
           {
             "date": "2026-08-25",
@@ -8259,7 +8259,7 @@
       "leverage": {
         "agent_ms": 1380000,
         "previous_agent_ms": 0,
-        "ridge_top_agents": 10,
+        "agents_scale_top": 10,
         "by_day": [
           {
             "date": "2026-08-09",

@@ -21,6 +21,7 @@
   --color-warning-tint: var(--warning-tint);
   --color-info: var(--info);
   --color-info-tint: var(--info-tint);
+  --color-human: var(--human);
   --color-danger: var(--danger);
   --color-danger-tint: var(--danger-tint);
   --color-cell: var(--cell);

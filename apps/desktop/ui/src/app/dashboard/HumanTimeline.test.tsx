@@ -288,29 +288,33 @@ it('human + agent: the headline sets your time beside the agents’ and the leve
   mountPaired(paired());
   expect(screen.getByTestId('human-timeline').dataset.variant).toBe('paired');
   expect(screen.getByTestId('effort-headline').textContent).toBe(
-    '1 h 30 myou1 h 18 magents3.4×agent time per hour of yours',
+    '1 h 30 m1 h 18 m3.4×agent time per hour of yours',
   );
   // No break threshold here, and no colour legend.
   expect(screen.queryByText(/break threshold/)).toBeNull();
 });
 
-it('human + agent: one track per day, the agents’ ridge in it and only your total beside it', () => {
+it('human + agent: one track per day, amber bands and the agents line in it, only your total beside it', () => {
   mountPaired(paired());
   const rows = screen.getAllByTestId('human-day');
   expect(rows).toHaveLength(7);
   for (const row of rows) expect(row.querySelectorAll('.xt-human-track')).toHaveLength(1);
-  // A day with no agent time draws no ridge.
-  const ridges = screen.getAllByTestId('agent-ridge');
-  expect(ridges).toHaveLength(1);
-  expect(rows[6]!.contains(ridges[0]!)).toBe(true);
-  expect(ridges[0]!.getAttribute('viewBox')).toBe('0 0 960 100');
-  // 3 agents on the report's scale of 10: 30% up, the 08:00 fifth of one 2%.
-  const path = ridges[0]!.querySelector('path')!;
-  expect(path.getAttribute('d')).toContain(' 25,70');
-  expect(path.getAttribute('d')).toContain(' 325,98');
-  expect(path.getAttribute('fill')).toMatch(/^url\(#xt-ridge-[\w-]+\)$/);
-  const gradient = path.getAttribute('fill')!.slice(5, -1);
-  expect(ridges[0]!.querySelector(`linearGradient[id="${gradient}"]`)).not.toBeNull();
+  // A day with no agent time draws no line.
+  const lines = screen.getAllByTestId('agent-line');
+  expect(lines).toHaveLength(1);
+  expect(rows[6]!.contains(lines[0]!)).toBe(true);
+  expect(lines[0]!.getAttribute('viewBox')).toBe('0 0 960 26');
+  // 3 agents on the report's scale of 10: 30% of the way up (25 → 18.1);
+  // the 08:00 fifth of one 2% (24.54). An open, unfilled line.
+  const path = lines[0]!.querySelector('path')!;
+  expect(path.getAttribute('d')).toContain(' 25,18.1');
+  expect(path.getAttribute('d')).toContain(' 325,24.54');
+  expect(path.getAttribute('d')).not.toContain('Z');
+  expect(path.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+  // The line is drawn over your bands.
+  const track = rows[6]!.querySelector('.xt-human-track')!;
+  expect(track.lastElementChild).toBe(lines[0]);
+  expect(track.querySelectorAll('[data-testid="human-stretch"]')).toHaveLength(2);
   // The right column is your time only; the agents' total is in the card.
   expect(rows[6]!.querySelector('.xt-human-total')!.textContent).toBe('0 h 30 m');
   expect(rows[6]!.textContent).toBe('Sep 70 h 30 m');
@@ -318,12 +322,23 @@ it('human + agent: one track per day, the agents’ ridge in it and only your to
   expect(rows[6]!.getAttribute('aria-label')).toBe(
     'Sep 7: 30 minutes; 12:00 AM–12:30 AM, one message at 2:00 AM; agents: 1 hour 18 minutes, busiest 15 minutes at 12:30 AM · 3 agents',
   );
+  // The person icon heads the totals column.
+  expect(screen.getByTestId('human-total-head').querySelector('svg')).not.toBeNull();
+});
+
+it('human + agent: the headline keys are named icons, without the words you and agents', () => {
+  mountPaired(paired());
+  expect(screen.getByRole('img', { name: 'Your time' }).querySelector('svg')).not.toBeNull();
+  expect(screen.getByRole('img', { name: 'Agent time' }).querySelector('svg')).not.toBeNull();
+  const headline = screen.getByTestId('effort-headline').textContent!;
+  expect(headline).not.toMatch(/\byou\b/);
+  expect(headline).not.toMatch(/\bagents\b/);
 });
 
 it('human + agent: a taller quarter than the scale is drawn at the top', () => {
   mountPaired(paired((r) => (r.leverage.by_day.at(-1)!.quarter_agents[2] = 14)));
-  expect(screen.getByTestId('agent-ridge').querySelector('path')!.getAttribute('d')).toContain(
-    ' 25,0',
+  expect(screen.getByTestId('agent-line').querySelector('path')!.getAttribute('d')).toContain(
+    ' 25,2',
   );
 });
 
@@ -364,10 +379,11 @@ it('human + agent: unknown human time still says so', () => {
   );
 });
 
-it('the plain human h view draws no agent ridge, agent totals or pointer line', () => {
+it('the plain human h view draws no agents line, agent totals, person icon or pointer line', () => {
   mount(paired());
   expect(screen.getByTestId('human-timeline').dataset.variant).toBeUndefined();
-  expect(screen.queryAllByTestId('agent-ridge')).toHaveLength(0);
+  expect(screen.queryAllByTestId('agent-line')).toHaveLength(0);
+  expect(screen.queryByTestId('human-total-head')).toBeNull();
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
   const track = screen
     .getAllByTestId('human-day')
