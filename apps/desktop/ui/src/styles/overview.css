@@ -378,6 +378,8 @@
 .xt-human[data-variant='paired'] .xt-human-track {
   height: min(30px, calc(var(--row-h) - 8px));
   overflow: hidden;
+  /* No 06/12/18 lines inside the rows; the axis above keeps its labels. */
+  background: var(--track);
 }
 /* Your time: full-height bands; a single message stays a thin band. */
 .xt-human[data-variant='paired'] .xt-human-bar {
