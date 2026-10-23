@@ -77,14 +77,14 @@ button.xt-rule-chip {
   text-align: left;
 }
 .xt-rule-table th {
-  padding: 2px 0 2px;
+  padding: 2px 0;
   border-bottom: 1px solid var(--divider);
   color: var(--meta);
   font-weight: 400;
   text-align: left;
 }
 .xt-rule-table td {
-  padding: 1px 0;
+  padding: 0;
   vertical-align: top;
 }
 .xt-rule-table th + th,
@@ -96,9 +96,6 @@ button.xt-rule-chip {
 .xt-rule-table td + td {
   color: var(--ink);
   font-weight: 500;
-}
-.xt-rule-table tbody tr:first-child td {
-  padding-top: 3px;
 }
 .xt-stat-tile {
   display: flex;
