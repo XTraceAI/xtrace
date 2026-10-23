@@ -109,6 +109,17 @@ function stressReport(report: DashboardMetrics): DashboardMetrics {
     ...out.favorite.current,
     model: 'claude-sonnet-4-5-20250929-extended-thinking-preview',
     unknown_reason: null,
+    output_shares: [
+      {
+        of: { kind: 'model', model: 'claude-sonnet-4-5-20250929-extended-thinking-preview' },
+        output_tokens: 620_000,
+      },
+      { of: { kind: 'model', model: 'claude-opus-4-1-20250805' }, output_tokens: 300_000 },
+      { of: { kind: 'unknown_model' }, output_tokens: 76_000 },
+      { of: { kind: 'model', model: 'gpt-5-codex' }, output_tokens: 3_000 },
+      { of: { kind: 'model', model: 'claude-haiku-4-5' }, output_tokens: 600 },
+      { of: { kind: 'model', model: 'o3' }, output_tokens: 400 },
+    ],
   };
   out.favorite.previous = { ...out.favorite.previous, model: 'claude-opus-4-1-20250805' };
   out.days = out.days.map((day, index) => ({
@@ -254,7 +265,12 @@ function partialReport(report: DashboardMetrics): DashboardMetrics {
   tiles.cost = unknown(tiles.cost, 'Selected usage is absent or unpriced');
   out.tokens.counters.total_tokens = null;
   out.cost = { ...out.cost, total_usd: null };
-  out.favorite.current = { model: null, output_tokens: null, unknown_reason: 'no_measured_output' };
+  out.favorite.current = {
+    model: null,
+    output_tokens: null,
+    unknown_reason: 'no_measured_output',
+    output_shares: [],
+  };
   out.days = out.days.map((day) => ({ ...day, human_hours_est: null }));
   return out;
 }
@@ -774,6 +790,102 @@ for (const shape of ['plain', 'stress'] as const)
         await expectPageStill(page);
         expect(errors).toEqual([]);
       });
+
+test("hovering the favorite lists each model's share of output tokens inside the window", async ({
+  page,
+}) => {
+  await open(page, exportFor('stress'), 1120, 720, 'dark');
+  const summary = page.getByTestId('dashboard-summary');
+  await summary.getByRole('button').hover();
+  const tip = page.getByRole('tooltip');
+  // The table is the first line drawn; no definition or title above it.
+  await expect(tip.locator('caption')).toHaveCount(0);
+  await expect(tip.getByText('The model that wrote the most output')).toHaveClass('sr-only');
+  await expect(tip.locator('th')).toHaveText(['Model', 'Share']);
+  const rows = await tip
+    .locator('tbody tr')
+    .evaluateAll((elements) =>
+      elements.map((row) => [...row.children].map((cell) => cell.textContent)),
+    );
+  expect(rows).toEqual([
+    ['claude-sonnet-4-5-20250929-extended-thinking-preview', '62%'],
+    ['claude-opus-4-1-20250805', '30%'],
+    ['no model recorded', '8%'],
+    ['gpt-5-codex', '<1%'],
+    ['claude-haiku-4-5', '<1%'],
+    ['o3', '<1%'],
+  ]);
+  await expect(tip).toContainText('Previous period: claude-opus-4-1-20250805.');
+  // Each share sits at the row's end, inside the popover and the window.
+  const box = (await tip.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(1120);
+  expect(box.y + box.height).toBeLessThanOrEqual(720);
+  // The Share heading and every share end at the same edge.
+  const values = await tip
+    .locator('th:last-child, td:last-child')
+    .evaluateAll((cells) => cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
+  expect(values).toHaveLength(7);
+  expect(new Set(values).size).toBe(1);
+  expect(values[0]).toBeLessThanOrEqual(box.x + box.width);
+  await page.keyboard.press('Escape');
+
+  await open(page, exportFor('partial'), 1120, 720, 'light');
+  await page.getByTestId('dashboard-summary').getByRole('button').hover();
+  await expect(page.getByRole('tooltip')).toContainText('Previous period:');
+  await expect(page.getByRole('tooltip').locator('table')).toHaveCount(0);
+  // With no table to show, the definition stays a drawn line.
+  await expect(
+    page.getByRole('tooltip').getByText('The model that wrote the most output'),
+  ).not.toHaveClass('sr-only');
+});
+
+test('the longest share list opens under the favorite and fits 1120x720', async ({ page }) => {
+  // The most rows the report sends: eight named models, output with no model
+  // and the folded rest, each name long enough to wrap to two or three lines.
+  const long = (n: number) =>
+    `synthetic-provider/very-long-model-name-${n}-extended-thinking-preview-20260930${n % 2 ? '-with-an-even-longer-deployment-suffix-for-wrapping' : ''}`;
+  const body = exportFor('stress');
+  body.dashboards = body.dashboards.map((report) => {
+    report.favorite.current.output_shares = [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        of: { kind: 'model' as const, model: long(index + 1) },
+        output_tokens: 1_000 - index * 50,
+      })),
+      { of: { kind: 'unknown_model' as const }, output_tokens: 200 },
+      { of: { kind: 'other_models' as const, models: 7 }, output_tokens: 150 },
+    ];
+    return report;
+  });
+  await open(page, body, 1120, 720, 'dark');
+  const trigger = page.getByTestId('dashboard-summary').getByRole('button');
+  await trigger.hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip.locator('tbody tr')).toHaveCount(10);
+  await expect(tip.locator('tbody tr').last()).toContainText('7 other models');
+  await expect(tip.locator('thead')).toBeInViewport({ ratio: 1 });
+  await expect(tip.locator('th')).toHaveText(['Model', 'Share']);
+  const lines = await tip
+    .locator('tbody td:first-child')
+    .evaluateAll((cells) =>
+      cells.map((cell) =>
+        Math.round(
+          cell.getBoundingClientRect().height / parseFloat(getComputedStyle(cell).lineHeight),
+        ),
+      ),
+    );
+  expect(Math.min(...lines.slice(0, 8))).toBeGreaterThanOrEqual(2);
+  expect(Math.max(...lines)).toBeGreaterThanOrEqual(3);
+  const anchor = (await trigger.boundingBox())!;
+  const box = (await tip.boundingBox())!;
+  // Below the trigger, not shifted over it, and inside the window.
+  expect(box.y).toBeGreaterThanOrEqual(anchor.y + anchor.height);
+  expect(box.y + box.height).toBeLessThanOrEqual(720);
+  await expect(tip.locator('.xt-rule-context')).toBeInViewport({ ratio: 1 });
+  await expect(tip.locator('.xt-rule-context')).toHaveText(
+    'Previous period: claude-opus-4-1-20250805.',
+  );
+});
 
 for (const shape of ['empty', 'partial'] as const)
   test(`${shape} Dashboard fits 1120x720 without scrolling`, async ({ page }, info) => {

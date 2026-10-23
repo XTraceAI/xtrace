@@ -64,6 +64,43 @@ button.xt-rule-chip {
   margin-top: 8px;
   color: var(--secondary);
 }
+/* A small table under a definition: muted caption and headings, a divider
+   under the headings, values aligned at the end in tabular figures. */
+.xt-rule-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+/* Drawn alone, it is the popover's first line. */
+.xt-rule-table[data-bare] {
+  margin-top: 0;
+}
+.xt-rule-table caption {
+  color: var(--secondary);
+  text-align: left;
+}
+.xt-rule-table th {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--meta);
+  font-weight: 400;
+  text-align: left;
+}
+.xt-rule-table td {
+  padding: 0;
+  vertical-align: top;
+}
+.xt-rule-table th + th,
+.xt-rule-table td + td {
+  padding-left: 16px;
+  text-align: right;
+  white-space: nowrap;
+}
+.xt-rule-table td + td {
+  color: var(--ink);
+  font-weight: 500;
+}
 .xt-stat-tile {
   display: flex;
   align-items: center;

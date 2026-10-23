@@ -1071,12 +1071,22 @@
         "current": {
           "model": "fixture-model-v1",
           "output_tokens": 150,
-          "unknown_reason": null
+          "unknown_reason": null,
+          "output_shares": [
+            {
+              "of": {
+                "kind": "model",
+                "model": "fixture-model-v1"
+              },
+              "output_tokens": 150
+            }
+          ]
         },
         "previous": {
           "model": null,
           "output_tokens": null,
-          "unknown_reason": "no_measured_output"
+          "unknown_reason": "no_measured_output",
+          "output_shares": []
         },
         "rule_id": "M-10"
       },
@@ -2940,12 +2950,22 @@
         "current": {
           "model": "fixture-model-v1",
           "output_tokens": 150,
-          "unknown_reason": null
+          "unknown_reason": null,
+          "output_shares": [
+            {
+              "of": {
+                "kind": "model",
+                "model": "fixture-model-v1"
+              },
+              "output_tokens": 150
+            }
+          ]
         },
         "previous": {
           "model": null,
           "output_tokens": null,
-          "unknown_reason": "no_measured_output"
+          "unknown_reason": "no_measured_output",
+          "output_shares": []
         },
         "rule_id": "M-10"
       },
@@ -6097,12 +6117,22 @@
         "current": {
           "model": "fixture-model-v1",
           "output_tokens": 150,
-          "unknown_reason": null
+          "unknown_reason": null,
+          "output_shares": [
+            {
+              "of": {
+                "kind": "model",
+                "model": "fixture-model-v1"
+              },
+              "output_tokens": 150
+            }
+          ]
         },
         "previous": {
           "model": null,
           "output_tokens": null,
-          "unknown_reason": "no_measured_output"
+          "unknown_reason": "no_measured_output",
+          "output_shares": []
         },
         "rule_id": "M-10"
       },

@@ -305,6 +305,30 @@ for (const scheme of ['light', 'dark'] as const)
     }
   });
 
+test('hovering the favorite model lists its share of output tokens', async ({ page }) => {
+  await open(page, 1120, 720, 'light');
+  await page.getByTestId('dashboard-summary').getByRole('button').hover();
+  const tip = page.getByRole('tooltip');
+  const table = tip.locator('table');
+  // Only the table and the previous period are drawn: the definition and the
+  // table's title are words for the description alone.
+  await expect(tip.getByText('The model that wrote the most output')).toHaveClass('sr-only');
+  await expect(table.locator('caption')).toHaveCount(0);
+  const top = (await tip.boundingBox())!.y;
+  expect((await table.boundingBox())!.y - top).toBeLessThanOrEqual(12);
+  await expect(table.locator('th')).toHaveText(['Model', 'Share']);
+  await expect(table.locator('tbody td')).toHaveText(['fixture-model-v1', '100%']);
+  await expect(tip).toContainText('Previous period: No measured output tokens in this range.');
+  // The table is drawn for the eye; the description reads each row once, as words.
+  await expect(
+    page.getByTestId('dashboard-summary').getByRole('button'),
+  ).toHaveAccessibleDescription(
+    'The model that wrote the most output in the selected range. ' +
+      'Share of output tokens: fixture-model-v1 100%. ' +
+      'Previous period: No measured output tokens in this range.',
+  );
+});
+
 test('keyboard focus opens tile definitions and reaches the Sessions link', async ({ page }) => {
   await open(page, 1120, 720, 'dark');
   const tile = page.getByRole('button', { name: 'Hands-off median definition' });

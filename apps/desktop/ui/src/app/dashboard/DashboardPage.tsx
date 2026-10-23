@@ -22,7 +22,7 @@ import { OverviewCard } from './OverviewCard';
 import { type AutoCheck, type EffortMetric } from './pr-effort';
 import { PrRefresh } from './PrRefresh';
 import { SplitHandle } from './SplitHandle';
-import { favoriteUnknownText, plainReason, plural } from './present';
+import { favoriteUnknownText, outputShareRows, plainReason, plural } from './present';
 import { useDashboardReport, useSelectedRange } from './range';
 import '../../styles/dashboard.css';
 
@@ -136,6 +136,12 @@ function DashboardReport({
           favorite{' '}
           <RulePopover
             ruleId="M-10"
+            table={{
+              caption: 'Share of output tokens',
+              bare: true,
+              columns: ['Model', 'Share'],
+              rows: outputShareRows(favorite.current.output_shares),
+            }}
             context={
               favorite.previous.model
                 ? `Previous period: ${favorite.previous.model}.`
