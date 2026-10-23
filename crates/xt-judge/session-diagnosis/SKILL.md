@@ -114,8 +114,8 @@ then put two spaces before every line of it, blank lines included.)
    - Otherwise: pick `make_skill`.
 4. **The draft.**
    - For `make_skill`: a complete, short SKILL.md. It starts with a line
-     `---`, then `name: <name>`, then `description: <one sentence saying
-     when to use it>`, then a line `---`,
+     `---`, then `name: <name>`, then
+     `description: <one sentence saying when to use it>`, then a line `---`,
      then a `# Title` and a few numbered steps saying what the agent should
      do. Teach what actually fixed it in the messages. Keep it under 40
      lines. The name uses only lowercase letters `a`–`z`, digits and `-`,
@@ -129,8 +129,8 @@ then put two spaces before every line of it, blank lines included.)
      details into a draft. Commands, file names and folder names from the
      project are fine.
 5. **Why.** One sentence that names the message numbers that support your
-   answer, like `[4] and [9] show the same error; in [11] the person gives
-   the right command.`
+   answer, like
+   `[4] and [9] show the same error; in [11] the person gives the right command.`
 
 ## The answer
 
