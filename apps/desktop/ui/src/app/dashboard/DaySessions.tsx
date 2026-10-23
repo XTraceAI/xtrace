@@ -12,16 +12,17 @@ import { useSessionTitles } from '../session-titles';
 import { plural } from './present';
 
 /**
- * The "Sessions" part of a "human + agent" day card: every session with agent
- * time that day, the most first, each with its time that day and a link that
- * opens it, then how many more there were and their time when the report
- * capped the list. The list and every number are the native side's answer for
- * this day of this report, so they add up to the card's agent time.
+ * A "human + agent" day's sessions box, under a heading that names the day:
+ * every session with agent time that day, the most first, each with its time
+ * that day and a link that opens it, then how many more there were and their
+ * time when the report capped the list. The list and every number are the
+ * native side's answer for this day of this report, so they add up to the
+ * day's agent time.
  *
- * Read when the card first opens (this part is only mounted while it is open)
- * and kept for the same report: opening the same day again reads nothing,
+ * Read when the box first opens (it is only mounted while it is open) and
+ * kept for the same report: opening the same day again reads nothing,
  * a new report is a new read, and committed data re-reads it. While a new
- * report's answer is on its way the card keeps the last one, unless stored
+ * report's answer is on its way the box keeps the last one, unless stored
  * content was deleted since, which drops every kept answer. A session is
  * named as the lanes name it: its host title when that has been read, else its
  * saved title or reviewer mark, else its short identifier.
@@ -29,12 +30,18 @@ import { plural } from './present';
 export function DaySessions({
   window,
   date,
+  label,
   range,
+  listRef,
 }: {
   window: DashboardWindow;
   date: string;
+  /** The day as its row writes it, for the heading. */
+  label: string;
   /** The Dashboard's range, carried by each link as the lanes' links carry it. */
   range: TimeRange;
+  /** Given the list of links once the sessions have been read. */
+  listRef?: (list: HTMLUListElement | null) => void;
 }) {
   const { source } = useData();
   const available = Boolean(source.daySessions);
@@ -71,7 +78,7 @@ export function DaySessions({
       No sessions
     </span>
   ) : (
-    <ul className="xt-effort-tip-sessions" role="list" aria-label="Sessions this day">
+    <ul ref={listRef} className="xt-effort-tip-sessions" role="list" aria-label="Sessions this day">
       {sessions.map((session) => {
         const title = displayTitle(
           hostTitle(session.session_id, session.last_ms) ?? session.title,
@@ -108,9 +115,8 @@ export function DaySessions({
   );
   return (
     <>
-      <span className="xt-effort-tip-divider" />
-      <span className="xt-effort-tip-row" data-testid="day-sessions-head">
-        <span>Sessions</span>
+      <span className="xt-effort-tip-head" data-testid="day-sessions-head">
+        <span>Sessions on {label}</span>
       </span>
       {body}
     </>

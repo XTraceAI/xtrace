@@ -299,10 +299,8 @@
 .xt-human-body[data-more-above] {
   mask-image: linear-gradient(to bottom, transparent 0, black 24px);
 }
-/* Fewer days than fit sit at the bottom, so today is always the last row.
-   Of type: an open "human + agent" card puts hidden focus guards (spans)
-   beside its day. */
-.xt-human-row:first-of-type {
+/* Fewer days than fit sit at the bottom, so today is always the last row. */
+.xt-human-row:first-child {
   margin-top: auto;
 }
 .xt-human-row {
@@ -563,21 +561,24 @@
   }
 }
 
-/* The "human + agent" day card holds links to the day's sessions, so it
-   takes the pointer, unlike the plain card. */
-.xt-effort-tip-positioner,
-.xt-effort-tip-positioner .xt-effort-tip {
+/* "human + agent": a day's date opens its sessions box, and shows that it
+   does on hover, quietly. */
+.xt-human[data-variant='paired'] .xt-human-day {
+  cursor: pointer;
+}
+.xt-human[data-variant='paired'] .xt-human-day:hover,
+.xt-human[data-variant='paired'] .xt-human-day[data-popup-open] {
+  color: var(--secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* The sessions box holds links, so it takes the pointer, unlike the day's
+   card. */
+.xt-rule-positioner.xt-day-sessions-positioner,
+.xt-day-sessions-positioner .xt-effort-tip {
   pointer-events: auto;
 }
-/* The gap between the day and its card belongs to the card, so the pointer
-   moving into it never passes over the next day. */
-.xt-effort-tip-positioner[data-side='top'] {
-  padding-bottom: 4px;
-}
-.xt-effort-tip-positioner[data-side='bottom'] {
-  padding-top: 4px;
-}
-.xt-effort-tip-positioner .xt-effort-tip:focus-visible {
+.xt-day-sessions-positioner .xt-effort-tip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

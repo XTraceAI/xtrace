@@ -531,7 +531,7 @@ for (const [width, height] of [
     expect(Math.abs(g.headlineRight - g.rows[0]!.rights.at(-1)!)).toBeLessThanOrEqual(1);
   });
 
-test('a human + agent day card lists the day’s sessions; the pointer moves into it to open one, and so does the keyboard', async ({
+test('in human + agent, hovering a date opens its sessions box, the rest of the row its card, one at a time, and the keyboard opens the box too', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -542,40 +542,94 @@ test('a human + agent day card lists the day’s sessions; the pointer moves int
   // exported it.
   const id = '00000000-0000-4000-8000-000000000001';
   const href = `/sessions/${id}?q=${id}&host=claude&range=7d`;
-  const today = page.getByTestId('human-day').last();
-  const track = (await today.locator('.xt-human-track').boundingBox())!;
-  await page.mouse.move(track.x + track.width * 0.3, track.y + track.height / 2);
-  const card = page.getByRole('dialog', { name: 'Sep 7' });
-  await expect(card.getByTestId('day-sessions-head')).toHaveText('Sessions');
-  const link = card.getByRole('link', { name: `Open session ${id}, 23 minutes this day` });
+  const url = new RegExp(`${href.replace(/[?]/g, '\\?')}$`);
+  const days = page.getByTestId('human-day');
+  const today = days.last();
+  const shown = page.locator('.xt-effort-tip[data-open]');
+  const centre = async (locator: ReturnType<Page['locator']>, across = 0.5) => {
+    const box = (await locator.boundingBox())!;
+    return [box.x + box.width * across, box.y + box.height / 2] as const;
+  };
+  /** Where a just-opened box's link has settled: its positioner may still move it. */
+  const settled = async (locator: ReturnType<Page['locator']>) => {
+    let last = '';
+    await expect
+      .poll(async () => {
+        const now = JSON.stringify(await locator.boundingBox());
+        const same = now === last;
+        last = now;
+        return same;
+      })
+      .toBe(true);
+    return centre(locator);
+  };
+  // The track shows the day's card as before, without sessions.
+  await page.mouse.move(...(await centre(today.locator('.xt-human-track'), 0.3)));
+  await expect(shown).toHaveCount(1);
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(page.getByTestId('day-sessions-head')).toHaveCount(0);
+  // The date opens its sessions box instead, and the card closes.
+  const date = today.getByRole('button', { name: 'Sessions on Sep 7' });
+  await page.mouse.move(...(await centre(date)), { steps: 5 });
+  const box = page.getByRole('dialog', { name: 'Sessions on Sep 7' });
+  await expect(box.getByTestId('day-sessions-head')).toHaveText('Sessions on Sep 7');
+  await expect(shown).toHaveCount(1);
+  await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
+  // The date shows, quietly, that it opens something.
+  expect(
+    await date.evaluate((element) => [
+      getComputedStyle(element).cursor,
+      getComputedStyle(element).textDecorationLine,
+    ]),
+  ).toEqual(['pointer', 'underline']);
+  const link = box.getByRole('link', { name: `Open session ${id}, 23 minutes this day` });
   await expect(link).toHaveText('Session 000000000 h 23 m');
   await expect(link).toHaveAttribute('href', href);
-  // Into the card in small steps: it stays open, and the day it passes over
-  // opens no card of its own.
-  const target = (await link.boundingBox())!;
-  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 15 });
+  // Into the box in small steps: it stays open, alone.
+  await page.mouse.move(...(await settled(link)), { steps: 15 });
   await expect(link).toBeVisible();
-  await expect(page.locator('.xt-effort-tip[data-open]')).toHaveCount(1);
+  await expect(shown).toHaveCount(1);
   if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-day-sessions.png` });
+  // Back onto the track: the box closes and the day's card returns.
+  await page.mouse.move(...(await centre(today.locator('.xt-human-track'), 0.6)), { steps: 15 });
+  await expect(box).toBeHidden();
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(shown).toHaveCount(1);
+  // And the date again, into the box, to open the session.
+  await page.mouse.move(...(await centre(date)), { steps: 5 });
+  await expect(link).toBeVisible();
+  await page.mouse.move(...(await settled(link)), { steps: 15 });
   await page.mouse.down();
   await page.mouse.up();
-  await expect(page).toHaveURL(new RegExp(`${href.replace(/[?]/g, '\\?')}$`));
-  // From the keyboard: Enter on the focused day moves onto its first session,
-  // Escape returns to the day, and Enter on the session opens it.
+  await expect(page).toHaveURL(url);
+  // From the keyboard: focus shows the day's card; Enter moves onto its first
+  // session, Escape returns to the day, arrows still move between days, and
+  // Enter on the session opens it.
   await page.goBack();
   await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
   await page.mouse.move(0, 0);
+  // Reached by Tab, as a keyboard user does: the card opens on visible focus.
   await today.focus();
-  await expect(card).toBeVisible();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
   await expect(today).toBeFocused();
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(box).toBeHidden();
   await page.keyboard.press('Enter');
   await expect(link).toBeFocused();
+  await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
+  await expect(shown).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(today).toBeFocused();
-  await expect(card).toBeHidden();
+  await expect(box).toBeHidden();
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await page.keyboard.press('ArrowUp');
+  await expect(days.nth(-2)).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(today).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(link).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(new RegExp(`${href.replace(/[?]/g, '\\?')}$`));
+  await expect(page).toHaveURL(url);
   expect(errors).toEqual([]);
 });
