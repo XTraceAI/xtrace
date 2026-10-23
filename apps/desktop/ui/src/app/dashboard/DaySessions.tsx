@@ -52,7 +52,9 @@ export function DaySessions({
   const sessions = query.data?.sessions ?? [];
   const hostTitle = useSessionTitles(
     JSON.stringify(['effort-day', date]),
-    sessions.map((session) => ({ id: session.session_id, version: session.agent_ms })),
+    // The session's latest event the read saw, as the lanes use their latest
+    // span: a new event, even one adding no time, reads its title again.
+    sessions.map((session) => ({ id: session.session_id, version: session.last_ms })),
     { keepResolved: true },
   );
   if (!available) return null;
@@ -72,7 +74,7 @@ export function DaySessions({
     <ul className="xt-effort-tip-sessions" role="list" aria-label="Sessions this day">
       {sessions.map((session) => {
         const title = displayTitle(
-          hostTitle(session.session_id, session.agent_ms) ?? session.title,
+          hostTitle(session.session_id, session.last_ms) ?? session.title,
           session.automated_review,
         );
         const name = title ?? `Session ${shortId(session.session_id)}`;

@@ -284,6 +284,9 @@ mod assembled {
         assert_eq!(busy.more_sessions, 7);
         assert_eq!(busy.more_ms, (5 + 10 + 15 + 20 + 25 + 30 + 10) * 60_000);
         assert_eq!(busy.sessions[2].host, "codex");
+        // Each named session carries its latest event the read saw: busy-12's
+        // last, at 19:00.
+        assert_eq!(busy.sessions[2].last_ms, ms("2026-10-03T19:00:00Z"));
         let after =
             xtrace_desktop::dashboard::day_sessions(&metrics, 7, now, "2026-10-04", TimeZone::UTC)
                 .unwrap();

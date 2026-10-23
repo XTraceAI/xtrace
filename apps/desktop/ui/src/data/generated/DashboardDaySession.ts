@@ -16,4 +16,12 @@ automated_review: boolean,
 /**
  * The part of the session's spans inside the day.
  */
-agent_ms: number, };
+agent_ms: number, 
+/**
+ * The end of its latest span the day's read saw (from one gap before the
+ * day to one gap after it, before the report's end), as
+ * `xt_metrics::SessionOnDay::last_ms`. It moves whenever the session's
+ * source gains an event there, even one that adds no time, so the view
+ * reads its host title again; a lane's latest span end does the same.
+ */
+last_ms: number, };

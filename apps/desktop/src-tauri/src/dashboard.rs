@@ -1184,6 +1184,7 @@ pub fn day_sessions(
                 session_id: session.session_id,
                 host: session.host,
                 agent_ms: session.active_ms,
+                last_ms: session.last_ms,
             }
         })
         .collect();

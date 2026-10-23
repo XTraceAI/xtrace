@@ -907,7 +907,8 @@
             "host": "claude",
             "title": null,
             "automated_review": false,
-            "agent_ms": 1380000
+            "agent_ms": 1380000,
+            "last_ms": 1788783780000
           }
         ],
         "more_sessions": 0,
@@ -1125,7 +1126,8 @@
             "host": "claude",
             "title": null,
             "automated_review": false,
-            "agent_ms": 1380000
+            "agent_ms": 1380000,
+            "last_ms": 1788783780000
           }
         ],
         "more_sessions": 0,
@@ -1583,7 +1585,8 @@
             "host": "claude",
             "title": null,
             "automated_review": false,
-            "agent_ms": 1380000
+            "agent_ms": 1380000,
+            "last_ms": 1788783780000
           }
         ],
         "more_sessions": 0,
