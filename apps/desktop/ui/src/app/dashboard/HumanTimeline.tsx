@@ -29,6 +29,8 @@ import '../../styles/overview.css';
 export const VISIBLE_ROWS = 8;
 /** Below this a row's bar and its gap stop reading as separate rows. */
 const MIN_ROW_PX = 28;
+/** The totals columns whose widths follow their widest text. */
+const TOTAL_COLUMNS = ['you', 'agents', 'leverage'] as const;
 /** With the agents line: a taller track, so the line's height reads. */
 const MIN_PAIRED_ROW_PX = 34;
 const HOURS = ['00', '06', '12', '18', '24'];
@@ -71,7 +73,34 @@ export function HumanTimeline({
     [withAgents, report.leverage],
   );
   const minRow = withAgents ? MIN_PAIRED_ROW_PX : MIN_ROW_PX;
+  const root = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  // No total is capped: a busy day's agent hours or a tiny day's leverage
+  // can be far wider than usual. Each totals column is as wide as its
+  // widest text in any row, never narrower than its usual width (in CSS);
+  // the axis and every row read the same widths, so they stay aligned.
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!withAgents || !element) return;
+    let live = true;
+    const fit = () => {
+      if (!live) return;
+      for (const key of TOTAL_COLUMNS) {
+        const widths = [
+          ...element.querySelectorAll<HTMLElement>(
+            `.xt-human-total[data-key="${key}"] > .xt-human-total-text`,
+          ),
+        ].map((text) => text.getBoundingClientRect().width);
+        element.style.setProperty(`--${key}-col`, `${Math.ceil(Math.max(0, ...widths))}px`);
+      }
+    };
+    fit();
+    // Measured again once the mono font has loaded.
+    void document.fonts?.ready.then(fit);
+    return () => {
+      live = false;
+    };
+  }, [withAgents, rows, lines]);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const [above, setAbove] = useState(false);
   /** The range the view last opened on today for; `null` before the first. */
@@ -129,6 +158,7 @@ export function HumanTimeline({
   const unknown = human.active_ms === null;
   return (
     <div
+      ref={root}
       className="xt-effort xt-human"
       data-testid="human-timeline"
       data-variant={withAgents ? 'paired' : undefined}
@@ -376,11 +406,15 @@ function Row({
           data-key={paired ? 'you' : undefined}
           data-unknown={paired && row.total === null ? '' : undefined}
         >
-          {paired ? (line?.yourHours ?? UNMEASURED) : (row.total ?? '—')}
+          {paired ? (
+            <span className="xt-human-total-text">{line?.yourHours ?? UNMEASURED}</span>
+          ) : (
+            (row.total ?? '—')
+          )}
         </span>
         {paired && (
           <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
-            {line ? line.hours : UNMEASURED}
+            <span className="xt-human-total-text">{line ? line.hours : UNMEASURED}</span>
           </span>
         )}
         {paired && (
@@ -391,7 +425,7 @@ function Row({
             data-low={line?.atOrBelowEven ? '' : undefined}
             data-testid="leverage-row-total"
           >
-            {line?.leverage ?? UNMEASURED}
+            <span className="xt-human-total-text">{line?.leverage ?? UNMEASURED}</span>
           </span>
         )}
       </Tooltip.Trigger>

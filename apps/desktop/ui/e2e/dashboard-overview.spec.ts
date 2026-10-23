@@ -40,11 +40,17 @@ const shots = process.env.OVERVIEW_SHOTS;
 const rgb = (hex: string) =>
   `rgb(${[1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16)).join(', ')})`;
 
-async function open(page: Page, scheme: 'light' | 'dark', width = 1440, height = 900) {
+async function open(
+  page: Page,
+  scheme: 'light' | 'dark',
+  width = 1440,
+  height = 900,
+  data: FixtureExport = synthetic,
+) {
   await page.route('**/fixtures/F1.json?import', (route) =>
     route.fulfill({
       contentType: 'text/javascript',
-      body: `export default ${JSON.stringify(synthetic)};`,
+      body: `export default ${JSON.stringify(data)};`,
     }),
   );
   await page.setViewportSize({ width, height });
@@ -461,4 +467,66 @@ for (const scheme of ['light', 'dark'] as const)
       .evaluate((bar) => bar.getBoundingClientRect().height);
     expect(plainBar).toBeGreaterThan(4);
     expect(errors).toEqual([]);
+  });
+
+/**
+ * Neither a day's agent hours nor its leverage has an upper bound: very
+ * large values widen their columns instead of running into a neighbour.
+ * Test data only: 1,234.5 h of agent time and a 123,456.7× leverage.
+ */
+for (const [width, height] of [
+  [1440, 900],
+  [1120, 720],
+] as const)
+  test(`very large agent hours and leverage widen their columns, ${width}x${height}`, async ({
+    page,
+  }) => {
+    const huge = structuredClone(synthetic);
+    const week = huge.dashboards.find((r) => r.window.days === 7)!;
+    week.leverage.by_day.at(-2)!.agent_ms = 1234.5 * 3_600_000;
+    Object.assign(week.leverage.by_day.at(-5)!, { value: 123_456.7, at_or_below_even: false });
+    await open(page, 'light', width, height, huge);
+    await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+    await expect(page.getByTestId('agent-row-total').nth(-2)).toHaveText('1,234.5 h');
+    await expect(page.getByTestId('leverage-row-total').nth(-5)).toHaveText('123,456.7×');
+    const g = await page.getByTestId('human-timeline').evaluate((view) => {
+      const box = (element: Element) => element.getBoundingClientRect();
+      const rows = [...view.querySelectorAll('[data-testid="human-day"]')].map((row) => {
+        const cells = [...row.querySelectorAll('.xt-human-total')];
+        return {
+          rights: cells.map((cell) => box(cell).right),
+          lefts: cells.map((cell) => box(cell).left),
+          // Each text inside its own cell: whole, and clear of its neighbours.
+          whole: cells.every((cell) => {
+            const text = cell.querySelector('.xt-human-total-text')!;
+            return (
+              box(text).left >= box(cell).left - 0.5 && box(text).right <= box(cell).right + 0.5
+            );
+          }),
+          trackRight: box(row.querySelector('.xt-human-track')!).right,
+        };
+      });
+      const heads = ['human-total-head', 'agent-total-head', 'leverage-total-head'].map(
+        (id) => box(view.querySelector(`[data-testid="${id}"]`)!).right,
+      );
+      const leverage = box(
+        view
+          .querySelector('[data-testid="effort-leverage"]')!
+          .closest('.xt-paired-stat')!
+          .querySelector('small')!,
+      );
+      return { rows, heads, headlineRight: leverage.right };
+    });
+    for (const row of g.rows) {
+      expect(row.whole).toBe(true);
+      // Cells in order, none running into the next or into the track.
+      expect(row.lefts[0]!).toBeGreaterThanOrEqual(row.trackRight);
+      for (let index = 1; index < row.lefts.length; index++)
+        expect(row.lefts[index]!).toBeGreaterThanOrEqual(row.rights[index - 1]!);
+      // Every row's columns line up with the head icons above them.
+      row.rights.forEach((right, index) =>
+        expect(Math.abs(right - g.heads[index]!)).toBeLessThanOrEqual(1),
+      );
+    }
+    expect(Math.abs(g.headlineRight - g.rows[0]!.rights.at(-1)!)).toBeLessThanOrEqual(1);
   });

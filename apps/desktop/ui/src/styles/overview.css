@@ -430,13 +430,16 @@
   pointer-events: none;
 }
 /* Three totals columns, the first two in decimal hours: your time (a day
-   holds at most 25 h, `23.9 h` is 36px), the agents' (any day under
-   1,000 h, `999.9 h` is 46px) and the day's leverage. A day with a minute
-   of yours and many agent hours has a very large leverage, so its column
-   holds any value under 100,000 whole (`99,999.9×` is 61px); each column is
-   headed by its icon in its own colour. */
+   holds at most 25 h, `23.9 h` is 36px), the agents' (`999.9 h` is 46px)
+   and the day's leverage (`99,999.9×` is 61px). Those are their usual
+   widths; neither the agents' hours nor the leverage has an upper bound,
+   so each column also grows to its widest text in any row (`--you-col`,
+   `--agents-col`, `--leverage-col`, measured by the timeline). The axis and
+   every row read the same widths, so each column stays under its icon. */
 .xt-human[data-variant='paired'] :is(.xt-human-axis, .xt-human-row) {
-  grid-template-columns: 52px minmax(0, 1fr) 40px 48px 62px;
+  grid-template-columns:
+    52px minmax(0, 1fr) max(40px, var(--you-col, 0px)) max(48px, var(--agents-col, 0px))
+    max(62px, var(--leverage-col, 0px));
 }
 .xt-human-total[data-key='leverage'] {
   color: var(--secondary);
