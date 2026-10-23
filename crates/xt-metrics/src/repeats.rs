@@ -197,15 +197,17 @@ pub(crate) struct StoredCall {
 }
 
 impl StoredCall {
-    /// The call's comparison key when this build can compare it, else which
-    /// piece of grouping evidence is missing. M-20's grouping and every other
-    /// "is this the same call" question read this one answer.
-    pub(crate) fn comparable_key(&self) -> std::result::Result<&str, UnknownRepeats> {
+    /// The call's comparison key, its derivation version beside its digest,
+    /// when this build can compare it, else which piece of grouping evidence
+    /// is missing. Keys of different versions are never the same call. M-20's
+    /// grouping and every other "is this the same call" question read this
+    /// one answer.
+    pub(crate) fn comparable_key(&self) -> std::result::Result<&(u32, String), UnknownRepeats> {
         if self.conflict {
             return Err(UnknownRepeats::ConflictingKey);
         }
-        let (version, key) = self.key.as_ref().ok_or(UnknownRepeats::MissingKey)?;
-        if *version != xt_store::repeat_key::VERSION {
+        let key = self.key.as_ref().ok_or(UnknownRepeats::MissingKey)?;
+        if !xt_store::repeat_key::readable(key.0) {
             return Err(UnknownRepeats::UnsupportedVersion);
         }
         Ok(key)
@@ -256,7 +258,7 @@ fn density(
     blocks: &BTreeMap<String, Vec<StoredCall>>,
     scope: CallScope,
 ) -> std::result::Result<RepeatDensity, UnknownRepeats> {
-    let mut groups = BTreeMap::<String, Group>::new();
+    let mut groups = BTreeMap::<(u32, String), Group>::new();
     for (order, (uuid, stated)) in stretch.records().enumerate() {
         // A record that never stated its call count could have made calls this
         // stretch's total does not include.
@@ -281,7 +283,7 @@ fn density(
             }
             let key = call.comparable_key()?;
             groups
-                .entry(key.to_owned())
+                .entry(key.clone())
                 .or_insert_with(|| Group {
                     count: 0,
                     name: call.name.clone(),

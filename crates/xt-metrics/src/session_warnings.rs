@@ -311,7 +311,7 @@ pub(crate) struct CallFacts {
     /// The call's stored tool name.
     pub(crate) name: String,
     /// The call's M-20 comparison key, or why it cannot be compared.
-    pub(crate) key: std::result::Result<String, UnknownRepeats>,
+    pub(crate) key: std::result::Result<(u32, String), UnknownRepeats>,
     /// The key says the call named no identifying argument, so it only
     /// identifies the tool: a reason then names the tool, not "the same call".
     pub(crate) tool_only: bool,
@@ -675,7 +675,7 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
     };
 
     // Failed calls, grouped by the call's comparison key.
-    let mut failures = BTreeMap::<&str, Vec<(&ToolOutcome, &CallFacts)>>::new();
+    let mut failures = BTreeMap::<&(u32, String), Vec<(&ToolOutcome, &CallFacts)>>::new();
     let mut keyless = BTreeMap::<UnknownRepeats, u64>::new();
     let mut unmatched = 0;
     for outcome in evidence
@@ -1099,7 +1099,7 @@ impl MetricsDb {
                     ended: *ended,
                     call: call.map(|c| CallFacts {
                         name: c.name.clone(),
-                        key: c.comparable_key().map(str::to_owned),
+                        key: c.comparable_key().cloned(),
                         tool_only: c.names_no_argument(),
                     }),
                 });
@@ -1511,7 +1511,7 @@ mod tests {
             ended,
             call: Some(CallFacts {
                 name: "Bash".into(),
-                key: Ok("k".into()),
+                key: Ok((1, "k".into())),
                 tool_only: false,
             }),
         }
@@ -1660,7 +1660,7 @@ mod tests {
         ToolOutcome {
             call: Some(CallFacts {
                 name: "Bash".into(),
-                key: Ok(key.into()),
+                key: Ok((1, key.into())),
                 tool_only: false,
             }),
             ..stopped(uuid, minute, Outcome::Failed)
@@ -1673,7 +1673,7 @@ mod tests {
         let fetch = |uuid: &str, minute| ToolOutcome {
             call: Some(CallFacts {
                 name: "WebFetch".into(),
-                key: Ok("webfetch-any".into()),
+                key: Ok((1, "webfetch-any".into())),
                 tool_only: true,
             }),
             ..failure(uuid, minute, "")

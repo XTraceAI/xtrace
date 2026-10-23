@@ -1,6 +1,7 @@
-//! What the store persists for M-20: the version-1 comparison key beside each
+//! What the store persists for M-20: the versioned comparison key beside each
 //! canonical `tool_use`, derived before content retention decides about the
-//! block, replayed without ever preferring a later observation to a stored one,
+//! block, replayed without ever preferring a later observation of the same
+//! derivation to a stored one (a newer derivation's key replaces an older one),
 //! and added by migration 9 without asking any transcript to be read again.
 
 use rusqlite::{Connection, params, types::Value as SqlValue};
@@ -568,4 +569,92 @@ fn a_record_conflict_that_is_not_about_the_call_leaves_its_key_trusted() {
     .unwrap();
     store.upsert_records(SESSION, &[silent], true).unwrap();
     assert_eq!(columns(&path, "one"), [(0, Some(1), Some(stored), false)]);
+}
+
+/// The version-1 key every Codex `exec` call had before Codex's command
+/// tools were keyed by their own field, as the live index stores it.
+const EXEC_V1: &str = "22f2a1b254303b3a67faea020a59512fc845e302b6a176066165b696050ac2b0";
+
+/// Overwrite one record's stored key as another build would have left it.
+fn store_key(path: &std::path::Path, uuid: &str, version: i64, digest: &str, conflict: bool) {
+    Connection::open(path)
+        .unwrap()
+        .execute(
+            "UPDATE tool_uses SET group_version=?2,group_key=?3,group_conflict=?4 WHERE uuid=?1",
+            params![uuid, version, digest, conflict],
+        )
+        .unwrap();
+}
+
+#[test]
+fn reading_a_call_again_under_a_newer_derivation_replaces_its_key() {
+    let directory = TempDir::new().unwrap();
+    let mut store = open(&directory, RetentionMode::MetadataOnly);
+    let path = directory.path().join("keys.sqlite");
+    let exec = || call("exec", "exec", Some(json!({"input": "cargo test"})));
+    store.upsert_records(SESSION, &[exec()], false).unwrap();
+    let current = columns(&path, "exec");
+    assert_eq!(current[0].1, Some(2));
+    assert!(!current[0].3);
+
+    // An older build stored the version-1 key: reading again replaces it,
+    // with no dispute.
+    store_key(&path, "exec", 1, EXEC_V1, false);
+    store.upsert_records(SESSION, &[exec()], false).unwrap();
+    assert_eq!(columns(&path, "exec"), current);
+
+    // Another key under the same version is a disagreement: the stored key
+    // stays and is disputed.
+    let other = "0".repeat(64);
+    store_key(&path, "exec", 2, &other, false);
+    store.upsert_records(SESSION, &[exec()], false).unwrap();
+    assert_eq!(
+        columns(&path, "exec"),
+        vec![(0, Some(2), Some(other.clone()), true)]
+    );
+
+    // A key from a newer build than this one: this reading changes nothing
+    // and disputes nothing.
+    store_key(&path, "exec", 3, &other, false);
+    store.upsert_records(SESSION, &[exec()], false).unwrap();
+    assert_eq!(
+        columns(&path, "exec"),
+        vec![(0, Some(3), Some(other.clone()), false)]
+    );
+
+    // A dispute already marked stays when the key is replaced: it may be
+    // about the call itself.
+    store_key(&path, "exec", 1, EXEC_V1, true);
+    store.upsert_records(SESSION, &[exec()], false).unwrap();
+    let after = columns(&path, "exec");
+    assert_eq!(
+        (after[0].1, after[0].2.as_ref(), after[0].3),
+        (Some(2), current[0].2.as_ref(), true)
+    );
+}
+
+#[test]
+fn another_tool_at_the_position_disputes_the_key_whatever_its_version() {
+    let directory = TempDir::new().unwrap();
+    let mut store = open(&directory, RetentionMode::MetadataOnly);
+    let path = directory.path().join("keys.sqlite");
+    store
+        .upsert_records(
+            SESSION,
+            &[call("same", "Bash", Some(json!({"command": "ls"})))],
+            false,
+        )
+        .unwrap();
+    // The same position now holds a Codex command tool, keyed under the
+    // newer version: still another call, so the stored key is disputed.
+    store
+        .upsert_records(
+            SESSION,
+            &[call("same", "exec", Some(json!({"input": "ls"})))],
+            false,
+        )
+        .unwrap();
+    let after = columns(&path, "same");
+    assert_eq!(after[0].1, Some(1), "the stored key stands");
+    assert!(after[0].3, "and is disputed");
 }
