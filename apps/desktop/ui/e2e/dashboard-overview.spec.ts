@@ -633,3 +633,51 @@ test('in human + agent, hovering a date opens its sessions box, the rest of the 
   await expect(page).toHaveURL(url);
   expect(errors).toEqual([]);
 });
+
+test('in human + agent, a click on a date neither pins nor toggles its sessions box: one box at a time, and moving off closes it', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page, 'light');
+  await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+  const days = page.getByTestId('human-day');
+  const centre = async (locator: ReturnType<Page['locator']>, across = 0.5) => {
+    const box = (await locator.boundingBox())!;
+    return [box.x + box.width * across, box.y + box.height / 2] as const;
+  };
+  const date = (day: string) => page.getByRole('button', { name: `Sessions on ${day}` });
+  const boxes = page.getByRole('dialog', { name: /^Sessions on / });
+  const shown = page.locator('.xt-effort-tip[data-open]');
+  // Hover Sep 6's date, then click it: its box stays open, as hovering keeps it.
+  await page.mouse.move(...(await centre(date('Sep 6'))), { steps: 5 });
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 6' })).toBeVisible();
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 6' })).toBeVisible();
+  // Hovering Sep 7's date then shows its box alone: the click pinned nothing.
+  await page.mouse.move(...(await centre(date('Sep 7'))), { steps: 5 });
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeVisible();
+  await expect(boxes).toHaveCount(1);
+  await expect(shown).toHaveCount(1);
+  // Click Sep 7's date, then move onto its track: the box closes and the
+  // day's card shows, alone.
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeVisible();
+  await page.mouse.move(...(await centre(days.last().locator('.xt-human-track'), 0.6)), {
+    steps: 15,
+  });
+  await expect(boxes).toHaveCount(0);
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(shown).toHaveCount(1);
+  // And a click on a date, then off the timeline: nothing stays open.
+  await page.mouse.move(...(await centre(date('Sep 7'))), { steps: 5 });
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeVisible();
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.mouse.move(0, 0, { steps: 5 });
+  await expect(boxes).toHaveCount(0);
+  await expect(shown).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

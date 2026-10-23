@@ -581,6 +581,21 @@ it('human + agent: hovering a date opens its sessions box instead of the day’s
   );
 });
 
+it('human + agent: a click on a date neither opens nor closes its sessions box', async () => {
+  await mountPaired(paired());
+  const last = screen.getAllByTestId('human-day').at(-1)!;
+  const date = within(last).getByRole('button', { name: 'Sessions on Sep 7' });
+  fireEvent.click(date);
+  await act(async () => {});
+  expect(screen.queryByRole('dialog')).toBeNull();
+  // Opened by hover, a click leaves it as it was.
+  hoverDate(last);
+  await sessionsBox();
+  fireEvent.click(date);
+  await act(async () => {});
+  expect(screen.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeTruthy();
+});
+
 it('human + agent: Enter on the focused day opens its sessions box onto its first session, Escape returns to the day', async () => {
   const source = new FixtureDataSource(exported());
   const read = vi.spyOn(source, 'daySessions');

@@ -309,7 +309,8 @@ const isAtBottom = (element: HTMLElement) =>
  * In "human + agent" the date also opens the day's sessions box, a list of
  * links, on hover; the pointer can move from the date into it. Enter or
  * Space on the focused day opens it with focus on its first session, and
- * Escape closes it and returns focus to the day. Only one of the day's two
+ * Escape closes it and returns focus to the day. A click on the date does
+ * nothing, so it never leaves a box pinned open. Only one of the day's two
  * boxes shows at a time: the card waits until the sessions box has gone.
  */
 function Row({
@@ -616,6 +617,13 @@ function Row({
     <Popover.Root
       open={sessions}
       onOpenChange={(open, details) => {
+        // A click (or tap) on the date neither opens, pins nor closes the
+        // box: a pinned box would stay open beside the next day's. Hover
+        // opens it, and Enter or Space on the day for the keyboard.
+        if (details.reason === 'trigger-press') {
+          details.cancel();
+          return;
+        }
         if (open) setSessionsShown(true);
         else {
           entering.current = false;
