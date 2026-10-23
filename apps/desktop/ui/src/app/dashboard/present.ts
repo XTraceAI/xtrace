@@ -17,7 +17,10 @@ import { rules, type RuleId } from '../../kit/rules';
 import type { TimeRange } from '../../kit/TopBar';
 import { NO_MODEL } from '../session-context';
 
-/** Presentation only: every value here was calculated by the Rust report. */
+/**
+ * Presentation only: every value here was calculated by the Rust report,
+ * except shares, which `shareText` writes from the report's own counts.
+ */
 
 /**
  * Money and a host's surface are each written in one place (the kit's `usd`
