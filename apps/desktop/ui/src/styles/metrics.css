@@ -72,6 +72,10 @@ button.xt-rule-chip {
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }
+/* Drawn alone, it is the popover's first line. */
+.xt-rule-table[data-bare] {
+  margin-top: 0;
+}
 .xt-rule-table caption {
   color: var(--secondary);
   text-align: left;

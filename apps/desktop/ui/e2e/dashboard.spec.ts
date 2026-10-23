@@ -309,9 +309,13 @@ test('hovering the favorite model lists its share of output tokens', async ({ pa
   await open(page, 1120, 720, 'light');
   await page.getByTestId('dashboard-summary').getByRole('button').hover();
   const tip = page.getByRole('tooltip');
-  await expect(tip).toContainText('The model that wrote the most output in the selected range.');
   const table = tip.locator('table');
-  await expect(table.locator('caption')).toHaveText('Share of output tokens');
+  // Only the table and the previous period are drawn: the definition and the
+  // table's title are words for the description alone.
+  await expect(tip.getByText('The model that wrote the most output')).toHaveClass('sr-only');
+  await expect(table.locator('caption')).toHaveCount(0);
+  const top = (await tip.boundingBox())!.y;
+  expect((await table.boundingBox())!.y - top).toBeLessThanOrEqual(12);
   await expect(table.locator('th')).toHaveText(['Model', 'Share']);
   await expect(table.locator('tbody td')).toHaveText(['fixture-model-v1', '100%']);
   await expect(tip).toContainText('Previous period: No measured output tokens in this range.');

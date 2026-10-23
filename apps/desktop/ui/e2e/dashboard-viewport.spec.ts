@@ -798,8 +798,9 @@ test("hovering the favorite lists each model's share of output tokens inside the
   const summary = page.getByTestId('dashboard-summary');
   await summary.getByRole('button').hover();
   const tip = page.getByRole('tooltip');
-  await expect(tip).toContainText('The model that wrote the most output in the selected range.');
-  await expect(tip.locator('caption')).toHaveText('Share of output tokens');
+  // The table is the first line drawn; no definition or title above it.
+  await expect(tip.locator('caption')).toHaveCount(0);
+  await expect(tip.getByText('The model that wrote the most output')).toHaveClass('sr-only');
   await expect(tip.locator('th')).toHaveText(['Model', 'Share']);
   const rows = await tip
     .locator('tbody tr')
@@ -833,6 +834,10 @@ test("hovering the favorite lists each model's share of output tokens inside the
   await page.getByTestId('dashboard-summary').getByRole('button').hover();
   await expect(page.getByRole('tooltip')).toContainText('Previous period:');
   await expect(page.getByRole('tooltip').locator('table')).toHaveCount(0);
+  // With no table to show, the definition stays a drawn line.
+  await expect(
+    page.getByRole('tooltip').getByText('The model that wrote the most output'),
+  ).not.toHaveClass('sr-only');
 });
 
 test('the longest share list opens under the favorite and fits 1120x720', async ({ page }) => {

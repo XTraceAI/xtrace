@@ -17,6 +17,12 @@ export const RULE_OPEN_DELAY_MS = 450;
  */
 export interface RuleTable {
   caption: string;
+  /**
+   * Draw the table alone, with no definition line or caption above it. Both
+   * are still read in the description. A table with no rows keeps the
+   * definition visible.
+   */
+  bare?: boolean;
   columns: readonly [label: string, value: string];
   rows: readonly { label: string; value: string }[];
 }
@@ -50,6 +56,7 @@ export function RulePopover({
 }) {
   const id = useId();
   const theme = useSurfaceTheme();
+  const bare = Boolean(table?.bare && table.rows.length > 0);
   return (
     <Tooltip.Root disableHoverablePopup>
       <Tooltip.Trigger
@@ -69,15 +76,15 @@ export function RulePopover({
           collisionPadding={8}
         >
           <Tooltip.Popup id={id} role="tooltip" className="xt-rule-popover xt-rule-definition">
-            <span>{text ?? ruleSummary(ruleId)}</span>
+            <span className={bare ? 'sr-only' : undefined}>{text ?? ruleSummary(ruleId)}</span>
             {table && table.rows.length > 0 && (
               <>
                 {/* The popover is read as the trigger's description, where a
                     table counts only as its caption: assistive technology reads
                     these words instead, and the table is drawn for the eye. */}
                 <span className="sr-only">{tableText(table)}</span>
-                <table className="xt-rule-table" aria-hidden="true">
-                  <caption>{table.caption}</caption>
+                <table className="xt-rule-table" data-bare={bare || undefined} aria-hidden="true">
+                  {!bare && <caption>{table.caption}</caption>}
                   <thead>
                     <tr>
                       <th scope="col">{table.columns[0]}</th>

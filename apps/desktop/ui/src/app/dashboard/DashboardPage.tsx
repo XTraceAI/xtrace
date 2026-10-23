@@ -138,6 +138,7 @@ function DashboardReport({
             ruleId="M-10"
             table={{
               caption: 'Share of output tokens',
+              bare: true,
               columns: ['Model', 'Share'],
               rows: outputShareRows(favorite.current.output_shares),
             }}

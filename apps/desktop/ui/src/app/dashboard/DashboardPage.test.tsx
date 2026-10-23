@@ -1721,7 +1721,13 @@ it("lists every model's share of output tokens under the favorite, known or not"
   // the eye, one sentence for the description.
   const table = tip.querySelector('table')!;
   expect(table.getAttribute('aria-hidden')).toBe('true');
-  expect(table.querySelector('caption')!.textContent).toBe('Share of output tokens');
+  // Drawn alone: the definition and the table's title are words for the
+  // description, in the order they are read.
+  expect(table.querySelector('caption')).toBeNull();
+  expect([...tip.querySelectorAll('.sr-only')].map((words) => words.textContent)).toEqual([
+    'The model that wrote the most output in the selected range.',
+    'Share of output tokens: synthetic-a 43%, synthetic-b 35%, no model recorded 22%.',
+  ]);
   expect(
     [...table.querySelectorAll('tr')].map((row) =>
       [...row.querySelectorAll('th, td')].map((cell) => cell.textContent),
@@ -1732,9 +1738,6 @@ it("lists every model's share of output tokens under the favorite, known or not"
     ['synthetic-b', '35%'],
     ['no model recorded', '22%'],
   ]);
-  expect(tip.querySelector('.sr-only')!.textContent).toBe(
-    'Share of output tokens: synthetic-a 43%, synthetic-b 35%, no model recorded 22%.',
-  );
   expect(tip.textContent).toContain('Previous period:');
 });
 
@@ -1752,6 +1755,8 @@ it('lists no shares when the period measured no output', async () => {
   act(() => trigger.focus());
   const tip = await screen.findByRole('tooltip');
   expect(tip.textContent).toContain('The model that wrote the most output');
+  // With no rows, the definition stays a drawn line.
+  expect(tip.querySelector('.sr-only')).toBeNull();
   expect(tip.textContent).not.toContain('Share of output tokens');
   expect(tip.querySelector('table')).toBeNull();
 });
