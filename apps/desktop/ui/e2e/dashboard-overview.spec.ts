@@ -12,7 +12,20 @@ import type { FixtureExport } from '../src/data/generated/FixtureExport';
 const synthetic = structuredClone(fixture as FixtureExport);
 synthetic.dashboards = synthetic.dashboards.map((report) => syntheticOverview(report));
 synthetic.pr_analytics = synthetic.pr_analytics.map(syntheticMergedPage);
+// One very busy day in the 7-day range: a three-digit-hour agent total
+// (`123 h 45 m`), the widest the agents column must hold whole.
+const LONG_AGENT_MS = (123 * 60 + 45) * 60_000;
+{
+  const week = synthetic.dashboards.find((r) => r.window.days === 7)!;
+  const busy = week.leverage.by_day.at(-2)!;
+  week.leverage.agent_ms += LONG_AGENT_MS - busy.agent_ms;
+  busy.agent_ms = LONG_AGENT_MS;
+}
 const shots = process.env.OVERVIEW_SHOTS;
+
+/** `#8b80ff` → `rgb(139, 128, 255)`, as computed styles write colours. */
+const rgb = (hex: string) =>
+  `rgb(${[1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16)).join(', ')})`;
 
 async function open(page: Page, scheme: 'light' | 'dark', width = 1440, height = 900) {
   await page.route('**/fixtures/F1.json?import', (route) =>
@@ -225,6 +238,36 @@ for (const scheme of ['light', 'dark'] as const)
     expect(columns.human).toBe(scheme === 'dark' ? '#2dd4bf' : '#0d9488');
     expect(columns.headColor).toBe(scheme === 'dark' ? 'rgb(45, 212, 191)' : 'rgb(13, 148, 136)');
     await expect(page.getByTestId('effort-leverage')).toHaveText(/^[\d.]+×$/);
+    // The leverage sits at the right, its right edge on the agents column's,
+    // with both totals keys on the left of the same line.
+    const edges = await page.evaluate(() => {
+      // The figure's visible text: its last word's right edge.
+      const leverage = document
+        .querySelector('[data-testid="effort-leverage"]')!
+        .closest('.xt-paired-stat')!
+        .querySelector('small')!
+        .getBoundingClientRect();
+      const figure = document
+        .querySelector('[data-testid="effort-leverage"]')!
+        .getBoundingClientRect();
+      const agents = document
+        .querySelector('[data-testid="agent-row-total"]')!
+        .getBoundingClientRect();
+      const keys = [...document.querySelectorAll('.xt-paired-key')].map((key) =>
+        key.getBoundingClientRect(),
+      );
+      return {
+        leverageRight: leverage.right,
+        agentsRight: agents.right,
+        leverageTop: leverage.top,
+        keyTops: keys.map((key) => key.top),
+        keyRights: keys.map((key) => key.right),
+        leverageLeft: figure.left,
+      };
+    });
+    expect(Math.abs(edges.leverageRight - edges.agentsRight)).toBeLessThanOrEqual(1);
+    for (const right of edges.keyRights) expect(right).toBeLessThan(edges.leverageLeft);
+    for (const top of edges.keyTops) expect(Math.abs(top - edges.leverageTop)).toBeLessThan(12);
     await expect(headline).not.toContainText('break threshold');
     // Each row: your total, then the agents' whole-day total from the
     // report, both whole on one line and centred with the track.
@@ -242,11 +285,13 @@ for (const scheme of ['light', 'dark'] as const)
           whole: totals.every((total) => total.scrollWidth <= total.clientWidth),
           oneLine: totals.every((total) => total.getBoundingClientRect().height < 20),
           agentColor: getComputedStyle(totals[1]!).color,
+          accent: getComputedStyle(totals[1]!).getPropertyValue('--accent').trim(),
           humanColor: getComputedStyle(totals[0]!).color,
         };
       }),
     );
     expect(rowTotals).toHaveLength(report.leverage.by_day.length);
+    expect(rowTotals.at(-2)!.texts[1]).toBe('123 h 45 m');
     rowTotals.forEach((row, index) => {
       expect(row.texts).toHaveLength(2);
       expect(row.texts[0]).toMatch(/^(\d+ h \d+ m|—)$/);
@@ -255,6 +300,8 @@ for (const scheme of ['light', 'dark'] as const)
       expect(row.whole).toBe(true);
       expect(row.oneLine).toBe(true);
       expect(row.agentColor).not.toBe(row.humanColor);
+      // The agents' totals are the agent line's purple.
+      expect(row.agentColor).toBe(rgb(row.accent));
     });
     // The line's highest point is the day's busiest average on the report's
     // one scale, in its box from 25 (no agents) up to 2 (the top); your time
@@ -305,6 +352,27 @@ for (const scheme of ['light', 'dark'] as const)
     await expect(card.getByTestId('agent-day-total')).toHaveText(/^\d+ h \d+ m$/);
     if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-${scheme}.png` });
     await page.mouse.move(0, 0);
+    // In a narrow card the headline wraps whole items onto a second line and
+    // grows, never running into the hour axis below it.
+    const narrow = await timelineView.evaluate((view) => {
+      view.style.width = '420px';
+      const headline = view.querySelector('.xt-paired-headline')!.getBoundingClientRect();
+      const items = [...view.querySelectorAll('.xt-paired-headline > *')].map((item) =>
+        item.getBoundingClientRect(),
+      );
+      const axis = view.querySelector('.xt-human-axis')!.getBoundingClientRect();
+      const result = {
+        lines: new Set(items.map((item) => Math.round(item.top))).size,
+        itemsBottom: Math.max(...items.map((item) => item.bottom)),
+        headlineBottom: headline.bottom,
+        axisTop: axis.top,
+      };
+      view.style.width = '';
+      return result;
+    });
+    expect(narrow.lines).toBeGreaterThan(1);
+    expect(narrow.itemsBottom).toBeLessThanOrEqual(narrow.headlineBottom + 0.5);
+    expect(narrow.headlineBottom).toBeLessThanOrEqual(narrow.axisTop + 0.5);
     // 30 days scroll, opened on today.
     await range(page, '30d');
     const body = page.getByTestId('human-timeline-body');

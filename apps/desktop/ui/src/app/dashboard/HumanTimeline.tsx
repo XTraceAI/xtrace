@@ -231,13 +231,13 @@ function PairedHeadline({ report }: { report: DashboardMetrics }) {
         </span>
         <strong data-testid="effort-agent-total">{agentTime(report.leverage.agent_ms)}</strong>
       </span>
+      {unknown && <small>Could not tell which messages a person sent.</small>}
       <span className="xt-paired-stat" data-stat="leverage">
         <strong data-testid="effort-leverage">
           {leverage === null ? UNMEASURED : `${continuous(leverage)}×`}
         </strong>
         <small>agent time per hour of yours</small>
       </span>
-      {unknown && <small>Could not tell which messages a person sent.</small>}
     </p>
   );
 }

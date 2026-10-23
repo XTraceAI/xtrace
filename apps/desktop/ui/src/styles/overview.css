@@ -427,13 +427,14 @@
   opacity: 0.55;
   pointer-events: none;
 }
-/* Two totals columns: your time, then the agents' as wide again; each
-   headed by its icon in its own colour. */
+/* Two totals columns: your time, then the agents', wide enough for a
+   three-digit hour (`123 h 45 m`); each headed by its icon in its own
+   colour. */
 .xt-human[data-variant='paired'] :is(.xt-human-axis, .xt-human-row) {
-  grid-template-columns: 52px minmax(0, 1fr) 64px 64px;
+  grid-template-columns: 52px minmax(0, 1fr) 64px 72px;
 }
 .xt-human-total[data-key='agents'] {
-  color: var(--accent-ink);
+  color: var(--accent);
 }
 .xt-human-total-head {
   display: flex;
@@ -442,12 +443,19 @@
   color: var(--human);
 }
 .xt-human-total-head[data-key='agents'] {
-  color: var(--accent-ink);
+  color: var(--accent);
 }
-/* The headline's three totals, each after its icon and a key drawn like
-   its mark. */
-.xt-paired-headline {
-  gap: 0;
+/* The headline's two totals on the left, each after its icon and a key
+   drawn like its mark, and the leverage at the right, its right edge on
+   the totals columns' (the plot's 4px inset). Narrow cards wrap whole
+   items onto a second line. */
+/* Both classes, so this wins over the shared headline's fixed height
+   whichever stylesheet loads last. */
+.xt-effort-headline.xt-paired-headline {
+  flex-wrap: wrap;
+  gap: 4px 0;
+  height: auto;
+  min-height: 22px;
 }
 .xt-paired-headline .xt-paired-stat {
   display: inline-flex;
@@ -462,6 +470,11 @@
 }
 .xt-paired-headline .xt-paired-stat strong {
   font-size: 16px;
+}
+.xt-paired-headline .xt-paired-stat[data-stat='leverage'] {
+  margin-left: auto;
+  padding: 0 4px 0 12px;
+  border-left: 0;
 }
 .xt-paired-headline .xt-paired-stat[data-stat='leverage'] strong {
   color: var(--secondary);
@@ -482,7 +495,7 @@
   color: var(--human);
 }
 .xt-paired-key[data-key='agents'] {
-  color: var(--accent-ink);
+  color: var(--accent);
 }
 .xt-paired-swatch[data-key='band'] {
   display: inline-block;
