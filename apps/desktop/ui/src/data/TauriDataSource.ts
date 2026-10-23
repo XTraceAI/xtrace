@@ -124,8 +124,13 @@ export class TauriDataSource implements DataSource {
       invoke<DashboardSpanDetail>(commands.spanDetail, { sessionId, startMs, endMs, readId }),
     cancel: (readId: string) => invoke<void>(commands.cancelSpanDetail, { readId }),
   };
-  daySessions(windowDays: number, windowEndMs: number, date: string) {
-    return invoke<DashboardDaySessions>(commands.daySessions, { windowDays, windowEndMs, date });
+  daySessions(windowDays: number, windowEndMs: number, timezone: string, date: string) {
+    return invoke<DashboardDaySessions>(commands.daySessions, {
+      windowDays,
+      windowEndMs,
+      timezone,
+      date,
+    });
   }
   readonly ruleActivity = {
     read: (readId: string) => invoke<RuleActivityResult>(commands.ruleActivityRead, { readId }),

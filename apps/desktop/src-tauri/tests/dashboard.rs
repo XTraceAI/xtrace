@@ -309,6 +309,88 @@ mod assembled {
     /// nor its card, so the card still adds up to the report's day. An event
     /// timestamped after the end but already stored when the report is read
     /// is left out of both.
+    /// A day's card splits its days in the zone its report was read in, not
+    /// the one the system has when the card opens: read in Los Angeles,
+    /// opened after the Mac moved to Tokyo, every day still adds up to the
+    /// report's. Tokyo's own days would not; a zone that cannot be found is
+    /// refused.
+    #[test]
+    fn a_days_card_keeps_its_reports_zone() {
+        use xtrace_desktop::dashboard::{day_sessions, report_zone};
+        let db = steady_user(21);
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let los_angeles = TimeZone::get("America/Los_Angeles").unwrap();
+        let tokyo = TimeZone::get("Asia/Tokyo").unwrap();
+        let now = ms("2026-10-05T20:00:00Z");
+        let report = assemble(
+            &metrics,
+            7,
+            now,
+            los_angeles.clone(),
+            MetricClock::System,
+            &catalog(),
+            TypingRate::default(),
+            BreakLength::default(),
+        )
+        .unwrap();
+        assert_eq!(report.window.timezone, "America/Los_Angeles");
+        // The system zone is now Tokyo; the request carries the report's.
+        let zone = report_zone(&report.window.timezone, &tokyo, MetricClock::System).unwrap();
+        assert_eq!(zone.iana_name(), Some("America/Los_Angeles"));
+        let mut listed = 0;
+        let mut differs = false;
+        for day in &report.leverage.by_day {
+            let card =
+                day_sessions(&metrics, 7, report.window.end_ms, &day.date, zone.clone()).unwrap();
+            assert_eq!(
+                (card.start_ms, card.end_ms, card.agent_ms),
+                (day.start_ms, day.end_ms, day.agent_ms),
+                "{}",
+                day.date
+            );
+            assert_eq!(
+                card.sessions.iter().map(|s| s.agent_ms).sum::<u64>() + card.more_ms,
+                day.agent_ms
+            );
+            listed += card.sessions.len();
+            // Tokyo's days are other days: refused, or other bounds or time.
+            differs |= day_sessions(&metrics, 7, report.window.end_ms, &day.date, tokyo.clone())
+                .map_or(true, |other| {
+                    (other.start_ms, other.end_ms, other.agent_ms)
+                        != (day.start_ms, day.end_ms, day.agent_ms)
+                });
+        }
+        assert!(listed > 0);
+        assert!(differs, "the system zone's days would not have matched");
+        // The current zone when the names agree; refused when the name is
+        // unknown, empty, overlong, or unnamed while the system zone has a
+        // name. Two unnamed zones cannot be told apart, so that is the
+        // current one.
+        assert_eq!(
+            report_zone("Asia/Tokyo", &tokyo, MetricClock::System).unwrap(),
+            tokyo
+        );
+        let long = "A".repeat(65);
+        for name in ["Mars/Olympus_Mons", "", "system-local", long.as_str()] {
+            assert!(
+                matches!(
+                    report_zone(name, &tokyo, MetricClock::System),
+                    Err(StateError::InvalidDayRequest)
+                ),
+                "{name:?}"
+            );
+        }
+        let unnamed = TimeZone::fixed(jiff::tz::offset(9));
+        assert_eq!(
+            report_zone("system-local", &unnamed, MetricClock::System).unwrap(),
+            unnamed
+        );
+        assert_eq!(
+            report_zone("UTC", &TimeZone::UTC, MetricClock::Fixture).unwrap(),
+            TimeZone::UTC
+        );
+    }
+
     #[test]
     fn a_days_card_reads_only_what_its_report_read() {
         let event = |id: &str, ts: &str| assistant(id, ts, None);

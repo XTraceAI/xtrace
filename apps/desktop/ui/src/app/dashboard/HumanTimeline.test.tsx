@@ -534,7 +534,7 @@ it('human + agent: a day card lists its sessions with their time, and a session 
     name: `Open session ${F1_SESSION}, 23 minutes this day`,
   });
   const report = paired();
-  expect(read).toHaveBeenCalledExactlyOnceWith(7, report.window.end_ms, '2026-09-07');
+  expect(read).toHaveBeenCalledExactlyOnceWith(7, report.window.end_ms, 'UTC', '2026-09-07');
   expect(screen.getByTestId('day-sessions-head').textContent).toBe('Sessions');
   // Named as the lanes name it, with its time that day as all agent time is written.
   expect(link.textContent).toBe('Session 000000000 h 23 m');

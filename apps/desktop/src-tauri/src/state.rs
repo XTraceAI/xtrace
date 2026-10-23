@@ -1199,16 +1199,19 @@ impl AppState {
     }
 
     /// The sessions behind one day of a Dashboard report's agent time,
-    /// pinned to the window that report was read over (its `window.end_ms`),
-    /// so the list adds up to the day the report showed.
+    /// pinned to the window that report was read over (its `window.end_ms`)
+    /// and to the zone it was read in (its `window.timezone`), so the list
+    /// adds up to the day the report showed even if the system zone changed.
     pub fn day_sessions(
         &self,
         window_days: u32,
         window_end_ms: i64,
+        timezone: &str,
         date: &str,
     ) -> Result<crate::dto::DashboardDaySessions, StateError> {
         self.with_metrics(window_days, |metrics, inputs| {
-            crate::dashboard::day_sessions(metrics, window_days, window_end_ms, date, inputs.zone)
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            crate::dashboard::day_sessions(metrics, window_days, window_end_ms, date, zone)
         })
     }
 

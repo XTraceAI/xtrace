@@ -357,14 +357,16 @@ export interface DataSource {
    * The sessions behind one day of a Dashboard report's agent time, each with
    * its time that day, the most first, capped with the rest counted — read
    * when that day's card opens. The request names the report's range, the
-   * end of the window it was read over (`window.end_ms`) and one of its days;
-   * the native side derives the day itself, so the list adds up to that day's
-   * agent time in the report. Metadata only. Present natively and in a
-   * fixture, which answers as its export read.
+   * end of the window it was read over (`window.end_ms`), the zone it was
+   * read in (`window.timezone`) and one of its days; the native side derives
+   * the day itself in that zone, so the list adds up to that day's agent time
+   * in the report even if the system zone has changed since. Metadata only.
+   * Present natively and in a fixture, which answers as its export read.
    */
   daySessions?(
     windowDays: number,
     windowEndMs: number,
+    timezone: string,
     date: string,
   ): Promise<DashboardDaySessions>;
   /** Present only natively, where the app checks pull requests on its own. */

@@ -5,4 +5,8 @@ import type { DashboardDaySessions } from "./DashboardDaySessions";
  * One day's sessions as a fixture carries them, for every day of every
  * range's report, pinned to that report's window end.
  */
-export type FixtureDaySessions = { window_days: number, window_end_ms: number, date: string, sessions: DashboardDaySessions, };
+export type FixtureDaySessions = { window_days: number, window_end_ms: number, 
+/**
+ * The report's `window.timezone`, as the request names it.
+ */
+timezone: string, date: string, sessions: DashboardDaySessions, };

@@ -1006,6 +1006,8 @@ pub struct FixtureDaySessions {
     pub window_days: u32,
     #[ts(type = "number")]
     pub window_end_ms: i64,
+    /// The report's `window.timezone`, as the request names it.
+    pub timezone: String,
     pub date: String,
     pub sessions: DashboardDaySessions,
 }

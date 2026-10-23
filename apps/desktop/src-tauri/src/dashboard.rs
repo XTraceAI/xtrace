@@ -177,6 +177,11 @@ pub(crate) fn dashboard_window(
         clock,
     }
 }
+/// What a report names a system zone with no IANA name.
+const UNNAMED_ZONE: &str = "system-local";
+/// The longest zone name a request may carry; IANA names are far shorter.
+const MAX_ZONE_NAME_BYTES: usize = 64;
+
 /// The zone a report names: its IANA name, `UTC` for the fixture clock, or
 /// `system-local` when the OS reports none.
 pub(crate) fn zone_name(zone: &TimeZone, clock: MetricClock) -> String {
@@ -184,9 +189,32 @@ pub(crate) fn zone_name(zone: &TimeZone, clock: MetricClock) -> String {
         .unwrap_or(if clock == MetricClock::Fixture {
             "UTC"
         } else {
-            "system-local"
+            UNNAMED_ZONE
         })
         .into()
+}
+
+/// The zone a report was read in, from the name it sent (`window.timezone`,
+/// written by [`zone_name`]), so a read that follows the report splits its
+/// days where the report did even if the system zone changed since.
+///
+/// A name the current zone also has is the current zone. Any other IANA name
+/// is looked up; one that cannot be found, an empty or overlong name, and
+/// `system-local` while the current zone has a name are refused. Two zones
+/// without a name cannot be told apart, so `system-local` is taken to be the
+/// current zone when that has no name either.
+pub fn report_zone(
+    name: &str,
+    current: &TimeZone,
+    clock: MetricClock,
+) -> Result<TimeZone, StateError> {
+    if name == zone_name(current, clock) {
+        return Ok(current.clone());
+    }
+    if name.is_empty() || name.len() > MAX_ZONE_NAME_BYTES || name == UNNAMED_ZONE {
+        return Err(StateError::InvalidDayRequest);
+    }
+    TimeZone::get(name).map_err(|_| StateError::InvalidDayRequest)
 }
 
 /// The returned spans of the fixed lane window, how many there were before the
@@ -1091,7 +1119,8 @@ fn agent_events(whole: Window, selected: Window) -> xt_metrics::Result<Window> {
 /// counts it too, and it has a new end, so its card is read again.
 /// A range that is not a preset, an anchor beyond what JSON carries exactly,
 /// or a date that is not one of the range's days is refused before anything
-/// is listed.
+/// is listed. `zone` is the report's own zone ([`report_zone`]), never the
+/// one the system has when the card opens.
 ///
 /// The [`DAY_SESSION_LIMIT`] sessions with the most time are named, with the
 /// saved title and reviewer mark the lanes name them by; the rest are counted
@@ -1180,14 +1209,18 @@ pub fn fixture_day_sessions(
     let metrics = MetricsDb::open(path)?;
     let mut out = Vec::new();
     for days in WINDOW_PRESETS {
+        // The zone the fixture's reports name, read back as a request names it.
+        let timezone = zone_name(&TimeZone::UTC, MetricClock::Fixture);
+        let zone = report_zone(&timezone, &TimeZone::UTC, MetricClock::Fixture)?;
         for bucket in
-            whole_days(selected_window(days, now_ms)?, TimeZone::UTC)?.local_days(TimeZone::UTC)?
+            whole_days(selected_window(days, now_ms)?, zone.clone())?.local_days(zone.clone())?
         {
             let date = bucket.date.to_string();
             out.push(FixtureDaySessions {
                 window_days: days,
                 window_end_ms: now_ms,
-                sessions: day_sessions(&metrics, days, now_ms, &date, TimeZone::UTC)?,
+                timezone: timezone.clone(),
+                sessions: day_sessions(&metrics, days, now_ms, &date, zone.clone())?,
                 date,
             });
         }

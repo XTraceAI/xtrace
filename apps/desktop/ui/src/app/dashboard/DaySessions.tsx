@@ -42,8 +42,8 @@ export function DaySessions({
   // content" is shown after it, not even while the next answer is on its way.
   const purges = usePurgeEpoch();
   const query = useQuery({
-    queryKey: queryKeys.daySessions(purges, window.days, window.end_ms, date),
-    queryFn: () => source.daySessions!(window.days, window.end_ms, date),
+    queryKey: queryKeys.daySessions(purges, window.days, window.end_ms, window.timezone, date),
+    queryFn: () => source.daySessions!(window.days, window.end_ms, window.timezone, date),
     enabled: available,
     staleTime: Infinity,
     placeholderData: (previous, previousQuery) =>

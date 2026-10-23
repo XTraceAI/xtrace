@@ -804,6 +804,7 @@
     {
       "window_days": 7,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-01",
       "sessions": {
         "date": "2026-09-01",
@@ -818,6 +819,7 @@
     {
       "window_days": 7,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-02",
       "sessions": {
         "date": "2026-09-02",
@@ -832,6 +834,7 @@
     {
       "window_days": 7,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-03",
       "sessions": {
         "date": "2026-09-03",
@@ -846,6 +849,7 @@
     {
       "window_days": 7,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-04",
       "sessions": {
         "date": "2026-09-04",
@@ -860,6 +864,7 @@
     {
       "window_days": 7,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-05",
       "sessions": {
         "date": "2026-09-05",
@@ -874,6 +879,7 @@
     {
       "window_days": 7,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-06",
       "sessions": {
         "date": "2026-09-06",
@@ -888,6 +894,7 @@
     {
       "window_days": 7,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-07",
       "sessions": {
         "date": "2026-09-07",
@@ -910,6 +917,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-25",
       "sessions": {
         "date": "2026-08-25",
@@ -924,6 +932,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-26",
       "sessions": {
         "date": "2026-08-26",
@@ -938,6 +947,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-27",
       "sessions": {
         "date": "2026-08-27",
@@ -952,6 +962,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-28",
       "sessions": {
         "date": "2026-08-28",
@@ -966,6 +977,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-29",
       "sessions": {
         "date": "2026-08-29",
@@ -980,6 +992,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-30",
       "sessions": {
         "date": "2026-08-30",
@@ -994,6 +1007,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-31",
       "sessions": {
         "date": "2026-08-31",
@@ -1008,6 +1022,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-01",
       "sessions": {
         "date": "2026-09-01",
@@ -1022,6 +1037,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-02",
       "sessions": {
         "date": "2026-09-02",
@@ -1036,6 +1052,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-03",
       "sessions": {
         "date": "2026-09-03",
@@ -1050,6 +1067,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-04",
       "sessions": {
         "date": "2026-09-04",
@@ -1064,6 +1082,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-05",
       "sessions": {
         "date": "2026-09-05",
@@ -1078,6 +1097,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-06",
       "sessions": {
         "date": "2026-09-06",
@@ -1092,6 +1112,7 @@
     {
       "window_days": 14,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-07",
       "sessions": {
         "date": "2026-09-07",
@@ -1114,6 +1135,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-09",
       "sessions": {
         "date": "2026-08-09",
@@ -1128,6 +1150,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-10",
       "sessions": {
         "date": "2026-08-10",
@@ -1142,6 +1165,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-11",
       "sessions": {
         "date": "2026-08-11",
@@ -1156,6 +1180,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-12",
       "sessions": {
         "date": "2026-08-12",
@@ -1170,6 +1195,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-13",
       "sessions": {
         "date": "2026-08-13",
@@ -1184,6 +1210,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-14",
       "sessions": {
         "date": "2026-08-14",
@@ -1198,6 +1225,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-15",
       "sessions": {
         "date": "2026-08-15",
@@ -1212,6 +1240,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-16",
       "sessions": {
         "date": "2026-08-16",
@@ -1226,6 +1255,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-17",
       "sessions": {
         "date": "2026-08-17",
@@ -1240,6 +1270,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-18",
       "sessions": {
         "date": "2026-08-18",
@@ -1254,6 +1285,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-19",
       "sessions": {
         "date": "2026-08-19",
@@ -1268,6 +1300,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-20",
       "sessions": {
         "date": "2026-08-20",
@@ -1282,6 +1315,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-21",
       "sessions": {
         "date": "2026-08-21",
@@ -1296,6 +1330,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-22",
       "sessions": {
         "date": "2026-08-22",
@@ -1310,6 +1345,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-23",
       "sessions": {
         "date": "2026-08-23",
@@ -1324,6 +1360,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-24",
       "sessions": {
         "date": "2026-08-24",
@@ -1338,6 +1375,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-25",
       "sessions": {
         "date": "2026-08-25",
@@ -1352,6 +1390,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-26",
       "sessions": {
         "date": "2026-08-26",
@@ -1366,6 +1405,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-27",
       "sessions": {
         "date": "2026-08-27",
@@ -1380,6 +1420,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-28",
       "sessions": {
         "date": "2026-08-28",
@@ -1394,6 +1435,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-29",
       "sessions": {
         "date": "2026-08-29",
@@ -1408,6 +1450,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-30",
       "sessions": {
         "date": "2026-08-30",
@@ -1422,6 +1465,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-08-31",
       "sessions": {
         "date": "2026-08-31",
@@ -1436,6 +1480,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-01",
       "sessions": {
         "date": "2026-09-01",
@@ -1450,6 +1495,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-02",
       "sessions": {
         "date": "2026-09-02",
@@ -1464,6 +1510,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-03",
       "sessions": {
         "date": "2026-09-03",
@@ -1478,6 +1525,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-04",
       "sessions": {
         "date": "2026-09-04",
@@ -1492,6 +1540,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-05",
       "sessions": {
         "date": "2026-09-05",
@@ -1506,6 +1555,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-06",
       "sessions": {
         "date": "2026-09-06",
@@ -1520,6 +1570,7 @@
     {
       "window_days": 30,
       "window_end_ms": 1788825600000,
+      "timezone": "UTC",
       "date": "2026-09-07",
       "sessions": {
         "date": "2026-09-07",

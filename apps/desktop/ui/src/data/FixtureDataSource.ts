@@ -218,14 +218,15 @@ export class FixtureDataSource implements DataSource {
   };
   /**
    * The sessions the export read through the native command for exactly this
-   * day of exactly this range's report. A day the export did not read fails
-   * rather than being worked out here.
+   * day of exactly this range's report, in its zone. A request the export did
+   * not read fails rather than being worked out here.
    */
-  async daySessions(windowDays: number, windowEndMs: number, date: string) {
+  async daySessions(windowDays: number, windowEndMs: number, timezone: string, date: string) {
     const entry = this.fixture.day_sessions.find(
       (candidate) =>
         candidate.window_days === windowDays &&
         candidate.window_end_ms === windowEndMs &&
+        candidate.timezone === timezone &&
         candidate.date === date,
     );
     if (!entry) throw new Error('The fixture export holds no sessions for this day.');
