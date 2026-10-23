@@ -530,3 +530,52 @@ for (const [width, height] of [
     }
     expect(Math.abs(g.headlineRight - g.rows[0]!.rights.at(-1)!)).toBeLessThanOrEqual(1);
   });
+
+test('a human + agent day card lists the day’s sessions; the pointer moves into it to open one, and so does the keyboard', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page, 'light');
+  await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+  // F1's one session with agent time, on its last day, as the native read
+  // exported it.
+  const id = '00000000-0000-4000-8000-000000000001';
+  const href = `/sessions/${id}?q=${id}&host=claude&range=7d`;
+  const today = page.getByTestId('human-day').last();
+  const track = (await today.locator('.xt-human-track').boundingBox())!;
+  await page.mouse.move(track.x + track.width * 0.3, track.y + track.height / 2);
+  const card = page.getByRole('dialog', { name: 'Sep 7' });
+  await expect(card.getByTestId('day-sessions-head')).toHaveText('Sessions');
+  const link = card.getByRole('link', { name: `Open session ${id}, 23 minutes this day` });
+  await expect(link).toHaveText('Session 000000000 h 23 m');
+  await expect(link).toHaveAttribute('href', href);
+  // Into the card in small steps: it stays open, and the day it passes over
+  // opens no card of its own.
+  const target = (await link.boundingBox())!;
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 15 });
+  await expect(link).toBeVisible();
+  await expect(page.locator('.xt-effort-tip[data-open]')).toHaveCount(1);
+  if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-day-sessions.png` });
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page).toHaveURL(new RegExp(`${href.replace(/[?]/g, '\\?')}$`));
+  // From the keyboard: Enter on the focused day moves onto its first session,
+  // Escape returns to the day, and Enter on the session opens it.
+  await page.goBack();
+  await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+  await page.mouse.move(0, 0);
+  await today.focus();
+  await expect(card).toBeVisible();
+  await expect(today).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(today).toBeFocused();
+  await expect(card).toBeHidden();
+  await page.keyboard.press('Enter');
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`${href.replace(/[?]/g, '\\?')}$`));
+  expect(errors).toEqual([]);
+});

@@ -1039,6 +1039,132 @@ pub fn tokens_by_host(
     })
 }
 
+/// The most sessions a day's card names; the rest are counted with their time.
+pub const DAY_SESSION_LIMIT: usize = 8;
+
+// The listed sessions' context is read in one bounded statement.
+const _: () = assert!(
+    DAY_SESSION_LIMIT <= xt_metrics::MAX_SESSIONS,
+    "DAY_SESSION_LIMIT must not exceed the sessions one context read accepts"
+);
+
+/// The whole local days a report's leverage, its human time and its
+/// day-by-day agent time cover: every local day the selected window touches,
+/// made whole. [`Daily::read`] reads agent time over exactly these days (the
+/// span `human_hours` reports as its current period).
+fn whole_days(days: u32, window_end_ms: i64, zone: TimeZone) -> Result<Window, StateError> {
+    Ok(selected_window(days, window_end_ms)?.whole_local_days(zone)?)
+}
+
+/// Which sessions had agent time on one whole local day of a Dashboard
+/// report, and how much each, for the "human + agent" day card.
+///
+/// The request names the report's range, the end of the window it was read
+/// over (`window.end_ms`) and one of its days; the day's bounds are derived
+/// here, from the same whole days the report's leverage uses, so the list
+/// adds up to that day's `agent_ms` in the report that was showing, whatever
+/// the clock says now. A range that is not a preset, an anchor beyond what
+/// JSON carries exactly, or a date that is not one of the range's days is
+/// refused before anything is listed.
+///
+/// The [`DAY_SESSION_LIMIT`] sessions with the most time are named, with the
+/// saved title and reviewer mark the lanes name them by; the rest are counted
+/// with their time, so the card can say "and N more" and still add up.
+pub fn day_sessions(
+    db: &MetricsDb,
+    days: u32,
+    window_end_ms: i64,
+    date: &str,
+    zone: TimeZone,
+) -> Result<DashboardDaySessions, StateError> {
+    validate_window(days)?;
+    if window_end_ms.unsigned_abs() >= 1_u64 << 53 || date.len() != "2026-01-01".len() {
+        return Err(StateError::InvalidDayRequest);
+    }
+    let day: jiff::civil::Date = date.parse().map_err(|_| StateError::InvalidDayRequest)?;
+    // One spelling per day, as the report writes it.
+    if day.to_string() != date {
+        return Err(StateError::InvalidDayRequest);
+    }
+    let window =
+        whole_days(days, window_end_ms, zone.clone()).map_err(|_| StateError::InvalidDayRequest)?;
+    let (found, context) = db
+        .read_snapshot(|db| {
+            let Some(found) = db.sessions_on_day(window, zone, day)? else {
+                return Ok(None);
+            };
+            let mut ids: Vec<&str> = found
+                .sessions
+                .iter()
+                .take(DAY_SESSION_LIMIT)
+                .map(|session| session.session_id.as_str())
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            let context = db.session_context(&ids)?;
+            Ok(Some((found, context)))
+        })?
+        .ok_or(StateError::InvalidDayRequest)?;
+    let context: std::collections::BTreeMap<_, _> = context
+        .into_iter()
+        .map(|row| ((row.id.clone(), row.host.clone()), row))
+        .collect();
+    let more = found.sessions.iter().skip(DAY_SESSION_LIMIT);
+    let more_sessions = more.clone().count() as u64;
+    let more_ms = more
+        .map(|session| session.active_ms)
+        .try_fold(0_u64, u64::checked_add)
+        .ok_or(StateError::CountRange)?;
+    let sessions = found
+        .sessions
+        .into_iter()
+        .take(DAY_SESSION_LIMIT)
+        .map(|session| {
+            let row = context.get(&(session.session_id.clone(), session.host.clone()));
+            DashboardDaySession {
+                title: row.and_then(|row| row.title.clone()),
+                automated_review: row.is_some_and(|row| row.automated_review),
+                session_id: session.session_id,
+                host: session.host,
+                agent_ms: session.active_ms,
+            }
+        })
+        .collect();
+    let answer = DashboardDaySessions {
+        date: found.day.date,
+        start_ms: found.day.start_ms,
+        end_ms: found.day.end_ms,
+        agent_ms: found.day.active_ms,
+        sessions,
+        more_sessions,
+        more_ms,
+    };
+    checked_value(&answer)?;
+    Ok(answer)
+}
+
+/// Every day's sessions for every range of a fixture's reports, read through
+/// the same function and pinned clock as those reports.
+pub fn fixture_day_sessions(
+    path: &std::path::Path,
+    now_ms: i64,
+) -> Result<Vec<FixtureDaySessions>, StateError> {
+    let metrics = MetricsDb::open(path)?;
+    let mut out = Vec::new();
+    for days in WINDOW_PRESETS {
+        for bucket in whole_days(days, now_ms, TimeZone::UTC)?.local_days(TimeZone::UTC)? {
+            let date = bucket.date.to_string();
+            out.push(FixtureDaySessions {
+                window_days: days,
+                window_end_ms: now_ms,
+                sessions: day_sessions(&metrics, days, now_ms, &date, TimeZone::UTC)?,
+                date,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// The longest stored session identifier a span request names, in bytes. The
 /// lanes only ever name identifiers they were sent; this bounds anything else.
 const MAX_SESSION_ID_BYTES: usize = 512;

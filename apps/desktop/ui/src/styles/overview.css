@@ -299,8 +299,10 @@
 .xt-human-body[data-more-above] {
   mask-image: linear-gradient(to bottom, transparent 0, black 24px);
 }
-/* Fewer days than fit sit at the bottom, so today is always the last row. */
-.xt-human-row:first-child {
+/* Fewer days than fit sit at the bottom, so today is always the last row.
+   Of type: an open "human + agent" card puts hidden focus guards (spans)
+   beside its day. */
+.xt-human-row:first-of-type {
   margin-top: auto;
 }
 .xt-human-row {
@@ -559,4 +561,65 @@
   .xt-overview-prs {
     display: none;
   }
+}
+
+/* The "human + agent" day card holds links to the day's sessions, so it
+   takes the pointer, unlike the plain card. */
+.xt-effort-tip-positioner,
+.xt-effort-tip-positioner .xt-effort-tip {
+  pointer-events: auto;
+}
+/* The gap between the day and its card belongs to the card, so the pointer
+   moving into it never passes over the next day. */
+.xt-effort-tip-positioner[data-side='top'] {
+  padding-bottom: 4px;
+}
+.xt-effort-tip-positioner[data-side='bottom'] {
+  padding-top: 4px;
+}
+.xt-effort-tip-positioner .xt-effort-tip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.xt-effort-tip-sessions {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* Each session is one line: its name, cut to fit, and its time that day. It
+   keeps the card's own type and shows it is a link on hover and focus, as a
+   lane's session name does. */
+.xt-effort-tip-session {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 -4px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.xt-effort-tip-session span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xt-effort-tip-session b {
+  flex: none;
+  color: var(--accent-ink);
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.xt-effort-tip-session:hover span {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+.xt-effort-tip-session:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }

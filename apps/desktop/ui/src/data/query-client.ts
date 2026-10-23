@@ -81,4 +81,12 @@ export const queryKeys = {
    */
   spanDetail: (purges: number, sessionId: string, startMs: number, endMs: number) =>
     ['metrics', 'span-detail', purges, sessionId, startMs, endMs] as const,
+  /**
+   * One day's sessions in one Dashboard report: its range, its window's end
+   * and the day. Under `metrics`, so committed data re-reads it; otherwise it
+   * is kept, so opening the same day of the same report again reads nothing.
+   * Every new report has a new window end, and so a new key.
+   */
+  daySessions: (windowDays: number, windowEndMs: number, date: string) =>
+    ['metrics', 'day-sessions', windowDays, windowEndMs, date] as const,
 } as const;

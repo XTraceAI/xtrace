@@ -3,6 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import fixture from '../../../fixtures/F1.json';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { DataProvider } from '../../data/DataProvider';
+import { FixtureDataSource } from '../../data/FixtureDataSource';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { HumanTimeline } from './HumanTimeline';
 
@@ -21,6 +24,13 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+
+const exported = () => structuredClone(fixture as FixtureExport);
+/** Where a session link landed. */
+function SessionPath() {
+  const location = useLocation();
+  return <p data-testid="session-path">{`${location.pathname}${location.search}`}</p>;
+}
 
 const H = 3_600_000;
 /** F1's 7-day report with synthetic stretches (not real history) on its last two days. */
@@ -285,15 +295,29 @@ function paired(edit?: (report: DashboardMetrics) => void) {
     edit?.(r);
   });
 }
-const mountPaired = (r: DashboardMetrics) =>
-  render(
-    <ThemeProvider>
-      <HumanTimeline report={r} withAgents />
-    </ThemeProvider>,
+/**
+ * The "human + agent" view reads each open day's sessions, so it is mounted
+ * with F1's fixture source (or `source`) and a router for the session links.
+ */
+async function mountPaired(r: DashboardMetrics, source = new FixtureDataSource(exported())) {
+  const view = render(
+    <MemoryRouter initialEntries={['/dashboard']}>
+      <ThemeProvider>
+        <DataProvider source={source}>
+          <Routes>
+            <Route path="/dashboard" element={<HumanTimeline report={r} withAgents />} />
+            <Route path="/sessions/:sessionId" element={<SessionPath />} />
+          </Routes>
+        </DataProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
   );
+  await screen.findAllByTestId('human-day');
+  return view;
+}
 
-it('human + agent: the headline sets your time beside the agents’ and the leverage', () => {
-  mountPaired(paired());
+it('human + agent: the headline sets your time beside the agents’ and the leverage', async () => {
+  await mountPaired(paired());
   expect(screen.getByTestId('human-timeline').dataset.variant).toBe('paired');
   expect(screen.getByTestId('effort-headline').textContent).toBe(
     '1 h 30 m1 h 18 m3.4×agent time per hour of yours',
@@ -302,8 +326,8 @@ it('human + agent: the headline sets your time beside the agents’ and the leve
   expect(screen.queryByText(/break threshold/)).toBeNull();
 });
 
-it('human + agent: one track per day, your bands and the agents line in it, your total and the agents’ beside it', () => {
-  mountPaired(paired());
+it('human + agent: one track per day, your bands and the agents line in it, your total and the agents’ beside it', async () => {
+  await mountPaired(paired());
   const rows = screen.getAllByTestId('human-day');
   expect(rows).toHaveLength(7);
   for (const row of rows) expect(row.querySelectorAll('.xt-human-track')).toHaveLength(1);
@@ -348,8 +372,8 @@ it('human + agent: one track per day, your bands and the agents line in it, your
   expect(screen.getByTestId('agent-total-head').querySelector('svg')).not.toBeNull();
 });
 
-it('human + agent: the headline keys are named icons, without the words you and agents', () => {
-  mountPaired(paired());
+it('human + agent: the headline keys are named icons, without the words you and agents', async () => {
+  await mountPaired(paired());
   expect(screen.getByRole('img', { name: 'Your time' }).querySelector('svg')).not.toBeNull();
   expect(screen.getByRole('img', { name: 'Agent time' }).querySelector('svg')).not.toBeNull();
   const headline = screen.getByTestId('effort-headline').textContent!;
@@ -357,15 +381,15 @@ it('human + agent: the headline keys are named icons, without the words you and 
   expect(headline).not.toMatch(/\bagents\b/);
 });
 
-it('human + agent: a taller quarter than the scale is drawn at the top', () => {
-  mountPaired(paired((r) => (r.leverage.by_day.at(-1)!.quarter_agents[2] = 14)));
+it('human + agent: a taller quarter than the scale is drawn at the top', async () => {
+  await mountPaired(paired((r) => (r.leverage.by_day.at(-1)!.quarter_agents[2] = 14)));
   expect(screen.getByTestId('agent-line').querySelector('path')!.getAttribute('d')).toContain(
     ' 25,2',
   );
 });
 
 it('human + agent: the day card adds agent time, the busiest quarter and the quarter under the pointer', async () => {
-  mountPaired(paired());
+  await mountPaired(paired());
   const last = screen.getAllByTestId('human-day').at(-1)!;
   // Keyboard focus: the day's card without a pointer line.
   fireEvent.focus(last);
@@ -384,12 +408,21 @@ it('human + agent: the day card adds agent time, the busiest quarter and the qua
   expect(screen.getByTestId('agent-quarter').textContent).toBe('8:00 AM–8:15 AM0.2 agents');
   fireEvent.pointerMove(lane, { clientX: 500 });
   expect(screen.getByTestId('agent-quarter').textContent).toBe('12:30 PM–12:45 PMno agents');
+  // Off the track the hairline goes; the card keeps naming the last quarter,
+  // so it does not shrink while the pointer moves into it.
   fireEvent.pointerLeave(lane);
+  expect(screen.queryByTestId('agent-hairline')).toBeNull();
+  expect(screen.getByTestId('agent-quarter').textContent).toBe('12:30 PM–12:45 PMno agents');
+  // Closing the card forgets it.
+  fireEvent.blur(last);
+  await waitFor(() => expect(screen.queryByTestId('agent-quarter')).toBeNull());
+  fireEvent.focus(last);
+  await screen.findByText('Busiest 15 min');
   expect(screen.queryByTestId('agent-quarter')).toBeNull();
 });
 
 it('human + agent: a day without leverage says none when your time was zero, unknown when it is unknown', async () => {
-  mountPaired(
+  await mountPaired(
     paired((r) => {
       // Sep 1: your time unknown that day; the others measured as zero.
       r.human_hours.current.by_day[0]!.active_ms = null;
@@ -419,7 +452,7 @@ it('human + agent: a day without leverage says none when your time was zero, unk
 });
 
 it('human + agent: a day the report marks at or below even is red, and says so in words', async () => {
-  mountPaired(
+  await mountPaired(
     paired((r) => {
       const day = r.leverage.by_day[2]!;
       day.value = 0.8;
@@ -450,8 +483,8 @@ it('human + agent: a day the report marks at or below even is red, and says so i
   );
 });
 
-it('human + agent: unknown human time still says so', () => {
-  mountPaired(
+it('human + agent: unknown human time still says so', async () => {
+  await mountPaired(
     paired((r) => {
       r.human_hours.current.active_ms = null;
       r.tiles.leverage = { ...r.tiles.leverage, value: null };
@@ -484,4 +517,123 @@ it('the plain human h view draws no agents line, agent totals, person icon or po
   track.getBoundingClientRect = () => ({ left: 0, width: 960, top: 0 }) as DOMRect;
   fireEvent.pointerMove(track, { clientX: 321 });
   expect(screen.queryByTestId('agent-hairline')).toBeNull();
+});
+
+const F1_SESSION = '00000000-0000-4000-8000-000000000001';
+/** A day's open card: the popover the focused or hovered day shows. */
+const card = (day = 'Sep 7') => screen.findByRole('dialog', { name: day });
+
+it('human + agent: a day card lists its sessions with their time, and a session opens from it', async () => {
+  const source = new FixtureDataSource(exported());
+  const read = vi.spyOn(source, 'daySessions');
+  await mountPaired(paired(), source);
+  const last = screen.getAllByTestId('human-day').at(-1)!;
+  last.focus();
+  const link = await within(await card()).findByRole('link', {
+    name: `Open session ${F1_SESSION}, 23 minutes this day`,
+  });
+  const report = paired();
+  expect(read).toHaveBeenCalledExactlyOnceWith(7, report.window.end_ms, '2026-09-07');
+  expect(screen.getByTestId('day-sessions-head').textContent).toBe('Sessions');
+  // Named as the lanes name it, with its time that day as all agent time is written.
+  expect(link.textContent).toBe('Session 000000000 h 23 m');
+  expect(screen.queryByTestId('day-sessions-more')).toBeNull();
+  // The link carries the list that finds the session, over the report's range.
+  expect(link.getAttribute('href')).toBe(
+    `/sessions/${F1_SESSION}?q=${F1_SESSION}&host=claude&range=7d`,
+  );
+  // Focus stays on the day: arrows still move between days.
+  expect(document.activeElement).toBe(last);
+  fireEvent.click(link);
+  expect((await screen.findByTestId('session-path')).textContent).toBe(
+    `/sessions/${F1_SESSION}?q=${F1_SESSION}&host=claude&range=7d`,
+  );
+});
+
+it('human + agent: Enter moves into the card onto its first session, Escape returns to the day', async () => {
+  const source = new FixtureDataSource(exported());
+  const read = vi.spyOn(source, 'daySessions');
+  await mountPaired(paired(), source);
+  const days = screen.getAllByTestId('human-day');
+  const last = days.at(-1)!;
+  last.focus();
+  const link = await within(await card()).findByRole('link');
+  fireEvent.keyDown(last, { key: 'Enter' });
+  await waitFor(() => expect(document.activeElement).toBe(link));
+  // Arrow keys inside the card are the card's own, not the days'.
+  fireEvent.keyDown(link, { key: 'ArrowUp' });
+  expect(document.activeElement).toBe(link);
+  fireEvent.keyDown(link, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Sep 7' })).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(last));
+  // Enter opens it again, straight into it; the same day of the same report
+  // is not read again.
+  fireEvent.keyDown(last, { key: 'Enter' });
+  const again = await within(await card()).findByRole('link');
+  await waitFor(() => expect(document.activeElement).toBe(again));
+  expect(read).toHaveBeenCalledTimes(1);
+  // Moving to another day closes this one's card and opens that day's.
+  fireEvent.keyDown(again, { key: 'Escape' });
+  await waitFor(() => expect(document.activeElement).toBe(last));
+  fireEvent.keyDown(last, { key: 'ArrowUp' });
+  expect(document.activeElement).toBe(days.at(-2));
+  const before = await card('Sep 6');
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Sep 7' })).toBeNull());
+  // A day without agent time says so.
+  await waitFor(() =>
+    expect(within(before).getByTestId('day-sessions-state').textContent).toBe('No sessions'),
+  );
+});
+
+it('human + agent: a day card says when its sessions are being read or could not be read, and counts the rest', async () => {
+  const source = new FixtureDataSource(exported());
+  let answer: (value: Awaited<ReturnType<FixtureDataSource['daySessions']>>) => void = () => {};
+  const day = paired().leverage.by_day.at(-1)!;
+  const read = vi
+    .spyOn(source, 'daySessions')
+    .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+    .mockRejectedValueOnce(new Error('refused'));
+  await mountPaired(paired(), source);
+  const [first, last] = [
+    screen.getAllByTestId('human-day').at(0)!,
+    screen.getAllByTestId('human-day').at(-1)!,
+  ];
+  fireEvent.focus(last);
+  const open = await card();
+  expect((await within(open).findByTestId('day-sessions-state')).textContent).toBe(
+    'Reading sessions…',
+  );
+  // Eight named, the most time first, and the rest counted with their time.
+  answer({
+    date: day.date,
+    start_ms: day.start_ms,
+    end_ms: day.end_ms,
+    agent_ms: 10 * H,
+    sessions: Array.from({ length: 8 }, (_, n) => ({
+      session_id: `s-${n}`,
+      host: n === 0 ? 'codex' : 'claude',
+      title: n === 0 ? 'Fix the sidebar' : null,
+      automated_review: n === 1,
+      agent_ms: H,
+    })),
+    more_sessions: 3,
+    more_ms: 2 * H,
+  });
+  const links = await within(open).findAllByTestId('day-session');
+  expect(links.map((link) => link.querySelector('span')!.textContent)).toEqual([
+    'Fix the sidebar',
+    'Automated review',
+    ...Array.from({ length: 6 }, (_, n) => `Session s-${n + 2}`),
+  ]);
+  expect(links[0]!.getAttribute('href')).toBe('/sessions/s-0?q=s-0&host=codex&range=7d');
+  expect(screen.getByTestId('day-sessions-more').textContent).toBe('and 3 more sessions2 h 0 m');
+  fireEvent.blur(last);
+  fireEvent.focus(first);
+  const failed = await card('Sep 1');
+  await waitFor(() =>
+    expect(within(failed).getByTestId('day-sessions-state').textContent).toBe(
+      'Sessions could not be read',
+    ),
+  );
+  expect(read).toHaveBeenCalledTimes(2);
 });

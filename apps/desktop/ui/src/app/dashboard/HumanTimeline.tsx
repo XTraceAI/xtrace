@@ -1,18 +1,26 @@
+import { Popover } from '@base-ui/react/popover';
 import { Tooltip } from '@base-ui/react/tooltip';
+import type { BaseUIEvent } from '@base-ui/react/types';
 import {
+  useCallback,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type FocusEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
+import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import { UNMEASURED } from '../../kit/format';
 import { Icon } from '../../kit/icons';
 import { useSurfaceTheme } from '../../theme/ThemeProvider';
 import { agentTime } from '../agent-duration';
 import { leverageText } from '../metric-format';
+import { DaySessions } from './DaySessions';
 import {
   QUARTERS,
   LINE_HEIGHT,
@@ -50,7 +58,10 @@ const HOURS = ['00', '06', '12', '18', '24'];
  *
  * The timeline is one tab stop: one day row at a time (today at first). Up and
  * Down move to the day before or after, Home and End to the first and last;
- * a focused day opens its card, as hovering does.
+ * a focused day opens its card, as hovering does. In "human + agent" the card
+ * also lists the day's sessions as links: the pointer can move into it, and
+ * Enter (or Tab) on the focused day moves focus into it; Escape returns to
+ * the day.
  */
 export function HumanTimeline({
   report,
@@ -113,6 +124,10 @@ export function HumanTimeline({
   const found = rows.findIndex((row) => row.date === chosen);
   const current = found >= 0 ? found : rows.length - 1;
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Keys pressed inside a day's card (it is portalled, but its events still
+    // pass through here) are the card's own.
+    if (!(event.target instanceof HTMLElement) || !event.target.classList.contains('xt-human-row'))
+      return;
     const next = {
       ArrowUp: current - 1,
       ArrowDown: current + 1,
@@ -232,6 +247,7 @@ export function HumanTimeline({
               lower={index >= rows.length / 2}
               current={index === current}
               onFocus={() => setChosen(row.date)}
+              window={report.window}
             />
           ))}
         </div>
@@ -295,6 +311,7 @@ function Row({
   lower,
   current,
   onFocus,
+  window,
 }: {
   row: TimelineRow;
   /** The day's agents line in the "human + agent" view; `null` there when the report has none. */
@@ -302,11 +319,19 @@ function Row({
   lower: boolean;
   current: boolean;
   onFocus: () => void;
+  /** The report's window, which names this day's sessions read. */
+  window: DashboardWindow;
 }) {
   const theme = useSurfaceTheme();
   const paired = line !== undefined;
-  /** The quarter under the pointer, and where along the track it is, in pixels. */
+  /**
+   * The quarter last under the pointer, and where along the track it is, in
+   * pixels. The card keeps naming it after the pointer leaves the track, until
+   * the card closes, so the card does not shrink while the pointer moves into
+   * it; the hairline shows only while the pointer is on the track.
+   */
   const [pointer, setPointer] = useState<{ quarter: number; x: number } | null>(null);
+  const [onTrack, setOnTrack] = useState(false);
   const track = (
     <span
       className="xt-human-track"
@@ -318,10 +343,28 @@ function Row({
               if (box.width <= 0) return;
               const x = Math.max(0, Math.min(box.width - 1, event.clientX - box.left));
               setPointer({ quarter: Math.floor((x / box.width) * QUARTERS), x });
+              setOnTrack(true);
             }
           : undefined
       }
-      onPointerLeave={paired ? () => setPointer(null) : undefined}
+      onPointerLeave={
+        paired
+          ? (event) => {
+              // A card that grows is drawn over the track for a moment
+              // before it is moved up; the pointer has not left the track
+              // then, so its hairline stays.
+              const box = event.currentTarget.getBoundingClientRect();
+              if (
+                event.clientX >= box.left &&
+                event.clientX < box.right &&
+                event.clientY >= box.top &&
+                event.clientY < box.bottom
+              )
+                return;
+              setOnTrack(false);
+            }
+          : undefined
+      }
     >
       {row.bars.map((bar, index) => (
         <span
@@ -367,7 +410,7 @@ function Row({
           <path d={line.path} vectorEffect="non-scaling-stroke" />
         </svg>
       )}
-      {pointer && (
+      {pointer && onTrack && (
         <span
           className="xt-human-hair"
           data-testid="agent-hairline"
@@ -380,54 +423,120 @@ function Row({
   const name = paired
     ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}`
     : row.name;
+  const cells = (
+    <>
+      <span className="xt-human-day" data-weekend={row.weekend || undefined}>
+        {row.label}
+      </span>
+      {track}
+      <span
+        className="xt-human-total"
+        data-key={paired ? 'you' : undefined}
+        data-unknown={paired && row.total === null ? '' : undefined}
+      >
+        {paired ? (
+          <span className="xt-human-total-text">{line?.yourHours ?? UNMEASURED}</span>
+        ) : (
+          (row.total ?? '—')
+        )}
+      </span>
+      {paired && (
+        <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
+          <span className="xt-human-total-text">{line ? line.hours : UNMEASURED}</span>
+        </span>
+      )}
+      {paired && (
+        <span
+          className="xt-human-total"
+          data-key="leverage"
+          data-unknown={line?.leverage ? undefined : ''}
+          data-low={line?.atOrBelowEven ? '' : undefined}
+          data-testid="leverage-row-total"
+        >
+          <span className="xt-human-total-text">{line?.leverage ?? UNMEASURED}</span>
+        </span>
+      )}
+    </>
+  );
+  const card = (
+    <>
+      <span className="xt-effort-tip-head">
+        <span>{row.label}</span>
+        <b>{row.total ?? 'unknown'}</b>
+      </span>
+      {row.bars.length === 0 && (
+        <span className="xt-effort-tip-note">
+          {row.total === null ? 'Could not tell which messages a person sent' : 'No messages'}
+        </span>
+      )}
+      {row.bars.map((bar, index) => (
+        <span key={index} className="xt-effort-tip-row">
+          <span>{bar.text}</span>
+          <em>{bar.tick ? 'one message' : ''}</em>
+        </span>
+      ))}
+      {paired && (
+        <>
+          <span className="xt-effort-tip-divider" />
+          <span className="xt-effort-tip-row" data-agent="">
+            <span>Agent time</span>
+            <b data-testid="agent-day-total">{line ? line.total : 'unknown'}</b>
+          </span>
+          {line?.busiest && (
+            <span className="xt-effort-tip-row">
+              <span>Busiest 15 min</span>
+              <em>{line.busiest}</em>
+            </span>
+          )}
+          <span
+            className="xt-effort-tip-row"
+            data-low={line?.atOrBelowEven ? '' : undefined}
+            data-testid="leverage-day"
+          >
+            <span>Agent time per hour of yours</span>
+            <b>{line?.leverage ?? line?.leverageWords ?? 'unknown'}</b>
+            {line?.atOrBelowEven && <em>{AT_OR_BELOW_EVEN}</em>}
+          </span>
+          <DaySessions window={window} date={row.date} />
+          {line && pointer && (
+            <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
+              <span>{line.quarter(pointer.quarter).span}</span>
+              <em>{line.quarter(pointer.quarter).agents}</em>
+            </span>
+          )}
+        </>
+      )}
+    </>
+  );
+  const rowProps = {
+    role: 'listitem',
+    tabIndex: current ? 0 : -1,
+    'aria-label': name,
+    className: 'xt-human-row',
+    'data-testid': 'human-day',
+    'data-date': row.date,
+  } as const;
+  if (paired)
+    return (
+      <PairedDay
+        label={row.label}
+        lower={lower}
+        rowProps={rowProps}
+        onFocus={onFocus}
+        onClose={() => setPointer(null)}
+        card={card}
+      >
+        {cells}
+      </PairedDay>
+    );
   return (
     <Tooltip.Root disableHoverablePopup>
       <Tooltip.Trigger
         delay={0}
         closeOnClick={false}
-        render={
-          <div
-            role="listitem"
-            tabIndex={current ? 0 : -1}
-            onFocus={onFocus}
-            aria-label={name}
-            className="xt-human-row"
-            data-testid="human-day"
-            data-date={row.date}
-          />
-        }
+        render={<div {...rowProps} onFocus={onFocus} />}
       >
-        <span className="xt-human-day" data-weekend={row.weekend || undefined}>
-          {row.label}
-        </span>
-        {track}
-        <span
-          className="xt-human-total"
-          data-key={paired ? 'you' : undefined}
-          data-unknown={paired && row.total === null ? '' : undefined}
-        >
-          {paired ? (
-            <span className="xt-human-total-text">{line?.yourHours ?? UNMEASURED}</span>
-          ) : (
-            (row.total ?? '—')
-          )}
-        </span>
-        {paired && (
-          <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
-            <span className="xt-human-total-text">{line ? line.hours : UNMEASURED}</span>
-          </span>
-        )}
-        {paired && (
-          <span
-            className="xt-human-total"
-            data-key="leverage"
-            data-unknown={line?.leverage ? undefined : ''}
-            data-low={line?.atOrBelowEven ? '' : undefined}
-            data-testid="leverage-row-total"
-          >
-            <span className="xt-human-total-text">{line?.leverage ?? UNMEASURED}</span>
-          </span>
-        )}
+        {cells}
       </Tooltip.Trigger>
       <Tooltip.Portal data-theme={theme}>
         <Tooltip.Positioner
@@ -439,54 +548,156 @@ function Row({
           collisionPadding={8}
         >
           <Tooltip.Popup className="xt-rule-popover xt-effort-tip" aria-hidden="true">
-            <span className="xt-effort-tip-head">
-              <span>{row.label}</span>
-              <b>{row.total ?? 'unknown'}</b>
-            </span>
-            {row.bars.length === 0 && (
-              <span className="xt-effort-tip-note">
-                {row.total === null ? 'Could not tell which messages a person sent' : 'No messages'}
-              </span>
-            )}
-            {row.bars.map((bar, index) => (
-              <span key={index} className="xt-effort-tip-row">
-                <span>{bar.text}</span>
-                <em>{bar.tick ? 'one message' : ''}</em>
-              </span>
-            ))}
-            {paired && (
-              <>
-                <span className="xt-effort-tip-divider" />
-                <span className="xt-effort-tip-row" data-agent="">
-                  <span>Agent time</span>
-                  <b data-testid="agent-day-total">{line ? line.total : 'unknown'}</b>
-                </span>
-                {line?.busiest && (
-                  <span className="xt-effort-tip-row">
-                    <span>Busiest 15 min</span>
-                    <em>{line.busiest}</em>
-                  </span>
-                )}
-                <span
-                  className="xt-effort-tip-row"
-                  data-low={line?.atOrBelowEven ? '' : undefined}
-                  data-testid="leverage-day"
-                >
-                  <span>Agent time per hour of yours</span>
-                  <b>{line?.leverage ?? line?.leverageWords ?? 'unknown'}</b>
-                  {line?.atOrBelowEven && <em>{AT_OR_BELOW_EVEN}</em>}
-                </span>
-                {line && pointer && (
-                  <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
-                    <span>{line.quarter(pointer.quarter).span}</span>
-                    <em>{line.quarter(pointer.quarter).agents}</em>
-                  </span>
-                )}
-              </>
-            )}
+            {card}
           </Tooltip.Popup>
         </Tooltip.Positioner>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+}
+
+/** Focus a day's card: its first session link, or the card itself while it has none. */
+const focusCard = (card: HTMLElement) =>
+  (card.querySelector<HTMLElement>('a[href]') ?? card).focus();
+
+/**
+ * A "human + agent" day: the same row and card, as a popover rather than a
+ * tooltip, because the card holds links to the day's sessions.
+ *
+ * Hovering the day opens its card at once and the pointer can move into it
+ * without closing it (Base UI's hover popover keeps a safe path to it);
+ * leaving both closes it. Focusing the day opens it too, as the plain view's
+ * tooltip does, without taking focus from the day, so arrow keys still move
+ * between days. Enter or Space on the day, or Tab, moves focus into the card,
+ * onto its first link; Escape closes it and returns focus to the day, which
+ * then stays closed until the day is focused again. Clicking the day neither
+ * opens nor closes it, so a click never leaves a card stuck open.
+ */
+function PairedDay({
+  label,
+  lower,
+  rowProps,
+  onFocus,
+  onClose,
+  card,
+  children,
+}: {
+  label: string;
+  lower: boolean;
+  rowProps: Record<string, unknown>;
+  onFocus: () => void;
+  /** Called whenever the card closes. */
+  onClose: () => void;
+  card: ReactNode;
+  children: ReactNode;
+}) {
+  const theme = useSurfaceTheme();
+  const triggerId = useId();
+  const [open, setOpen] = useState(false);
+  const day = useRef<HTMLElement | null>(null);
+  const dayRef = useCallback((element: HTMLElement | null) => {
+    day.current = element;
+  }, []);
+  const popup = useRef<HTMLDivElement | null>(null);
+  /** Escape closed the card: the focus it hands back to the day does not reopen it. */
+  const dismissed = useRef(false);
+  /** Enter asked for focus inside the card, which may not be mounted yet. */
+  const entering = useRef(false);
+  /** Focus was inside the card when it closed, so it goes back to the day. */
+  const returning = useRef(false);
+  const show = (next: boolean) => {
+    setOpen(next);
+    if (next) return;
+    // A request to move into the card ends with it, so a later hover never
+    // takes focus into the card.
+    entering.current = false;
+    onClose();
+  };
+  const popupRef = useCallback((element: HTMLDivElement | null) => {
+    popup.current = element;
+    if (element && entering.current) {
+      entering.current = false;
+      focusCard(element);
+    }
+  }, []);
+  return (
+    <Popover.Root
+      open={open}
+      triggerId={triggerId}
+      onOpenChange={(next, details) => {
+        // A click, or the press a key makes, never toggles a day's card.
+        if (details.reason === 'trigger-press') {
+          details.cancel();
+          return;
+        }
+        if (!next) {
+          returning.current = Boolean(popup.current?.contains(document.activeElement));
+          if (details.reason === 'escape-key') dismissed.current = true;
+        }
+        show(next);
+      }}
+    >
+      <Popover.Trigger
+        id={triggerId}
+        ref={dayRef}
+        nativeButton={false}
+        openOnHover
+        delay={0}
+        render={<div {...rowProps} />}
+        onFocus={() => {
+          onFocus();
+          if (!dismissed.current) show(true);
+        }}
+        onBlur={(event: FocusEvent<HTMLElement>) => {
+          dismissed.current = false;
+          const to = event.relatedTarget;
+          // Into the card, or onto the guard that hands Tab into it.
+          if (
+            to instanceof HTMLElement &&
+            (popup.current?.contains(to) || to.hasAttribute('data-base-ui-focus-guard'))
+          )
+            return;
+          show(false);
+        }}
+        onKeyDown={(event: BaseUIEvent<KeyboardEvent<HTMLElement>>) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          event.preventBaseUIHandler();
+          dismissed.current = false;
+          entering.current = true;
+          if (open && popup.current) {
+            entering.current = false;
+            focusCard(popup.current);
+          } else setOpen(true);
+        }}
+      >
+        {children}
+      </Popover.Trigger>
+      <Popover.Portal data-theme={theme}>
+        <Popover.Positioner
+          className="xt-rule-positioner xt-effort-tip-positioner"
+          positionMethod="fixed"
+          side={lower ? 'top' : 'bottom'}
+          align="center"
+          // The 4px between the day and its card is the positioner's own
+          // padding (CSS), so the pointer never crosses a neighbouring day,
+          // which would open that day's card over this one.
+          sideOffset={0}
+          collisionPadding={8}
+        >
+          <Popover.Popup
+            ref={popupRef}
+            className="xt-rule-popover xt-effort-tip"
+            aria-label={label}
+            initialFocus={false}
+            // Back to the day only when focus was inside the card; a card
+            // closed by the pointer leaves focus where it is.
+            finalFocus={() => (returning.current ? day.current : false)}
+          >
+            {card}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

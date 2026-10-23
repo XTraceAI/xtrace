@@ -253,7 +253,11 @@ test('range presets update the Dashboard while account usage stays separate', as
   await expect(period).toHaveCount(0);
 });
 
-/** Each control Tab reaches inside the Dashboard, in order, by its accessible name or text. */
+/**
+ * Each control Tab reaches inside the Dashboard, in order, by its accessible
+ * name or text. An open "human + agent" day card is portalled outside the
+ * page but is part of its order: Tab moves from the focused day into it.
+ */
 async function dashboardTabOrder(page: Page) {
   await page
     .getByRole('radiogroup', { name: 'Date range' })
@@ -262,7 +266,7 @@ async function dashboardTabOrder(page: Page) {
   const inside = () =>
     page.evaluate(() => {
       const active = document.activeElement;
-      if (!active?.closest('.xt-dashboard')) return null;
+      if (!active?.closest('.xt-dashboard, .xt-effort-tip-positioner')) return null;
       return (active.getAttribute('aria-label') ?? active.textContent ?? '').trim();
     });
   const order: string[] = [];

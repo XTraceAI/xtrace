@@ -177,6 +177,131 @@ mod assembled {
         }
     }
 
+    /// A day's card lists exactly the agent time the report gives that day:
+    /// for every preset and every day, the listed sessions plus the counted
+    /// rest add up to the day's `agent_ms`, the first day of the range and a
+    /// session over midnight included; beyond the cap they are counted, the
+    /// most time first.
+    #[test]
+    fn a_days_sessions_add_up_to_its_agent_time_in_every_range() {
+        let mut db = steady_user(21);
+        let at = |minutes: i64| {
+            Timestamp::from_millisecond(ms("2026-10-03T00:00:00Z") + minutes * 60_000)
+                .unwrap()
+                .to_string()
+        };
+        // Twelve more sessions on Oct 3, the n-th running n × 5 minutes (an
+        // event every five), and
+        // one over the midnight into Oct 4.
+        for n in 1..=12_i64 {
+            seed(
+                db.store_mut(),
+                &format!("busy-{n:02}"),
+                "codex",
+                Some("cli"),
+                &(0..=n)
+                    .map(|k| assistant(&format!("busy-{n}-{k}"), &at(18 * 60 + k * 5), None))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        seed(
+            db.store_mut(),
+            "midnight",
+            "claude",
+            Some("cli"),
+            &[
+                assistant("m-a", &at(23 * 60 + 50), None),
+                assistant("m-b", &at(24 * 60 + 5), None),
+            ],
+        );
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let now = ms("2026-10-05T20:00:00Z");
+        let mut listed = 0;
+        for days in [7, 14, 30] {
+            let report = assemble(
+                &metrics,
+                days,
+                now,
+                TimeZone::UTC,
+                MetricClock::Fixture,
+                &catalog(),
+                TypingRate::default(),
+                BreakLength::default(),
+            )
+            .unwrap();
+            for day in &report.leverage.by_day {
+                let found = xtrace_desktop::dashboard::day_sessions(
+                    &metrics,
+                    days,
+                    report.window.end_ms,
+                    &day.date,
+                    TimeZone::UTC,
+                )
+                .unwrap();
+                assert_eq!(
+                    (
+                        found.date.as_str(),
+                        found.start_ms,
+                        found.end_ms,
+                        found.agent_ms
+                    ),
+                    (day.date.as_str(), day.start_ms, day.end_ms, day.agent_ms),
+                    "{days} {}",
+                    day.date
+                );
+                assert_eq!(
+                    found.sessions.iter().map(|s| s.agent_ms).sum::<u64>() + found.more_ms,
+                    day.agent_ms
+                );
+                assert!(found.sessions.len() <= xtrace_desktop::dashboard::DAY_SESSION_LIMIT);
+                listed += found.sessions.len();
+            }
+        }
+        assert!(listed > 0);
+        let busy =
+            xtrace_desktop::dashboard::day_sessions(&metrics, 7, now, "2026-10-03", TimeZone::UTC)
+                .unwrap();
+        // The steady pair's eight hours each, then the busiest of the twelve.
+        let rows: Vec<_> = busy
+            .sessions
+            .iter()
+            .map(|s| (s.session_id.as_str(), s.agent_ms / 60_000))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("a-18", 480),
+                ("b-18", 480),
+                ("busy-12", 60),
+                ("busy-11", 55),
+                ("busy-10", 50),
+                ("busy-09", 45),
+                ("busy-08", 40),
+                ("busy-07", 35),
+            ]
+        );
+        // busy-01 to busy-06 and the ten minutes of "midnight" before 00:00.
+        assert_eq!(busy.more_sessions, 7);
+        assert_eq!(busy.more_ms, (5 + 10 + 15 + 20 + 25 + 30 + 10) * 60_000);
+        assert_eq!(busy.sessions[2].host, "codex");
+        let after =
+            xtrace_desktop::dashboard::day_sessions(&metrics, 7, now, "2026-10-04", TimeZone::UTC)
+                .unwrap();
+        assert!(
+            after
+                .sessions
+                .iter()
+                .any(|s| s.session_id == "midnight" && s.agent_ms == 5 * 60_000)
+        );
+        // A day outside the range, or not written as the report writes it.
+        for date in ["2026-09-01", "2026-10-3", "2026-10-03T00:00", ""] {
+            assert!(matches!(
+                xtrace_desktop::dashboard::day_sessions(&metrics, 7, now, date, TimeZone::UTC),
+                Err(StateError::InvalidDayRequest)
+            ));
+        }
+    }
+
     #[test]
     fn dashboard_f2_concurrency_lanes_and_agent_time_for_each_preset() {
         let f = fixture("F2");
@@ -1457,7 +1582,8 @@ mod assembled {
     /// snapshot, by construction: both reads happen only in `lane_report`, and
     /// `lane_report` is called only from inside `read_snapshot`'s closure. The
     /// spans are read only by `lane_spans`, which `lane_report` calls; the
-    /// fixture span-detail export calls it too, for spans alone.
+    /// fixture span-detail export calls it too, for spans alone. The only
+    /// other context read is a day card's, inside its own snapshot.
     #[test]
     fn dashboard_lane_reads_stay_inside_one_snapshot_by_construction() {
         let module = include_str!("../src/dashboard.rs");
@@ -1469,7 +1595,18 @@ mod assembled {
         // Context is read three times: for the returned sessions, for the
         // parents they link that have no span, and for the sub-sessions under
         // them that have none; cost twice, for the returned sessions and for
-        // those sub-sessions. Every one of these reads is lane_report's.
+        // those sub-sessions. Every one of these reads is lane_report's, but
+        // for one context read in `day_sessions`, inside its own snapshot.
+        let day = body_of("pub fn day_sessions(");
+        assert_eq!(day.matches("db.session_context(").count(), 1);
+        let (_, day_snapshot) = day.split_once(".read_snapshot(|db| {").expect("snapshot");
+        assert!(
+            day_snapshot
+                .split_once("})?")
+                .expect("snapshot end")
+                .0
+                .contains("db.session_context(")
+        );
         for (read, times) in [
             ("db.session_context(", 3),
             ("db.whole_session_costs(", 2),
@@ -1477,7 +1614,7 @@ mod assembled {
             ("lane_spans(db, lane_window)", 1),
         ] {
             assert_eq!(
-                module.matches(read).count(),
+                module.matches(read).count() - day.matches(read).count(),
                 times,
                 "{read} is read elsewhere"
             );
