@@ -31,7 +31,12 @@
 //! text rule reads it, and it does not end the agent's reply.
 //!
 //! Sidechain records (an agent's own sub-conversation inside the session) are
-//! left out of every rule: they are not the person's conversation.
+//! left out of the rules that read messages and results: they are not the
+//! person's conversation. Circling is the exception on purpose. It is M-20's
+//! answer over M-09's stretches, which count sidechain records and calls as
+//! the Dashboard does, so a stretch and its repeats are the same here as there.
+//! Leaving sidechains out only here would give "is this stretch circling" a
+//! second answer.
 //!
 //! An unknown is never a zero. Each rule says whether it read everything it
 //! needed ([`CheckState::Complete`]) or which inputs it could not read. A
