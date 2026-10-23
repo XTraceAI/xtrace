@@ -298,6 +298,10 @@ async function open(
   await page.goto('/dashboard');
   await expect(page.getByTestId('dashboard-summary')).toBeVisible();
   await expect(page.getByTestId('overview-grid')).toBeVisible();
+  // The card opens on human + agent; these checks start from the agent h
+  // bar chart, as they were written for it.
+  await page.getByRole('radio', { name: 'agent h', exact: true }).click();
+  await expect(page.getByTestId('effort-chart')).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 }
 

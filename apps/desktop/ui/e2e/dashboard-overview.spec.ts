@@ -189,8 +189,11 @@ for (const scheme of ['light', 'dark'] as const)
     await open(page, scheme);
     const options = page.getByRole('radiogroup', { name: 'Effort measure' }).getByRole('radio');
     await expect(options).toHaveText(['human + agent', 'agent h', 'human h', 'cost']);
-    // The default stays agent h.
-    await expect(page.getByRole('radio', { name: 'agent h', exact: true })).toBeChecked();
+    // The card opens on human + agent, with its timeline and no bar chart.
+    await expect(page.getByRole('radio', { name: 'human + agent', exact: true })).toBeChecked();
+    await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+    await expect(page.getByTestId('effort-chart')).toHaveCount(0);
+    await measure(page, 'agent h');
     await expect(page.getByTestId('effort-chart')).toBeVisible();
     const report = synthetic.dashboards.find((r) => r.window.days === 7)!;
     const top = report.leverage.agents_scale_top;
