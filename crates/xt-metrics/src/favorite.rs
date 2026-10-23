@@ -14,27 +14,21 @@ pub enum FavoriteUnknown {
     UnknownModelOutput,
     UnknownTurnAttribution,
 }
-/// At most this many named models get a row of their own in
-/// [`FavoriteModel::output_shares`]; the rest share one row.
-pub const SHARE_MODEL_ROWS: usize = 5;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FavoriteModel {
     pub model: Option<String>,
     pub output_tokens: Option<u64>,
     pub unknown_reason: Option<FavoriteUnknown>,
-    /// Each model's part of the window's measured output, largest first,
+    /// Every model that wrote measured output in the window, largest first,
     /// whether or not a favorite is known. Empty when no output was measured
     /// or all of it was zero.
     pub output_shares: Vec<OutputShare>,
 }
-/// One row of the window's measured output.
+/// One row of the window's measured output; its share is of the rows' sum.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OutputShare {
     pub of: OutputShareOf,
     pub output_tokens: u64,
-    /// Its share of all measured output as shown: a whole percent (`62%`),
-    /// `<1%` for output that rounds to none, `0%` for none.
-    pub share: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -44,10 +38,6 @@ pub enum OutputShareOf {
     },
     /// Output from responses that recorded no model.
     UnknownModel,
-    /// The named models beyond [`SHARE_MODEL_ROWS`], together.
-    OtherModels {
-        models: u64,
-    },
 }
 impl FavoriteModel {
     fn unknown(reason: FavoriteUnknown, output_shares: Vec<OutputShare>) -> Self {
@@ -104,64 +94,35 @@ impl Outputs {
         }
         Ok(())
     }
-    /// The rows of [`FavoriteModel::output_shares`]: named models by output,
-    /// then name; the unknown-model output placed among them by its size,
-    /// after a named model of equal size; any folded models last.
-    fn shares(&self) -> Result<Vec<OutputShare>> {
-        let mut total = self.unknown_output;
-        for output in self.models.values() {
-            total = total.checked_add(*output).ok_or(Error::CounterOverflow)?;
-        }
-        if total == 0 {
-            return Ok(Vec::new());
-        }
-        let row = |of, output| OutputShare {
-            of,
-            output_tokens: output,
-            share: share_text(output, total),
-        };
-        let mut named: Vec<(&String, u64)> = self
+    /// The rows of [`FavoriteModel::output_shares`]: each named model with
+    /// output, by output and then name; the unknown-model output placed among
+    /// them by its size, after a named model of equal size.
+    fn shares(&self) -> Vec<OutputShare> {
+        let mut rows: Vec<OutputShare> = self
             .models
             .iter()
-            .map(|(model, output)| (model, *output))
-            .collect();
-        named.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let folded = named.split_off(named.len().min(SHARE_MODEL_ROWS));
-        let mut rows: Vec<OutputShare> = named
-            .into_iter()
-            .map(|(model, output)| {
-                row(
-                    OutputShareOf::Model {
-                        model: model.clone(),
-                    },
-                    output,
-                )
+            .filter(|(_, output)| **output > 0)
+            .map(|(model, output)| OutputShare {
+                of: OutputShareOf::Model {
+                    model: model.clone(),
+                },
+                output_tokens: *output,
             })
             .collect();
+        // Stable: equal outputs keep the map's name order.
+        rows.sort_by(|a, b| b.output_tokens.cmp(&a.output_tokens));
         if self.unknown_output > 0 {
             let at = rows
                 .iter()
                 .position(|named| named.output_tokens < self.unknown_output)
                 .unwrap_or(rows.len());
-            rows.insert(at, row(OutputShareOf::UnknownModel, self.unknown_output));
+            let unknown = OutputShare {
+                of: OutputShareOf::UnknownModel,
+                output_tokens: self.unknown_output,
+            };
+            rows.insert(at, unknown);
         }
-        if !folded.is_empty() {
-            // Within `total`, so no overflow.
-            let output = folded.iter().map(|(_, output)| output).sum();
-            let models = folded.len() as u64;
-            rows.push(row(OutputShareOf::OtherModels { models }, output));
-        }
-        Ok(rows)
-    }
-}
-/// `part` of a nonzero `total` as a whole percent, rounded half up; a nonzero
-/// part that rounds to none reads `<1%`.
-fn share_text(part: u64, total: u64) -> String {
-    let percent = (u128::from(part) * 200 + u128::from(total)) / (u128::from(total) * 2);
-    if part > 0 && percent == 0 {
-        "<1%".into()
-    } else {
-        format!("{percent}%")
+        rows
     }
 }
 fn instant(raw: &str, column: usize) -> Result<InstantKey> {
@@ -235,7 +196,7 @@ impl MetricsDb {
     /// [`MetricsDb::favorite_model`] from the window's measured outputs,
     /// inside the caller's snapshot; a tie reads the window's turns.
     pub(crate) fn favorite_from(&self, window: Window, outputs: Outputs) -> Result<FavoriteModel> {
-        let shares = outputs.shares()?;
+        let shares = outputs.shares();
         let Outputs {
             models,
             unknown_output,
@@ -391,37 +352,35 @@ mod tests {
         }
         outputs
     }
-    /// Each row as `(name, output, share)`, the unknown and folded rows by kind.
-    fn rows(outputs: &Outputs) -> Vec<(String, u64, String)> {
+    /// Each row as `(name, output)`, the unknown-model row as `?`.
+    fn rows(outputs: &Outputs) -> Vec<(String, u64)> {
         outputs
             .shares()
-            .unwrap()
             .into_iter()
             .map(|row| {
                 let name = match row.of {
                     OutputShareOf::Model { model } => model,
                     OutputShareOf::UnknownModel => "?".into(),
-                    OutputShareOf::OtherModels { models } => format!("+{models}"),
                 };
-                (name, row.output_tokens, row.share)
+                (name, row.output_tokens)
             })
             .collect()
     }
-    fn row(name: &str, output: u64, share: &str) -> (String, u64, String) {
-        (name.into(), output, share.into())
+    fn row(name: &str, output: u64) -> (String, u64) {
+        (name.into(), output)
     }
     #[test]
     fn output_shares_of_one_model_and_of_none() {
         assert_eq!(
             rows(&outputs(&[(Some("A"), 10), (Some("A"), 5)])),
-            [row("A", 15, "100%")]
+            [row("A", 15)]
         );
         assert!(rows(&Outputs::default()).is_empty());
-        // Measured, but all zero: no share to give.
+        // Measured, but all zero: no row.
         assert!(rows(&outputs(&[(Some("A"), 0), (None, 0)])).is_empty());
     }
     #[test]
-    fn output_shares_order_by_output_then_name_and_round_half_up() {
+    fn output_shares_list_every_model_with_output_by_output_then_name() {
         assert_eq!(
             rows(&outputs(&[
                 (Some("C"), 1),
@@ -429,12 +388,17 @@ mod tests {
                 (Some("A"), 3),
                 (Some("D"), 0),
                 (Some("C"), 1),
+                (Some("E"), 1),
+                (Some("F"), 1),
+                (Some("G"), 1),
             ])),
             [
-                row("A", 3, "38%"), // 37.5
-                row("B", 3, "38%"),
-                row("C", 2, "25%"),
-                row("D", 0, "0%"),
+                row("A", 3),
+                row("B", 3),
+                row("C", 2),
+                row("E", 1),
+                row("F", 1),
+                row("G", 1),
             ]
         );
     }
@@ -447,68 +411,14 @@ mod tests {
                 (Some(" "), 0),
                 (Some("B"), 30),
             ])),
-            [row("A", 62, "62%"), row("B", 30, "30%"), row("?", 8, "8%")]
+            [row("A", 62), row("B", 30), row("?", 8)]
         );
         // After a named model of equal size, before a smaller one.
         assert_eq!(
             rows(&outputs(&[(Some("A"), 40), (None, 40), (Some("B"), 20)])),
-            [
-                row("A", 40, "40%"),
-                row("?", 40, "40%"),
-                row("B", 20, "20%")
-            ]
+            [row("A", 40), row("?", 40), row("B", 20)]
         );
-        assert_eq!(rows(&outputs(&[(None, 10)])), [row("?", 10, "100%")]);
-    }
-    #[test]
-    fn output_shares_below_half_a_percent_read_less_than_one() {
-        assert_eq!(
-            rows(&outputs(&[
-                (Some("A"), 995),
-                (Some("B"), 4),
-                (Some("C"), 1)
-            ])),
-            [
-                row("A", 995, "100%"),
-                row("B", 4, "<1%"),
-                row("C", 1, "<1%")
-            ]
-        );
-        // Half a percent rounds up to 1%.
-        assert_eq!(
-            rows(&outputs(&[(Some("A"), 199), (Some("B"), 1)])),
-            [row("A", 199, "100%"), row("B", 1, "1%")]
-        );
-    }
-    #[test]
-    fn output_shares_fold_models_beyond_the_named_rows() {
-        let five = [
-            (Some("A"), 50),
-            (Some("B"), 20),
-            (Some("C"), 10),
-            (Some("D"), 8),
-            (Some("E"), 6),
-        ];
-        assert_eq!(rows(&outputs(&five)).len(), SHARE_MODEL_ROWS);
-        let mut seven = five.to_vec();
-        seven.extend([(Some("F"), 4), (Some("G"), 2), (None, 0)]);
-        assert_eq!(
-            rows(&outputs(&seven)),
-            [
-                row("A", 50, "50%"),
-                row("B", 20, "20%"),
-                row("C", 10, "10%"),
-                row("D", 8, "8%"),
-                row("E", 6, "6%"),
-                row("+2", 6, "6%"),
-            ]
-        );
-        // The unknown-model row is not one of the named rows.
-        seven.push((None, 3));
-        let shares = rows(&outputs(&seven));
-        assert_eq!(shares.len(), SHARE_MODEL_ROWS + 2);
-        assert_eq!(shares[5], row("?", 3, "3%"));
-        assert_eq!(shares[6], row("+2", 6, "6%"));
+        assert_eq!(rows(&outputs(&[(None, 10)])), [row("?", 10)]);
     }
     #[test]
     fn favorite_comparison_and_turn_reads_share_snapshot_and_reuse_transaction() {

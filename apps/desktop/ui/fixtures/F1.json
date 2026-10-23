@@ -1078,8 +1078,7 @@
                 "kind": "model",
                 "model": "fixture-model-v1"
               },
-              "output_tokens": 150,
-              "share": "100%"
+              "output_tokens": 150
             }
           ]
         },
@@ -2958,8 +2957,7 @@
                 "kind": "model",
                 "model": "fixture-model-v1"
               },
-              "output_tokens": 150,
-              "share": "100%"
+              "output_tokens": 150
             }
           ]
         },
@@ -6126,8 +6124,7 @@
                 "kind": "model",
                 "model": "fixture-model-v1"
               },
-              "output_tokens": 150,
-              "share": "100%"
+              "output_tokens": 150
             }
           ]
         },

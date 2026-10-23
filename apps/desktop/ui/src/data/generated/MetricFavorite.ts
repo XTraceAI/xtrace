@@ -4,6 +4,6 @@ import type { MetricOutputShare } from "./MetricOutputShare";
 
 export type MetricFavorite = { model: string | null, output_tokens: number | null, unknown_reason: MetricFavoriteUnknown | null, 
 /**
- * Each model's part of the period's measured output, largest first.
+ * Every model that wrote measured output in the period, largest first.
  */
 output_shares: Array<MetricOutputShare>, };

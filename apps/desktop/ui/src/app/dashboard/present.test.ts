@@ -6,6 +6,7 @@ import {
   fromPoints,
   outputShareRows,
   ruleId,
+  shareText,
   tileDelta,
   usd,
   windowLabel,
@@ -46,18 +47,20 @@ it('falls back to a known rule definition and system zone labels', () => {
   expect(windowLabel({ ...report.window, timezone: 'Not/AZone' })).toMatch(/2026/);
 });
 
-it("names each output share row and keeps the report's share text", () => {
+it('names each output share row and gives its share of the rows, as every share is written', () => {
   expect(
     outputShareRows([
-      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 995, share: '100%' },
-      { of: { kind: 'unknown_model' }, output_tokens: 4, share: '<1%' },
-      { of: { kind: 'other_models', models: 1 }, output_tokens: 1, share: '<1%' },
-      { of: { kind: 'other_models', models: 2 }, output_tokens: 0, share: '0%' },
+      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 995 },
+      { of: { kind: 'unknown_model' }, output_tokens: 4 },
+      { of: { kind: 'model', model: 'synthetic-b' }, output_tokens: 1 },
     ]),
   ).toEqual([
     { label: 'synthetic-a', value: '100%' },
-    { label: 'unknown model', value: '<1%' },
-    { label: '1 other model', value: '<1%' },
-    { label: '2 other models', value: '0%' },
+    { label: 'no model recorded', value: '<1%' },
+    { label: 'synthetic-b', value: '<1%' },
   ]);
+  expect(outputShareRows([])).toEqual([]);
+  expect(shareText(1, 200)).toBe('1%');
+  expect(shareText(0, 10)).toBe('0%');
+  expect(shareText(1, 0)).toBe('—');
 });

@@ -32,10 +32,10 @@ an enumeration of possible missing histories.
 `favorite_comparison(window)` returns current and previous categories in one
 read-only snapshot, using the equal-elapsed `Window::previous()`. Its
 favorite is categorical: no percentage decides or compares it. Each period also
-carries `output_shares`, every model's part of the same measured output as a
-whole percent (`<1%` when it rounds to none), with unknown-model output as its
-own row and models beyond the fifth folded into one; the Dashboard lists them
-under the favorite's definition. `favorite_iso_week(anchor_ms, zone)`
+carries `output_shares`, the output tokens of every model that wrote measured
+output in that window, largest first, with unknown-model output as its own row;
+the Dashboard lists each row's share of their sum under the favorite's
+definition. `favorite_iso_week(anchor_ms, zone)`
 uses a complete Monday-to-Monday local ISO week with an explicit anchor and zone.
 Calendar arithmetic handles DST and year boundaries; this weekly lookup is
 separate from equal-elapsed comparisons. Existing caller transactions are reused.

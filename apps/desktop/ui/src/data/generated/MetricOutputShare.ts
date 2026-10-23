@@ -2,6 +2,6 @@
 import type { MetricOutputShareOf } from "./MetricOutputShareOf";
 
 /**
- * One row of a period's measured output; `share` is ready to show.
+ * One row of a period's measured output; its share is of the rows' sum.
  */
-export type MetricOutputShare = { of: MetricOutputShareOf, output_tokens: number, share: string, };
+export type MetricOutputShare = { of: MetricOutputShareOf, output_tokens: number, };

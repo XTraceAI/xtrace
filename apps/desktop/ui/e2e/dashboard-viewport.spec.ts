@@ -113,16 +113,12 @@ function stressReport(report: DashboardMetrics): DashboardMetrics {
       {
         of: { kind: 'model', model: 'claude-sonnet-4-5-20250929-extended-thinking-preview' },
         output_tokens: 620_000,
-        share: '62%',
       },
-      {
-        of: { kind: 'model', model: 'claude-opus-4-1-20250805' },
-        output_tokens: 300_000,
-        share: '30%',
-      },
-      { of: { kind: 'unknown_model' }, output_tokens: 76_000, share: '8%' },
-      { of: { kind: 'model', model: 'gpt-5-codex' }, output_tokens: 3_000, share: '<1%' },
-      { of: { kind: 'other_models', models: 2 }, output_tokens: 1_000, share: '<1%' },
+      { of: { kind: 'model', model: 'claude-opus-4-1-20250805' }, output_tokens: 300_000 },
+      { of: { kind: 'unknown_model' }, output_tokens: 76_000 },
+      { of: { kind: 'model', model: 'gpt-5-codex' }, output_tokens: 3_000 },
+      { of: { kind: 'model', model: 'claude-haiku-4-5' }, output_tokens: 600 },
+      { of: { kind: 'model', model: 'o3' }, output_tokens: 400 },
     ],
   };
   out.favorite.previous = { ...out.favorite.previous, model: 'claude-opus-4-1-20250805' };
@@ -812,9 +808,10 @@ test("hovering the favorite lists each model's share of output tokens inside the
   expect(rows).toEqual([
     ['claude-sonnet-4-5-20250929-extended-thinking-preview', '62%'],
     ['claude-opus-4-1-20250805', '30%'],
-    ['unknown model', '8%'],
+    ['no model recorded', '8%'],
     ['gpt-5-codex', '<1%'],
-    ['2 other models', '<1%'],
+    ['claude-haiku-4-5', '<1%'],
+    ['o3', '<1%'],
   ]);
   await expect(tip).toContainText('Previous period: claude-opus-4-1-20250805.');
   // Each share sits at the row's end, inside the popover and the window.

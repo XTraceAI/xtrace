@@ -1707,10 +1707,9 @@ it("lists every model's share of output tokens under the favorite, known or not"
     output_tokens: null,
     unknown_reason: 'unknown_model_output',
     output_shares: [
-      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 100, share: '43%' },
-      { of: { kind: 'model', model: 'synthetic-b' }, output_tokens: 80, share: '35%' },
-      { of: { kind: 'unknown_model' }, output_tokens: 50, share: '22%' },
-      { of: { kind: 'other_models', models: 1 }, output_tokens: 0, share: '0%' },
+      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 100 },
+      { of: { kind: 'model', model: 'synthetic-b' }, output_tokens: 80 },
+      { of: { kind: 'unknown_model' }, output_tokens: 50 },
     ],
   };
   mount(nativeSource(() => report));
@@ -1718,9 +1717,9 @@ it("lists every model's share of output tokens under the favorite, known or not"
   const trigger = within(screen.getByTestId('dashboard-summary')).getByRole('button');
   act(() => trigger.focus());
   const tip = await screen.findByRole('tooltip');
-  // The report's own share text, in the report's order.
+  // In the report's order, each a share of the rows' sum (230).
   expect(tip.textContent).toContain(
-    'Share of output tokens: synthetic-a 43% synthetic-b 35% unknown model 22% 1 other model 0%',
+    'Share of output tokens: synthetic-a 43% synthetic-b 35% no model recorded 22%',
   );
   expect(tip.textContent).toContain('Previous period:');
 });

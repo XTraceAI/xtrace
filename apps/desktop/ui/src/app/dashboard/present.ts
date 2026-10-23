@@ -15,6 +15,7 @@ import type { ControlTone } from '../../kit/control-tone';
 import { surfaceLabel } from '../../kit/hosts';
 import { rules, type RuleId } from '../../kit/rules';
 import type { TimeRange } from '../../kit/TopBar';
+import { NO_MODEL } from '../session-context';
 
 /** Presentation only: every value here was calculated by the Rust report. */
 
@@ -100,17 +101,24 @@ export const favoriteUnknownText: Record<MetricFavoriteUnknown, string> = {
   unknown_turn_attribution: 'A tie could not be resolved from turn attribution',
 };
 
-/** Each row of a period's output, named; the share is the report's own text. */
-export const outputShareRows = (shares: readonly MetricOutputShare[]) =>
-  shares.map(({ of, share }) => ({
-    label:
-      of.kind === 'model'
-        ? of.model
-        : of.kind === 'unknown_model'
-          ? 'unknown model'
-          : plural(of.models, 'other model'),
-    value: share,
+/**
+ * A part's share of a whole, as every share is written: a whole percent, or
+ * `<1%` for a part that rounds to none; `—` when there is no whole.
+ */
+export function shareText(value: number, total: number) {
+  if (total <= 0) return '—';
+  const pct = (value / total) * 100;
+  return value > 0 && pct < 0.5 ? '<1%' : `${Math.round(pct)}%`;
+}
+
+/** Each row of a period's output, named, with its share of the rows' sum. */
+export function outputShareRows(shares: readonly MetricOutputShare[]) {
+  const total = shares.reduce((sum, row) => sum + row.output_tokens, 0);
+  return shares.map(({ of, output_tokens }) => ({
+    label: of.kind === 'model' ? of.model : NO_MODEL,
+    value: shareText(output_tokens, total),
   }));
+}
 
 export const unpricedText: Record<MetricUnpricedReason, string> = {
   missing_model: 'model not recorded',

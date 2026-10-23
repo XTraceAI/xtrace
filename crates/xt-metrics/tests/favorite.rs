@@ -131,7 +131,7 @@ fn favorite_unknown_output_bounds_and_partial_output_observations() {
             let shares: Vec<_> = r
                 .output_shares
                 .iter()
-                .map(|row| (&row.of, row.output_tokens, row.share.as_str()))
+                .map(|row| (&row.of, row.output_tokens))
                 .collect();
             let model = |model: &str| OutputShareOf::Model {
                 model: model.into(),
@@ -139,9 +139,9 @@ fn favorite_unknown_output_bounds_and_partial_output_observations() {
             assert_eq!(
                 shares,
                 [
-                    (&model("A"), 100, "43%"),
-                    (&model("B"), 80, "35%"),
-                    (&OutputShareOf::UnknownModel, 50, "22%"),
+                    (&model("A"), 100),
+                    (&model("B"), 80),
+                    (&OutputShareOf::UnknownModel, 50),
                 ]
             );
         }
