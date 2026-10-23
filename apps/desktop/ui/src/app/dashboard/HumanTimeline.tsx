@@ -17,6 +17,7 @@ import {
   QUARTERS,
   LINE_HEIGHT,
   LINE_WIDTH,
+  AT_OR_BELOW_EVEN,
   agentLines,
   timelineRows,
   type AgentLine,
@@ -387,6 +388,7 @@ function Row({
             className="xt-human-total"
             data-key="leverage"
             data-unknown={line?.leverage ? undefined : ''}
+            data-low={line?.atOrBelowEven ? '' : undefined}
             data-testid="leverage-row-total"
           >
             {line?.leverage ?? UNMEASURED}
@@ -431,9 +433,14 @@ function Row({
                     <em>{line.busiest}</em>
                   </span>
                 )}
-                <span className="xt-effort-tip-row" data-testid="leverage-day">
+                <span
+                  className="xt-effort-tip-row"
+                  data-low={line?.atOrBelowEven ? '' : undefined}
+                  data-testid="leverage-day"
+                >
                   <span>Agent time per hour of yours</span>
-                  <b>{line?.leverageWords ?? 'unknown'}</b>
+                  <b>{line?.leverage ?? line?.leverageWords ?? 'unknown'}</b>
+                  {line?.atOrBelowEven && <em>{AT_OR_BELOW_EVEN}</em>}
                 </span>
                 {line && pointer && (
                   <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">

@@ -443,6 +443,11 @@
 .xt-human-total[data-key='leverage'][data-unknown] {
   color: var(--meta);
 }
+/* A day the report marks at or below even (1×): its leverage in red. */
+.xt-human-total[data-key='leverage'][data-low],
+.xt-effort-tip-row[data-low] b {
+  color: var(--danger);
+}
 .xt-human-total-head[data-key='leverage'] {
   color: var(--secondary);
 }

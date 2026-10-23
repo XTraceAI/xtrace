@@ -314,6 +314,9 @@ export function timelineRows(
   });
 }
 
+/** How a day whose leverage the report marks at or below 1× is described. */
+export const AT_OR_BELOW_EVEN = 'at or below even';
+
 /** Wall-clock quarter-hours in a day, as the report sends them. */
 export const QUARTERS = 96;
 /**
@@ -339,9 +342,12 @@ export interface AgentLine {
   busiest: string | null;
   /** The report's leverage for the day, e.g. `12.9×`; null when it has none. */
   leverage: string | null;
+  /** The report's call that the day's leverage, as written, is at or below even (1×). */
+  atOrBelowEven: boolean;
   /**
-   * The same in words: the value, or why there is none: `none` when your
-   * time that day was measured as zero, `unknown` when it is unknown.
+   * The same in words: the value (`0.8×, at or below even` when the report
+   * says so), or why there is none: `none` when your time that day was
+   * measured as zero, `unknown` when it is unknown.
    */
   leverageWords: string;
   /** What one quarter says while the pointer is on it: `2:15 PM–2:30 PM`, `3.2 agents`. */
@@ -416,8 +422,13 @@ export function agentLines(
             ? null
             : `${clockText(day.busiest_quarter / 4)} · ${agents(day.busiest_quarter)}`,
         leverage: day.value === null ? null : leverageText(day.value),
+        atOrBelowEven: day.at_or_below_even === true,
         leverageWords:
-          day.value !== null ? leverageText(day.value) : day.human_ms === null ? 'unknown' : 'none',
+          day.value !== null
+            ? `${leverageText(day.value)}${day.at_or_below_even ? `, ${AT_OR_BELOW_EVEN}` : ''}`
+            : day.human_ms === null
+              ? 'unknown'
+              : 'none',
         quarter: (index) => ({ span: quarterSpan(index), agents: agents(index) }),
       };
       return [day.date, line];

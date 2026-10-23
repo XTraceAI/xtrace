@@ -25,9 +25,14 @@ const LONG_AGENT_MS = (123 * 60 + 45) * 60_000;
   // the leverage column must hold whole, `99,999.9×`), as a day with a
   // minute of yours and many agent hours has. Test data only: they are not
   // those days' agent time divided by yours.
-  week.leverage.by_day.at(-4)!.value = 123.4;
-  week.leverage.by_day.at(-5)!.value = 99_999.9;
-  week.leverage.by_day.at(-6)!.value = 36_000;
+  for (const [at, value] of [
+    [-4, 123.4],
+    [-5, 99_999.9],
+    [-6, 36_000],
+  ] as const)
+    Object.assign(week.leverage.by_day.at(at)!, { value, at_or_below_even: false });
+  // And a day at or below even (`0.8×`), which the report flags.
+  Object.assign(week.leverage.by_day.at(-7)!, { value: 0.8, at_or_below_even: true });
 }
 const shots = process.env.OVERVIEW_SHOTS;
 
@@ -305,12 +310,16 @@ for (const scheme of ['light', 'dark'] as const)
           leverageColor: getComputedStyle(totals[2]!).color,
           secondary: getComputedStyle(totals[2]!).getPropertyValue('--secondary').trim(),
           meta: getComputedStyle(totals[2]!).getPropertyValue('--meta').trim(),
+          danger: getComputedStyle(totals[2]!).getPropertyValue('--danger').trim(),
         };
       }),
     );
     expect(rowTotals).toHaveLength(report.leverage.by_day.length);
     expect(rowTotals.at(-2)!.texts[1]).toBe('123 h 45 m');
     expect(rowTotals.at(-4)!.texts[2]).toBe('123.4×');
+    expect(rowTotals.at(-7)!.texts[2]).toBe('0.8×');
+    expect(rowTotals.at(-7)!.leverageColor).toBe(rgb(rowTotals.at(-7)!.danger));
+    expect(rowTotals.at(-1)!.leverageColor).not.toBe(rgb(rowTotals.at(-1)!.danger));
     expect(rowTotals.at(-5)!.texts[2]).toBe('99,999.9×');
     expect(rowTotals.at(-6)!.texts[2]).toBe('36,000×');
     rowTotals.forEach((row, index) => {
@@ -319,7 +328,11 @@ for (const scheme of ['light', 'dark'] as const)
       // writes it; a day without one says so in the meta colour.
       const value = report.leverage.by_day[index]!.value;
       expect(row.texts[2]).toBe(value === null ? '—' : leverageText(value));
-      expect(row.leverageColor).toBe(rgb(value === null ? row.meta : row.secondary));
+      // Red exactly on the days the report flags at or below even.
+      const flagged = report.leverage.by_day[index]!.at_or_below_even === true;
+      expect(row.leverageColor).toBe(
+        rgb(value === null ? row.meta : flagged ? row.danger : row.secondary),
+      );
       expect(row.texts[0]).toMatch(/^(\d+ h \d+ m|—)$/);
       expect(row.texts[1]).toBe(agentTimeText(report.leverage.by_day[index]!.agent_ms));
       for (const centre of row.centres) expect(Math.abs(centre)).toBeLessThanOrEqual(1);

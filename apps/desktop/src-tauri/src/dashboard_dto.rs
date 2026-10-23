@@ -248,6 +248,10 @@ pub struct MetricLeverageDay {
     #[ts(type = "number | null")]
     pub human_ms: Option<u64>,
     pub value: Option<f64>,
+    /// Whether the day's leverage, as the screen writes it (one decimal),
+    /// is at or below even, 1×: `value` under `ABOVE_EVEN_FROM`. `null` when
+    /// `value` is.
+    pub at_or_below_even: Option<bool>,
     /// The average number of agents running in each local wall-clock
     /// quarter-hour of the day, exactly 96 from 00:00 (agent time over the
     /// real time the quarter covered; their agent time adds up to

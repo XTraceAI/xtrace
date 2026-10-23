@@ -261,6 +261,7 @@ function paired(edit?: (report: DashboardMetrics) => void) {
       day.quarter_agents = Array.from({ length: 96 }, () => 0);
       day.busiest_quarter = null;
       day.value = null;
+      day.at_or_below_even = null;
       // Your time on the leverage day is the row's: measured as zero.
       day.human_ms = 0;
     }
@@ -277,6 +278,7 @@ function paired(edit?: (report: DashboardMetrics) => void) {
     last.busiest_quarter = 2;
     // The report's own leverage for the day: 78 agent minutes per 30 of yours.
     last.value = 2.6;
+    last.at_or_below_even = false;
     last.human_ms = 0.5 * H;
     r.leverage.agent_ms = last.agent_ms;
     r.tiles.leverage = { ...r.tiles.leverage, value: 3.4 };
@@ -412,6 +414,38 @@ it('human + agent: a day without leverage says none when your time was zero, unk
       screen
         .getAllByTestId('leverage-day')
         .some((line) => line.textContent === 'Agent time per hour of yoursunknown'),
+    ).toBe(true),
+  );
+});
+
+it('human + agent: a day the report marks at or below even is red, and says so in words', async () => {
+  mountPaired(
+    paired((r) => {
+      const day = r.leverage.by_day[2]!;
+      day.value = 0.8;
+      day.at_or_below_even = true;
+      day.human_ms = 3_600_000;
+    }),
+  );
+  const cells = screen.getAllByTestId('leverage-row-total');
+  expect(cells[2]!.textContent).toBe('0.8×');
+  expect(cells[2]!.dataset.low).toBe('');
+  expect(cells[6]!.dataset.low).toBeUndefined();
+  const rows = screen.getAllByTestId('human-day');
+  expect(rows[2]!.getAttribute('aria-label')).toMatch(
+    /; agent time per hour of yours: 0\.8×, at or below even$/,
+  );
+  expect(rows[6]!.getAttribute('aria-label')).toMatch(/; agent time per hour of yours: 2\.6×$/);
+  fireEvent.focus(rows[2]!);
+  await waitFor(() =>
+    expect(
+      screen
+        .getAllByTestId('leverage-day')
+        .some(
+          (line) =>
+            line.dataset.low === '' &&
+            line.textContent === 'Agent time per hour of yours0.8×at or below even',
+        ),
     ).toBe(true),
   );
 });

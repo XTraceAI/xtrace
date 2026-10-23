@@ -7,6 +7,7 @@ import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { MetricHumanHoursDay } from '../../data/generated/MetricHumanHoursDay';
 import type { MetricPrAnalyticsRow } from '../../data/generated/MetricPrAnalyticsRow';
 import type { MetricPrMarker } from '../../data/generated/MetricPrMarker';
+import { leverageText } from '../metric-format';
 import {
   agentLines,
   agentsText,
@@ -317,6 +318,26 @@ it('writes a quarter’s agents and span on the shared scale, and builds lines f
 /** The heights a line reaches, in its 26-high box (25 is no agents, 2 the top). */
 const heights = (path: string) =>
   [...path.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map((match) => Number(match[2]));
+
+it('the report’s at-or-below-even flag agrees with the leverage as written', () => {
+  // The flags Rust sends for these values (`value < ABOVE_EVEN_FROM`, 1.05).
+  for (const [value, flag] of [
+    [0.95, true],
+    [1.0, true],
+    [1.04, true],
+    [1.05, false],
+    [1.1, false],
+  ] as const) {
+    const text = leverageText(value);
+    expect([value, Number(text.slice(0, -1)) <= 1]).toEqual([value, flag]);
+    const day = { ...report().leverage.by_day.at(-1)!, value, at_or_below_even: flag };
+    const line = agentLines([day], 10).get(day.date)!;
+    expect(line.atOrBelowEven).toBe(flag);
+    expect(line.leverageWords).toBe(flag ? `${text}, at or below even` : text);
+  }
+  expect(leverageText(1.04)).toBe('1×');
+  expect(leverageText(1.05)).toBe('1.1×');
+});
 
 it('draws the agents line as high as each quarter’s agents on one scale, inside its margins', () => {
   const agents = Array.from({ length: 96 }, () => 0);

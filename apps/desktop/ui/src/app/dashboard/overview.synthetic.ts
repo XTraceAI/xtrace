@@ -126,6 +126,8 @@ export function syntheticOverview(
         agent_ms: agentMs,
         human_ms: day.active_ms,
         value: day.active_ms ? agentMs / day.active_ms : null,
+        // Synthetic leverage is 2.5× to 8.5×: never at or below even.
+        at_or_below_even: day.active_ms ? false : null,
         ...quarters,
       };
     }),
