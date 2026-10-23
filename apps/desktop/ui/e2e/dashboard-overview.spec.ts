@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
 import { agentTime as agentTimeText } from '../src/app/agent-duration';
+import { leverageText } from '../src/app/metric-format';
 import { syntheticMergedPage, syntheticOverview } from '../src/app/dashboard/overview.synthetic';
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
 
@@ -20,6 +21,10 @@ const LONG_AGENT_MS = (123 * 60 + 45) * 60_000;
   const busy = week.leverage.by_day.at(-2)!;
   week.leverage.agent_ms += LONG_AGENT_MS - busy.agent_ms;
   busy.agent_ms = LONG_AGENT_MS;
+  // And a three-digit leverage on another day (`123.4×`), the widest the
+  // leverage column must hold whole. Test data only: it is not this day's
+  // agent time divided by yours.
+  week.leverage.by_day.at(-4)!.value = 123.4;
 }
 const shots = process.env.OVERVIEW_SHOTS;
 
@@ -214,9 +219,11 @@ for (const scheme of ['light', 'dark'] as const)
     const head = page.getByTestId('human-total-head');
     await expect(head.locator('svg')).toBeVisible();
     await expect(page.getByTestId('agent-total-head').locator('svg')).toBeVisible();
+    await expect(page.getByTestId('leverage-total-head').locator('svg')).toBeVisible();
     const columns = await page.evaluate(() => {
       const head = document.querySelector('[data-testid="human-total-head"]')!;
       const agentHead = document.querySelector('[data-testid="agent-total-head"]')!;
+      const leverageHead = document.querySelector('[data-testid="leverage-total-head"]')!;
       const totals = document
         .querySelector('[data-testid="human-day"]')!
         .querySelectorAll('.xt-human-total');
@@ -226,6 +233,8 @@ for (const scheme of ['light', 'dark'] as const)
         totalRight: totals[0]!.getBoundingClientRect().right,
         agentHeadRight: agentHead.getBoundingClientRect().right,
         agentTotalRight: totals[1]!.getBoundingClientRect().right,
+        leverageHeadRight: leverageHead.getBoundingClientRect().right,
+        leverageTotalRight: totals[2]!.getBoundingClientRect().right,
         humanRightOfLeft:
           totals[1]!.getBoundingClientRect().left - totals[0]!.getBoundingClientRect().right,
         headColor: getComputedStyle(head).color,
@@ -234,6 +243,7 @@ for (const scheme of ['light', 'dark'] as const)
     });
     expect(Math.abs(columns.headRight - columns.totalRight)).toBeLessThanOrEqual(1);
     expect(Math.abs(columns.agentHeadRight - columns.agentTotalRight)).toBeLessThanOrEqual(1);
+    expect(Math.abs(columns.leverageHeadRight - columns.leverageTotalRight)).toBeLessThanOrEqual(1);
     expect(columns.humanRightOfLeft).toBeGreaterThanOrEqual(0);
     expect(columns.human).toBe(scheme === 'dark' ? '#2dd4bf' : '#0d9488');
     expect(columns.headColor).toBe(scheme === 'dark' ? 'rgb(45, 212, 191)' : 'rgb(13, 148, 136)');
@@ -250,27 +260,28 @@ for (const scheme of ['light', 'dark'] as const)
       const figure = document
         .querySelector('[data-testid="effort-leverage"]')!
         .getBoundingClientRect();
-      const agents = document
-        .querySelector('[data-testid="agent-row-total"]')!
+      const last = document
+        .querySelector('[data-testid="leverage-row-total"]')!
         .getBoundingClientRect();
       const keys = [...document.querySelectorAll('.xt-paired-key')].map((key) =>
         key.getBoundingClientRect(),
       );
       return {
         leverageRight: leverage.right,
-        agentsRight: agents.right,
+        lastRight: last.right,
         leverageTop: leverage.top,
         keyTops: keys.map((key) => key.top),
         keyRights: keys.map((key) => key.right),
         leverageLeft: figure.left,
       };
     });
-    expect(Math.abs(edges.leverageRight - edges.agentsRight)).toBeLessThanOrEqual(1);
+    expect(Math.abs(edges.leverageRight - edges.lastRight)).toBeLessThanOrEqual(1);
     for (const right of edges.keyRights) expect(right).toBeLessThan(edges.leverageLeft);
     for (const top of edges.keyTops) expect(Math.abs(top - edges.leverageTop)).toBeLessThan(12);
     await expect(headline).not.toContainText('break threshold');
-    // Each row: your total, then the agents' whole-day total from the
-    // report, both whole on one line and centred with the track.
+    // Each row: your total, the agents' whole-day total and the day's
+    // leverage from the report, all whole on one line and centred with the
+    // track.
     await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
     const rowTotals = await days.evaluateAll((rows) =>
       rows.map((row) => {
@@ -287,13 +298,22 @@ for (const scheme of ['light', 'dark'] as const)
           agentColor: getComputedStyle(totals[1]!).color,
           accent: getComputedStyle(totals[1]!).getPropertyValue('--accent').trim(),
           humanColor: getComputedStyle(totals[0]!).color,
+          leverageColor: getComputedStyle(totals[2]!).color,
+          secondary: getComputedStyle(totals[2]!).getPropertyValue('--secondary').trim(),
+          meta: getComputedStyle(totals[2]!).getPropertyValue('--meta').trim(),
         };
       }),
     );
     expect(rowTotals).toHaveLength(report.leverage.by_day.length);
     expect(rowTotals.at(-2)!.texts[1]).toBe('123 h 45 m');
+    expect(rowTotals.at(-4)!.texts[2]).toBe('123.4×');
     rowTotals.forEach((row, index) => {
-      expect(row.texts).toHaveLength(2);
+      expect(row.texts).toHaveLength(3);
+      // The day's leverage is the report's value, written as the headline
+      // writes it; a day without one says so in the meta colour.
+      const value = report.leverage.by_day[index]!.value;
+      expect(row.texts[2]).toBe(value === null ? '—' : leverageText(value));
+      expect(row.leverageColor).toBe(rgb(value === null ? row.meta : row.secondary));
       expect(row.texts[0]).toMatch(/^(\d+ h \d+ m|—)$/);
       expect(row.texts[1]).toBe(agentTimeText(report.leverage.by_day[index]!.agent_ms));
       for (const centre of row.centres) expect(Math.abs(centre)).toBeLessThanOrEqual(1);
@@ -391,6 +411,8 @@ for (const scheme of ['light', 'dark'] as const)
     await expect(page.getByTestId('human-total-head')).toHaveCount(0);
     await expect(page.getByTestId('agent-total-head')).toHaveCount(0);
     await expect(page.getByTestId('agent-row-total')).toHaveCount(0);
+    await expect(page.getByTestId('leverage-row-total')).toHaveCount(0);
+    await expect(page.getByTestId('leverage-total-head')).toHaveCount(0);
     await expect(page.getByTestId('human-day').last().locator('.xt-human-total')).toHaveCount(1);
     await expect(page.getByTestId('effort-headline')).toContainText('break threshold');
     const plainBar = await page

@@ -429,11 +429,20 @@
   opacity: 0.55;
   pointer-events: none;
 }
-/* Two totals columns: your time, then the agents', wide enough for a
-   three-digit hour (`123 h 45 m`); each headed by its icon in its own
-   colour. */
+/* Three totals columns: your time, the agents' (wide enough for a
+   three-digit hour, `123 h 45 m`) and the day's leverage (wide enough for
+   `123.4×`); each headed by its icon in its own colour. */
 .xt-human[data-variant='paired'] :is(.xt-human-axis, .xt-human-row) {
-  grid-template-columns: 52px minmax(0, 1fr) 64px 72px;
+  grid-template-columns: 52px minmax(0, 1fr) 64px 72px 40px;
+}
+.xt-human-total[data-key='leverage'] {
+  color: var(--secondary);
+}
+.xt-human-total[data-key='leverage'][data-unknown] {
+  color: var(--meta);
+}
+.xt-human-total-head[data-key='leverage'] {
+  color: var(--secondary);
 }
 .xt-human-total[data-key='agents'] {
   color: var(--accent);

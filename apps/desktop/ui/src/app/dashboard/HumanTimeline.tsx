@@ -12,7 +12,7 @@ import { UNMEASURED } from '../../kit/format';
 import { Icon } from '../../kit/icons';
 import { useSurfaceTheme } from '../../theme/ThemeProvider';
 import { agentTime } from '../agent-duration';
-import { continuous } from '../metric-format';
+import { leverageText } from '../metric-format';
 import {
   QUARTERS,
   LINE_HEIGHT,
@@ -165,6 +165,13 @@ export function HumanTimeline({
               >
                 <Icon name="bot" size={13} />
               </span>
+              <span
+                className="xt-human-total-head"
+                data-key="leverage"
+                data-testid="leverage-total-head"
+              >
+                <Icon name="bolt" size={13} />
+              </span>
             </>
           ) : (
             <span />
@@ -234,7 +241,7 @@ function PairedHeadline({ report }: { report: DashboardMetrics }) {
       {unknown && <small>Could not tell which messages a person sent.</small>}
       <span className="xt-paired-stat" data-stat="leverage">
         <strong data-testid="effort-leverage">
-          {leverage === null ? UNMEASURED : `${continuous(leverage)}×`}
+          {leverage === null ? UNMEASURED : leverageText(leverage)}
         </strong>
         <small>agent time per hour of yours</small>
       </span>
@@ -340,7 +347,7 @@ function Row({
     </span>
   );
   const name = paired
-    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}`
+    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverage ?? 'unknown'}`
     : row.name;
   return (
     <Tooltip.Root disableHoverablePopup>
@@ -367,6 +374,16 @@ function Row({
         {paired && (
           <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
             {line ? line.total : UNMEASURED}
+          </span>
+        )}
+        {paired && (
+          <span
+            className="xt-human-total"
+            data-key="leverage"
+            data-unknown={line?.leverage ? undefined : ''}
+            data-testid="leverage-row-total"
+          >
+            {line?.leverage ?? UNMEASURED}
           </span>
         )}
       </Tooltip.Trigger>
@@ -408,6 +425,10 @@ function Row({
                     <em>{line.busiest}</em>
                   </span>
                 )}
+                <span className="xt-effort-tip-row" data-testid="leverage-day">
+                  <span>Agent time per hour of yours</span>
+                  <b>{line?.leverage ?? UNMEASURED}</b>
+                </span>
                 {line && pointer && (
                   <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
                     <span>{line.quarter(pointer.quarter).span}</span>

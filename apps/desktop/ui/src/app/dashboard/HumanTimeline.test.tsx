@@ -260,6 +260,7 @@ function paired(edit?: (report: DashboardMetrics) => void) {
       day.agent_ms = 0;
       day.quarter_agents = Array.from({ length: 96 }, () => 0);
       day.busiest_quarter = null;
+      day.value = null;
     }
     const last = r.leverage.by_day.at(-1)!;
     // 00:00–00:30 one agent, 00:30–00:45 three, 08:00 a fifth of one.
@@ -272,6 +273,8 @@ function paired(edit?: (report: DashboardMetrics) => void) {
       last.quarter_agents[index] = agents;
     last.agent_ms = 5 * Q + Q / 5;
     last.busiest_quarter = 2;
+    // The report's own leverage for the day: 78 agent minutes per 30 of yours.
+    last.value = 2.6;
     r.leverage.agent_ms = last.agent_ms;
     r.tiles.leverage = { ...r.tiles.leverage, value: 3.4 };
     edit?.(r);
@@ -319,15 +322,21 @@ it('human + agent: one track per day, your bands and the agents line in it, your
   // the row; the card keeps its own agent time too.
   expect(
     [...rows[6]!.querySelectorAll('.xt-human-total')].map((total) => total.textContent),
-  ).toEqual(['0 h 30 m', '1 h 18 m']);
-  expect(rows[6]!.textContent).toBe('Sep 70 h 30 m1 h 18 m');
+  ).toEqual(['0 h 30 m', '1 h 18 m', '2.6×']);
+  expect(rows[6]!.textContent).toBe('Sep 70 h 30 m1 h 18 m2.6×');
+  // A day with no leverage says so in the meta colour, never a computed 0.
+  const leverage = screen.getAllByTestId('leverage-row-total');
+  expect(leverage.map((cell) => cell.textContent)).toEqual([...Array(6).fill('—'), '2.6×']);
+  expect(leverage[0]!.dataset.unknown).toBe('');
+  expect(leverage[6]!.dataset.unknown).toBeUndefined();
+  expect(screen.getByTestId('leverage-total-head').querySelector('svg')).not.toBeNull();
   expect(screen.getAllByTestId('agent-row-total').map((total) => total.textContent)).toEqual([
     ...Array(6).fill('0 h 0 m'),
     '1 h 18 m',
   ]);
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
   expect(rows[6]!.getAttribute('aria-label')).toBe(
-    'Sep 7: 30 minutes; 12:00 AM–12:30 AM, one message at 2:00 AM; agents: 1 hour 18 minutes, busiest 15 minutes at 12:30 AM · 3 agents',
+    'Sep 7: 30 minutes; 12:00 AM–12:30 AM, one message at 2:00 AM; agents: 1 hour 18 minutes, busiest 15 minutes at 12:30 AM · 3 agents; agent time per hour of yours: 2.6×',
   );
   // The person icon heads your column, the robot the agents'.
   expect(screen.getByTestId('human-total-head').querySelector('svg')).not.toBeNull();
@@ -359,6 +368,7 @@ it('human + agent: the day card adds agent time, the busiest quarter and the qua
   expect(screen.getByText('12:30 AM · 3 agents')).toBeTruthy();
   expect(screen.getByText('Agent time').nextSibling!.textContent).toBe('1 h 18 m');
   expect(screen.getByTestId('agent-day-total').textContent).toBe('1 h 18 m');
+  expect(screen.getByTestId('leverage-day').textContent).toBe('Agent time per hour of yours2.6×');
   expect(screen.queryByTestId('agent-quarter')).toBeNull();
   expect(screen.queryByTestId('agent-hairline')).toBeNull();
   // The pointer over 08:00–08:15 (a third of the track) names that quarter.
@@ -394,6 +404,8 @@ it('the plain human h view draws no agents line, agent totals, person icon or po
   expect(screen.queryByTestId('human-total-head')).toBeNull();
   expect(screen.queryByTestId('agent-total-head')).toBeNull();
   expect(screen.queryAllByTestId('agent-row-total')).toHaveLength(0);
+  expect(screen.queryAllByTestId('leverage-row-total')).toHaveLength(0);
+  expect(screen.queryByTestId('leverage-total-head')).toBeNull();
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
   expect(
     screen.getAllByTestId('human-day').at(-1)!.querySelectorAll('.xt-human-total'),

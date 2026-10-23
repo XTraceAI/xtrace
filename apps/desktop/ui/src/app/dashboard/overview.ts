@@ -6,7 +6,7 @@ import type { MetricPrAnalyticsRow } from '../../data/generated/MetricPrAnalytic
 import type { MetricPrMarker } from '../../data/generated/MetricPrMarker';
 import { clock } from '../../kit/clock';
 import { agentDuration, agentTime } from '../agent-duration';
-import { continuous, handsOffTime } from '../metric-format';
+import { continuous, handsOffTime, leverageText } from '../metric-format';
 import { dayLabel } from './effort-chart';
 import { plural, zoneOf } from './present';
 
@@ -337,6 +337,8 @@ export interface AgentLine {
   path: string | null;
   /** e.g. `2:15 PM · 3.2 agents`; null when the day has no agent time. */
   busiest: string | null;
+  /** The report's leverage for the day, e.g. `12.9×`; null when it has none (no or unknown human time). */
+  leverage: string | null;
   /** What one quarter says while the pointer is on it: `2:15 PM–2:30 PM`, `3.2 agents`. */
   quarter: (index: number) => { span: string; agents: string };
 }
@@ -408,6 +410,7 @@ export function agentLines(
           day.busiest_quarter === null
             ? null
             : `${clockText(day.busiest_quarter / 4)} · ${agents(day.busiest_quarter)}`,
+        leverage: day.value === null ? null : leverageText(day.value),
         quarter: (index) => ({ span: quarterSpan(index), agents: agents(index) }),
       };
       return [day.date, line];
