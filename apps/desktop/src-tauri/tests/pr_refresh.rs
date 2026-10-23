@@ -1539,13 +1539,24 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
             .unwrap();
     }
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (committed, commits) = mpsc::channel();
+    let (proceed, requests) = mpsc::channel();
     let writer = {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
             let connection = rusqlite::Connection::open(&database).unwrap();
             connection.busy_timeout(Duration::from_secs(5)).unwrap();
             let mut linked = true;
+            let mut checkpoints = 2;
             while !stop.load(Ordering::SeqCst) {
+                // A progress acknowledgment must follow a new transaction,
+                // rather than acknowledge a commit made before the request.
+                let progress_requested = checkpoints == 0
+                    && match requests.try_recv() {
+                        Ok(()) => true,
+                        Err(mpsc::TryRecvError::Empty) => false,
+                        Err(mpsc::TryRecvError::Disconnected) => return,
+                    };
                 let transaction = connection.unchecked_transaction().unwrap();
                 if linked {
                     transaction
@@ -1574,15 +1585,24 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
                 }
                 transaction.commit().unwrap();
                 linked = !linked;
+                if checkpoints > 0 {
+                    committed.send(linked).unwrap();
+                    if requests.recv().is_err() {
+                        return;
+                    }
+                    checkpoints -= 1;
+                } else if progress_requested {
+                    committed.send(linked).unwrap();
+                }
             }
         })
     };
 
     let mut listed_linked = 0;
     let mut listed_absent = 0;
-    for _ in 0..400 {
+    let mut check_snapshot = || {
         let listed = app.state.pr_list().unwrap();
-        match listed.rows.iter().find(|row| row.pull_request.id == beta) {
+        let linked = match listed.rows.iter().find(|row| row.pull_request.id == beta) {
             // A listed row is a linked row, so its title must say so. A split
             // read could list it with the title it had while unlinked.
             Some(row) => {
@@ -1593,9 +1613,13 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
                 );
                 assert_eq!(row.linked_sessions, 1);
                 listed_linked += 1;
+                true
             }
-            None => listed_absent += 1,
-        }
+            None => {
+                listed_absent += 1;
+                false
+            }
+        };
         // The selection path reads the same snapshot: a stored ID always
         // resolves, whether or not it is still linked.
         let report =
@@ -1615,10 +1639,30 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
             report.rows[0].outcome
         );
         assert!(report.rows[0].pull_request.is_some());
+        linked
+    };
+    // Observe both committed states before allowing the writer to run freely.
+    // Thread scheduling alone need not expose both states to a reader.
+    for expected in [false, true] {
+        assert_eq!(
+            commits.recv_timeout(Duration::from_secs(10)).unwrap(),
+            expected
+        );
+        assert_eq!(check_snapshot(), expected);
+        proceed.send(()).unwrap();
+    }
+    for sample in 0..400 {
+        if sample == 200 {
+            // Confirm a transaction commits within the concurrent phase.
+            // The writer keeps running after replying; no read holds it back.
+            proceed.send(()).unwrap();
+            commits.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+        check_snapshot();
     }
     stop.store(true, Ordering::SeqCst);
     writer.join().unwrap();
-    // The writer really did move the row both ways while the reads ran.
+    // Both committed states were checked, as well as the concurrent samples.
     assert!(
         listed_linked > 0 && listed_absent > 0,
         "the interleaving never happened: {listed_linked} linked, {listed_absent} absent"
