@@ -302,13 +302,6 @@ mod assembled {
         }
     }
 
-    /// A day's card reads the events its report read: those recorded before
-    /// the report's end. Events that arrive later, timestamped after that end
-    /// — the next event of a session still running today, or one just after
-    /// midnight that joins a span begun yesterday — change neither the report
-    /// nor its card, so the card still adds up to the report's day. An event
-    /// timestamped after the end but already stored when the report is read
-    /// is left out of both.
     /// A day's card splits its days in the zone its report was read in, not
     /// the one the system has when the card opens: read in Los Angeles,
     /// opened after the Mac moved to Tokyo, every day still adds up to the
@@ -391,6 +384,13 @@ mod assembled {
         );
     }
 
+    /// A day's card reads the events its report read: those recorded before
+    /// the report's end. Events that arrive later, timestamped after that end
+    /// — the next event of a session still running today, or one just after
+    /// midnight that joins a span begun yesterday — change neither the report
+    /// nor its card, so the card still adds up to the report's day. An event
+    /// timestamped after the end but already stored when the report is read
+    /// is left out of both.
     #[test]
     fn a_days_card_reads_only_what_its_report_read() {
         let event = |id: &str, ts: &str| assistant(id, ts, None);
