@@ -593,7 +593,11 @@ function PairedDay({
   lower: boolean;
   rowProps: Record<string, unknown>;
   onFocus: () => void;
-  /** Called whenever the card closes. */
+  /**
+   * Called once the card has closed and is gone, never while it is still
+   * shown: a card whose content changed as it closed would resize under the
+   * positioner's own size watcher (a ResizeObserver loop in WebKit).
+   */
   onClose: () => void;
   card: ReactNode;
   children: ReactNode;
@@ -618,7 +622,6 @@ function PairedDay({
     // A request to move into the card ends with it, so a later hover never
     // takes focus into the card.
     entering.current = false;
-    onClose();
   };
   const popupRef = useCallback((element: HTMLDivElement | null) => {
     popup.current = element;
@@ -631,6 +634,10 @@ function PairedDay({
     <Popover.Root
       open={open}
       triggerId={triggerId}
+      // The card's content stays as it was until it has closed.
+      onOpenChangeComplete={(next) => {
+        if (!next) onClose();
+      }}
       onOpenChange={(next, details) => {
         // A click, or the press a key makes, never toggles a day's card.
         if (details.reason === 'trigger-press') {
