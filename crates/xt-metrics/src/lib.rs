@@ -18,6 +18,7 @@ mod session;
 mod session_hands_off;
 mod session_stretches;
 mod session_summary;
+mod session_warnings;
 mod sessions;
 mod span_detail;
 mod spans;
@@ -60,6 +61,11 @@ pub use session::{MAX_SESSIONS, SUB_SESSION_WALK, SessionWindow, SubSessions};
 pub use session_hands_off::SessionHandsOff;
 pub use session_stretches::{SessionStretch, SessionStretches, ToolBlock};
 pub use session_summary::SessionListSummary;
+pub use session_warnings::{
+    CORRECTION_PHRASE, CORRECTION_WORDS, CheckState, DECLINED, Missing, REPEAT_AT_LEAST,
+    STILL_NEGATIVES, STILL_REACH, SessionWarning, SessionWarnings, WarningChecks, WarningKind,
+    correction,
+};
 pub use sessions::{DaySessions, SessionsPerDay};
 pub use span_detail::{
     AutomaticText, MAX_PROMPT_CHARS, PromptText, SpanAutomatic, SpanDetail, SpanPrompt, SpanTool,
@@ -153,6 +159,7 @@ impl MetricsDb {
             connection.prepare(&format!("{query} LIMIT 0"))?;
         }
         connection.prepare(&format!("{} LIMIT 0", repeats::BLOCK_QUERY))?;
+        connection.prepare(&format!("{} LIMIT 0", session_warnings::RECORD_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", favorite::OUTPUT_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", favorite::TURN_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", cost::QUERY))?;

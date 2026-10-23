@@ -62,6 +62,16 @@ dash) always means unknown or not measured; a measured zero is shown as a zero
 
 M-08 is Leverage: agent hours divided by human time (the time between messages you sent agents at most the break length apart), both over the same whole local days. It replaced the earlier ratio of agent time to estimated typing time (M-07) on 2026-10-05; M-07 itself is unchanged.
 
+M-21 is Session warnings: simple rules, with no model and no score, that say a session probably went wrong somewhere. A warning fires when one rule matches, and each carries its kind, session, time, the saved records it points at and a short reason such as `same prompt sent twice (10:05, 10:12)`. One function, `session_warnings::decide` in `xt-metrics`, decides them; it is not yet in the definition catalog above. The five rules, sidechain records left out of each:
+
+- **Correction**: a message M-02 calls a person's, sent after an agent reply, contains `no`, `wrong`, `stop`, `again` or `I said`, or `still` with `not`, `broken`, `fails`, `error`, `same`, `wrong`, `doesn't`, `happening` or `see` within five words. `still not working` matches; `I still need an export button` does not.
+- **Interruption**: an input the store flagged as `[Request interrupted by user…]` (`records.is_interrupted`), or a kept tool result saying the person declined the call.
+- **Circling**: an M-20 stretch judged circling, with M-20's own thresholds.
+- **Repeated prompt**: the same person's message, lowercased with whitespace collapsed, sent two or more times.
+- **Repeated failure**: kept tool results reporting failure (`is_error`) for two or more calls with the same stored M-20 comparison key.
+
+The text rules read the message's kept content, else the index's 280-character preview of a person's message, and compare only those first 280 characters. Each rule also says whether it read everything it needed; when words, tool results, a classification or M-20's count were not kept or not known, it lists what was missing instead of reporting no warnings.
+
 The [coverage report](acceptance/metrics/rule-coverage.json) records the approved-source comparison using only IDs and SHA-256 hashes. Ordinary tests check the expected ID set, important amended clauses, and catalog/report parity. The report records a completed comparison; it is not an independent approval mechanism. Definition changes require source review and an updated report.
 
 Hover or keyboard focus opens the exact definition and optional context. The trigger is explicitly tabbable, and the popup has `role="tooltip"` with a matching `aria-describedby` association. Escape dismisses while retaining trigger focus; Tab leaves normally. The popup contains passive text and does not intercept pointer clicks or move keyboard focus. Body portals preserve the nearest `ThemeScope` and escape ancestor clipping.

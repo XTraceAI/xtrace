@@ -281,22 +281,7 @@ impl MetricsDb {
         if eligible.is_none() {
             return Ok(SpanPrompt::Unclassified);
         }
-        // No reader separates the person's part of a wrapped input: its
-        // adjustment records only a length. The joined text would show the
-        // wrapper, so the words are withheld rather than shown wrong.
-        let text = if partial {
-            PromptText::Wrapped
-        } else {
-            match record_text::text(&self.connection, &uuid)? {
-                RecordText::Stored(text) => prompt_excerpt(&text),
-                RecordText::NotStored | RecordText::Missing => {
-                    match record_preview::read(&self.connection, &uuid, PreviewKind::Person)? {
-                        Some(Preview { text, truncated }) => PromptText::Stored { text, truncated },
-                        None => PromptText::NotStored,
-                    }
-                }
-            }
-        };
+        let text = person_words(&self.connection, &uuid, partial)?;
         Ok(SpanPrompt::Found {
             at_ms,
             in_span: at_ms >= start_ms,
@@ -358,6 +343,34 @@ impl MetricsDb {
             text,
         })
     }
+}
+
+/// The words of one record the stored M-02 classification already calls a
+/// person's message, as one bounded line: from the record's kept content,
+/// else from the short preview the index keeps. `partial` is that
+/// classification's own statement that only part of the record is the
+/// person's. Every reader of a person's words (the last prompt, session
+/// warnings) reads them here.
+pub(crate) fn person_words(
+    connection: &rusqlite::Connection,
+    uuid: &str,
+    partial: bool,
+) -> Result<PromptText> {
+    // No reader separates the person's part of a wrapped input: its
+    // adjustment records only a length. The joined text would show the
+    // wrapper, so the words are withheld rather than shown wrong.
+    if partial {
+        return Ok(PromptText::Wrapped);
+    }
+    Ok(match record_text::text(connection, uuid)? {
+        RecordText::Stored(text) => prompt_excerpt(&text),
+        RecordText::NotStored | RecordText::Missing => {
+            match record_preview::read(connection, uuid, PreviewKind::Person)? {
+                Some(Preview { text, truncated }) => PromptText::Stored { text, truncated },
+                None => PromptText::NotStored,
+            }
+        }
+    })
 }
 
 /// The `<summary>` of a Claude Code task notification's joined text, as one
