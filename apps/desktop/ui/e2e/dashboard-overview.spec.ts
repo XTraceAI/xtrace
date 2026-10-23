@@ -21,10 +21,13 @@ const LONG_AGENT_MS = (123 * 60 + 45) * 60_000;
   const busy = week.leverage.by_day.at(-2)!;
   week.leverage.agent_ms += LONG_AGENT_MS - busy.agent_ms;
   busy.agent_ms = LONG_AGENT_MS;
-  // And a three-digit leverage on another day (`123.4×`), the widest the
-  // leverage column must hold whole. Test data only: it is not this day's
-  // agent time divided by yours.
+  // And large leverages on other days (`123.4×`, `36,000×` and the widest
+  // the leverage column must hold whole, `99,999.9×`), as a day with a
+  // minute of yours and many agent hours has. Test data only: they are not
+  // those days' agent time divided by yours.
   week.leverage.by_day.at(-4)!.value = 123.4;
+  week.leverage.by_day.at(-5)!.value = 99_999.9;
+  week.leverage.by_day.at(-6)!.value = 36_000;
 }
 const shots = process.env.OVERVIEW_SHOTS;
 
@@ -307,6 +310,8 @@ for (const scheme of ['light', 'dark'] as const)
     expect(rowTotals).toHaveLength(report.leverage.by_day.length);
     expect(rowTotals.at(-2)!.texts[1]).toBe('123 h 45 m');
     expect(rowTotals.at(-4)!.texts[2]).toBe('123.4×');
+    expect(rowTotals.at(-5)!.texts[2]).toBe('99,999.9×');
+    expect(rowTotals.at(-6)!.texts[2]).toBe('36,000×');
     rowTotals.forEach((row, index) => {
       expect(row.texts).toHaveLength(3);
       // The day's leverage is the report's value, written as the headline

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import fixture from '../../../fixtures/F1.json';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
@@ -261,6 +261,8 @@ function paired(edit?: (report: DashboardMetrics) => void) {
       day.quarter_agents = Array.from({ length: 96 }, () => 0);
       day.busiest_quarter = null;
       day.value = null;
+      // Your time on the leverage day is the row's: measured as zero.
+      day.human_ms = 0;
     }
     const last = r.leverage.by_day.at(-1)!;
     // 00:00–00:30 one agent, 00:30–00:45 three, 08:00 a fifth of one.
@@ -275,6 +277,7 @@ function paired(edit?: (report: DashboardMetrics) => void) {
     last.busiest_quarter = 2;
     // The report's own leverage for the day: 78 agent minutes per 30 of yours.
     last.value = 2.6;
+    last.human_ms = 0.5 * H;
     r.leverage.agent_ms = last.agent_ms;
     r.tiles.leverage = { ...r.tiles.leverage, value: 3.4 };
     edit?.(r);
@@ -381,6 +384,36 @@ it('human + agent: the day card adds agent time, the busiest quarter and the qua
   expect(screen.getByTestId('agent-quarter').textContent).toBe('12:30 PM–12:45 PMno agents');
   fireEvent.pointerLeave(lane);
   expect(screen.queryByTestId('agent-quarter')).toBeNull();
+});
+
+it('human + agent: a day without leverage says none when your time was zero, unknown when it is unknown', async () => {
+  mountPaired(
+    paired((r) => {
+      // Sep 1: your time unknown that day; the others measured as zero.
+      r.human_hours.current.by_day[0]!.active_ms = null;
+      r.leverage.by_day[0]!.human_ms = null;
+    }),
+  );
+  const rows = screen.getAllByTestId('human-day');
+  const cells = screen.getAllByTestId('leverage-row-total');
+  // The column draws a dash for both.
+  expect(cells[0]!.textContent).toBe('—');
+  expect(cells[1]!.textContent).toBe('—');
+  expect(rows[0]!.getAttribute('aria-label')).toMatch(/; agent time per hour of yours: unknown$/);
+  expect(rows[1]!.getAttribute('aria-label')).toMatch(/; agent time per hour of yours: none$/);
+  fireEvent.focus(rows[1]!);
+  await waitFor(() =>
+    expect(screen.getByTestId('leverage-day').textContent).toBe('Agent time per hour of yoursnone'),
+  );
+  fireEvent.blur(rows[1]!);
+  fireEvent.focus(rows[0]!);
+  await waitFor(() =>
+    expect(
+      screen
+        .getAllByTestId('leverage-day')
+        .some((line) => line.textContent === 'Agent time per hour of yoursunknown'),
+    ).toBe(true),
+  );
 });
 
 it('human + agent: unknown human time still says so', () => {

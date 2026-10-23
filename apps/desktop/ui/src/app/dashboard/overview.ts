@@ -337,8 +337,13 @@ export interface AgentLine {
   path: string | null;
   /** e.g. `2:15 PM · 3.2 agents`; null when the day has no agent time. */
   busiest: string | null;
-  /** The report's leverage for the day, e.g. `12.9×`; null when it has none (no or unknown human time). */
+  /** The report's leverage for the day, e.g. `12.9×`; null when it has none. */
   leverage: string | null;
+  /**
+   * The same in words: the value, or why there is none: `none` when your
+   * time that day was measured as zero, `unknown` when it is unknown.
+   */
+  leverageWords: string;
   /** What one quarter says while the pointer is on it: `2:15 PM–2:30 PM`, `3.2 agents`. */
   quarter: (index: number) => { span: string; agents: string };
 }
@@ -411,6 +416,8 @@ export function agentLines(
             ? null
             : `${clockText(day.busiest_quarter / 4)} · ${agents(day.busiest_quarter)}`,
         leverage: day.value === null ? null : leverageText(day.value),
+        leverageWords:
+          day.value !== null ? leverageText(day.value) : day.human_ms === null ? 'unknown' : 'none',
         quarter: (index) => ({ span: quarterSpan(index), agents: agents(index) }),
       };
       return [day.date, line];

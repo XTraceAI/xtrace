@@ -347,7 +347,7 @@ function Row({
     </span>
   );
   const name = paired
-    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverage ?? 'unknown'}`
+    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}`
     : row.name;
   return (
     <Tooltip.Root disableHoverablePopup>
@@ -427,7 +427,7 @@ function Row({
                 )}
                 <span className="xt-effort-tip-row" data-testid="leverage-day">
                   <span>Agent time per hour of yours</span>
-                  <b>{line?.leverage ?? UNMEASURED}</b>
+                  <b>{line?.leverageWords ?? 'unknown'}</b>
                 </span>
                 {line && pointer && (
                   <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
