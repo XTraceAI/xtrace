@@ -370,7 +370,13 @@ function Row({
           {row.label}
         </span>
         {track}
-        <span className="xt-human-total">{row.total ?? '—'}</span>
+        <span
+          className="xt-human-total"
+          data-key={paired ? 'you' : undefined}
+          data-unknown={paired && row.total === null ? '' : undefined}
+        >
+          {row.total ?? '—'}
+        </span>
         {paired && (
           <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
             {line ? line.total : UNMEASURED}

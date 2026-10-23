@@ -446,6 +446,11 @@
 .xt-human-total-head[data-key='leverage'] {
   color: var(--secondary);
 }
+/* Your daily totals in your colour's text-safe shade; an unknown day's
+   dash keeps the plain total colour. */
+.xt-human-total[data-key='you']:not([data-unknown]) {
+  color: var(--human-ink);
+}
 .xt-human-total[data-key='agents'] {
   color: var(--accent);
 }

@@ -301,6 +301,7 @@ for (const scheme of ['light', 'dark'] as const)
           agentColor: getComputedStyle(totals[1]!).color,
           accent: getComputedStyle(totals[1]!).getPropertyValue('--accent').trim(),
           humanColor: getComputedStyle(totals[0]!).color,
+          humanInk: getComputedStyle(totals[0]!).getPropertyValue('--human-ink').trim(),
           leverageColor: getComputedStyle(totals[2]!).color,
           secondary: getComputedStyle(totals[2]!).getPropertyValue('--secondary').trim(),
           meta: getComputedStyle(totals[2]!).getPropertyValue('--meta').trim(),
@@ -325,6 +326,9 @@ for (const scheme of ['light', 'dark'] as const)
       expect(row.whole).toBe(true);
       expect(row.oneLine).toBe(true);
       expect(row.agentColor).not.toBe(row.humanColor);
+      // Your totals are your colour's text-safe shade.
+      expect(row.humanInk).toBe(scheme === 'dark' ? '#2dd4bf' : '#0f766e');
+      if (row.texts[0] !== '—') expect(row.humanColor).toBe(rgb(row.humanInk));
       // The agents' totals are the agent line's purple.
       expect(row.agentColor).toBe(rgb(row.accent));
     });
@@ -420,6 +424,17 @@ for (const scheme of ['light', 'dark'] as const)
     await expect(page.getByTestId('leverage-total-head')).toHaveCount(0);
     await expect(page.getByTestId('human-day').last().locator('.xt-human-total')).toHaveCount(1);
     await expect(page.getByTestId('effort-headline')).toContainText('break threshold');
+    // Its totals keep the plain total colour.
+    const plainTotals = await page.getByTestId('human-day').evaluateAll((rows) =>
+      rows.map((row) => {
+        const total = row.querySelector('.xt-human-total')!;
+        return [
+          getComputedStyle(total).color,
+          getComputedStyle(total).getPropertyValue('--secondary').trim(),
+        ];
+      }),
+    );
+    for (const [color, secondary] of plainTotals) expect(color).toBe(rgb(secondary!));
     const plainBar = await page
       .getByTestId('human-day')
       .last()
