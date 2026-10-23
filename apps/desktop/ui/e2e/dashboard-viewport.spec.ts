@@ -832,6 +832,51 @@ test("hovering the favorite lists each model's share of output tokens inside the
   await expect(page.getByRole('tooltip').locator('.xt-rule-rows')).toHaveCount(0);
 });
 
+test('the longest share list opens under the favorite and fits 1120x720', async ({ page }) => {
+  // The most rows the report sends: eight named models, output with no model
+  // and the folded rest, each name long enough to wrap to two or three lines.
+  const long = (n: number) =>
+    `synthetic-provider/very-long-model-name-${n}-extended-thinking-preview-20260930${n % 2 ? '-with-an-even-longer-deployment-suffix-for-wrapping' : ''}`;
+  const body = exportFor('stress');
+  body.dashboards = body.dashboards.map((report) => {
+    report.favorite.current.output_shares = [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        of: { kind: 'model' as const, model: long(index + 1) },
+        output_tokens: 1_000 - index * 50,
+      })),
+      { of: { kind: 'unknown_model' as const }, output_tokens: 200 },
+      { of: { kind: 'other_models' as const, models: 7 }, output_tokens: 150 },
+    ];
+    return report;
+  });
+  await open(page, body, 1120, 720, 'dark');
+  const trigger = page.getByTestId('dashboard-summary').getByRole('button');
+  await trigger.hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip.locator('.xt-rule-row')).toHaveCount(10);
+  await expect(tip.locator('.xt-rule-row').last()).toContainText('7 other models');
+  const lines = await tip
+    .locator('.xt-rule-row > span')
+    .evaluateAll((cells) =>
+      cells.map((cell) =>
+        Math.round(
+          cell.getBoundingClientRect().height / parseFloat(getComputedStyle(cell).lineHeight),
+        ),
+      ),
+    );
+  expect(Math.min(...lines.slice(0, 8))).toBeGreaterThanOrEqual(2);
+  expect(Math.max(...lines)).toBeGreaterThanOrEqual(3);
+  const anchor = (await trigger.boundingBox())!;
+  const box = (await tip.boundingBox())!;
+  // Below the trigger, not shifted over it, and inside the window.
+  expect(box.y).toBeGreaterThanOrEqual(anchor.y + anchor.height);
+  expect(box.y + box.height).toBeLessThanOrEqual(720);
+  await expect(tip.locator('.xt-rule-context')).toBeInViewport({ ratio: 1 });
+  await expect(tip.locator('.xt-rule-context')).toHaveText(
+    'Previous period: claude-opus-4-1-20250805.',
+  );
+});
+
 for (const shape of ['empty', 'partial'] as const)
   test(`${shape} Dashboard fits 1120x720 without scrolling`, async ({ page }, info) => {
     await open(page, exportFor(shape), 1120, 720, shape === 'empty' ? 'light' : 'dark');

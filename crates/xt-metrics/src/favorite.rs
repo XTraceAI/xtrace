@@ -14,6 +14,10 @@ pub enum FavoriteUnknown {
     UnknownModelOutput,
     UnknownTurnAttribution,
 }
+/// At most this many named models get a row of their own in
+/// [`FavoriteModel::output_shares`]. One more is listed rather than folded,
+/// so a folded row always holds at least two models.
+pub const SHARE_MODEL_ROWS: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FavoriteModel {
     pub model: Option<String>,
@@ -38,6 +42,10 @@ pub enum OutputShareOf {
     },
     /// Output from responses that recorded no model.
     UnknownModel,
+    /// The named models beyond [`SHARE_MODEL_ROWS`], together.
+    OtherModels {
+        models: u64,
+    },
 }
 impl FavoriteModel {
     fn unknown(reason: FavoriteUnknown, output_shares: Vec<OutputShare>) -> Self {
@@ -95,9 +103,10 @@ impl Outputs {
         Ok(())
     }
     /// The rows of [`FavoriteModel::output_shares`]: each named model with
-    /// output, by output and then name; the unknown-model output placed among
-    /// them by its size, after a named model of equal size.
-    fn shares(&self) -> Vec<OutputShare> {
+    /// output, by output and then name, up to [`SHARE_MODEL_ROWS`] when more
+    /// than one would be left over; the unknown-model output placed among them
+    /// by its size, after a named model of equal size; the folded rest last.
+    fn shares(&self) -> Result<Vec<OutputShare>> {
         let mut rows: Vec<OutputShare> = self
             .models
             .iter()
@@ -111,6 +120,11 @@ impl Outputs {
             .collect();
         // Stable: equal outputs keep the map's name order.
         rows.sort_by(|a, b| b.output_tokens.cmp(&a.output_tokens));
+        let folded = if rows.len() > SHARE_MODEL_ROWS + 1 {
+            rows.split_off(SHARE_MODEL_ROWS)
+        } else {
+            Vec::new()
+        };
         if self.unknown_output > 0 {
             let at = rows
                 .iter()
@@ -122,7 +136,21 @@ impl Outputs {
             };
             rows.insert(at, unknown);
         }
-        rows
+        if !folded.is_empty() {
+            let mut output: u64 = 0;
+            for row in &folded {
+                output = output
+                    .checked_add(row.output_tokens)
+                    .ok_or(Error::CounterOverflow)?;
+            }
+            rows.push(OutputShare {
+                of: OutputShareOf::OtherModels {
+                    models: folded.len() as u64,
+                },
+                output_tokens: output,
+            });
+        }
+        Ok(rows)
     }
 }
 fn instant(raw: &str, column: usize) -> Result<InstantKey> {
@@ -196,7 +224,7 @@ impl MetricsDb {
     /// [`MetricsDb::favorite_model`] from the window's measured outputs,
     /// inside the caller's snapshot; a tie reads the window's turns.
     pub(crate) fn favorite_from(&self, window: Window, outputs: Outputs) -> Result<FavoriteModel> {
-        let shares = outputs.shares();
+        let shares = outputs.shares()?;
         let Outputs {
             models,
             unknown_output,
@@ -352,15 +380,18 @@ mod tests {
         }
         outputs
     }
-    /// Each row as `(name, output)`, the unknown-model row as `?`.
+    /// Each row as `(name, output)`, the unknown-model row as `?` and the
+    /// folded row as `+N`.
     fn rows(outputs: &Outputs) -> Vec<(String, u64)> {
         outputs
             .shares()
+            .unwrap()
             .into_iter()
             .map(|row| {
                 let name = match row.of {
                     OutputShareOf::Model { model } => model,
                     OutputShareOf::UnknownModel => "?".into(),
+                    OutputShareOf::OtherModels { models } => format!("+{models}"),
                 };
                 (name, row.output_tokens)
             })
@@ -419,6 +450,49 @@ mod tests {
             [row("A", 40), row("?", 40), row("B", 20)]
         );
         assert_eq!(rows(&outputs(&[(None, 10)])), [row("?", 10)]);
+    }
+    /// `count` named models, `M01` writing the most, each with output.
+    fn named(count: u64) -> Vec<(String, u64)> {
+        (1..=count).map(|n| (format!("M{n:02}"), 100 - n)).collect()
+    }
+    fn of_named(named: &[(String, u64)], extra: &[(Option<&str>, u64)]) -> Outputs {
+        let mut rows: Vec<(Option<&str>, u64)> = named
+            .iter()
+            .map(|(model, output)| (Some(model.as_str()), *output))
+            .collect();
+        rows.extend_from_slice(extra);
+        outputs(&rows)
+    }
+    #[test]
+    fn output_shares_list_one_more_model_rather_than_fold_it() {
+        let nine = named(SHARE_MODEL_ROWS as u64 + 1);
+        let listed: Vec<_> = nine.iter().map(|(m, o)| row(m, *o)).collect();
+        // A zero-output model is no row, so it does not cause a fold either.
+        assert_eq!(rows(&of_named(&nine, &[(Some("Z"), 0)])), listed);
+    }
+    #[test]
+    fn output_shares_fold_two_or_more_models_beyond_the_named_rows() {
+        let ten = named(SHARE_MODEL_ROWS as u64 + 2);
+        let mut expected: Vec<_> = ten[..SHARE_MODEL_ROWS]
+            .iter()
+            .map(|(m, o)| row(m, *o))
+            .collect();
+        expected.push(row("+2", 91 + 90));
+        assert_eq!(rows(&of_named(&ten, &[])), expected);
+        // The no-model row is not a named row: placed by its size, never folded.
+        let mut expected: Vec<_> = ten[..SHARE_MODEL_ROWS]
+            .iter()
+            .map(|(m, o)| row(m, *o))
+            .collect();
+        expected.insert(3, row("?", 97));
+        expected.push(row("+2", 91 + 90));
+        assert_eq!(rows(&of_named(&ten, &[(None, 97)])), expected);
+        // Ties at the limit keep name order; the later names fold.
+        let tied: Vec<(String, u64)> = (1..=11).map(|n| (format!("T{n:02}"), 5)).collect();
+        let shares = rows(&of_named(&tied, &[]));
+        assert_eq!(shares.len(), SHARE_MODEL_ROWS + 1);
+        assert_eq!(shares[SHARE_MODEL_ROWS - 1], row("T08", 5));
+        assert_eq!(shares[SHARE_MODEL_ROWS], row("+3", 15));
     }
     #[test]
     fn favorite_comparison_and_turn_reads_share_snapshot_and_reuse_transaction() {

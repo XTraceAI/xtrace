@@ -1488,6 +1488,10 @@ mod tests {
                     of: xt_metrics::OutputShareOf::UnknownModel,
                     output_tokens: 10,
                 },
+                xt_metrics::OutputShare {
+                    of: xt_metrics::OutputShareOf::OtherModels { models: 2 },
+                    output_tokens: 5,
+                },
             ],
         };
         assert_eq!(
@@ -1502,6 +1506,10 @@ mod tests {
                 MetricOutputShare {
                     of: MetricOutputShareOf::UnknownModel,
                     output_tokens: 10,
+                },
+                MetricOutputShare {
+                    of: MetricOutputShareOf::OtherModels { models: 2 },
+                    output_tokens: 5,
                 },
             ]
         );

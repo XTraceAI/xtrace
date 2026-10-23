@@ -39,6 +39,7 @@ pub use coverage::{
 pub use daily::{DayConcurrency, DayHandsOff};
 pub use favorite::{
     FavoriteComparison, FavoriteModel, FavoriteUnknown, OutputShare, OutputShareOf,
+    SHARE_MODEL_ROWS,
 };
 pub use hands_off::{ExcludedSurface, HandsOff};
 pub use human::{DayHuman, HumanTime};

@@ -118,7 +118,12 @@ export function shareText(value: number, total: number) {
 export function outputShareRows(shares: readonly MetricOutputShare[]) {
   const total = shares.reduce((sum, row) => sum + row.output_tokens, 0);
   return shares.map(({ of, output_tokens }) => ({
-    label: of.kind === 'model' ? of.model : NO_MODEL,
+    label:
+      of.kind === 'model'
+        ? of.model
+        : of.kind === 'unknown_model'
+          ? NO_MODEL
+          : plural(of.models, 'other model'),
     value: shareText(output_tokens, total),
   }));
 }

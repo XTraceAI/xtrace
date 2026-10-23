@@ -509,8 +509,15 @@ pub struct MetricOutputShare {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MetricOutputShareOf {
-    Model { model: String },
+    Model {
+        model: String,
+    },
     UnknownModel,
+    /// Named models folded into one row, and how many.
+    OtherModels {
+        #[ts(type = "number")]
+        models: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]

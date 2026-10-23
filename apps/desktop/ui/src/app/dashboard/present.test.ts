@@ -59,6 +59,16 @@ it('names each output share row and gives its share of the rows, as every share 
     { label: 'no model recorded', value: '<1%' },
     { label: 'synthetic-b', value: '<1%' },
   ]);
+  // A folded row is named by its count and shares the same sum.
+  expect(
+    outputShareRows([
+      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 60 },
+      { of: { kind: 'other_models', models: 2 }, output_tokens: 40 },
+    ]),
+  ).toEqual([
+    { label: 'synthetic-a', value: '60%' },
+    { label: '2 other models', value: '40%' },
+  ]);
   expect(outputShareRows([])).toEqual([]);
   expect(shareText(1, 200)).toBe('1%');
   expect(shareText(0, 10)).toBe('0%');
