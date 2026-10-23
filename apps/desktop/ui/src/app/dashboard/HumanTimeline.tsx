@@ -642,13 +642,19 @@ function Row({
     >
       {dayCard}
       <Popover.Portal data-theme={theme}>
+        {/* Beside the date, over the track, and never flipped back over the
+            dates: a box above or below its date would cover the next date
+            and keep the pointer moving down the dates from reaching it. It
+            grows away from the nearer end of the list and shifts only up or
+            down to fit. */}
         <Popover.Positioner
           className="xt-rule-positioner xt-day-sessions-positioner"
           positionMethod="fixed"
-          side={lower ? 'top' : 'bottom'}
-          align="start"
+          side="inline-end"
+          align={lower ? 'end' : 'start'}
           sideOffset={4}
           collisionPadding={8}
+          collisionAvoidance={{ side: 'none', align: 'shift', fallbackAxisSide: 'none' }}
         >
           <Popover.Popup
             ref={popupRef}

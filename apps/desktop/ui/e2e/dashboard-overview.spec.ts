@@ -681,3 +681,46 @@ test('in human + agent, a click on a date neither pins nor toggles its sessions 
   await expect(shown).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+for (const [width, height] of [
+  [1440, 900],
+  [1120, 720],
+] as const)
+  test(`in human + agent, walking the pointer along the dates opens each date’s sessions box in turn, never covering the next date, ${width}x${height}`, async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await open(page, 'light', width, height);
+    await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+    const boxes = page.getByRole('dialog', { name: /^Sessions on / });
+    // Every date in view, top to bottom, with its centre.
+    const dates = await page.getByTestId('human-timeline-body').evaluate((body) => {
+      const view = body.getBoundingClientRect();
+      return [...body.querySelectorAll<HTMLElement>('.xt-human-day')]
+        .map((date) => ({ label: date.textContent!, box: date.getBoundingClientRect() }))
+        .filter(({ box }) => box.top >= view.top && box.bottom <= view.bottom)
+        .map(({ label, box }) => ({
+          label,
+          x: box.left + box.width / 2,
+          y: box.top + box.height / 2,
+          top: view.top,
+          bottom: view.bottom,
+        }));
+    });
+    expect(dates.length).toBeGreaterThanOrEqual(5);
+    // Down the column from its top edge, then up from its bottom edge, in
+    // small steps: each date's box opens, alone, as the pointer reaches it.
+    for (const order of [dates, [...dates].reverse()]) {
+      await page.mouse.move(0, 0);
+      await expect(boxes).toHaveCount(0);
+      const start = order === dates ? order[0]!.top + 1 : order[0]!.bottom - 1;
+      await page.mouse.move(order[0]!.x, start);
+      for (const date of order) {
+        await page.mouse.move(date.x, date.y, { steps: 13 });
+        await expect(page.getByRole('dialog', { name: `Sessions on ${date.label}` })).toBeVisible();
+        await expect(boxes).toHaveCount(1);
+      }
+    }
+    expect(errors).toEqual([]);
+  });
