@@ -85,8 +85,10 @@ export const queryKeys = {
    * One day's sessions in one Dashboard report: its range, its window's end
    * and the day. Under `metrics`, so committed data re-reads it; otherwise it
    * is kept, so opening the same day of the same report again reads nothing.
-   * Every new report has a new window end, and so a new key.
+   * Every new report has a new window end, and so a new key. `purges` is the
+   * content-purge epoch the read began in, as for a span's detail: the list
+   * carries saved titles, which "Delete stored content" removes.
    */
-  daySessions: (windowDays: number, windowEndMs: number, date: string) =>
-    ['metrics', 'day-sessions', windowDays, windowEndMs, date] as const,
+  daySessions: (purges: number, windowDays: number, windowEndMs: number, date: string) =>
+    ['metrics', 'day-sessions', purges, windowDays, windowEndMs, date] as const,
 } as const;

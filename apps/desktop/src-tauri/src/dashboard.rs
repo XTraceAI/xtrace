@@ -65,16 +65,20 @@ impl Period {
     }
 }
 
+/// The first integer JSON cannot carry exactly (2^53): every integer sent to
+/// the view, or named by a request from it, is below it in magnitude.
+pub(crate) const JSON_SAFE: u64 = 1 << 53;
+
 // Match DbCounts' exact JSON-integer boundary across all nested transport fields.
 // Core float reports already enforce finite arithmetic; tile values are checked
 // separately before serialization so a nonfinite value cannot turn into null.
 fn check_integers(value: &serde_json::Value) -> Result<(), StateError> {
     match value {
         serde_json::Value::Number(number) => {
-            if number.as_u64().is_some_and(|n| n >= 1_u64 << 53)
+            if number.as_u64().is_some_and(|n| n >= JSON_SAFE)
                 || number
                     .as_i64()
-                    .is_some_and(|n| n.unsigned_abs() >= 1_u64 << 53)
+                    .is_some_and(|n| n.unsigned_abs() >= JSON_SAFE)
             {
                 return Err(StateError::CountRange);
             }
@@ -837,7 +841,8 @@ struct Daily {
     /// same number of whole days just before.
     human: xt_metrics::HumanHoursPeriods,
     /// Agent hours (M-05) over exactly the whole days of `human.current`, so
-    /// leverage divides two measures of one span.
+    /// leverage divides two measures of one span, from the events recorded
+    /// before the report's end ([`agent_events`]).
     agent: xt_metrics::ActiveSpanReport,
     /// The whole days of `human.current`, the span `agent` was read over.
     agent_window: Window,
@@ -858,10 +863,16 @@ impl Daily {
         hands_off: Vec<xt_metrics::DayHandsOff>,
     ) -> xt_metrics::Result<Self> {
         let human = db.human_hours(window, break_length, zone.clone())?;
-        let agent_window = Window::new(human.current.start_ms, human.current.end_ms)?;
+        let agent_window = whole_days(window, zone.clone())?;
+        // The same whole days human time reports as its current period.
+        if (agent_window.start_ms(), agent_window.end_ms())
+            != (human.current.start_ms, human.current.end_ms)
+        {
+            return Err(xt_metrics::Error::InvalidWindow);
+        }
         let previous_window = Window::new(human.previous.start_ms, human.previous.end_ms)?;
         Ok(Self {
-            agent: db.active_spans(agent_window)?,
+            agent: db.active_spans(agent_events(agent_window, window)?)?,
             agent_window,
             previous_agent_ms: db.active_spans(previous_window)?.active_ms,
             human,
@@ -1050,22 +1061,37 @@ const _: () = assert!(
 
 /// The whole local days a report's leverage, its human time and its
 /// day-by-day agent time cover: every local day the selected window touches,
-/// made whole. [`Daily::read`] reads agent time over exactly these days (the
-/// span `human_hours` reports as its current period).
-fn whole_days(days: u32, window_end_ms: i64, zone: TimeZone) -> Result<Window, StateError> {
-    Ok(selected_window(days, window_end_ms)?.whole_local_days(zone)?)
+/// made whole (the span `human_hours` reports as its current period).
+/// [`Daily::read`] and [`day_sessions`] both take the days from here.
+fn whole_days(selected: Window, zone: TimeZone) -> xt_metrics::Result<Window> {
+    selected.whole_local_days(zone)
+}
+
+/// The events a report's whole-day agent time is measured from: those of its
+/// whole days recorded before the report's own end, the instant its selected
+/// window ends (`window.end_ms`, the clock read when the report was asked
+/// for). The rest of today is not read, so an event that arrives while the
+/// report is being read never counts in one report's day and not in its
+/// day card, which reads the same events by the same end.
+fn agent_events(whole: Window, selected: Window) -> xt_metrics::Result<Window> {
+    Window::new(whole.start_ms(), whole.end_ms().min(selected.end_ms()))
 }
 
 /// Which sessions had agent time on one whole local day of a Dashboard
 /// report, and how much each, for the "human + agent" day card.
 ///
 /// The request names the report's range, the end of the window it was read
-/// over (`window.end_ms`) and one of its days; the day's bounds are derived
-/// here, from the same whole days the report's leverage uses, so the list
+/// over (`window.end_ms`) and one of its days; the day's bounds and the
+/// events read are derived here, from the same whole days and the same end
+/// the report's leverage uses ([`whole_days`], [`agent_events`]), so the list
 /// adds up to that day's `agent_ms` in the report that was showing, whatever
-/// the clock says now. A range that is not a preset, an anchor beyond what
-/// JSON carries exactly, or a date that is not one of the range's days is
-/// refused before anything is listed.
+/// the clock says now, even while sessions are still running. One gap
+/// remains: an event recorded before the report's end but indexed only after
+/// the report was read counts here and not in that report; the next report
+/// counts it too, and it has a new end, so its card is read again.
+/// A range that is not a preset, an anchor beyond what JSON carries exactly,
+/// or a date that is not one of the range's days is refused before anything
+/// is listed.
 ///
 /// The [`DAY_SESSION_LIMIT`] sessions with the most time are named, with the
 /// saved title and reviewer mark the lanes name them by; the rest are counted
@@ -1078,7 +1104,7 @@ pub fn day_sessions(
     zone: TimeZone,
 ) -> Result<DashboardDaySessions, StateError> {
     validate_window(days)?;
-    if window_end_ms.unsigned_abs() >= 1_u64 << 53 || date.len() != "2026-01-01".len() {
+    if window_end_ms.unsigned_abs() >= JSON_SAFE || date.len() != "2026-01-01".len() {
         return Err(StateError::InvalidDayRequest);
     }
     let day: jiff::civil::Date = date.parse().map_err(|_| StateError::InvalidDayRequest)?;
@@ -1086,11 +1112,13 @@ pub fn day_sessions(
     if day.to_string() != date {
         return Err(StateError::InvalidDayRequest);
     }
-    let window =
-        whole_days(days, window_end_ms, zone.clone()).map_err(|_| StateError::InvalidDayRequest)?;
+    let selected =
+        selected_window(days, window_end_ms).map_err(|_| StateError::InvalidDayRequest)?;
+    let window = whole_days(selected, zone.clone()).map_err(|_| StateError::InvalidDayRequest)?;
+    let events = agent_events(window, selected).map_err(|_| StateError::InvalidDayRequest)?;
     let (found, context) = db
         .read_snapshot(|db| {
-            let Some(found) = db.sessions_on_day(window, zone, day)? else {
+            let Some(found) = db.sessions_on_day(window, events, zone, day)? else {
                 return Ok(None);
             };
             let mut ids: Vec<&str> = found
@@ -1152,7 +1180,9 @@ pub fn fixture_day_sessions(
     let metrics = MetricsDb::open(path)?;
     let mut out = Vec::new();
     for days in WINDOW_PRESETS {
-        for bucket in whole_days(days, now_ms, TimeZone::UTC)?.local_days(TimeZone::UTC)? {
+        for bucket in
+            whole_days(selected_window(days, now_ms)?, TimeZone::UTC)?.local_days(TimeZone::UTC)?
+        {
             let date = bucket.date.to_string();
             out.push(FixtureDaySessions {
                 window_days: days,

@@ -554,15 +554,15 @@ fn the_last_day_alone_matches_that_days_bar_in_a_longer_range() {
     assert_eq!(bar, day);
 }
 
-/// Every day of `w`: the sessions listed for it add up to that day's bar, and
-/// each session's part is its own spans' part of the bar; a date outside the
-/// window has no answer.
-fn check_sessions_on_day(metrics: &MetricsDb, w: Window, zone: TimeZone) {
-    let whole = metrics.active_spans(w).unwrap();
+/// Every day of `w`, for the events of `read`: the sessions listed for it add
+/// up to that day's bar, and each session's part is its own spans' part of the
+/// bar; a date outside the window has no answer.
+fn check_sessions_on_day(metrics: &MetricsDb, w: Window, read: Window, zone: TimeZone) {
+    let whole = metrics.active_spans(read).unwrap();
     let bars = whole.by_day(w, zone.clone()).unwrap();
     for (index, bucket) in w.local_days(zone.clone()).unwrap().iter().enumerate() {
         let found = metrics
-            .sessions_on_day(w, zone.clone(), bucket.date)
+            .sessions_on_day(w, read, zone.clone(), bucket.date)
             .unwrap()
             .unwrap();
         assert_eq!(found.day, bars[index], "{}", bucket.date);
@@ -602,7 +602,7 @@ fn check_sessions_on_day(metrics: &MetricsDb, w: Window, zone: TimeZone) {
         .date
         .tomorrow()
         .unwrap();
-    assert_eq!(metrics.sessions_on_day(w, zone, after).unwrap(), None);
+    assert_eq!(metrics.sessions_on_day(w, read, zone, after).unwrap(), None);
 }
 
 #[test]
@@ -671,17 +671,34 @@ fn a_days_sessions_add_up_to_that_days_bar() {
         seed(&mut db, id, &rows);
     }
     let metrics = MetricsDb::open(db.path()).unwrap();
-    check_sessions_on_day(&metrics, window(), TimeZone::UTC);
+    check_sessions_on_day(&metrics, window(), window(), TimeZone::UTC);
     // Midnight elsewhere, and a window that starts and ends mid-day.
     let pacific = TimeZone::get("America/Los_Angeles").unwrap();
-    check_sessions_on_day(&metrics, window(), pacific.clone());
+    check_sessions_on_day(&metrics, window(), window(), pacific.clone());
     let partial = Window::new(ms("2026-09-01T00:10:00Z"), ms("2026-09-07T22:30:00Z")).unwrap();
-    check_sessions_on_day(&metrics, partial, TimeZone::UTC);
-    check_sessions_on_day(&metrics, partial, pacific);
+    check_sessions_on_day(&metrics, partial, partial, TimeZone::UTC);
+    check_sessions_on_day(&metrics, partial, partial, pacific.clone());
+    // Whole days whose events end earlier, as a report pinned to its own end
+    // reads them: mid-span, just after a midnight a span crosses, and
+    // between two parallel sessions' events.
+    for until in [
+        "2026-09-07T22:30:00Z",
+        "2026-09-03T00:02:00Z",
+        "2026-09-04T09:12:00Z",
+    ] {
+        let read = Window::new(window().start_ms(), ms(until)).unwrap();
+        check_sessions_on_day(&metrics, window(), read, TimeZone::UTC);
+        check_sessions_on_day(&metrics, window(), read, pacific.clone());
+    }
     // The parallel day, read whole: both sessions, the gap session's two
     // spans as one row, no single event, most time first.
     let day = metrics
-        .sessions_on_day(window(), TimeZone::UTC, "2026-09-04".parse().unwrap())
+        .sessions_on_day(
+            window(),
+            window(),
+            TimeZone::UTC,
+            "2026-09-04".parse().unwrap(),
+        )
         .unwrap()
         .unwrap();
     let rows: Vec<_> = day
@@ -693,7 +710,12 @@ fn a_days_sessions_add_up_to_that_days_bar() {
     assert_eq!(day.day.active_ms, 80 * 60_000);
     // Before the window's start nothing counts: `early` begins at 00:05.
     let first = metrics
-        .sessions_on_day(window(), TimeZone::UTC, "2026-09-01".parse().unwrap())
+        .sessions_on_day(
+            window(),
+            window(),
+            TimeZone::UTC,
+            "2026-09-01".parse().unwrap(),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(first.sessions.len(), 1);

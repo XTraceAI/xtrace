@@ -33,9 +33,6 @@ export const costAmount = (cost: DashboardLaneCost): string | null =>
       : `${usd(cost.priced_subtotal_usd)}+`;
 
 export const rangeDays: Record<TimeRange, 7 | 14 | 30> = { '7d': 7, '14d': 14, '30d': 30 };
-/** The range a report of `days` days was read for; `null` for no preset. */
-export const rangeOf = (days: number): TimeRange | null =>
-  (Object.keys(rangeDays) as TimeRange[]).find((range) => rangeDays[range] === days) ?? null;
 
 /**
  * Report percentages (`pct`, `delta.pct`) are percentage points: 50 means 50%.

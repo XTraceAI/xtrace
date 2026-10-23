@@ -1,13 +1,15 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
+import { usePurgeEpoch } from '../../data/content-purges';
 import { Link } from 'react-router';
 import { useData } from '../../data/DataProvider';
 import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import { queryKeys } from '../../data/query-client';
+import type { TimeRange } from '../../kit/TopBar';
 import { agentDuration, agentTime } from '../agent-duration';
 import { displayTitle, shortId } from '../session-context';
 import { listAddress, sessionHref } from '../session-search';
 import { useSessionTitles } from '../session-titles';
-import { plural, rangeOf } from './present';
+import { plural } from './present';
 
 /**
  * The "Sessions" part of a "human + agent" day card: every session with agent
@@ -19,19 +21,33 @@ import { plural, rangeOf } from './present';
  * Read when the card first opens (this part is only mounted while it is open)
  * and kept for the same report: opening the same day again reads nothing,
  * a new report is a new read, and committed data re-reads it. While a new
- * report's answer is on its way the card keeps the last one. A session is
+ * report's answer is on its way the card keeps the last one, unless stored
+ * content was deleted since, which drops every kept answer. A session is
  * named as the lanes name it: its host title when that has been read, else its
  * saved title or reviewer mark, else its short identifier.
  */
-export function DaySessions({ window, date }: { window: DashboardWindow; date: string }) {
+export function DaySessions({
+  window,
+  date,
+  range,
+}: {
+  window: DashboardWindow;
+  date: string;
+  /** The Dashboard's range, carried by each link as the lanes' links carry it. */
+  range: TimeRange;
+}) {
   const { source } = useData();
   const available = Boolean(source.daySessions);
+  // Keyed by the purge epoch, so no saved title read before "Delete stored
+  // content" is shown after it, not even while the next answer is on its way.
+  const purges = usePurgeEpoch();
   const query = useQuery({
-    queryKey: queryKeys.daySessions(window.days, window.end_ms, date),
+    queryKey: queryKeys.daySessions(purges, window.days, window.end_ms, date),
     queryFn: () => source.daySessions!(window.days, window.end_ms, date),
     enabled: available,
     staleTime: Infinity,
-    placeholderData: keepPreviousData,
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[2] === purges ? previous : undefined,
   });
   const sessions = query.data?.sessions ?? [];
   const hostTitle = useSessionTitles(
@@ -39,7 +55,6 @@ export function DaySessions({ window, date }: { window: DashboardWindow; date: s
     sessions.map((session) => ({ id: session.session_id, version: session.agent_ms })),
     { keepResolved: true },
   );
-  const range = rangeOf(window.days) ?? '7d';
   if (!available) return null;
   const body = query.isError ? (
     <span className="xt-effort-tip-note" data-testid="day-sessions-state">

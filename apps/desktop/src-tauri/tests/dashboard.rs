@@ -302,6 +302,140 @@ mod assembled {
         }
     }
 
+    /// A day's card reads the events its report read: those recorded before
+    /// the report's end. Events that arrive later, timestamped after that end
+    /// — the next event of a session still running today, or one just after
+    /// midnight that joins a span begun yesterday — change neither the report
+    /// nor its card, so the card still adds up to the report's day. An event
+    /// timestamped after the end but already stored when the report is read
+    /// is left out of both.
+    #[test]
+    fn a_days_card_reads_only_what_its_report_read() {
+        let event = |id: &str, ts: &str| assistant(id, ts, None);
+        // In the evening, and ten minutes after midnight.
+        for (now, today, yesterday) in [
+            ("2026-10-05T20:00:00Z", "2026-10-05", "2026-10-04"),
+            ("2026-10-05T00:10:00Z", "2026-10-05", "2026-10-04"),
+        ] {
+            let mut db = steady_user(21);
+            let end = ms(now);
+            let at = |minutes: i64| {
+                Timestamp::from_millisecond(end + minutes * 60_000)
+                    .unwrap()
+                    .to_string()
+            };
+            let live = [event("live-a", &at(-8)), event("live-b", &at(-2))];
+            // Yesterday's last span, 23:50 to 23:55.
+            let midnight = [
+                event("midnight-a", &format!("{yesterday}T23:50:00Z")),
+                event("midnight-b", &format!("{yesterday}T23:55:00Z")),
+            ];
+            // A session running up to the report's end; yesterday's last
+            // span; and a session already stored with an event a minute
+            // after the end.
+            seed(db.store_mut(), "live", "claude", Some("cli"), &live);
+            seed(db.store_mut(), "midnight", "claude", Some("cli"), &midnight);
+            seed(
+                db.store_mut(),
+                "early",
+                "claude",
+                Some("cli"),
+                &[event("early-a", &at(-3)), event("early-b", &at(1))],
+            );
+            let metrics = MetricsDb::open(db.path()).unwrap();
+            let report = assemble(
+                &metrics,
+                7,
+                end,
+                TimeZone::UTC,
+                MetricClock::Fixture,
+                &catalog(),
+                TypingRate::default(),
+                BreakLength::default(),
+            )
+            .unwrap();
+            drop(metrics);
+            let day = |report: &DashboardMetrics, date: &str| {
+                report
+                    .leverage
+                    .by_day
+                    .iter()
+                    .find(|day| day.date == date)
+                    .unwrap()
+                    .agent_ms
+            };
+            // After the report, a minute after its end: the live session's
+            // next event, which extends today's span; after midnight, also
+            // an event at 00:11 that joins yesterday's 23:55 over midnight.
+            seed(
+                db.store_mut(),
+                "live",
+                "claude",
+                Some("cli"),
+                &[event("live-c", &at(1))],
+            );
+            if now.ends_with("00:10:00Z") {
+                seed(
+                    db.store_mut(),
+                    "midnight",
+                    "claude",
+                    Some("cli"),
+                    &[event("midnight-c", &format!("{today}T00:11:00Z"))],
+                );
+            }
+            let metrics = MetricsDb::open(db.path()).unwrap();
+            for date in [today, yesterday] {
+                let card = xtrace_desktop::dashboard::day_sessions(
+                    &metrics,
+                    7,
+                    report.window.end_ms,
+                    date,
+                    TimeZone::UTC,
+                )
+                .unwrap();
+                assert_eq!(card.agent_ms, day(&report, date), "{now} {date}");
+                assert_eq!(
+                    card.sessions.iter().map(|s| s.agent_ms).sum::<u64>() + card.more_ms,
+                    day(&report, date),
+                    "{now} {date}"
+                );
+                // `early`'s event after the end counts in neither.
+                assert!(card.sessions.iter().all(|s| s.session_id != "early"));
+            }
+            // The next report counts what arrived, and its card agrees again.
+            let later = assemble(
+                &metrics,
+                7,
+                end + 5 * 60_000,
+                TimeZone::UTC,
+                MetricClock::Fixture,
+                &catalog(),
+                TypingRate::default(),
+                BreakLength::default(),
+            )
+            .unwrap();
+            assert!(day(&later, today) > day(&report, today), "{now}");
+            if now.ends_with("00:10:00Z") {
+                assert_eq!(
+                    day(&later, yesterday),
+                    day(&report, yesterday) + 5 * 60_000,
+                    "{now}"
+                );
+            }
+            for date in [today, yesterday] {
+                let card = xtrace_desktop::dashboard::day_sessions(
+                    &metrics,
+                    7,
+                    later.window.end_ms,
+                    date,
+                    TimeZone::UTC,
+                )
+                .unwrap();
+                assert_eq!(card.agent_ms, day(&later, date), "{now} {date}");
+            }
+        }
+    }
+
     #[test]
     fn dashboard_f2_concurrency_lanes_and_agent_time_for_each_preset() {
         let f = fixture("F2");

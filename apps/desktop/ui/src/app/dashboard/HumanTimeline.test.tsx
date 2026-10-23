@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import fixture from '../../../fixtures/F1.json';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
@@ -6,6 +6,7 @@ import type { FixtureExport } from '../../data/generated/FixtureExport';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { DataProvider } from '../../data/DataProvider';
 import { FixtureDataSource } from '../../data/FixtureDataSource';
+import { events } from '../../data/ipc-names';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { HumanTimeline } from './HumanTimeline';
 
@@ -59,7 +60,7 @@ function report(edit?: (report: DashboardMetrics) => void) {
 const mount = (r: DashboardMetrics) =>
   render(
     <ThemeProvider>
-      <HumanTimeline report={r} />
+      <HumanTimeline report={r} range="7d" />
     </ThemeProvider>,
   );
 
@@ -218,14 +219,14 @@ it('keeps your scroll position when the same range refreshes, and opens a new ra
     refreshed.window.end_ms += 1000;
     view.rerender(
       <ThemeProvider>
-        <HumanTimeline report={refreshed} />
+        <HumanTimeline report={refreshed} range="30d" />
       </ThemeProvider>,
     );
     expect(body.scrollTop).toBe(200);
     // Another range opens on today again.
     view.rerender(
       <ThemeProvider>
-        <HumanTimeline report={range(7)} />
+        <HumanTimeline report={range(7)} range="7d" />
       </ThemeProvider>,
     );
     expect(screen.getByTestId('human-timeline-body').scrollTop).toBe(1200);
@@ -305,7 +306,7 @@ async function mountPaired(r: DashboardMetrics, source = new FixtureDataSource(e
       <ThemeProvider>
         <DataProvider source={source}>
           <Routes>
-            <Route path="/dashboard" element={<HumanTimeline report={r} withAgents />} />
+            <Route path="/dashboard" element={<HumanTimeline report={r} range="7d" withAgents />} />
             <Route path="/sessions/:sessionId" element={<SessionPath />} />
           </Routes>
         </DataProvider>
@@ -636,4 +637,35 @@ it('human + agent: a day card says when its sessions are being read or could not
     ),
   );
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+it('human + agent: a day card drops saved titles read before stored content was deleted', async () => {
+  const source = new FixtureDataSource(exported());
+  const day = paired().leverage.by_day.at(-1)!;
+  const answer = (title: string | null) => ({
+    date: day.date,
+    start_ms: day.start_ms,
+    end_ms: day.end_ms,
+    agent_ms: H,
+    sessions: [{ session_id: 's-0', host: 'claude', title, automated_review: false, agent_ms: H }],
+    more_sessions: 0,
+    more_ms: 0,
+  });
+  let after: (value: ReturnType<typeof answer>) => void = () => {};
+  const read = vi
+    .spyOn(source, 'daySessions')
+    .mockResolvedValueOnce(answer('Saved before the delete'))
+    .mockImplementationOnce(() => new Promise((resolve) => (after = resolve)));
+  await mountPaired(paired(), source);
+  const last = screen.getAllByTestId('human-day').at(-1)!;
+  fireEvent.focus(last);
+  const open = await card();
+  await within(open).findByText('Saved before the delete');
+  // The open card reads again and never shows the old title meanwhile.
+  act(() => source.emit(events.contentPurged));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(within(open).queryByText('Saved before the delete')).toBeNull();
+  expect(within(open).getByTestId('day-sessions-state').textContent).toBe('Reading sessions…');
+  await act(async () => after(answer(null)));
+  expect((await within(open).findByTestId('day-session')).textContent).toBe('Session s-01 h 0 m');
 });

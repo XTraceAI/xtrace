@@ -178,21 +178,24 @@ impl MetricsDb {
     }
 
     /// Which sessions had agent time on one local day of `window`, and how
-    /// much each: the day [`ActiveSpanReport::by_day`] reports for
-    /// `self.active_spans(window)`, split by session. `None` when `date` is
-    /// not one of the window's local days.
+    /// much each: the day [`ActiveSpanReport::by_day`] reports over `window`
+    /// for `self.active_spans(read)`, split by session. `read` is the events
+    /// the caller's report read: `window` itself, or a part of it that ends
+    /// earlier (a report pinned to its own end). `None` when `date` is not
+    /// one of the window's local days.
     ///
     /// Only the events from one gap before the day to one gap after it, kept
-    /// inside `window`, are read. That gives the same answer as reading the
-    /// whole window: a span adds time to the day only through a pair of
-    /// consecutive events at most one gap apart with the day between or
-    /// around them, and both events of such a pair lie in that stretch, as
-    /// does every event between them. The parts are allocated over the whole
-    /// window's days, so the last day keeps a leap-second remainder exactly
-    /// as `by_day` gives it.
+    /// inside `read`, are read. That gives the same answer as reading all of
+    /// `read`: a span adds time to the day only through a pair of consecutive
+    /// events at most one gap apart with the day between or around them, and
+    /// both events of such a pair lie in that stretch, as does every event
+    /// between them. The parts are allocated over the whole window's days,
+    /// so the last day keeps a leap-second remainder exactly as `by_day`
+    /// gives it.
     pub fn sessions_on_day(
         &self,
         window: Window,
+        read: Window,
         zone: TimeZone,
         date: jiff::civil::Date,
     ) -> Result<Option<SessionsOnDay>> {
@@ -201,25 +204,29 @@ impl MetricsDb {
             return Ok(None);
         };
         let bucket = days[index].window;
-        let read = Window::new(
-            bucket
-                .start_ms()
-                .checked_sub(MAX_GAP_MS)
-                .ok_or(Error::InvalidWindow)?
-                .max(window.start_ms()),
-            bucket
-                .end_ms()
-                .checked_add(MAX_GAP_MS)
-                .ok_or(Error::InvalidWindow)?
-                .min(window.end_ms()),
-        )?;
+        let from = bucket
+            .start_ms()
+            .checked_sub(MAX_GAP_MS)
+            .ok_or(Error::InvalidWindow)?
+            .max(read.start_ms());
+        let until = bucket
+            .end_ms()
+            .checked_add(MAX_GAP_MS)
+            .ok_or(Error::InvalidWindow)?
+            .min(read.end_ms());
+        // A day the read ends before (or starts after) has nothing read.
+        let spans = if from < until {
+            self.active_spans(Window::new(from, until)?)?.spans
+        } else {
+            Vec::new()
+        };
         let ends: Vec<i128> = days
             .iter()
             .map(|day| i128::from(day.window.end_ms()))
             .collect();
         let mut by_session = BTreeMap::<(String, String), i128>::new();
         let mut totals = vec![0_i128; days.len()];
-        for span in self.active_spans(read)?.spans {
+        for span in spans {
             totals.fill(0);
             allocate(
                 i128::from(window.start_ms()),

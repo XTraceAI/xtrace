@@ -17,6 +17,7 @@ import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import { UNMEASURED } from '../../kit/format';
 import { Icon } from '../../kit/icons';
+import type { TimeRange } from '../../kit/TopBar';
 import { useSurfaceTheme } from '../../theme/ThemeProvider';
 import { agentTime } from '../agent-duration';
 import { leverageText } from '../metric-format';
@@ -65,9 +66,12 @@ const HOURS = ['00', '06', '12', '18', '24'];
  */
 export function HumanTimeline({
   report,
+  range,
   withAgents = false,
 }: {
   report: DashboardMetrics;
+  /** The Dashboard's range, which a day card's session links carry. */
+  range: TimeRange;
   /**
    * The "human + agent" view: each day's agent time as a thin line across
    * its track, as high as the agents running on average in each wall-clock
@@ -248,6 +252,7 @@ export function HumanTimeline({
               current={index === current}
               onFocus={() => setChosen(row.date)}
               window={report.window}
+              range={range}
             />
           ))}
         </div>
@@ -312,6 +317,7 @@ function Row({
   current,
   onFocus,
   window,
+  range,
 }: {
   row: TimelineRow;
   /** The day's agents line in the "human + agent" view; `null` there when the report has none. */
@@ -321,6 +327,7 @@ function Row({
   onFocus: () => void;
   /** The report's window, which names this day's sessions read. */
   window: DashboardWindow;
+  range: TimeRange;
 }) {
   const theme = useSurfaceTheme();
   const paired = line !== undefined;
@@ -497,7 +504,7 @@ function Row({
             <b>{line?.leverage ?? line?.leverageWords ?? 'unknown'}</b>
             {line?.atOrBelowEven && <em>{AT_OR_BELOW_EVEN}</em>}
           </span>
-          <DaySessions window={window} date={row.date} />
+          <DaySessions window={window} date={row.date} range={range} />
           {line && pointer && (
             <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
               <span>{line.quarter(pointer.quarter).span}</span>
