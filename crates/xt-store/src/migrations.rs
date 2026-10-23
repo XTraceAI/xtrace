@@ -163,7 +163,7 @@ const MIGRATIONS: &[Migration] = &[
     migration!(
         27,
         "0027_tool_result_outcomes",
-        "db485902e807c92d87a85e99cfc13f7afbbd04872d08c221cd04219b0984f9ea"
+        "cce54663d395af6156d8fcd76e0056f57d6c6faa7b8c1c7389e602a632b36511"
     ),
 ];
 

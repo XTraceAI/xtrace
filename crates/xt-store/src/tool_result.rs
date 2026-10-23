@@ -31,6 +31,12 @@ pub const INTERRUPTED_PREFIX: &str = "[Request interrupted by user for tool use]
 /// The start of the tool result Claude Code writes when its own permission
 /// check, not the person, refused a call (auto mode's denials).
 pub const PERMISSION_DENIED_PREFIX: &str = "Permission for this action was denied";
+/// Claude Code's other permission refusal, from its settings or mode rather
+/// than the person: "Permission to use Bash has been denied …", or "Permission
+/// to use Bash with command … has been denied …". The result starts with the
+/// first part and states the second.
+pub const PERMISSION_TO_USE_PREFIX: &str = "Permission to use ";
+pub const PERMISSION_TO_USE_DENIED: &str = " has been denied";
 /// The write-time derivation of [`ResultFacts`] this build implements. Bump it
 /// only together with a change to [`facts`]; rows written under a lower
 /// version are then replaced when their source is read again.
@@ -123,7 +129,9 @@ pub fn facts(block: &Value) -> ResultFacts {
         Wording::Declined
     } else if text.starts_with(INTERRUPTED_PREFIX) {
         Wording::Interrupted
-    } else if text.starts_with(PERMISSION_DENIED_PREFIX) {
+    } else if text.starts_with(PERMISSION_DENIED_PREFIX)
+        || (text.starts_with(PERMISSION_TO_USE_PREFIX) && text.contains(PERMISSION_TO_USE_DENIED))
+    {
         Wording::PermissionDenied
     } else {
         Wording::Other
@@ -423,6 +431,30 @@ mod tests {
                 ),
                 Outcome::PermissionDenied,
                 Outcome::PermissionDenied,
+            ),
+            (
+                result(
+                    json!(true),
+                    json!(
+                        "Permission to use Bash has been denied because Claude Code is running in don't ask mode."
+                    ),
+                ),
+                Outcome::PermissionDenied,
+                Outcome::PermissionDenied,
+            ),
+            (
+                result(
+                    json!(true),
+                    json!("Permission to use Bash with command ls has been denied."),
+                ),
+                Outcome::PermissionDenied,
+                Outcome::PermissionDenied,
+            ),
+            // Without the denial it is an ordinary failure.
+            (
+                result(json!(true), json!("Permission to use the cache: yes")),
+                Outcome::Failed,
+                Outcome::Failed,
             ),
             // The wording without the flag is an ordinary result.
             (result(json!(false), declined), Outcome::Ok, Outcome::Ok),

@@ -62,10 +62,10 @@ pub use session_hands_off::SessionHandsOff;
 pub use session_stretches::{SessionStretch, SessionStretches, ToolBlock};
 pub use session_summary::SessionListSummary;
 pub use session_warnings::{
-    CORRECTION_PHRASE, CORRECTION_WORDS, CheckState, Missing, NO_MAX_WORDS, PROMPT_MIN_WORDS,
-    REPEAT_AT_LEAST, STILL_NEGATIVES, STILL_REACH, SessionWarning, SessionWarnings,
-    TASK_LIST_TOOLS, WAITING_TOOLS, WarningChecks, WarningKind, comparable_prompt, correction,
-    expected_repeat, tool_written,
+    CORRECTION_PHRASE, CORRECTION_WORDS, CheckState, HANDBACK_TOOLS, Missing, NO_MAX_WORDS,
+    PROMPT_MIN_WORDS, REPEAT_AT_LEAST, STILL_NEGATIVES, STILL_REACH, SessionWarning,
+    SessionWarnings, TASK_LIST_TOOLS, WAITING_TOOLS, WarningChecks, WarningKind, comparable_prompt,
+    correction, expected_repeat, tool_written,
 };
 pub use sessions::{DaySessions, SessionsPerDay};
 pub use span_detail::{

@@ -15,7 +15,8 @@
 --   messages the result's text starts with: `declined` (Claude Code's "The
 --   user doesn't want to proceed with this tool use"), `interrupted`
 --   ("[Request interrupted by user for tool use]"), `permission_denied`
---   ("Permission for this action was denied") or `other`. No result text, no
+--   ("Permission for this action was denied", or "Permission to use …" with
+--   "has been denied") or `other`. No result text, no
 --   argument and no output is kept. How the call ended is decided from these
 --   facts by the reader, in Rust, so a corrected rule needs no rewrite here.
 --

@@ -133,14 +133,20 @@ pub const WAITING_TOOLS: [&str; 8] = [
     "TaskOutput",
 ];
 
+/// Tools a subagent calls to hand its report back to the agent that started
+/// it: one call per subagent, so a session that runs many of them calls it
+/// often.
+pub const HANDBACK_TOOLS: [&str; 1] = ["SubagentHandback"];
+
 /// M-21's circling exclusion: whether a call is an expected repeat, which
 /// the circling warning does not compare. Read from the stored tool name
 /// only; no argument is read. A task-list tool ([`TASK_LIST_TOOLS`]), a
-/// waiting tool ([`WAITING_TOOLS`]), or a screenshot tool: its stored name
-/// contains `screenshot`.
+/// waiting tool ([`WAITING_TOOLS`]), a handback tool ([`HANDBACK_TOOLS`]),
+/// or a screenshot tool: its stored name contains `screenshot`.
 pub fn expected_repeat(name: &str) -> bool {
     TASK_LIST_TOOLS.contains(&name)
         || WAITING_TOOLS.contains(&name)
+        || HANDBACK_TOOLS.contains(&name)
         || name.to_ascii_lowercase().contains("screenshot")
 }
 
@@ -1293,6 +1299,7 @@ mod tests {
             "Monitor",
             "sleep",
             "wait_agent",
+            "SubagentHandback",
             "mcp__computer-use__app_screenshot",
             "mcp__Claude_Preview__preview_screenshot",
         ] {

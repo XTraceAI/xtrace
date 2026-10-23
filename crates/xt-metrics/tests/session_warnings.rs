@@ -468,7 +468,7 @@ fn an_interrupted_call_and_a_permission_denial_are_not_failures() {
             &at(0, 7),
             "t3",
             Some(true),
-            "Permission for this action was denied. Reason: outside the project.",
+            "Permission to use Bash has been denied because Claude Code is running in don't ask mode.",
         ),
         reply("a5", &at(0, 8)),
     ];
