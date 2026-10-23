@@ -64,25 +64,41 @@ button.xt-rule-chip {
   margin-top: 8px;
   color: var(--secondary);
 }
-/* Label and value rows under a definition, values aligned at the end. */
-.xt-rule-rows {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 16px;
+/* A small table under a definition: muted caption and headings, a divider
+   under the headings, values aligned at the end in tabular figures. */
+.xt-rule-table {
+  width: 100%;
   margin-top: 8px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
 }
-.xt-rule-rows-title {
-  grid-column: 1 / -1;
+.xt-rule-table caption {
   color: var(--secondary);
+  text-align: left;
 }
-.xt-rule-row {
-  display: contents;
+.xt-rule-table th {
+  padding: 2px 0 2px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--meta);
+  font-weight: 400;
+  text-align: left;
 }
-.xt-rule-row b {
+.xt-rule-table td {
+  padding: 1px 0;
+  vertical-align: top;
+}
+.xt-rule-table th + th,
+.xt-rule-table td + td {
+  padding-left: 16px;
+  text-align: right;
+  white-space: nowrap;
+}
+.xt-rule-table td + td {
   color: var(--ink);
   font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+}
+.xt-rule-table tbody tr:first-child td {
+  padding-top: 3px;
 }
 .xt-stat-tile {
   display: flex;

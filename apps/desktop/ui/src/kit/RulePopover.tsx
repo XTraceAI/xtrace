@@ -11,11 +11,19 @@ import '../styles/metrics.css';
  */
 export const RULE_OPEN_DELAY_MS = 450;
 
-/** A titled list of label and value pairs under a definition. */
-export interface RuleRows {
-  title: string;
+/**
+ * A small two-column table under a definition: a caption, the label and value
+ * columns' headings, then one row per pair, values aligned at the end.
+ */
+export interface RuleTable {
+  caption: string;
+  columns: readonly [label: string, value: string];
   rows: readonly { label: string; value: string }[];
 }
+
+/** The table as one sentence: `Share of output tokens: a 62%, b 30%.` */
+export const tableText = (table: RuleTable) =>
+  `${table.caption}: ${table.rows.map((row) => `${row.label} ${row.value}`).join(', ')}.`;
 
 /**
  * Passive definition text: the rule's one-line summary, then optional rows
@@ -25,7 +33,7 @@ export interface RuleRows {
 export function RulePopover({
   ruleId,
   context,
-  rows,
+  table,
   text,
   closeOnClick = false,
   children,
@@ -33,7 +41,7 @@ export function RulePopover({
   ruleId: RuleId;
   context?: string;
   /** Shown between the definition and the note; nothing when it has no rows. */
-  rows?: RuleRows;
+  table?: RuleTable;
   /** Plain words shown instead of the rule's own definition. */
   text?: string;
   /** True when clicking the trigger opens something else (a dialog). */
@@ -62,17 +70,30 @@ export function RulePopover({
         >
           <Tooltip.Popup id={id} role="tooltip" className="xt-rule-popover xt-rule-definition">
             <span>{text ?? ruleSummary(ruleId)}</span>
-            {rows && rows.rows.length > 0 && (
-              <span className="xt-rule-rows">
-                <span className="xt-rule-rows-title">{rows.title}</span>
-                {/* The spaces keep the words apart where the text is read as one line. */}
-                {rows.rows.map((row, index) => (
-                  <span key={index} className="xt-rule-row">
-                    {' '}
-                    <span>{row.label}</span> <b>{row.value}</b>
-                  </span>
-                ))}
-              </span>
+            {table && table.rows.length > 0 && (
+              <>
+                {/* The popover is read as the trigger's description, where a
+                    table counts only as its caption: assistive technology reads
+                    these words instead, and the table is drawn for the eye. */}
+                <span className="sr-only">{tableText(table)}</span>
+                <table className="xt-rule-table" aria-hidden="true">
+                  <caption>{table.caption}</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">{table.columns[0]}</th>
+                      <th scope="col">{table.columns[1]}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {table.rows.map((row, index) => (
+                      <tr key={index}>
+                        <td>{row.label}</td>
+                        <td>{row.value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
             {context && <span className="xt-rule-context">{context}</span>}
           </Tooltip.Popup>

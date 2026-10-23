@@ -310,8 +310,19 @@ test('hovering the favorite model lists its share of output tokens', async ({ pa
   await page.getByTestId('dashboard-summary').getByRole('button').hover();
   const tip = page.getByRole('tooltip');
   await expect(tip).toContainText('The model that wrote the most output in the selected range.');
-  await expect(tip).toContainText('Share of output tokens: fixture-model-v1 100%');
+  const table = tip.locator('table');
+  await expect(table.locator('caption')).toHaveText('Share of output tokens');
+  await expect(table.locator('th')).toHaveText(['Model', 'Share']);
+  await expect(table.locator('tbody td')).toHaveText(['fixture-model-v1', '100%']);
   await expect(tip).toContainText('Previous period: No measured output tokens in this range.');
+  // The table is drawn for the eye; the description reads each row once, as words.
+  await expect(
+    page.getByTestId('dashboard-summary').getByRole('button'),
+  ).toHaveAccessibleDescription(
+    'The model that wrote the most output in the selected range. ' +
+      'Share of output tokens: fixture-model-v1 100%. ' +
+      'Previous period: No measured output tokens in this range.',
+  );
 });
 
 test('keyboard focus opens tile definitions and reaches the Sessions link', async ({ page }) => {

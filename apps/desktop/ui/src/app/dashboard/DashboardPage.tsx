@@ -136,8 +136,9 @@ function DashboardReport({
           favorite{' '}
           <RulePopover
             ruleId="M-10"
-            rows={{
-              title: 'Share of output tokens:',
+            table={{
+              caption: 'Share of output tokens',
+              columns: ['Model', 'Share'],
               rows: outputShareRows(favorite.current.output_shares),
             }}
             context={

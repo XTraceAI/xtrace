@@ -799,9 +799,10 @@ test("hovering the favorite lists each model's share of output tokens inside the
   await summary.getByRole('button').hover();
   const tip = page.getByRole('tooltip');
   await expect(tip).toContainText('The model that wrote the most output in the selected range.');
-  await expect(tip.locator('.xt-rule-rows-title')).toHaveText('Share of output tokens:');
+  await expect(tip.locator('caption')).toHaveText('Share of output tokens');
+  await expect(tip.locator('th')).toHaveText(['Model', 'Share']);
   const rows = await tip
-    .locator('.xt-rule-row')
+    .locator('tbody tr')
     .evaluateAll((elements) =>
       elements.map((row) => [...row.children].map((cell) => cell.textContent)),
     );
@@ -819,9 +820,11 @@ test("hovering the favorite lists each model's share of output tokens inside the
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(1120);
   expect(box.y + box.height).toBeLessThanOrEqual(720);
+  // The Share heading and every share end at the same edge.
   const values = await tip
-    .locator('.xt-rule-row b')
+    .locator('th:last-child, td:last-child')
     .evaluateAll((cells) => cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
+  expect(values).toHaveLength(7);
   expect(new Set(values).size).toBe(1);
   expect(values[0]).toBeLessThanOrEqual(box.x + box.width);
   await page.keyboard.press('Escape');
@@ -829,7 +832,7 @@ test("hovering the favorite lists each model's share of output tokens inside the
   await open(page, exportFor('partial'), 1120, 720, 'light');
   await page.getByTestId('dashboard-summary').getByRole('button').hover();
   await expect(page.getByRole('tooltip')).toContainText('Previous period:');
-  await expect(page.getByRole('tooltip').locator('.xt-rule-rows')).toHaveCount(0);
+  await expect(page.getByRole('tooltip').locator('table')).toHaveCount(0);
 });
 
 test('the longest share list opens under the favorite and fits 1120x720', async ({ page }) => {
@@ -853,10 +856,12 @@ test('the longest share list opens under the favorite and fits 1120x720', async 
   const trigger = page.getByTestId('dashboard-summary').getByRole('button');
   await trigger.hover();
   const tip = page.getByRole('tooltip');
-  await expect(tip.locator('.xt-rule-row')).toHaveCount(10);
-  await expect(tip.locator('.xt-rule-row').last()).toContainText('7 other models');
+  await expect(tip.locator('tbody tr')).toHaveCount(10);
+  await expect(tip.locator('tbody tr').last()).toContainText('7 other models');
+  await expect(tip.locator('thead')).toBeInViewport({ ratio: 1 });
+  await expect(tip.locator('th')).toHaveText(['Model', 'Share']);
   const lines = await tip
-    .locator('.xt-rule-row > span')
+    .locator('tbody td:first-child')
     .evaluateAll((cells) =>
       cells.map((cell) =>
         Math.round(
