@@ -5,7 +5,7 @@ import type { MetricLeverageDay } from '../../data/generated/MetricLeverageDay';
 import type { MetricPrAnalyticsRow } from '../../data/generated/MetricPrAnalyticsRow';
 import type { MetricPrMarker } from '../../data/generated/MetricPrMarker';
 import { clock } from '../../kit/clock';
-import { agentDuration, agentTime } from '../agent-duration';
+import { agentDuration, agentTime, decimalHours } from '../agent-duration';
 import { continuous, handsOffTime, leverageText } from '../metric-format';
 import { dayLabel } from './effort-chart';
 import { plural, zoneOf } from './present';
@@ -334,6 +334,13 @@ const LINE_TOP = 2;
 export interface AgentLine {
   /** The day's agent time, written as all agent time is. */
   total: string;
+  /** The same in decimal hours for the day's column, e.g. `53.9 h`. */
+  hours: string;
+  /**
+   * Your time that day (the leverage pair's, the same as the row's) in
+   * decimal hours for your column; null when unknown.
+   */
+  yourHours: string | null;
   /** The same in words, for the row's accessible name. */
   spoken: string;
   /** The line in the `LINE_WIDTH` × `LINE_HEIGHT` box; null when no agent ran. */
@@ -415,6 +422,8 @@ export function agentLines(
       const agents = (index: number) => agentsText(day.quarter_agents[index] ?? 0);
       const line: AgentLine = {
         total: agentTime(day.agent_ms),
+        hours: decimalHours(day.agent_ms),
+        yourHours: day.human_ms === null ? null : decimalHours(day.human_ms),
         spoken: agentDuration(day.agent_ms).spoken,
         path: agentsLinePath(day.quarter_agents, top),
         busiest:

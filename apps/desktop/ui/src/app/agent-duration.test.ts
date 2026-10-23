@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentDuration } from './agent-duration';
+import { agentDuration, decimalHours } from './agent-duration';
 
 const MIN = 60_000;
 const shown = (ms: number) => agentDuration(ms).visible;
@@ -54,5 +54,27 @@ describe('agentDuration', () => {
     expect(agentDuration(60 * MIN).spoken).toBe('1 hour 0 minutes');
     expect(agentDuration(MIN).spoken).toBe('1 minute');
     expect(agentDuration(0).spoken).toBe('0 minutes');
+  });
+});
+
+describe('decimalHours', () => {
+  const H = 3_600_000;
+  it('writes the nearest tenth of an hour, with thousands commas', () => {
+    expect(decimalHours(53.9 * H)).toBe('53.9 h');
+    expect(decimalHours((53 * 60 + 51) * 60_000)).toBe('53.9 h');
+    expect(decimalHours(1.8 * H)).toBe('1.8 h');
+    expect(decimalHours(24 * H)).toBe('24 h');
+    expect(decimalHours((123 * 60 + 45) * 60_000)).toBe('123.8 h');
+    expect(decimalHours(1234.5 * H)).toBe('1,234.5 h');
+  });
+  it('reads a measured zero as 0 h and a positive value under 0.05 h as <0.1 h', () => {
+    expect(decimalHours(0)).toBe('0 h');
+    expect(decimalHours(1)).toBe('<0.1 h');
+    // 0.05 h is three minutes: the first value written as 0.1 h.
+    expect(decimalHours(3 * 60_000 - 1)).toBe('<0.1 h');
+    expect(decimalHours(3 * 60_000)).toBe('0.1 h');
+    // A half tenth rounds up: 1.05 h is 63 minutes.
+    expect(decimalHours(63 * 60_000 - 1)).toBe('1 h');
+    expect(decimalHours(63 * 60_000)).toBe('1.1 h');
   });
 });

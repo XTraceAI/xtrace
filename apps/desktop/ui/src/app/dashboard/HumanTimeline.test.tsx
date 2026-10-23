@@ -323,12 +323,12 @@ it('human + agent: one track per day, your bands and the agents line in it, your
   const track = rows[6]!.querySelector('.xt-human-track')!;
   expect(track.lastElementChild).toBe(lines[0]);
   expect(track.querySelectorAll('[data-testid="human-stretch"]')).toHaveLength(2);
-  // Your total, then the agents' (the report's whole-day agent time), on
-  // the row; the card keeps its own agent time too.
+  // Your total, then the agents' (the report's whole-day agent time), in
+  // decimal hours on the row; the card keeps hours and minutes.
   expect(
     [...rows[6]!.querySelectorAll('.xt-human-total')].map((total) => total.textContent),
-  ).toEqual(['0 h 30 m', '1 h 18 m', '2.6×']);
-  expect(rows[6]!.textContent).toBe('Sep 70 h 30 m1 h 18 m2.6×');
+  ).toEqual(['0.5 h', '1.3 h', '2.6×']);
+  expect(rows[6]!.textContent).toBe('Sep 70.5 h1.3 h2.6×');
   // A day with no leverage says so in the meta colour, never a computed 0.
   const leverage = screen.getAllByTestId('leverage-row-total');
   expect(leverage.map((cell) => cell.textContent)).toEqual([...Array(6).fill('—'), '2.6×']);
@@ -336,8 +336,8 @@ it('human + agent: one track per day, your bands and the agents line in it, your
   expect(leverage[6]!.dataset.unknown).toBeUndefined();
   expect(screen.getByTestId('leverage-total-head').querySelector('svg')).not.toBeNull();
   expect(screen.getAllByTestId('agent-row-total').map((total) => total.textContent)).toEqual([
-    ...Array(6).fill('0 h 0 m'),
-    '1 h 18 m',
+    ...Array(6).fill('0 h'),
+    '1.3 h',
   ]);
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
   expect(rows[6]!.getAttribute('aria-label')).toBe(

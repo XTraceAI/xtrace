@@ -1,4 +1,5 @@
 import { count, UNMEASURED } from '../kit/format';
+import { hoursText } from './metric-format';
 
 /**
  * Agent time, the one way the app writes it — the Sessions list, a session's
@@ -27,6 +28,7 @@ export interface AgentDuration {
 }
 
 const MS_PER_MINUTE = 60_000;
+const MS_PER_HOUR = 3_600_000;
 
 const unit = (value: string, one: string, many: string) => `${value} ${value === '1' ? one : many}`;
 
@@ -52,3 +54,10 @@ export function agentDuration(agentMs: number): AgentDuration {
 
 /** Agent time as a compact label: `agentDuration(ms).visible`. */
 export const agentTime = (agentMs: number) => agentDuration(agentMs).visible;
+
+/**
+ * A time in milliseconds as decimal hours, rounded to the nearest tenth:
+ * `53.9 h`, written by `hoursText`. For narrow day columns; everywhere else
+ * agent time stays `agentTime`'s hours and minutes.
+ */
+export const decimalHours = (ms: number) => hoursText(ms / MS_PER_HOUR);

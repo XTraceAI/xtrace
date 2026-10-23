@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
-import { agentTime as agentTimeText } from '../src/app/agent-duration';
+import { decimalHours } from '../src/app/agent-duration';
 import { leverageText } from '../src/app/metric-format';
 import { syntheticMergedPage, syntheticOverview } from '../src/app/dashboard/overview.synthetic';
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
@@ -14,7 +14,7 @@ const synthetic = structuredClone(fixture as FixtureExport);
 synthetic.dashboards = synthetic.dashboards.map((report) => syntheticOverview(report));
 synthetic.pr_analytics = synthetic.pr_analytics.map(syntheticMergedPage);
 // One very busy day in the 7-day range: a three-digit-hour agent total
-// (`123 h 45 m`), the widest the agents column must hold whole.
+// (123 h 45 m, written `123.8 h`), which the agents column must hold whole.
 const LONG_AGENT_MS = (123 * 60 + 45) * 60_000;
 {
   const week = synthetic.dashboards.find((r) => r.window.days === 7)!;
@@ -318,7 +318,7 @@ for (const scheme of ['light', 'dark'] as const)
       }),
     );
     expect(rowTotals).toHaveLength(report.leverage.by_day.length);
-    expect(rowTotals.at(-2)!.texts[1]).toBe('123 h 45 m');
+    expect(rowTotals.at(-2)!.texts[1]).toBe('123.8 h');
     expect(rowTotals.at(-4)!.texts[2]).toBe('123.4×');
     expect(rowTotals.at(-7)!.texts[2]).toBe('0.8×');
     expect(rowTotals.at(-7)!.leverageColor).toBe(rgb(rowTotals.at(-7)!.danger));
@@ -336,8 +336,10 @@ for (const scheme of ['light', 'dark'] as const)
       expect(row.leverageColor).toBe(
         rgb(value === null ? row.meta : flagged ? row.danger : row.secondary),
       );
-      expect(row.texts[0]).toMatch(/^(\d+ h \d+ m|—)$/);
-      expect(row.texts[1]).toBe(agentTimeText(report.leverage.by_day[index]!.agent_ms));
+      // Both time columns in decimal hours, from the report's own numbers.
+      const human = report.leverage.by_day[index]!.human_ms;
+      expect(row.texts[0]).toBe(human === null ? '—' : decimalHours(human));
+      expect(row.texts[1]).toBe(decimalHours(report.leverage.by_day[index]!.agent_ms));
       for (const centre of row.centres) expect(Math.abs(centre)).toBeLessThanOrEqual(1);
       expect(row.whole).toBe(true);
       expect(row.oneLine).toBe(true);

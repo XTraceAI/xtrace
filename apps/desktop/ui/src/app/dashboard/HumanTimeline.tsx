@@ -376,11 +376,11 @@ function Row({
           data-key={paired ? 'you' : undefined}
           data-unknown={paired && row.total === null ? '' : undefined}
         >
-          {row.total ?? '—'}
+          {paired ? (line?.yourHours ?? UNMEASURED) : (row.total ?? '—')}
         </span>
         {paired && (
           <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
-            {line ? line.total : UNMEASURED}
+            {line ? line.hours : UNMEASURED}
           </span>
         )}
         {paired && (
