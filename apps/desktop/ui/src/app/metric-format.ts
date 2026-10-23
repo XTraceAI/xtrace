@@ -23,6 +23,13 @@ export const continuous = (value: number): string =>
   value > 0 && value < SHOWN_SCALE ? '<0.1' : hours(value);
 
 /**
+ * Hours with one decimal on the shared scale, the one way the app writes a
+ * time as decimal hours: `53.9 h`, `1,234.5 h`, `0 h` for a measured zero,
+ * `<0.1 h` for a positive value under 0.05 h.
+ */
+export const hoursText = (hours: number): string => `${continuous(hours)} h`;
+
+/**
  * Hands-off time (M-09), the one way it is written wherever it is shown — a
  * stretch's length on a session's timeline, a session's or a pull request's
  * median, the Dashboard's median, p90 and daily line: minutes on the shared
