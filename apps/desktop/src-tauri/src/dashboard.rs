@@ -1184,7 +1184,7 @@ pub fn day_sessions(
                 session_id: session.session_id,
                 host: session.host,
                 agent_ms: session.active_ms,
-                last_ms: session.last_ms,
+                last_activity_at_ms: row.and_then(|row| row.last_activity_at_ms),
             }
         })
         .collect();

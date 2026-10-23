@@ -675,7 +675,7 @@ it('human + agent: a sessions box says when its sessions are being read or could
       title: n === 0 ? 'Fix the sidebar' : null,
       automated_review: n === 1,
       agent_ms: H,
-      last_ms: day.start_ms + 10 * H,
+      last_activity_at_ms: day.start_ms + 10 * H,
     })),
     more_sessions: 3,
     more_ms: 2 * H,
@@ -716,7 +716,7 @@ it('human + agent: a sessions box drops saved titles read before stored content 
         title,
         automated_review: false,
         agent_ms: H,
-        last_ms: day.start_ms + H,
+        last_activity_at_ms: day.start_ms + H,
       },
     ],
     more_sessions: 0,
@@ -740,11 +740,11 @@ it('human + agent: a sessions box drops saved titles read before stored content 
   expect((await within(open).findByTestId('day-session')).textContent).toBe('Session s-01 h 0 m');
 });
 
-it('human + agent: a session’s host title is read again when its source gains an event that adds no time', async () => {
+it('human + agent: a session’s host title is read again when the session has later activity, on any day', async () => {
   const source = new FixtureDataSource(exported());
   const day = paired().leverage.by_day.at(-1)!;
-  // The same hour that day, and a later last event the second time.
-  const answer = (lastMs: number) => ({
+  // The same hour that day, and later activity the second time, after the day.
+  const answer = (lastActivity: number) => ({
     date: day.date,
     start_ms: day.start_ms,
     end_ms: day.end_ms,
@@ -756,7 +756,7 @@ it('human + agent: a session’s host title is read again when its source gains 
         title: null,
         automated_review: false,
         agent_ms: H,
-        last_ms: lastMs,
+        last_activity_at_ms: lastActivity,
       },
     ],
     more_sessions: 0,
@@ -764,7 +764,7 @@ it('human + agent: a session’s host title is read again when its source gains 
   });
   vi.spyOn(source, 'daySessions')
     .mockResolvedValueOnce(answer(day.start_ms + H))
-    .mockResolvedValue(answer(day.start_ms + 2 * H));
+    .mockResolvedValue(answer(day.end_ms + 2 * H));
   const titles = vi
     .fn<SessionTitleControls['read']>()
     .mockResolvedValueOnce({ titles: [{ id: 's-0', title: 'Old name' }] })
@@ -774,7 +774,7 @@ it('human + agent: a session’s host title is read again when its source gains 
   hoverDate(screen.getAllByTestId('human-day').at(-1)!);
   const open = await sessionsBox();
   await within(open).findByText('Old name');
-  // Committed data re-reads the box: the same time that day, a later event.
+  // Committed data re-reads the box: the same time that day, later activity.
   act(() => source.emit(events.importReceived));
   await within(open).findByText('New name', undefined, { timeout: 3000 });
   expect(titles).toHaveBeenCalledTimes(2);

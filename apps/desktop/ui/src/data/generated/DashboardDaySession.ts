@@ -18,10 +18,11 @@ automated_review: boolean,
  */
 agent_ms: number, 
 /**
- * The end of its latest span the day's read saw (from one gap before the
- * day to one gap after it, before the report's end), as
- * `xt_metrics::SessionOnDay::last_ms`. It moves whenever the session's
- * source gains an event there, even one that adds no time, so the view
- * reads its host title again; a lane's latest span end does the same.
+ * The session's latest activity, whenever it was: the same newest timed
+ * own work the Sessions page shows (`last_activity_at_ms`), read with its
+ * context. Not bounded by the day or the report, so it moves with every
+ * new event of the session, on any day; the view reads the session's host
+ * title again when it does. `null` when no timed work record or no
+ * context was found for the session.
  */
-last_ms: number, };
+last_activity_at_ms: number | null, };

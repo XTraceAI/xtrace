@@ -98,12 +98,6 @@ pub struct SessionOnDay {
     pub session_id: String,
     pub host: String,
     pub active_ms: u64,
-    /// The end of the session's latest span the read saw: its last event
-    /// from one gap before the day to one gap after it, before the read's
-    /// end. It moves with every new event there, a single event after a
-    /// break that adds no time included, so a view can tell the session's
-    /// source changed even when its time that day did not.
-    pub last_ms: i64,
 }
 
 /// The sessions behind one local day's agent time.
@@ -230,8 +224,7 @@ impl MetricsDb {
             .iter()
             .map(|day| i128::from(day.window.end_ms()))
             .collect();
-        // Per session: its time in the day, and its latest span end read.
-        let mut by_session = BTreeMap::<(String, String), (i128, i64)>::new();
+        let mut by_session = BTreeMap::<(String, String), i128>::new();
         let mut totals = vec![0_i128; days.len()];
         for span in spans {
             totals.fill(0);
@@ -242,22 +235,18 @@ impl MetricsDb {
                 &mut totals,
             )?;
             let part = totals[index];
-            let (sum, last) = by_session
-                .entry((span.session_id, span.host))
-                .or_insert((0, span.end_ms));
-            *sum = sum.checked_add(part).ok_or(Error::CounterOverflow)?;
-            *last = (*last).max(span.end_ms);
+            if part > 0 {
+                let sum = by_session.entry((span.session_id, span.host)).or_default();
+                *sum = sum.checked_add(part).ok_or(Error::CounterOverflow)?;
+            }
         }
-        // Listed only with time in the day.
         let mut sessions = by_session
             .into_iter()
-            .filter(|(_, (active, _))| *active > 0)
-            .map(|((session_id, host), (active, last_ms))| {
+            .map(|((session_id, host), active)| {
                 Ok(SessionOnDay {
                     session_id,
                     host,
                     active_ms: u64::try_from(active).map_err(|_| Error::CounterOverflow)?,
-                    last_ms,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

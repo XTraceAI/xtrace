@@ -721,36 +721,3 @@ fn a_days_sessions_add_up_to_that_days_bar() {
     assert_eq!(first.sessions.len(), 1);
     assert_eq!(first.sessions[0].active_ms, 10 * 60_000);
 }
-
-#[test]
-fn a_sessions_last_event_moves_even_when_its_time_that_day_does_not() {
-    let mut db = TempDb::empty().unwrap();
-    let day: jiff::civil::Date = "2026-09-04".parse().unwrap();
-    let read = |db: &TempDb| {
-        let found = MetricsDb::open(db.path())
-            .unwrap()
-            .sessions_on_day(window(), window(), TimeZone::UTC, day)
-            .unwrap()
-            .unwrap();
-        assert_eq!(found.sessions.len(), 1);
-        let session = &found.sessions[0];
-        (session.active_ms, session.last_ms)
-    };
-    seed(
-        &mut db,
-        "s",
-        &[
-            record("a", "2026-09-04T10:00:00Z"),
-            record("b", "2026-09-04T10:10:00Z"),
-        ],
-    );
-    assert_eq!(read(&db), (10 * 60_000, ms("2026-09-04T10:10:00Z")));
-    // A single event after a break: no time, a new latest event.
-    seed(&mut db, "s", &[record("c", "2026-09-04T11:00:00Z")]);
-    assert_eq!(read(&db), (10 * 60_000, ms("2026-09-04T11:00:00Z")));
-    // The read reaches one gap past the day, and no further.
-    seed(&mut db, "s", &[record("d", "2026-09-05T08:00:00Z")]);
-    assert_eq!(read(&db), (10 * 60_000, ms("2026-09-04T11:00:00Z")));
-    seed(&mut db, "s", &[record("e", "2026-09-05T00:10:00Z")]);
-    assert_eq!(read(&db), (10 * 60_000, ms("2026-09-05T00:10:00Z")));
-}

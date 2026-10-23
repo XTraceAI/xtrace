@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePurgeEpoch } from '../../data/content-purges';
 import { Link } from 'react-router';
 import { useData } from '../../data/DataProvider';
+import type { DashboardDaySession } from '../../data/generated/DashboardDaySession';
 import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import { queryKeys } from '../../data/query-client';
 import type { TimeRange } from '../../kit/TopBar';
@@ -10,6 +11,9 @@ import { displayTitle, shortId } from '../session-context';
 import { listAddress, sessionHref } from '../session-search';
 import { useSessionTitles } from '../session-titles';
 import { plural } from './present';
+
+/** The version a listed session's host title is read by; see `last_activity_at_ms`. */
+const titleVersion = (session: DashboardDaySession) => session.last_activity_at_ms ?? 'unknown';
 
 /**
  * A "human + agent" day's sessions box, under a heading that names the day:
@@ -59,9 +63,10 @@ export function DaySessions({
   const sessions = query.data?.sessions ?? [];
   const hostTitle = useSessionTitles(
     JSON.stringify(['effort-day', date]),
-    // The session's latest event the read saw, as the lanes use their latest
-    // span: a new event, even one adding no time, reads its title again.
-    sessions.map((session) => ({ id: session.session_id, version: session.last_ms })),
+    // The session's latest activity, on any day, as Sessions shows it: every
+    // new event reads its title again, even one after this day or one that
+    // adds no time. A session with none known is read once.
+    sessions.map((session) => ({ id: session.session_id, version: titleVersion(session) })),
     { keepResolved: true },
   );
   if (!available) return null;
@@ -81,7 +86,7 @@ export function DaySessions({
     <ul ref={listRef} className="xt-effort-tip-sessions" role="list" aria-label="Sessions this day">
       {sessions.map((session) => {
         const title = displayTitle(
-          hostTitle(session.session_id, session.last_ms) ?? session.title,
+          hostTitle(session.session_id, titleVersion(session)) ?? session.title,
           session.automated_review,
         );
         const name = title ?? `Session ${shortId(session.session_id)}`;

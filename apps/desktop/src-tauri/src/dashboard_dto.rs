@@ -997,13 +997,14 @@ pub struct DashboardDaySession {
     /// The part of the session's spans inside the day.
     #[ts(type = "number")]
     pub agent_ms: u64,
-    /// The end of its latest span the day's read saw (from one gap before the
-    /// day to one gap after it, before the report's end), as
-    /// `xt_metrics::SessionOnDay::last_ms`. It moves whenever the session's
-    /// source gains an event there, even one that adds no time, so the view
-    /// reads its host title again; a lane's latest span end does the same.
-    #[ts(type = "number")]
-    pub last_ms: i64,
+    /// The session's latest activity, whenever it was: the same newest timed
+    /// own work the Sessions page shows (`last_activity_at_ms`), read with its
+    /// context. Not bounded by the day or the report, so it moves with every
+    /// new event of the session, on any day; the view reads the session's host
+    /// title again when it does. `null` when no timed work record or no
+    /// context was found for the session.
+    #[ts(type = "number | null")]
+    pub last_activity_at_ms: Option<i64>,
 }
 
 /// One day's sessions as a fixture carries them, for every day of every

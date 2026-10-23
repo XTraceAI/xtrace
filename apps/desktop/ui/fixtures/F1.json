@@ -908,7 +908,7 @@
             "title": null,
             "automated_review": false,
             "agent_ms": 1380000,
-            "last_ms": 1788783780000
+            "last_activity_at_ms": 1788783780000
           }
         ],
         "more_sessions": 0,
@@ -1127,7 +1127,7 @@
             "title": null,
             "automated_review": false,
             "agent_ms": 1380000,
-            "last_ms": 1788783780000
+            "last_activity_at_ms": 1788783780000
           }
         ],
         "more_sessions": 0,
@@ -1586,7 +1586,7 @@
             "title": null,
             "automated_review": false,
             "agent_ms": 1380000,
-            "last_ms": 1788783780000
+            "last_activity_at_ms": 1788783780000
           }
         ],
         "more_sessions": 0,

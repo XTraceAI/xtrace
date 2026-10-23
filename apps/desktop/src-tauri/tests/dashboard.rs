@@ -284,9 +284,12 @@ mod assembled {
         assert_eq!(busy.more_sessions, 7);
         assert_eq!(busy.more_ms, (5 + 10 + 15 + 20 + 25 + 30 + 10) * 60_000);
         assert_eq!(busy.sessions[2].host, "codex");
-        // Each named session carries its latest event the read saw: busy-12's
-        // last, at 19:00.
-        assert_eq!(busy.sessions[2].last_ms, ms("2026-10-03T19:00:00Z"));
+        // Each named session carries its latest activity, as Sessions shows
+        // it: busy-12's last event, at 19:00.
+        assert_eq!(
+            busy.sessions[2].last_activity_at_ms,
+            Some(ms("2026-10-03T19:00:00Z"))
+        );
         let after =
             xtrace_desktop::dashboard::day_sessions(&metrics, 7, now, "2026-10-04", TimeZone::UTC)
                 .unwrap();
@@ -295,6 +298,27 @@ mod assembled {
                 .sessions
                 .iter()
                 .any(|s| s.session_id == "midnight" && s.agent_ms == 5 * 60_000)
+        );
+        // An event a day later moves that version, whenever it was, and
+        // leaves Oct 3's time alone.
+        drop(metrics);
+        seed(
+            db.store_mut(),
+            "busy-12",
+            "codex",
+            Some("cli"),
+            &[assistant("busy-12-later", "2026-10-04T12:00:00Z", None)],
+        );
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let again =
+            xtrace_desktop::dashboard::day_sessions(&metrics, 7, now, "2026-10-03", TimeZone::UTC)
+                .unwrap();
+        assert_eq!(again.sessions[2].session_id, "busy-12");
+        assert_eq!(again.sessions[2].agent_ms, busy.sessions[2].agent_ms);
+        assert_eq!(again.agent_ms, busy.agent_ms);
+        assert_eq!(
+            again.sessions[2].last_activity_at_ms,
+            Some(ms("2026-10-04T12:00:00Z"))
         );
         // A day outside the range, or not written as the report writes it.
         for date in ["2026-09-01", "2026-10-3", "2026-10-03T00:00", ""] {
