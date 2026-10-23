@@ -109,6 +109,21 @@ function stressReport(report: DashboardMetrics): DashboardMetrics {
     ...out.favorite.current,
     model: 'claude-sonnet-4-5-20250929-extended-thinking-preview',
     unknown_reason: null,
+    output_shares: [
+      {
+        of: { kind: 'model', model: 'claude-sonnet-4-5-20250929-extended-thinking-preview' },
+        output_tokens: 620_000,
+        share: '62%',
+      },
+      {
+        of: { kind: 'model', model: 'claude-opus-4-1-20250805' },
+        output_tokens: 300_000,
+        share: '30%',
+      },
+      { of: { kind: 'unknown_model' }, output_tokens: 76_000, share: '8%' },
+      { of: { kind: 'model', model: 'gpt-5-codex' }, output_tokens: 3_000, share: '<1%' },
+      { of: { kind: 'other_models', models: 2 }, output_tokens: 1_000, share: '<1%' },
+    ],
   };
   out.favorite.previous = { ...out.favorite.previous, model: 'claude-opus-4-1-20250805' };
   out.days = out.days.map((day, index) => ({
@@ -254,7 +269,12 @@ function partialReport(report: DashboardMetrics): DashboardMetrics {
   tiles.cost = unknown(tiles.cost, 'Selected usage is absent or unpriced');
   out.tokens.counters.total_tokens = null;
   out.cost = { ...out.cost, total_usd: null };
-  out.favorite.current = { model: null, output_tokens: null, unknown_reason: 'no_measured_output' };
+  out.favorite.current = {
+    model: null,
+    output_tokens: null,
+    unknown_reason: 'no_measured_output',
+    output_shares: [],
+  };
   out.days = out.days.map((day) => ({ ...day, human_hours_est: null }));
   return out;
 }
@@ -774,6 +794,46 @@ for (const shape of ['plain', 'stress'] as const)
         await expectPageStill(page);
         expect(errors).toEqual([]);
       });
+
+test("hovering the favorite lists each model's share of output tokens inside the window", async ({
+  page,
+}) => {
+  await open(page, exportFor('stress'), 1120, 720, 'dark');
+  const summary = page.getByTestId('dashboard-summary');
+  await summary.getByRole('button').hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toContainText('The model that wrote the most output in the selected range.');
+  await expect(tip.locator('.xt-rule-rows-title')).toHaveText('Share of output tokens:');
+  const rows = await tip
+    .locator('.xt-rule-row')
+    .evaluateAll((elements) =>
+      elements.map((row) => [...row.children].map((cell) => cell.textContent)),
+    );
+  expect(rows).toEqual([
+    ['claude-sonnet-4-5-20250929-extended-thinking-preview', '62%'],
+    ['claude-opus-4-1-20250805', '30%'],
+    ['unknown model', '8%'],
+    ['gpt-5-codex', '<1%'],
+    ['2 other models', '<1%'],
+  ]);
+  await expect(tip).toContainText('Previous period: claude-opus-4-1-20250805.');
+  // Each share sits at the row's end, inside the popover and the window.
+  const box = (await tip.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(1120);
+  expect(box.y + box.height).toBeLessThanOrEqual(720);
+  const values = await tip
+    .locator('.xt-rule-row b')
+    .evaluateAll((cells) => cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
+  expect(new Set(values).size).toBe(1);
+  expect(values[0]).toBeLessThanOrEqual(box.x + box.width);
+  await page.keyboard.press('Escape');
+
+  await open(page, exportFor('partial'), 1120, 720, 'light');
+  await page.getByTestId('dashboard-summary').getByRole('button').hover();
+  await expect(page.getByRole('tooltip')).toContainText('Previous period:');
+  await expect(page.getByRole('tooltip').locator('.xt-rule-rows')).toHaveCount(0);
+});
 
 for (const shape of ['empty', 'partial'] as const)
   test(`${shape} Dashboard fits 1120x720 without scrolling`, async ({ page }, info) => {

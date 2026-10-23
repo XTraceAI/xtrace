@@ -2,7 +2,15 @@ import { expect, it } from 'vitest';
 import fixture from '../../../fixtures/F1.json';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import { delta, percent } from '../../kit/format';
-import { fromPoints, ruleId, tileDelta, usd, windowLabel, zoneLabel } from './present';
+import {
+  fromPoints,
+  outputShareRows,
+  ruleId,
+  tileDelta,
+  usd,
+  windowLabel,
+  zoneLabel,
+} from './present';
 
 const report = (fixture as FixtureExport).dashboards[0];
 
@@ -36,4 +44,20 @@ it('falls back to a known rule definition and system zone labels', () => {
   expect(zoneLabel(local)).toBe('system time zone');
   expect(windowLabel(local)).toMatch(/2026/);
   expect(windowLabel({ ...report.window, timezone: 'Not/AZone' })).toMatch(/2026/);
+});
+
+it("names each output share row and keeps the report's share text", () => {
+  expect(
+    outputShareRows([
+      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 995, share: '100%' },
+      { of: { kind: 'unknown_model' }, output_tokens: 4, share: '<1%' },
+      { of: { kind: 'other_models', models: 1 }, output_tokens: 1, share: '<1%' },
+      { of: { kind: 'other_models', models: 2 }, output_tokens: 0, share: '0%' },
+    ]),
+  ).toEqual([
+    { label: 'synthetic-a', value: '100%' },
+    { label: 'unknown model', value: '<1%' },
+    { label: '1 other model', value: '<1%' },
+    { label: '2 other models', value: '0%' },
+  ]);
 });

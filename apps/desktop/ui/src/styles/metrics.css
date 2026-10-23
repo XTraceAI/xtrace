@@ -64,6 +64,26 @@ button.xt-rule-chip {
   margin-top: 8px;
   color: var(--secondary);
 }
+/* Label and value rows under a definition, values aligned at the end. */
+.xt-rule-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 16px;
+  margin-top: 8px;
+}
+.xt-rule-rows-title {
+  grid-column: 1 / -1;
+  color: var(--secondary);
+}
+.xt-rule-row {
+  display: contents;
+}
+.xt-rule-row b {
+  color: var(--ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
 .xt-stat-tile {
   display: flex;
   align-items: center;

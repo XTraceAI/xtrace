@@ -5,6 +5,7 @@ import type { MetricCaptureGap } from '../../data/generated/MetricCaptureGap';
 import type { MetricExcludedSurface } from '../../data/generated/MetricExcludedSurface';
 import type { MetricFavoriteUnknown } from '../../data/generated/MetricFavoriteUnknown';
 import type { MetricInventory } from '../../data/generated/MetricInventory';
+import type { MetricOutputShare } from '../../data/generated/MetricOutputShare';
 import type { MetricTile } from '../../data/generated/MetricTile';
 import type { MetricUnpricedReason } from '../../data/generated/MetricUnpricedReason';
 import type { MetricUsageGap } from '../../data/generated/MetricUsageGap';
@@ -98,6 +99,18 @@ export const favoriteUnknownText: Record<MetricFavoriteUnknown, string> = {
   unknown_model_output: 'Measured output has an unknown model',
   unknown_turn_attribution: 'A tie could not be resolved from turn attribution',
 };
+
+/** Each row of a period's output, named; the share is the report's own text. */
+export const outputShareRows = (shares: readonly MetricOutputShare[]) =>
+  shares.map(({ of, share }) => ({
+    label:
+      of.kind === 'model'
+        ? of.model
+        : of.kind === 'unknown_model'
+          ? 'unknown model'
+          : plural(of.models, 'other model'),
+    value: share,
+  }));
 
 export const unpricedText: Record<MetricUnpricedReason, string> = {
   missing_model: 'model not recorded',

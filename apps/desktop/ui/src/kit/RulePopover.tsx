@@ -11,19 +11,29 @@ import '../styles/metrics.css';
  */
 export const RULE_OPEN_DELAY_MS = 450;
 
+/** A titled list of label and value pairs under a definition. */
+export interface RuleRows {
+  title: string;
+  rows: readonly { label: string; value: string }[];
+}
+
 /**
- * Passive definition text: the rule's one-line summary, then an optional short
- * note about this value. Base UI owns hover, focus, Escape, and positioning.
+ * Passive definition text: the rule's one-line summary, then optional rows
+ * and a short note about this value. Base UI owns hover, focus, Escape, and
+ * positioning.
  */
 export function RulePopover({
   ruleId,
   context,
+  rows,
   text,
   closeOnClick = false,
   children,
 }: {
   ruleId: RuleId;
   context?: string;
+  /** Shown between the definition and the note; nothing when it has no rows. */
+  rows?: RuleRows;
   /** Plain words shown instead of the rule's own definition. */
   text?: string;
   /** True when clicking the trigger opens something else (a dialog). */
@@ -52,6 +62,18 @@ export function RulePopover({
         >
           <Tooltip.Popup id={id} role="tooltip" className="xt-rule-popover xt-rule-definition">
             <span>{text ?? ruleSummary(ruleId)}</span>
+            {rows && rows.rows.length > 0 && (
+              <span className="xt-rule-rows">
+                <span className="xt-rule-rows-title">{rows.title}</span>
+                {/* The spaces keep the words apart where the text is read as one line. */}
+                {rows.rows.map((row, index) => (
+                  <span key={index} className="xt-rule-row">
+                    {' '}
+                    <span>{row.label}</span> <b>{row.value}</b>
+                  </span>
+                ))}
+              </span>
+            )}
             {context && <span className="xt-rule-context">{context}</span>}
           </Tooltip.Popup>
         </Tooltip.Positioner>

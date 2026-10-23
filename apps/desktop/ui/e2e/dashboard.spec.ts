@@ -305,6 +305,15 @@ for (const scheme of ['light', 'dark'] as const)
     }
   });
 
+test('hovering the favorite model lists its share of output tokens', async ({ page }) => {
+  await open(page, 1120, 720, 'light');
+  await page.getByTestId('dashboard-summary').getByRole('button').hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toContainText('The model that wrote the most output in the selected range.');
+  await expect(tip).toContainText('Share of output tokens: fixture-model-v1 100%');
+  await expect(tip).toContainText('Previous period: No measured output tokens in this range.');
+});
+
 test('keyboard focus opens tile definitions and reaches the Sessions link', async ({ page }) => {
   await open(page, 1120, 720, 'dark');
   const tile = page.getByRole('button', { name: 'Hands-off median definition' });

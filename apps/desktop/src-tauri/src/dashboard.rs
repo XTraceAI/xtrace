@@ -1451,6 +1451,7 @@ mod tests {
             model: Option<String>,
             output_tokens: Option<u64>,
             unknown_reason: Option<&'static str>,
+            output_shares: Vec<()>,
         }
         let renamed = Renamed {
             host: "claude".into(),
@@ -1465,6 +1466,7 @@ mod tests {
             model: None,
             output_tokens: None,
             unknown_reason: Some("no_measured_output"),
+            output_shares: Vec::new(),
         };
         assert_eq!(
             convert::<MetricFavorite>(&exact).unwrap().unknown_reason,
