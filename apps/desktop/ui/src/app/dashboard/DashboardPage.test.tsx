@@ -1495,7 +1495,9 @@ it('shows the generated report leverage with a point for each day of every range
   const leverage = () =>
     within(tileNamed('Leverage')).getByRole('img', { name: /^Leverage by day/ });
   expect(tileValue('Leverage')).toMatch(/^\d+\.\d×/);
-  expect(tileSub('Leverage')).toMatch(/^[\d,]+ h \d+ m agent ÷ [\d,]+ h \d+ m human · whole days$/);
+  expect(tileSub('Leverage')).toMatch(
+    /^(?:[\d,]+(?:\.\d)?|<0\.1) h agent ÷ (?:[\d,]+(?:\.\d)?|<0\.1) h human$/,
+  );
   // The exact days are stated in its accessible description.
   expect(
     document.getElementById(tileNamed('Leverage').getAttribute('aria-describedby')!)!.textContent,
