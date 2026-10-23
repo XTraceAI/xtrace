@@ -213,7 +213,9 @@ impl StoredCall {
 
     /// Whether the stored key says this call named no identifying argument
     /// (no command, path or pattern), so every such call of its tool shares
-    /// it. Read from the stored key alone.
+    /// it: the key then identifies the tool, not one call of it. Read from the
+    /// stored key alone; it changes how a group is named, never how calls are
+    /// grouped.
     pub(crate) fn names_no_argument(&self) -> bool {
         !self.conflict
             && self.key.as_ref().is_some_and(|(version, digest)| {
@@ -221,6 +223,9 @@ impl StoredCall {
             })
     }
 }
+
+/// One session's stored calls, by record UUID, in block order.
+pub(crate) type StoredCalls = BTreeMap<String, Vec<StoredCall>>;
 
 /// Which calls one repeat measurement compares. M-20, the Dashboard's
 /// number, compares every call. M-21's circling warning compares every call
@@ -270,7 +275,7 @@ fn density(
             // Left out before its key is read: a call the scope does not
             // compare cannot make the stretch's count unknown either.
             if scope == CallScope::WithoutExpectedRepeats
-                && crate::session_warnings::expected_repeat(&call.name, call.names_no_argument())
+                && crate::session_warnings::expected_repeat(&call.name)
             {
                 continue;
             }
@@ -344,6 +349,7 @@ impl MetricsDb {
                 session_id,
                 thresholds,
                 CallScope::Every,
+                &mut None,
             )
         })
     }
@@ -354,7 +360,8 @@ impl MetricsDb {
     /// M-09's health verdict for the session's surface over that window and
     /// `events` the session's own in-window events, both exactly as the load
     /// produced them. `scope` says which calls are compared; M-20 itself
-    /// always compares [`CallScope::Every`].
+    /// always compares [`CallScope::Every`]. `stored` holds the session's
+    /// stored calls once any reader of this session has read them.
     pub(crate) fn loaded_repeats(
         &self,
         excluded: Option<hands_off::ExcludedSurface>,
@@ -362,6 +369,7 @@ impl MetricsDb {
         session_id: &str,
         thresholds: RepeatThresholds,
         scope: CallScope,
+        stored: &mut Option<StoredCalls>,
     ) -> Result<SessionRepeats> {
         if let Some(excluded) = excluded {
             return Ok(SessionRepeats::Unmeasured {
@@ -380,10 +388,11 @@ impl MetricsDb {
             });
         };
 
+        let none = BTreeMap::new();
         let blocks = if collected.is_empty() {
-            BTreeMap::new()
+            &none
         } else {
-            self.stored_calls(session_id)?
+            self.stored_calls_once(stored, session_id)?
         };
         let stretches = collected
             .iter()
@@ -392,7 +401,7 @@ impl MetricsDb {
                 let (end_uuid, end) = stretch.end();
                 // M-05's fold, over this stretch's own records.
                 let active_duration_ms = spans::fold(&stretch.timeline(), |_, _| {})?;
-                let repeats = density(stretch, &blocks, scope)
+                let repeats = density(stretch, blocks, scope)
                     .unwrap_or_else(|reason| RepeatDensity::Unknown { reason });
                 let circling = match &repeats {
                     RepeatDensity::Unknown { .. } => None,
@@ -419,12 +428,22 @@ impl MetricsDb {
         })
     }
 
+    /// [`MetricsDb::stored_calls`], read at most once per session: `cache`
+    /// keeps the first read for every later reader of the same session.
+    pub(crate) fn stored_calls_once<'a>(
+        &self,
+        cache: &'a mut Option<StoredCalls>,
+        session_id: &str,
+    ) -> Result<&'a StoredCalls> {
+        if cache.is_none() {
+            *cache = Some(self.stored_calls(session_id)?);
+        }
+        Ok(cache.get_or_insert_with(BTreeMap::new))
+    }
+
     /// One session's stored record-bound calls, by record UUID. Metadata only:
     /// the position, the stored tool name and the grouping evidence.
-    pub(crate) fn stored_calls(
-        &self,
-        session_id: &str,
-    ) -> Result<BTreeMap<String, Vec<StoredCall>>> {
+    fn stored_calls(&self, session_id: &str) -> Result<StoredCalls> {
         let mut stored = BTreeMap::<String, Vec<StoredCall>>::new();
         let mut statement = self.connection.prepare(BLOCK_QUERY)?;
         let mut rows = statement.query([session_id])?;

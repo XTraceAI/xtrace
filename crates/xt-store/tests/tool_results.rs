@@ -1,6 +1,7 @@
-//! How each tool call ended is kept as metadata at write time: which call a
-//! result answers and whether it failed, was declined or succeeded, whatever
-//! the content retention setting says, and with no result text.
+//! What each tool result said about how its call ended is kept as metadata at
+//! write time: which call it answers, its error flag and which fixed host
+//! message it starts with, whatever the content retention setting says, and
+//! with no result text.
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use xt_store::{CanonicalRecord, SessionMeta, SessionSource, Store, retention::RetentionMode};
@@ -50,12 +51,14 @@ fn store(directory: &tempfile::TempDir, host: &str, keep: bool) -> (Store, std::
     (store, path)
 }
 
-/// `(result record, block, call id, outcome, conflicted)` for every kept result.
-fn results(path: &std::path::Path) -> Vec<(String, i64, Option<String>, String, bool)> {
+/// `(result record, block, call id, is_error, wording, conflicted)` for every
+/// kept result.
+type Row = (String, i64, Option<String>, Option<bool>, String, bool);
+fn results(path: &std::path::Path) -> Vec<Row> {
     let connection = Connection::open(path).unwrap();
     let mut statement = connection
         .prepare(
-            "SELECT record_uuid,block_index,call_id,outcome,conflicted FROM tool_results
+            "SELECT record_uuid,block_index,call_id,is_error,wording,conflicted FROM tool_results
              ORDER BY record_uuid,block_index",
         )
         .unwrap();
@@ -67,6 +70,7 @@ fn results(path: &std::path::Path) -> Vec<(String, i64, Option<String>, String, 
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
             ))
         })
         .unwrap()
@@ -89,16 +93,28 @@ fn call_ids(path: &std::path::Path) -> Vec<(String, i64, Option<String>, bool)> 
 
 fn conversation() -> Vec<CanonicalRecord> {
     vec![
-        calls("a", &["t1", "t2", "t3", "t4"]),
+        calls("a", &["t1", "t2", "t3", "t4", "t5", "t6"]),
         result("r1", "t1", Some(true), "1 test failed"),
         result("r2", "t2", Some(true), DECLINED),
         result("r3", "t3", Some(false), "ok"),
         result("r4", "t4", None, "ok"),
+        result(
+            "r5",
+            "t5",
+            Some(true),
+            "[Request interrupted by user for tool use]",
+        ),
+        result(
+            "r6",
+            "t6",
+            Some(true),
+            "Permission for this action was denied. Reason: outside the project.",
+        ),
     ]
 }
 
 #[test]
-fn failed_declined_and_ok_are_kept_without_content() {
+fn the_flag_and_the_wording_kind_are_kept_without_content() {
     for keep in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let (mut store, path) = store(&directory, "claude", keep);
@@ -107,17 +123,41 @@ fn failed_declined_and_ok_are_kept_without_content() {
         assert_eq!(
             results(&path),
             vec![
-                ("r1".into(), 0, t("t1"), "failed".into(), false),
-                ("r2".into(), 0, t("t2"), "declined".into(), false),
-                ("r3".into(), 0, t("t3"), "ok".into(), false),
-                // Claude omits the flag on a success; the API's default is false.
-                ("r4".into(), 0, t("t4"), "ok".into(), false),
+                ("r1".into(), 0, t("t1"), Some(true), "other".into(), false),
+                (
+                    "r2".into(),
+                    0,
+                    t("t2"),
+                    Some(true),
+                    "declined".into(),
+                    false
+                ),
+                ("r3".into(), 0, t("t3"), Some(false), "other".into(), false),
+                // Claude omits the flag on a success: kept as absent, and
+                // the reader decides what that means.
+                ("r4".into(), 0, t("t4"), None, "other".into(), false),
+                (
+                    "r5".into(),
+                    0,
+                    t("t5"),
+                    Some(true),
+                    "interrupted".into(),
+                    false
+                ),
+                (
+                    "r6".into(),
+                    0,
+                    t("t6"),
+                    Some(true),
+                    "permission_denied".into(),
+                    false
+                ),
             ],
             "keep content: {keep}"
         );
         assert_eq!(
             call_ids(&path),
-            (0..4)
+            (0..6)
                 .map(|i| ("a".to_owned(), i, t(&format!("t{}", i + 1)), false))
                 .collect::<Vec<_>>()
         );
@@ -130,12 +170,12 @@ fn failed_declined_and_ok_are_kept_without_content() {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(kept, if keep { 5 } else { 0 });
+        assert_eq!(kept, if keep { 7 } else { 0 });
     }
 }
 
 #[test]
-fn a_replay_changes_nothing_and_a_contradiction_is_marked() {
+fn a_replay_changes_nothing_and_a_same_version_contradiction_is_marked() {
     let directory = tempfile::tempdir().unwrap();
     let (mut store, path) = store(&directory, "claude", false);
     store.upsert_records("s", &conversation(), false).unwrap();
@@ -149,14 +189,14 @@ fn a_replay_changes_nothing_and_a_contradiction_is_marked() {
             "s",
             &[
                 result("r3", "t3", Some(true), "ok"),
-                calls("a", &["t1", "other", "t3", "t4"]),
+                calls("a", &["t1", "other", "t3", "t4", "t5", "t6"]),
             ],
             false,
         )
         .unwrap();
     let after = results(&path);
-    assert_eq!(after[2].3, "ok", "the first observation is kept");
-    assert!(after[2].4, "and marked contradicted");
+    assert_eq!(after[2].3, Some(false), "the first observation is kept");
+    assert!(after[2].5, "and marked contradicted");
     assert!(call_ids(&path)[1].3);
 }
 
@@ -171,12 +211,12 @@ fn a_record_indexed_before_the_mark_gains_it_when_read_again() {
         .execute_batch("DELETE FROM tool_results; UPDATE tool_uses SET call_id=NULL;")
         .unwrap();
     store.upsert_records("s", &conversation(), false).unwrap();
-    assert_eq!(results(&path).len(), 4);
+    assert_eq!(results(&path).len(), 6);
     assert!(call_ids(&path).iter().all(|row| row.2.is_some()));
 }
 
 #[test]
-fn a_reader_host_without_the_flag_is_unknown_and_another_session_writes_nothing() {
+fn a_missing_flag_is_kept_as_absent_and_another_session_writes_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let (mut store, path) = store(&directory, "codex", false);
     store
@@ -189,7 +229,7 @@ fn a_reader_host_without_the_flag_is_unknown_and_another_session_writes_nothing(
             false,
         )
         .unwrap();
-    assert_eq!(results(&path)[0].3, "unknown");
+    assert_eq!(results(&path)[0].3, None);
     // A record another session owns is not this session's to mark.
     store
         .upsert_session(
@@ -202,5 +242,5 @@ fn a_reader_host_without_the_flag_is_unknown_and_another_session_writes_nothing(
         .unwrap();
     let rows = results(&path);
     assert_eq!(rows.len(), 1);
-    assert_eq!((rows[0].3.as_str(), rows[0].4), ("unknown", false));
+    assert_eq!((rows[0].3, rows[0].5), (None, false));
 }

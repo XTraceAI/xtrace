@@ -208,6 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn reason_name(missing: &Missing) -> String {
     match missing {
         Missing::TextNotKept { .. } => "words not kept".into(),
+        Missing::TextCut { .. } => "only the first 280 characters kept".into(),
         Missing::WrappedText { .. } => "only part of message is the person's".into(),
         Missing::Unclassified { .. } => "sender unknown".into(),
         Missing::InterruptionUnknown { .. } => "interruption flag unknown".into(),

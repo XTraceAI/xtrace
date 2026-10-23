@@ -9,7 +9,10 @@ use xt_metrics::{
     CheckState, MetricsDb, Missing, RepeatThresholds, SessionRepeats, SessionWarnings, WarningKind,
     Window,
 };
-use xt_store::{CanonicalRecord, SessionMeta, SessionSource, retention::RetentionMode};
+use xt_store::{
+    CanonicalRecord, SessionMeta, SessionSource, batch::IngestBatch, retention::RetentionMode,
+    tool_sent::ToolSentKind,
+};
 
 const SESSION: &str = "s";
 
@@ -323,4 +326,228 @@ fn codex_results_without_a_flag_are_unknown() {
         }
     );
     assert_eq!((found.tool_results, found.tool_results_known), (2, 0));
+}
+
+/// Read one session the way the writer does, with its tool-sent claims, so
+/// previews and proofs are kept as ingestion keeps them.
+fn ingest(
+    db: &mut TempDb,
+    id: &str,
+    host: &str,
+    rows: &[CanonicalRecord],
+    tool_sent: &[Option<ToolSentKind>],
+    keep_content: bool,
+) {
+    let mut meta = SessionMeta::new(id, host, SessionSource::ReadersCli);
+    meta.native_session_id = Some(id.into());
+    meta.surface = Some("cli".into());
+    db.store_mut()
+        .set_retention_mode(if keep_content {
+            RetentionMode::FullContent
+        } else {
+            RetentionMode::MetadataOnly
+        })
+        .unwrap();
+    let mut batch = IngestBatch::new(&meta, rows, keep_content);
+    batch.tool_sent = tool_sent;
+    let saved = db.store_mut().apply_ingest_batch(&batch).unwrap();
+    assert!(saved.records.iter().all(|r| r.disposition.is_accepted()));
+}
+
+#[test]
+fn codex_s_proven_interrupted_turn_note_is_an_interruption() {
+    let mut db = TempDb::empty().unwrap();
+    let rows = [
+        says("h1", &at(0, 0), "make the tests pass"),
+        reply("a1", &at(0, 1)),
+        says(
+            "t1",
+            &at(0, 2),
+            "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+        ),
+        says("h2", &at(0, 3), "use the other branch instead"),
+    ];
+    ingest(
+        &mut db,
+        "codex-s",
+        "codex",
+        &rows,
+        &[None, None, Some(ToolSentKind::CodexTurnAborted), None],
+        false,
+    );
+    let found = warnings(&db, "codex-s");
+    let interruptions: Vec<_> = found
+        .warnings
+        .iter()
+        .filter(|w| w.kind == WarningKind::Interruption)
+        .map(|w| (w.record_uuids.clone(), w.reason.as_str()))
+        .collect();
+    assert_eq!(
+        interruptions,
+        vec![(uuids(&["t1"]), "you interrupted the agent (12:00)")]
+    );
+    assert_eq!(found.checks.interruption, CheckState::Complete);
+    // The proven note is not the person's message.
+    assert_eq!(found.person_messages, 2);
+}
+
+#[test]
+fn a_decline_and_its_marker_at_one_moment_are_one_interruption_in_source_order() {
+    let mut db = TempDb::empty().unwrap();
+    let rows = [
+        says("h1", &at(0, 0), "edit the parser"),
+        calls(
+            "a1",
+            &at(0, 1),
+            &[("t1", "Edit", json!({"file_path": "/p.rs"}))],
+        ),
+        result(
+            "z-decline",
+            &at(0, 2),
+            "t1",
+            Some(true),
+            "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+        ),
+        says(
+            "a-marker",
+            &at(0, 2),
+            "[Request interrupted by user for tool use]",
+        ),
+    ];
+    seed(&mut db, SESSION, "claude", &rows, false);
+    // Claude Code writes the marker after the result it follows.
+    Connection::open(db.path())
+        .unwrap()
+        .execute(
+            "UPDATE records SET parent_uuid='z-decline' WHERE uuid='a-marker'",
+            [],
+        )
+        .unwrap();
+    let found = warnings(&db, SESSION);
+    let interruptions: Vec<_> = found
+        .warnings
+        .iter()
+        .filter(|w| w.kind == WarningKind::Interruption)
+        .map(|w| (w.record_uuids.clone(), w.reason.as_str()))
+        .collect();
+    assert_eq!(
+        interruptions,
+        vec![(
+            uuids(&["z-decline", "a-marker"]),
+            "you declined a call to Edit (12:00)"
+        )]
+    );
+}
+
+#[test]
+fn an_interrupted_call_and_a_permission_denial_are_not_failures() {
+    let mut db = TempDb::empty().unwrap();
+    let bash = json!({"command": "cargo test"});
+    let rows = [
+        says("h1", &at(0, 0), "run the tests please"),
+        calls("a1", &at(0, 1), &[("t1", "Bash", bash.clone())]),
+        result(
+            "r1",
+            &at(0, 2),
+            "t1",
+            Some(true),
+            "[Request interrupted by user for tool use]",
+        ),
+        reply("a2", &at(0, 3)),
+        calls("a3", &at(0, 4), &[("t2", "Bash", bash.clone())]),
+        result(
+            "r2",
+            &at(0, 5),
+            "t2",
+            Some(true),
+            "Permission for this action was denied. Reason: outside the project.",
+        ),
+        calls("a4", &at(0, 6), &[("t3", "Bash", bash)]),
+        result(
+            "r3",
+            &at(0, 7),
+            "t3",
+            Some(true),
+            "Permission for this action was denied. Reason: outside the project.",
+        ),
+        reply("a5", &at(0, 8)),
+    ];
+    seed(&mut db, SESSION, "claude", &rows, false);
+    let found = warnings(&db, SESSION);
+    let summary: Vec<_> = found
+        .warnings
+        .iter()
+        .map(|w| (w.kind, w.record_uuids.clone(), w.reason.as_str()))
+        .collect();
+    // The interrupted call is the person's interruption; the two denials by
+    // the host's own check are neither a decline nor a repeated failure.
+    assert_eq!(
+        summary,
+        vec![(
+            WarningKind::Interruption,
+            uuids(&["r1"]),
+            "you interrupted a call to Bash (12:00)"
+        )]
+    );
+    assert_eq!(found.checks.repeated_failure, CheckState::Complete);
+    assert_eq!(found.checks.interruption, CheckState::Complete);
+    assert_eq!((found.tool_results, found.tool_results_known), (3, 3));
+}
+
+/// Two prompts identical for their first 280 characters and different after,
+/// and a reply's correction that comes after character 280.
+fn long_messages() -> Vec<CanonicalRecord> {
+    let opening = "please look at the module layout and the tests ".repeat(7);
+    assert!(opening.chars().count() > 300);
+    vec![
+        says("h1", &at(0, 0), &format!("{opening} then fix the parser")),
+        reply("a1", &at(0, 1)),
+        says("h2", &at(0, 2), &format!("{opening} that is wrong")),
+        reply("a2", &at(0, 3)),
+        says("h3", &at(0, 4), &format!("{opening} then fix the lexer")),
+        reply("a3", &at(0, 5)),
+    ]
+}
+
+#[test]
+fn whole_kept_messages_are_read_past_the_preview_length() {
+    let mut db = TempDb::empty().unwrap();
+    ingest(&mut db, SESSION, "claude", &long_messages(), &[], true);
+    let found = warnings(&db, SESSION);
+    let summary: Vec<_> = found
+        .warnings
+        .iter()
+        .map(|w| (w.kind, w.record_uuids.clone()))
+        .collect();
+    // The correction after character 280 is found, and the two prompts that
+    // differ only after it are not the same prompt.
+    assert_eq!(summary, vec![(WarningKind::Correction, uuids(&["h2"]))]);
+    assert_eq!(found.checks.correction, CheckState::Complete);
+    assert_eq!(found.checks.repeated_prompt, CheckState::Complete);
+    assert_eq!((found.person_messages, found.person_messages_read), (3, 3));
+}
+
+#[test]
+fn a_cut_preview_never_reads_as_the_whole_message() {
+    let mut db = TempDb::empty().unwrap();
+    ingest(&mut db, SESSION, "claude", &long_messages(), &[], false);
+    let found = warnings(&db, SESSION);
+    // Only the previews' first 280 characters were kept: no correction is
+    // found there, the prompts look the same there, and neither rule says
+    // it read everything.
+    assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+    // The two messages sent after a reply.
+    assert_eq!(
+        found.checks.correction,
+        CheckState::Incomplete {
+            missing: vec![Missing::TextCut { messages: 2 }]
+        }
+    );
+    assert_eq!(
+        found.checks.repeated_prompt,
+        CheckState::Incomplete {
+            missing: vec![Missing::TextCut { messages: 3 }]
+        }
+    );
+    assert_eq!((found.person_messages, found.person_messages_read), (3, 0));
 }

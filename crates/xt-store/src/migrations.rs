@@ -163,7 +163,7 @@ const MIGRATIONS: &[Migration] = &[
     migration!(
         27,
         "0027_tool_result_outcomes",
-        "db611bbc4e13fe43ecf61d41ea001bea5dd7d717b03c47f3df97e911ac986273"
+        "db485902e807c92d87a85e99cfc13f7afbbd04872d08c221cd04219b0984f9ea"
     ),
 ];
 
@@ -679,7 +679,6 @@ mod tests {
         DROP TABLE tool_sent_inputs;
         ALTER TABLE tool_sent_inputs_rebuilt RENAME TO tool_sent_inputs;";
 
-    /// Undoes everything migration 25 applied, leaving it pending again.
     /// Undoes everything migration 26 applied, leaving it pending again.
     const UNDO_26: &str = "DROP TABLE grading_added_skills;";
 

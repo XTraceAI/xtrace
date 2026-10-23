@@ -504,13 +504,7 @@ pub(crate) fn upsert_records(
     }
     // How each call ended, from this write's own blocks, before retention
     // drops them; only for records this session owns.
-    crate::tool_result::apply(
-        connection,
-        session_id,
-        session.meta.host,
-        records,
-        &outcomes,
-    )?;
+    crate::tool_result::apply(connection, session_id, records, &outcomes)?;
     // Compare native instants, not lexically different RFC3339 offsets.
     // A native started_at_ms is never inferred from this imported range.
     (session.first_ts, session.last_ts) = read::timestamp_range(connection, session_id)?;
