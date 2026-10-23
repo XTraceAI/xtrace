@@ -139,6 +139,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  of which no person's message words were readable at all: {text_none}");
     println!("sessions with no person's message in the window: {no_person}");
     println!("person's messages: {sent}, words readable for {read}");
+    let (results, known) = all.iter().fold((0, 0), |(results, known), s| {
+        (results + s.tool_results, known + s.tool_results_known)
+    });
+    println!(
+        "tool results with a saved outcome: {results}, known outcome for {known}; \
+         sessions where every result had a known outcome: {}",
+        all.iter()
+            .filter(|s| s.tool_results > 0 && s.tool_results == s.tool_results_known)
+            .count()
+    );
 
     // Which correction words matched: the quoted words of each reason.
     let mut matched = BTreeMap::<String, usize>::new();
@@ -201,7 +211,8 @@ fn reason_name(missing: &Missing) -> String {
         Missing::WrappedText { .. } => "only part of message is the person's".into(),
         Missing::Unclassified { .. } => "sender unknown".into(),
         Missing::InterruptionUnknown { .. } => "interruption flag unknown".into(),
-        Missing::ToolResultsNotKept { .. } => "tool results not kept".into(),
+        Missing::OutcomeNotSaved { .. } => "tool outcome not saved".into(),
+        Missing::OutcomeUnknown { .. } => "tool outcome unknown".into(),
         Missing::UnmatchedResults { .. } => "result names an unknown call".into(),
         Missing::FailedCallKey { reason, .. } => format!("failed call key: {reason:?}"),
         Missing::CirclingUnmeasured => "M-20 has no stretches for it".into(),

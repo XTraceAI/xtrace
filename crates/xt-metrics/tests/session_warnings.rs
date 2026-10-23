@@ -6,7 +6,8 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use xt_fixtures::TempDb;
 use xt_metrics::{
-    CheckState, MetricsDb, Missing, RepeatThresholds, SessionWarnings, WarningKind, Window,
+    CheckState, MetricsDb, Missing, RepeatThresholds, SessionRepeats, SessionWarnings, WarningKind,
+    Window,
 };
 use xt_store::{CanonicalRecord, SessionMeta, SessionSource, retention::RetentionMode};
 
@@ -41,15 +42,18 @@ fn calls(uuid: &str, time: &str, calls: &[(&str, &str, Value)]) -> CanonicalReco
     record(json!({"uuid":uuid,"type":"assistant","timestamp":time,
         "message":{"role":"assistant","content":content}}))
 }
-fn result(uuid: &str, time: &str, call: &str, failed: bool, text: &str) -> CanonicalRecord {
+fn result(uuid: &str, time: &str, call: &str, failed: Option<bool>, text: &str) -> CanonicalRecord {
+    let mut block = json!({"type":"tool_result","tool_use_id":call,"content":text});
+    if let Some(failed) = failed {
+        block["is_error"] = failed.into();
+    }
     record(json!({"uuid":uuid,"type":"user","timestamp":time,
-        "message":{"role":"user","content":[
-            {"type":"tool_result","tool_use_id":call,"is_error":failed,"content":text}]}}))
+        "message":{"role":"user","content":[block]}}))
 }
 
-fn seed(db: &mut TempDb, rows: &[CanonicalRecord], keep_content: bool) {
-    let mut meta = SessionMeta::new(SESSION, "claude", SessionSource::Transcript);
-    meta.native_session_id = Some(SESSION.into());
+fn seed(db: &mut TempDb, id: &str, host: &str, rows: &[CanonicalRecord], keep_content: bool) {
+    let mut meta = SessionMeta::new(id, host, SessionSource::Transcript);
+    meta.native_session_id = Some(id.into());
     meta.surface = Some("cli".into());
     db.store_mut().upsert_session(&meta, false).unwrap();
     db.store_mut()
@@ -60,28 +64,33 @@ fn seed(db: &mut TempDb, rows: &[CanonicalRecord], keep_content: bool) {
         })
         .unwrap();
     db.store_mut()
-        .upsert_records(SESSION, rows, keep_content)
+        .upsert_records(id, rows, keep_content)
         .unwrap();
 }
 
-fn warnings(db: &TempDb) -> SessionWarnings {
-    let mut all = MetricsDb::open(db.path())
+fn warnings(db: &TempDb, id: &str) -> SessionWarnings {
+    MetricsDb::open(db.path())
         .unwrap()
         .session_warnings(window(), RepeatThresholds::default(), &TimeZone::UTC)
-        .unwrap();
-    assert_eq!(all.len(), 1);
-    all.remove(0)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.session_id == id)
+        .unwrap()
+}
+fn uuids(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| (*s).to_owned()).collect()
 }
 
 fn conversation() -> Vec<CanonicalRecord> {
     let pnpm = json!({"command": "pnpm test"});
     let read = json!({"file_path": "/a.rs"});
+    let todo = json!({"todos": []});
     vec![
-        says("h1", &at(0, 0), "Fix the build"),
+        says("h1", &at(0, 0), "Fix the build please"),
         calls("a1", &at(0, 1), &[("t1", "Bash", pnpm.clone())]),
-        result("r1", &at(0, 2), "t1", true, "1 test failed"),
+        result("r1", &at(0, 2), "t1", Some(true), "1 test failed"),
         calls("a2", &at(0, 3), &[("t2", "Bash", pnpm.clone())]),
-        result("r2", &at(0, 4), "t2", true, "1 test failed"),
+        result("r2", &at(0, 4), "t2", Some(true), "1 test failed"),
         calls(
             "a3",
             &at(0, 5),
@@ -91,9 +100,10 @@ fn conversation() -> Vec<CanonicalRecord> {
             "r3",
             &at(0, 6),
             "t3",
-            true,
+            Some(true),
             "The user doesn't want to proceed with this tool use. The tool use was rejected.",
         ),
+        // Claude Code's marker right after the declined call: one interruption.
         says(
             "i1",
             &at(0, 7),
@@ -101,12 +111,20 @@ fn conversation() -> Vec<CanonicalRecord> {
         ),
         // Two identical automatic inputs: the classification says no person
         // sent them, so they are never a repeated prompt or a correction.
-        says("x1", &at(0, 8), "<system-reminder>stop</system-reminder>"),
+        says(
+            "x1",
+            &at(0, 8),
+            "<system-reminder>stop it now please</system-reminder>",
+        ),
         reply("a4", &at(0, 9)),
-        says("x2", &at(0, 10), "<system-reminder>stop</system-reminder>"),
+        says(
+            "x2",
+            &at(0, 10),
+            "<system-reminder>stop it now please</system-reminder>",
+        ),
         says("h2", &at(1, 0), "still not working"),
         reply("a5", &at(1, 30)),
-        says("h3", &at(2, 0), "fix  the build"),
+        says("h3", &at(2, 0), "fix  the build please"),
         calls(
             "a6",
             &at(2, 30),
@@ -121,21 +139,34 @@ fn conversation() -> Vec<CanonicalRecord> {
         ),
         reply("a7", &at(6, 30)),
         says("h4", &at(7, 0), "I still need an export button"),
-        reply("a8", &at(7, 30)),
+        // Six task-list updates in four active minutes: M-20 calls this
+        // stretch circling; they are expected repeats, so M-21 does not.
+        calls(
+            "a8",
+            &at(7, 30),
+            &[
+                ("u1", "TodoWrite", todo.clone()),
+                ("u2", "TodoWrite", todo.clone()),
+                ("u3", "TodoWrite", todo.clone()),
+                ("u4", "TodoWrite", todo.clone()),
+                ("u5", "TodoWrite", todo.clone()),
+                ("u6", "TodoWrite", todo),
+            ],
+        ),
+        reply("a9", &at(11, 30)),
     ]
 }
 
 #[test]
 fn every_rule_fires_from_kept_content() {
     let mut db = TempDb::empty().unwrap();
-    seed(&mut db, &conversation(), true);
-    let found = warnings(&db);
+    seed(&mut db, SESSION, "claude", &conversation(), true);
+    let found = warnings(&db, SESSION);
     let summary: Vec<_> = found
         .warnings
         .iter()
         .map(|w| (w.kind, w.record_uuids.clone(), w.reason.as_str()))
         .collect();
-    let uuids = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     assert_eq!(
         summary,
         vec![
@@ -146,13 +177,8 @@ fn every_rule_fires_from_kept_content() {
             ),
             (
                 WarningKind::Interruption,
-                uuids(&["r3"]),
+                uuids(&["r3", "i1"]),
                 "you declined a call to Edit (12:00)"
-            ),
-            (
-                WarningKind::Interruption,
-                uuids(&["i1"]),
-                "you interrupted the agent (12:00)"
             ),
             (
                 WarningKind::Correction,
@@ -175,12 +201,29 @@ fn every_rule_fires_from_kept_content() {
         assert_eq!(found.checks.get(kind), &CheckState::Complete, "{kind:?}");
     }
     assert_eq!((found.person_messages, found.person_messages_read), (4, 4));
+    assert_eq!((found.tool_results, found.tool_results_known), (3, 3));
+
+    // M-20, the Dashboard's number, still compares every call: the
+    // task-list stretch M-21 leaves alone is circling there.
+    let SessionRepeats::Measured { stretches, .. } = MetricsDb::open(db.path())
+        .unwrap()
+        .session_repeats(window(), SESSION, RepeatThresholds::default())
+        .unwrap()
+    else {
+        panic!("measured");
+    };
+    let circling: Vec<_> = stretches
+        .iter()
+        .filter(|s| s.circling == Some(true))
+        .map(|s| s.start_uuid.as_str())
+        .collect();
+    assert_eq!(circling, vec!["h3", "h4"]);
 }
 
 #[test]
-fn unkept_content_is_said_and_a_kept_preview_is_read() {
+fn outcomes_are_read_without_kept_content_and_a_preview_is_read() {
     let mut db = TempDb::empty().unwrap();
-    seed(&mut db, &conversation(), false);
+    seed(&mut db, SESSION, "claude", &conversation(), false);
     // The index keeps a short preview of a person's message whatever the
     // retention setting says; keep one, for the correction only.
     Connection::open(db.path())
@@ -191,18 +234,21 @@ fn unkept_content_is_said_and_a_kept_preview_is_read() {
             [SESSION],
         )
         .unwrap();
-    let found = warnings(&db);
+    let found = warnings(&db, SESSION);
     let kinds: Vec<_> = found.warnings.iter().map(|w| w.kind).collect();
-    // Interruption and circling read metadata only; the correction reads the
-    // preview. Failures, declines and the other prompts were not kept.
+    // Outcomes, interruptions and circling are metadata; the correction
+    // reads the preview; the other prompts' words were not kept.
     assert_eq!(
         kinds,
         vec![
+            WarningKind::RepeatedFailure,
             WarningKind::Interruption,
             WarningKind::Correction,
             WarningKind::Circling
         ]
     );
+    assert_eq!(found.checks.repeated_failure, CheckState::Complete);
+    assert_eq!(found.checks.interruption, CheckState::Complete);
     assert_eq!(found.checks.circling, CheckState::Complete);
     assert_eq!(
         found.checks.correction,
@@ -216,12 +262,65 @@ fn unkept_content_is_said_and_a_kept_preview_is_read() {
             missing: vec![Missing::TextNotKept { messages: 3 }]
         }
     );
-    // Seven records carry calls (four) or results (three), none of them
-    // kept, so failed and declined calls cannot be seen.
-    let unkept = CheckState::Incomplete {
-        missing: vec![Missing::ToolResultsNotKept { records: 7 }],
-    };
-    assert_eq!(found.checks.repeated_failure, unkept);
-    assert_eq!(found.checks.interruption, unkept);
     assert_eq!((found.person_messages, found.person_messages_read), (4, 1));
+}
+
+#[test]
+fn results_indexed_before_outcomes_were_kept_are_said_not_saved() {
+    let mut db = TempDb::empty().unwrap();
+    seed(&mut db, SESSION, "claude", &conversation(), false);
+    // As an index written before migration 27 holds them.
+    Connection::open(db.path())
+        .unwrap()
+        .execute_batch("DELETE FROM tool_results; UPDATE tool_uses SET call_id=NULL;")
+        .unwrap();
+    let found = warnings(&db, SESSION);
+    assert!(
+        found
+            .warnings
+            .iter()
+            .all(|w| w.kind != WarningKind::RepeatedFailure)
+    );
+    // The interruption marker is still there, on its own now.
+    let interruptions: Vec<_> = found
+        .warnings
+        .iter()
+        .filter(|w| w.kind == WarningKind::Interruption)
+        .map(|w| w.record_uuids.clone())
+        .collect();
+    assert_eq!(interruptions, vec![uuids(&["i1"])]);
+    let missing = CheckState::Incomplete {
+        missing: vec![Missing::OutcomeNotSaved { records: 3 }],
+    };
+    assert_eq!(found.checks.repeated_failure, missing);
+    assert_eq!(found.checks.interruption, missing);
+}
+
+#[test]
+fn codex_results_without_a_flag_are_unknown() {
+    let mut db = TempDb::empty().unwrap();
+    let bash = json!({"command": "cargo test"});
+    seed(
+        &mut db,
+        "codex-s",
+        "codex",
+        &[
+            says("h1", &at(0, 0), "make the tests pass"),
+            calls("a1", &at(0, 1), &[("c1", "exec_command", bash.clone())]),
+            result("r1", &at(0, 2), "c1", None, "Exit code: 1"),
+            calls("a2", &at(0, 3), &[("c2", "exec_command", bash)]),
+            result("r2", &at(0, 4), "c2", None, "Exit code: 1"),
+            reply("a3", &at(0, 5)),
+        ],
+        false,
+    );
+    let found = warnings(&db, "codex-s");
+    assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+    assert_eq!(
+        found.checks.repeated_failure,
+        CheckState::Incomplete {
+            missing: vec![Missing::OutcomeUnknown { results: 2 }]
+        }
+    );
+    assert_eq!((found.tool_results, found.tool_results_known), (2, 0));
 }

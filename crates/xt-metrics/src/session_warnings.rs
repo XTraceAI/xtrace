@@ -10,16 +10,20 @@
 //! The five rules, and the existing answers each one reads:
 //!
 //! * **Correction**: a message the stored M-02 classification calls a
-//!   person's, sent after an agent reply, holds a correction word ([`correction`]).
+//!   person's, sent after an agent reply, holds a correction ([`correction`]).
 //! * **Interruption**: an input the store flagged as Claude Code's
-//!   `[Request interrupted by user…]` marker (`records.is_interrupted`), or a
-//!   tool result saying the person declined the call ([`DECLINED`]).
-//! * **Circling**: an M-09 stretch M-20 judged circling, exactly as
-//!   [`crate::repeats`] judges it, with its thresholds. Nothing is recounted.
+//!   `[Request interrupted by user…]` marker (`records.is_interrupted`),
+//!   Codex's own `<turn_aborted>` message ([`CODEX_TURN_ABORTED`]), or a tool
+//!   call whose stored outcome says the person declined it. A declined call
+//!   followed by Claude Code's marker is one interruption, not two.
+//! * **Circling**: an M-09 stretch judged circling by M-20's own measurement
+//!   and thresholds, over every call except the expected repeats
+//!   [`expected_repeat`] names (see [`crate::repeats`]'s call scope).
 //! * **Repeated prompt**: the same person's message, compared lowercased with
-//!   whitespace collapsed, sent two or more times in the session.
-//! * **Repeated failure**: tool results reporting failure (`is_error`) for two
-//!   or more calls with the same stored M-20 comparison key.
+//!   whitespace collapsed, sent two or more times in the session; short and
+//!   tag-led messages are not compared ([`comparable_prompt`]).
+//! * **Repeated failure**: two or more calls with the same stored M-20
+//!   comparison key whose stored outcome is a failure.
 //!
 //! Sidechain records (an agent's own sub-conversation inside the session) are
 //! left out of every rule: they are not the person's conversation.
@@ -31,31 +35,44 @@
 
 use crate::{
     MetricsDb, Result, Window, hands_off,
-    repeats::{RepeatDensity, RepeatThresholds, SessionRepeats, UnknownRepeats},
+    repeats::{CallScope, RepeatDensity, RepeatThresholds, SessionRepeats, UnknownRepeats},
     span_detail::{self, PromptText},
 };
 use jiff::{Timestamp, tz::TimeZone};
-use rusqlite::OptionalExtension;
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use xt_store::timestamp::{self, InstantKey};
+use xt_store::{
+    timestamp::{self, InstantKey},
+    tool_result::Outcome,
+};
 
 /// One session's records inside the window, with the stored facts every rule
 /// reads: who sent each one (M-02), whether only part of a person's record is
-/// theirs, the stored interruption flag, the stated tool-result and tool-call
-/// presence, and whether content retention kept the record's content.
+/// theirs, the stored interruption flag and the stated tool-result presence.
 pub(crate) const RECORD_QUERY: &str = "SELECT v.uuid,v.ts,v.ts_ms,v.type,v.is_sidechain,
        v.human_is_eligible,v.human_text_len IS NOT v.text_len,v.is_interrupted,
-       v.is_tool_result_carrier,v.tool_use_count,r.content_json IS NOT NULL
-     FROM v_session_events v JOIN records r ON r.uuid=v.uuid
+       v.is_tool_result_carrier
+     FROM v_session_events v
      WHERE v.session_id=?1 AND v.ts_ms>=?2 AND v.ts_ms<?3";
 
-/// A kept record's content blocks.
-const CONTENT_QUERY: &str = "SELECT content_json FROM records WHERE uuid=?1";
+/// The stored outcome of every tool result in the session (migration 27):
+/// the result's record, the call it names and how that call ended. A
+/// conflicted row or one on a conflicted record reads as unknown.
+pub(crate) const RESULT_QUERY: &str = "SELECT t.record_uuid,t.call_id,t.outcome,
+       t.conflicted OR r.has_conflict
+     FROM tool_results t JOIN records r ON r.uuid=t.record_uuid AND r.session_id=t.session_id
+     WHERE t.session_id=?1";
+
+/// Every call in the session whose identifier is known and uncontested.
+pub(crate) const CALL_QUERY: &str = "SELECT uuid,block_index,call_id FROM tool_uses
+     WHERE session_id=?1 AND uuid IS NOT NULL AND call_id IS NOT NULL AND call_id_conflict=0";
 
 /// Words that, on their own, mark a person's message as a correction.
-pub const CORRECTION_WORDS: [&str; 4] = ["no", "wrong", "stop", "again"];
+pub const CORRECTION_WORDS: [&str; 3] = ["wrong", "stop", "again"];
+/// "no" counts only as the first word of a message of at most this many
+/// words ("No, use the other file"), never inside a longer one ("there is
+/// no test for it yet").
+pub const NO_MAX_WORDS: usize = 8;
 /// Two words that, in this order, mark a correction.
 pub const CORRECTION_PHRASE: [&str; 2] = ["i", "said"];
 /// "still" counts only with one of these within [`STILL_REACH`] words of it,
@@ -73,11 +90,53 @@ pub const STILL_NEGATIVES: [&str; 9] = [
     "see",
 ];
 pub const STILL_REACH: usize = 5;
-/// The start of the tool result Claude Code writes when the person declines a
-/// tool call at its permission prompt.
-pub const DECLINED: &str = "The user doesn't want to proceed with this tool use";
+/// The start of the message Codex itself writes into the conversation when the
+/// person interrupts a turn.
+pub const CODEX_TURN_ABORTED: &str = "<turn_aborted>";
 /// A repeated prompt or a repeated failure needs at least this many.
 pub const REPEAT_AT_LEAST: usize = 2;
+/// A prompt of fewer words ("yes", "go on") is not compared with the others.
+pub const PROMPT_MIN_WORDS: usize = 4;
+
+/// Tools that track a task list: each call is the list's next state, so
+/// calling them often is their job, not going in circles.
+pub const TASK_LIST_TOOLS: [&str; 7] = [
+    "TodoWrite",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+    "TaskGet",
+    "update_plan",
+    "mcp__ccd_turn__update_plan",
+];
+/// Tools that wait or poll for something to finish.
+pub const WAITING_TOOLS: [&str; 8] = [
+    "ScheduleWakeup",
+    "Monitor",
+    "sleep",
+    "wait",
+    "wait_agent",
+    "AwaitShell",
+    "BashOutput",
+    "TaskOutput",
+];
+
+/// M-21's circling exclusion: whether a call is an expected repeat, which
+/// the circling warning does not compare. Read from the stored tool name and
+/// the stored M-20 key only; no argument is read.
+///
+/// * a task-list tool ([`TASK_LIST_TOOLS`]) or a waiting tool ([`WAITING_TOOLS`]);
+/// * a screenshot tool: its stored name contains `screenshot`;
+/// * a call that named no identifying argument (no command, path or pattern):
+///   M-20 counts every such call of one tool as the same call, so a browser
+///   `computer` call taking a screenshot and one clicking, or two Codex
+///   `exec` calls running different code, would count as a repeat.
+pub fn expected_repeat(name: &str, names_no_argument: bool) -> bool {
+    names_no_argument
+        || TASK_LIST_TOOLS.contains(&name)
+        || WAITING_TOOLS.contains(&name)
+        || name.to_ascii_lowercase().contains("screenshot")
+}
 
 /// The five rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -130,10 +189,14 @@ pub enum Missing {
     Unclassified { inputs: u64 },
     /// Inputs the store could not flag as an interruption or not.
     InterruptionUnknown { inputs: u64 },
-    /// Records carrying tool calls or tool results whose content was not
-    /// kept, so failed and declined calls in them cannot be seen.
-    ToolResultsNotKept { records: u64 },
-    /// Tool results naming a call this session's kept records do not hold.
+    /// Records carrying tool results for which the index saved no outcome:
+    /// indexed before outcomes were kept, or their content was never seen.
+    OutcomeNotSaved { records: u64 },
+    /// Tool results whose saved outcome is unknown: the host does not state
+    /// one (Codex, Cursor), or two observations disagreed.
+    OutcomeUnknown { results: u64 },
+    /// Failed or declined results naming a call the session's saved calls do
+    /// not identify.
     UnmatchedResults { results: u64 },
     /// Failed calls whose stored comparison key cannot be compared.
     FailedCallKey { reason: UnknownRepeats, calls: u64 },
@@ -204,6 +267,9 @@ pub struct SessionWarnings {
     /// sidechains, and how many of them had words the text rules could read.
     pub person_messages: u64,
     pub person_messages_read: u64,
+    /// Tool results in the window, and how many have a saved, known outcome.
+    pub tool_results: u64,
+    pub tool_results_known: u64,
 }
 
 /// One record as the rules read it.
@@ -219,15 +285,19 @@ pub(crate) struct EvidenceRecord {
     pub(crate) interrupted: Option<bool>,
 }
 
-/// One tool result read from kept content, with the call it answers.
+/// One failed or declined call, from its stored outcome.
 pub(crate) struct ToolOutcome {
     /// The record carrying the result.
     pub(crate) result_uuid: String,
     pub(crate) at_ms: i64,
-    pub(crate) tool_name: String,
+    /// The call's stored tool name, when the result's call was found.
+    pub(crate) tool_name: Option<String>,
     /// The call's M-20 comparison key, or why it cannot be compared.
     pub(crate) key: std::result::Result<String, UnknownRepeats>,
-    pub(crate) failed: bool,
+    /// The key says the call named no identifying argument, so it only
+    /// identifies the tool: the reason then says the tool failed, not that
+    /// the same call did.
+    pub(crate) tool_only: bool,
     pub(crate) declined: bool,
 }
 
@@ -236,10 +306,15 @@ pub(crate) struct Evidence {
     pub(crate) session_id: String,
     /// Chronological: exact instant, then UUID.
     pub(crate) records: Vec<EvidenceRecord>,
+    /// Failed and declined calls only.
     pub(crate) outcomes: Vec<ToolOutcome>,
-    /// Records with tool calls or results whose content was not kept.
-    pub(crate) tool_records_not_kept: u64,
+    pub(crate) tool_results: u64,
+    pub(crate) tool_results_known: u64,
+    /// Result-carrying records with no saved outcome.
+    pub(crate) outcome_not_saved: u64,
+    pub(crate) outcome_unknown: u64,
     pub(crate) unmatched_results: u64,
+    /// M-20 over the session's calls, expected repeats left out.
     pub(crate) repeats: SessionRepeats,
 }
 
@@ -259,6 +334,9 @@ fn words(text: &str) -> Vec<String> {
 /// The first correction in a message, as the matched words, or `None`.
 pub fn correction(text: &str) -> Option<String> {
     let words = words(text);
+    if words.first().map(String::as_str) == Some("no") && words.len() <= NO_MAX_WORDS {
+        return Some("no".to_owned());
+    }
     for (index, word) in words.iter().enumerate() {
         if CORRECTION_WORDS.contains(&word.as_str()) {
             return Some(word.clone());
@@ -285,12 +363,26 @@ pub fn correction(text: &str) -> Option<String> {
     None
 }
 
-/// How a prompt is compared with the session's other prompts.
-fn prompt_key(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+/// Whether a message opens with a tag such as `<ci-monitor-event …>` or
+/// `<task-notification>`: text a tool or an agent wrote, whatever the
+/// classification says about who sent it.
+fn starts_with_tag(text: &str) -> bool {
+    let mut chars = text.trim_start().chars();
+    chars.next() == Some('<') && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+/// How a prompt is compared with the session's other prompts, or `None` when
+/// it is not compared: fewer than [`PROMPT_MIN_WORDS`] words, or tag-led.
+pub fn comparable_prompt(text: &str) -> Option<String> {
+    if starts_with_tag(text) || words(text).len() < PROMPT_MIN_WORDS {
+        return None;
+    }
+    Some(
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase(),
+    )
 }
 
 fn times_word(count: usize) -> String {
@@ -334,10 +426,21 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
         record_uuids,
         reason,
     };
+    let mut declines = BTreeMap::<&str, Vec<&ToolOutcome>>::new();
+    for outcome in evidence.outcomes.iter().filter(|o| o.declined) {
+        declines
+            .entry(outcome.result_uuid.as_str())
+            .or_default()
+            .push(outcome);
+    }
 
     // Corrections, repeated prompts and interruptions walk the person's own
     // conversation once.
     let mut replied = false;
+    // The last declined call's warning, until an agent record or a person's
+    // message: Claude Code's interruption marker right after it is the same
+    // interruption.
+    let mut open_decline: Option<usize> = None;
     let mut unclassified = 0;
     let (mut correction_not_kept, mut correction_wrapped) = (0, 0);
     let (mut prompt_not_kept, mut prompt_wrapped) = (0, 0);
@@ -347,18 +450,35 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
     for record in evidence.records.iter().filter(|r| !r.sidechain) {
         if record.agent {
             replied = true;
+            open_decline = None;
             continue;
         }
-        match record.interrupted {
-            Some(true) => warnings.push(warn(
+        for outcome in declines.get(record.uuid.as_str()).into_iter().flatten() {
+            let tool = outcome.tool_name.as_deref().unwrap_or("a tool");
+            warnings.push(warn(
                 WarningKind::Interruption,
-                record.at_ms,
+                outcome.at_ms,
                 vec![record.uuid.clone()],
                 format!(
-                    "you interrupted the agent ({})",
-                    clock_times(&[record.at_ms], zone)
+                    "you declined a call to {tool} ({})",
+                    clock_times(&[outcome.at_ms], zone)
                 ),
-            )),
+            ));
+            open_decline = Some(warnings.len() - 1);
+        }
+        match record.interrupted {
+            Some(true) => match open_decline.take() {
+                Some(index) => warnings[index].record_uuids.push(record.uuid.clone()),
+                None => warnings.push(warn(
+                    WarningKind::Interruption,
+                    record.at_ms,
+                    vec![record.uuid.clone()],
+                    format!(
+                        "you interrupted the agent ({})",
+                        clock_times(&[record.at_ms], zone)
+                    ),
+                )),
+            },
             Some(false) => {}
             None => interruption_unknown += 1,
         }
@@ -369,6 +489,23 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                 unclassified += 1;
                 continue;
             }
+        }
+        open_decline = None;
+        // Codex's own interruption message: the stored classification calls
+        // it a person's, but its words are Codex's, so the text rules skip it.
+        if let Some(PromptText::Stored { text, .. }) = &record.words
+            && text.trim_start().starts_with(CODEX_TURN_ABORTED)
+        {
+            warnings.push(warn(
+                WarningKind::Interruption,
+                record.at_ms,
+                vec![record.uuid.clone()],
+                format!(
+                    "you interrupted the agent ({})",
+                    clock_times(&[record.at_ms], zone)
+                ),
+            ));
+            continue;
         }
         let after_reply = std::mem::replace(&mut replied, false);
         person_messages += 1;
@@ -386,8 +523,7 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                         ),
                     ));
                 }
-                let key = prompt_key(text);
-                if !key.is_empty() {
+                if let Some(key) = comparable_prompt(text) {
                     prompts.entry(key).or_default().push(record);
                 }
             }
@@ -433,27 +569,13 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
         missing
     };
 
-    // Tool results: declined calls are interruptions, failed ones are grouped
-    // by the call's comparison key.
+    // Failed calls, grouped by the call's comparison key.
     let mut failures = BTreeMap::<&str, Vec<&ToolOutcome>>::new();
     let mut keyless = BTreeMap::<UnknownRepeats, u64>::new();
-    for outcome in &evidence.outcomes {
-        if outcome.declined {
-            warnings.push(warn(
-                WarningKind::Interruption,
-                outcome.at_ms,
-                vec![outcome.result_uuid.clone()],
-                format!(
-                    "you declined a call to {} ({})",
-                    outcome.tool_name,
-                    clock_times(&[outcome.at_ms], zone)
-                ),
-            ));
-        } else if outcome.failed {
-            match &outcome.key {
-                Ok(key) => failures.entry(key).or_default().push(outcome),
-                Err(reason) => *keyless.entry(*reason).or_default() += 1,
-            }
+    for outcome in evidence.outcomes.iter().filter(|o| !o.declined) {
+        match &outcome.key {
+            Ok(key) => failures.entry(key).or_default().push(outcome),
+            Err(reason) => *keyless.entry(*reason).or_default() += 1,
         }
     }
     for failed in failures.values().filter(|f| f.len() >= REPEAT_AT_LEAST) {
@@ -462,26 +584,38 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
             WarningKind::RepeatedFailure,
             failed[1].at_ms,
             failed.iter().map(|o| o.result_uuid.clone()).collect(),
-            format!(
-                "the same {} call failed {} ({})",
-                failed[0].tool_name,
-                times_word(failed.len()),
-                clock_times(&moments, zone)
-            ),
+            {
+                let tool = failed[0].tool_name.as_deref().unwrap_or("tool");
+                let what = if failed[0].tool_only {
+                    tool.to_owned()
+                } else {
+                    format!("the same {tool} call")
+                };
+                format!(
+                    "{what} failed {} ({})",
+                    times_word(failed.len()),
+                    clock_times(&moments, zone)
+                )
+            },
         ));
     }
-    let mut tool_missing = Vec::new();
-    if evidence.tool_records_not_kept > 0 {
-        tool_missing.push(Missing::ToolResultsNotKept {
-            records: evidence.tool_records_not_kept,
+    let mut outcome_missing = Vec::new();
+    if evidence.outcome_not_saved > 0 {
+        outcome_missing.push(Missing::OutcomeNotSaved {
+            records: evidence.outcome_not_saved,
+        });
+    }
+    if evidence.outcome_unknown > 0 {
+        outcome_missing.push(Missing::OutcomeUnknown {
+            results: evidence.outcome_unknown,
         });
     }
     if evidence.unmatched_results > 0 {
-        tool_missing.push(Missing::UnmatchedResults {
+        outcome_missing.push(Missing::UnmatchedResults {
             results: evidence.unmatched_results,
         });
     }
-    let mut failure_missing = tool_missing.clone();
+    let mut failure_missing = outcome_missing.clone();
     failure_missing.extend(
         keyless
             .into_iter()
@@ -493,7 +627,7 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
             inputs: interruption_unknown,
         });
     }
-    interruption_missing.extend(tool_missing);
+    interruption_missing.extend(outcome_missing);
 
     // Circling is M-20's own verdict, stretch by stretch.
     let at = |uuid: &str| {
@@ -566,27 +700,16 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
         },
         person_messages,
         person_messages_read,
-    }
-}
-
-/// The text of a tool result's `content`, which the host writes as a string,
-/// as a list of parts, or not at all.
-fn result_text(block: &Value) -> String {
-    match block.get("content") {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .collect(),
-        _ => String::new(),
+        tool_results: evidence.tool_results,
+        tool_results_known: evidence.tool_results_known,
     }
 }
 
 impl MetricsDb {
     /// M-21 for every user session with an event inside the window, ordered
     /// by session id. Every rule reads only the session's records inside the
-    /// window; circling is M-20 over that same window. `zone` only writes the
-    /// clock times in each reason.
+    /// window; circling is M-20 over that same window, expected repeats left
+    /// out. `zone` only writes the clock times in each reason.
     ///
     /// Read inside one snapshot, so every session's rules describe the same
     /// committed state.
@@ -609,6 +732,7 @@ impl MetricsDb {
                         Some(events.as_slice()),
                         session_id,
                         thresholds,
+                        CallScope::WithoutExpectedRepeats,
                     )?;
                     let evidence = db.warning_evidence(window, session_id, repeats)?;
                     all.push(decide(&evidence, zone));
@@ -629,8 +753,8 @@ impl MetricsDb {
             instant: InstantKey,
             record: EvidenceRecord,
             partial: bool,
-            tool_bearing: bool,
-            kept: bool,
+            /// May carry a tool result: stated so, or unknown.
+            carrier: bool,
         }
         let start = InstantKey::from_millisecond(window.start_ms());
         let end = InstantKey::from_millisecond(window.end_ms());
@@ -656,8 +780,6 @@ impl MetricsDb {
                 continue;
             }
             let agent = row.get::<_, String>(3)? == "assistant";
-            let carrier: Option<bool> = row.get(8)?;
-            let tool_calls: Option<i64> = row.get(9)?;
             rows.push(Row {
                 instant,
                 record: EvidenceRecord {
@@ -670,13 +792,7 @@ impl MetricsDb {
                     interrupted: if agent { Some(false) } else { row.get(7)? },
                 },
                 partial: row.get(6)?,
-                // A record that may carry a call or a result: unknown counts.
-                tool_bearing: if agent {
-                    tool_calls != Some(0)
-                } else {
-                    carrier != Some(false)
-                },
-                kept: row.get(10)?,
+                carrier: !agent && row.get::<_, Option<bool>>(8)? != Some(false),
             });
         }
         drop(result);
@@ -698,106 +814,99 @@ impl MetricsDb {
             }
         }
 
-        // Tool calls and results, only from content retention kept. A call is
-        // named by its `id` at its block position; a result by `tool_use_id`.
-        let mut tool_records_not_kept = 0;
-        let mut calls = BTreeMap::<String, (String, u64)>::new();
-        let mut results = Vec::new();
+        // Saved outcomes, per result record, and the calls they name.
+        let mut saved = BTreeMap::<String, Vec<(Option<String>, Option<Outcome>)>>::new();
+        let mut statement = self.connection.prepare(RESULT_QUERY)?;
+        let mut result = statement.query([session_id])?;
+        while let Some(row) = result.next()? {
+            let outcome: String = row.get(2)?;
+            let contested: bool = row.get(3)?;
+            saved.entry(row.get(0)?).or_default().push((
+                row.get(1)?,
+                (!contested)
+                    .then(|| Outcome::parse(&outcome))
+                    .flatten()
+                    .filter(|o| *o != Outcome::Unknown),
+            ));
+        }
+        drop(result);
+        drop(statement);
+        let mut calls = BTreeMap::<String, Vec<(String, u64)>>::new();
+        let mut statement = self.connection.prepare(CALL_QUERY)?;
+        let mut result = statement.query([session_id])?;
+        while let Some(row) = result.next()? {
+            let index: i64 = row.get(1)?;
+            calls.entry(row.get(2)?).or_default().push((
+                row.get(0)?,
+                u64::try_from(index)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, index))?,
+            ));
+        }
+        drop(result);
+        drop(statement);
+
+        let mut evidence = Evidence {
+            session_id: session_id.to_owned(),
+            records: Vec::new(),
+            outcomes: Vec::new(),
+            tool_results: 0,
+            tool_results_known: 0,
+            outcome_not_saved: 0,
+            outcome_unknown: 0,
+            unmatched_results: 0,
+            repeats,
+        };
+        let mut stored = None;
         for row in rows
             .iter()
-            .filter(|row| !row.record.sidechain && row.tool_bearing)
+            .filter(|row| !row.record.sidechain && row.carrier)
         {
-            if !row.kept {
-                tool_records_not_kept += 1;
-                continue;
-            }
-            let Some(blocks) = self.content_blocks(&row.record.uuid)? else {
-                tool_records_not_kept += 1;
+            let Some(results) = saved.get(&row.record.uuid) else {
+                evidence.outcome_not_saved += 1;
                 continue;
             };
-            for (index, block) in blocks.iter().enumerate() {
-                let kind = block.get("type").and_then(Value::as_str);
-                if row.record.agent && kind == Some("tool_use") {
-                    if let Some(id) = block.get("id").and_then(Value::as_str) {
-                        calls.insert(id.to_owned(), (row.record.uuid.clone(), index as u64));
-                    }
-                } else if !row.record.agent && kind == Some("tool_result") {
-                    // The same reading the session view uses: failed only
-                    // when the result says so.
-                    let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
-                    let declined = failed && result_text(block).starts_with(DECLINED);
-                    results.push((
-                        row.record.uuid.clone(),
-                        row.record.at_ms,
-                        block
-                            .get("tool_use_id")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        failed,
-                        declined,
-                    ));
+            for (call_id, outcome) in results {
+                evidence.tool_results += 1;
+                let Some(outcome) = outcome else {
+                    evidence.outcome_unknown += 1;
+                    continue;
+                };
+                evidence.tool_results_known += 1;
+                if *outcome == Outcome::Ok {
+                    continue;
                 }
-            }
-        }
-        let stored = if results.iter().any(|result| result.3) {
-            self.stored_calls(session_id)?
-        } else {
-            BTreeMap::new()
-        };
-        let mut outcomes = Vec::new();
-        let mut unmatched_results = 0;
-        for (result_uuid, at_ms, call_id, failed, declined) in results {
-            if !failed {
-                continue;
-            }
-            let call = call_id
-                .and_then(|id| calls.get(&id))
-                .and_then(|(uuid, index)| {
-                    stored
-                        .get(uuid)?
-                        .iter()
-                        .find(|call| call.block_index == *index)
+                // The call this result answers: exactly one saved call with
+                // its identifier, and that call's stored grouping evidence.
+                if stored.is_none() {
+                    stored = Some(self.stored_calls(session_id)?);
+                }
+                let call = match call_id.as_deref().and_then(|id| calls.get(id)) {
+                    Some(found) if found.len() == 1 => {
+                        let (uuid, index) = &found[0];
+                        stored
+                            .as_ref()
+                            .and_then(|stored| stored.get(uuid))
+                            .and_then(|calls| calls.iter().find(|c| c.block_index == *index))
+                    }
+                    _ => None,
+                };
+                if call.is_none() {
+                    evidence.unmatched_results += 1;
+                }
+                evidence.outcomes.push(ToolOutcome {
+                    result_uuid: row.record.uuid.clone(),
+                    at_ms: row.record.at_ms,
+                    tool_name: call.map(|c| c.name.clone()),
+                    key: call.map_or(Err(UnknownRepeats::MissingKey), |c| {
+                        c.comparable_key().map(str::to_owned)
+                    }),
+                    tool_only: call.is_some_and(|c| c.names_no_argument()),
+                    declined: *outcome == Outcome::Declined,
                 });
-            let Some(call) = call else {
-                unmatched_results += 1;
-                continue;
-            };
-            outcomes.push(ToolOutcome {
-                result_uuid,
-                at_ms,
-                tool_name: call.name.clone(),
-                key: call.comparable_key().map(str::to_owned),
-                failed,
-                declined,
-            });
+            }
         }
-
-        Ok(Evidence {
-            session_id: session_id.to_owned(),
-            records: rows.into_iter().map(|row| row.record).collect(),
-            outcomes,
-            tool_records_not_kept,
-            unmatched_results,
-            repeats,
-        })
-    }
-
-    /// A kept record's content blocks; `None` when none were kept or the kept
-    /// content is not a block list.
-    fn content_blocks(&self, uuid: &str) -> Result<Option<Vec<Value>>> {
-        let json: Option<Option<String>> = self
-            .connection
-            .query_row(CONTENT_QUERY, [uuid], |row| row.get(0))
-            .optional()?;
-        Ok(match json.flatten() {
-            // The column only holds valid JSON (its CHECK); anything that is
-            // not a block list has no calls or results this read can name.
-            Some(json) => match serde_json::from_str::<Value>(&json) {
-                Ok(Value::Array(blocks)) => Some(blocks),
-                _ => None,
-            },
-            None => None,
-        })
+        evidence.records = rows.into_iter().map(|row| row.record).collect();
+        Ok(evidence)
     }
 }
 
@@ -852,7 +961,10 @@ mod tests {
             session_id: "s".into(),
             records,
             outcomes: vec![],
-            tool_records_not_kept: 0,
+            tool_results: 0,
+            tool_results_known: 0,
+            outcome_not_saved: 0,
+            outcome_unknown: 0,
             unmatched_results: 0,
             repeats: SessionRepeats::Measured {
                 thresholds: RepeatThresholds::default(),
@@ -894,7 +1006,6 @@ mod tests {
 
     #[test]
     fn correction_words_match_whole_words_only() {
-        assert_eq!(correction("No, use the other file"), Some("no".into()));
         assert_eq!(correction("that's WRONG"), Some("wrong".into()));
         assert_eq!(correction("Please stop."), Some("stop".into()));
         assert_eq!(correction("try again"), Some("again".into()));
@@ -911,10 +1022,71 @@ mod tests {
     }
 
     #[test]
+    fn no_counts_only_as_the_first_word_of_a_short_message() {
+        assert_eq!(correction("No, use the other file"), Some("no".into()));
+        assert_eq!(correction("no"), Some("no".into()));
+        // Eight words is still short; nine is not.
+        assert_eq!(
+            correction("no that is not the file I meant"),
+            Some("no".into())
+        );
+        assert_eq!(correction("no that is not the file I meant here"), None);
+        assert_eq!(correction("there is no test for it yet"), None);
+    }
+
+    #[test]
+    fn short_and_tag_led_prompts_are_not_compared() {
+        assert_eq!(
+            comparable_prompt("Run the  TESTS please"),
+            Some("run the tests please".into())
+        );
+        for skipped in [
+            "yes",
+            "go on now",
+            "<ci-monitor-event kind=\"check\">the build passed again</ci-monitor-event>",
+            "<turn_aborted> The user interrupted the previous turn on purpose.",
+            "  <task-notification><summary>done and dusted now</summary>",
+        ] {
+            assert_eq!(comparable_prompt(skipped), None, "{skipped}");
+        }
+        // A message that only mentions a tag later is a prompt like any other.
+        assert!(comparable_prompt("fix the <div> in the header").is_some());
+    }
+
+    #[test]
+    fn expected_repeats_are_named_from_stored_facts_only() {
+        for name in [
+            "TodoWrite",
+            "TaskUpdate",
+            "mcp__ccd_turn__update_plan",
+            "ScheduleWakeup",
+            "Monitor",
+            "sleep",
+            "wait_agent",
+            "mcp__computer-use__app_screenshot",
+            "mcp__Claude_Preview__preview_screenshot",
+        ] {
+            assert!(expected_repeat(name, false), "{name}");
+        }
+        for name in [
+            "Bash",
+            "Edit",
+            "Read",
+            "WebFetch",
+            "mcp__Claude_Browser__computer",
+        ] {
+            assert!(!expected_repeat(name, false), "{name}");
+        }
+        // A call naming no identifying argument is never "the same call".
+        assert!(expected_repeat("mcp__Claude_Browser__computer", true));
+        assert!(expected_repeat("exec", true));
+    }
+
+    #[test]
     fn a_correction_needs_an_agent_reply_before_it() {
         let found = decide(
             &evidence(vec![
-                person("p1", 0, "no tests yet, start with the parser"),
+                person("p1", 0, "wrong idea, start with the parser"),
                 agent("a1", 1),
                 person("p2", 2, "still not working"),
                 person("p3", 3, "wrong file"),
@@ -926,7 +1098,6 @@ mod tests {
         assert_eq!(corrections.len(), 1);
         assert_eq!(corrections[0].record_uuids, vec!["p2".to_owned()]);
         assert_eq!(corrections[0].at_ms, T0 + 2 * MINUTE);
-        assert!(corrections[0].reason.contains("\"still not\""));
         assert_eq!(
             corrections[0].reason,
             "you wrote \"still not\" after a reply (14:15)"
@@ -938,16 +1109,21 @@ mod tests {
     fn same_prompt_twice_is_compared_without_case_or_spacing() {
         let found = decide(
             &evidence(vec![
-                person("p1", 5, "Run the  tests"),
+                person("p1", 5, "Run the  tests now"),
                 agent("a1", 6),
                 automatic("hook", 6),
-                person("p2", 12, "run the tests\n"),
+                person("p2", 12, "run the tests now\n"),
                 agent("a2", 13),
-                person("p3", 14, "run the tests please"),
+                person("p3", 14, "run the tests now please"),
+                agent("a3", 15),
+                person("y1", 16, "yes"),
+                agent("a4", 17),
+                person("y2", 18, "yes"),
             ]),
             &utc(),
         );
         let repeated = of_kind(&found, WarningKind::RepeatedPrompt);
+        // "yes" twice is too short to compare.
         assert_eq!(repeated.len(), 1);
         assert_eq!(repeated[0].record_uuids, vec!["p1".to_owned(), "p2".into()]);
         assert_eq!(repeated[0].at_ms, T0 + 12 * MINUTE);
@@ -957,17 +1133,19 @@ mod tests {
 
     #[test]
     fn automatic_messages_never_count_as_prompts_or_corrections() {
-        // Two identical hook outputs and a tool result reading "wrong": the
+        // Identical hook outputs and a tool result reading "wrong": the
         // stored classification says no person sent them, so neither rule
         // reads them, whatever they would have said.
         let mut hook = automatic("h1", 1);
-        hook.words = Some(span_detail::prompt_excerpt("wrong"));
+        hook.words = Some(span_detail::prompt_excerpt("wrong wrong wrong wrong"));
+        let mut twin = automatic("h2", 2);
+        twin.words = Some(span_detail::prompt_excerpt("wrong wrong wrong wrong"));
         let found = decide(
             &evidence(vec![
                 person("p1", 0, "build it"),
                 agent("a1", 1),
                 hook,
-                automatic("h2", 2),
+                twin,
                 automatic("h3", 3),
                 agent("a2", 4),
             ]),
@@ -999,66 +1177,68 @@ mod tests {
             &utc(),
         );
         assert!(found.warnings.is_empty());
-        assert_eq!(
-            found.checks.correction,
-            CheckState::Incomplete {
-                missing: vec![
-                    Missing::TextNotKept { messages: 1 },
-                    Missing::WrappedText { messages: 1 },
-                    Missing::Unclassified { inputs: 1 },
-                ]
-            }
-        );
-        // The opening message was read; the unkept one still counts against
-        // the repeated-prompt rule, which needs every prompt.
-        assert_eq!(
-            found.checks.repeated_prompt,
-            CheckState::Incomplete {
-                missing: vec![
-                    Missing::TextNotKept { messages: 1 },
-                    Missing::WrappedText { messages: 1 },
-                    Missing::Unclassified { inputs: 1 },
-                ]
-            }
-        );
+        let missing = CheckState::Incomplete {
+            missing: vec![
+                Missing::TextNotKept { messages: 1 },
+                Missing::WrappedText { messages: 1 },
+                Missing::Unclassified { inputs: 1 },
+            ],
+        };
+        assert_eq!(found.checks.correction, missing);
+        assert_eq!(found.checks.repeated_prompt, missing);
+        assert_eq!((found.person_messages, found.person_messages_read), (3, 1));
+    }
+
+    fn declined(result: &str, minute: i64) -> ToolOutcome {
+        ToolOutcome {
+            result_uuid: result.into(),
+            at_ms: T0 + minute * MINUTE,
+            tool_name: Some("Bash".into()),
+            key: Ok("k".into()),
+            tool_only: false,
+            declined: true,
+        }
     }
 
     #[test]
-    fn interruptions_come_from_the_stored_flag_and_declined_calls() {
-        let mut stop = automatic("i1", 3);
-        stop.interrupted = Some(true);
-        let mut side = automatic("i2", 4);
+    fn a_declined_call_and_the_marker_after_it_are_one_interruption() {
+        let mut marker = automatic("i1", 3);
+        marker.interrupted = Some(true);
+        let mut alone = automatic("i2", 7);
+        alone.interrupted = Some(true);
+        let mut side = automatic("i3", 8);
         side.interrupted = Some(true);
         side.sidechain = true;
-        let mut unknown = automatic("i3", 5);
+        let mut unknown = automatic("i4", 9);
         unknown.interrupted = None;
         let mut evidence = evidence(vec![
             person("p1", 0, "go"),
             agent("a1", 1),
-            stop,
+            automatic("r1", 2),
+            marker,
+            agent("a2", 5),
+            automatic("r2", 6),
+            agent("a3", 6),
+            alone,
             side,
             unknown,
         ]);
-        evidence.outcomes.push(ToolOutcome {
-            result_uuid: "r1".into(),
-            at_ms: T0 + 2 * MINUTE,
-            tool_name: "Bash".into(),
-            key: Ok("k".into()),
-            failed: true,
-            declined: true,
-        });
+        evidence.outcomes = vec![declined("r1", 2), declined("r2", 6)];
         let found = decide(&evidence, &utc());
-        let interruptions = of_kind(&found, WarningKind::Interruption);
-        assert_eq!(interruptions.len(), 2, "{interruptions:?}");
+        let interruptions: Vec<_> = of_kind(&found, WarningKind::Interruption)
+            .into_iter()
+            .map(|w| (w.record_uuids.clone(), w.reason.as_str()))
+            .collect();
+        let uuids = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         assert_eq!(
-            interruptions[0].reason,
-            "you declined a call to Bash (14:15)"
-        );
-        assert_eq!(interruptions[1].record_uuids, vec!["i1".to_owned()]);
-        assert!(
-            interruptions[1]
-                .reason
-                .starts_with("you interrupted the agent")
+            interruptions,
+            vec![
+                // The marker right after the decline joins it.
+                (uuids(&["r1", "i1"]), "you declined a call to Bash (14:15)"),
+                // An agent reply came between: the marker is its own.
+                (uuids(&["r2"]), "you declined a call to Bash (14:19)"),
+                (uuids(&["i2"]), "you interrupted the agent (14:20)"),
+            ]
         );
         // A declined call is not a failed command.
         assert!(of_kind(&found, WarningKind::RepeatedFailure).is_empty());
@@ -1070,28 +1250,69 @@ mod tests {
         );
     }
 
-    fn failure(uuid: &str, minute: i64, tool: &str, key: &str) -> ToolOutcome {
+    #[test]
+    fn codex_turn_aborted_is_an_interruption_and_not_a_prompt() {
+        let found = decide(
+            &evidence(vec![
+                person("p1", 0, "build the thing"),
+                agent("a1", 1),
+                person(
+                    "x1",
+                    2,
+                    "<turn_aborted> The user interrupted the previous turn on purpose.",
+                ),
+                person("p2", 3, "stop, use the other branch"),
+            ]),
+            &utc(),
+        );
+        let kinds: Vec<_> = found.warnings.iter().map(|w| w.kind).collect();
+        // The message after it is still after the agent's reply.
+        assert_eq!(
+            kinds,
+            vec![WarningKind::Interruption, WarningKind::Correction]
+        );
+        assert_eq!(found.warnings[0].record_uuids, vec!["x1".to_owned()]);
+        assert_eq!(found.person_messages, 2);
+    }
+
+    fn failure(uuid: &str, minute: i64, key: &str) -> ToolOutcome {
         ToolOutcome {
             result_uuid: uuid.into(),
             at_ms: T0 + minute * MINUTE,
-            tool_name: tool.into(),
+            tool_name: Some("Bash".into()),
             key: Ok(key.into()),
-            failed: true,
+            tool_only: false,
             declined: false,
         }
+    }
+
+    #[test]
+    fn a_tool_without_an_identifying_argument_is_named_as_the_tool() {
+        let mut evidence = evidence(vec![person("p1", 0, "fix it"), agent("a1", 1)]);
+        let navigate = |uuid: &str, minute| ToolOutcome {
+            tool_name: Some("navigate".into()),
+            tool_only: true,
+            ..failure(uuid, minute, "navigate-any")
+        };
+        evidence.outcomes = vec![navigate("r1", 2), navigate("r2", 3)];
+        let found = decide(&evidence, &utc());
+        assert_eq!(
+            of_kind(&found, WarningKind::RepeatedFailure)[0].reason,
+            "navigate failed twice (14:15, 14:16)"
+        );
     }
 
     #[test]
     fn the_same_call_failing_twice_is_one_warning() {
         let mut evidence = evidence(vec![person("p1", 0, "fix it"), agent("a1", 1)]);
         evidence.outcomes = vec![
-            failure("r1", 2, "Bash", "pnpm-test"),
-            failure("r2", 3, "Bash", "cargo-build"),
-            failure("r3", 4, "Bash", "pnpm-test"),
-            failure("r4", 5, "Bash", "pnpm-test"),
+            failure("r1", 2, "pnpm-test"),
+            failure("r2", 3, "cargo-build"),
+            failure("r3", 4, "pnpm-test"),
+            failure("r4", 5, "pnpm-test"),
             ToolOutcome {
                 key: Err(UnknownRepeats::MissingKey),
-                ..failure("r5", 6, "Bash", "")
+                ..failure("r5", 6, "")
             },
         ];
         let found = decide(&evidence, &utc());
@@ -1120,12 +1341,16 @@ mod tests {
     }
 
     #[test]
-    fn unkept_tool_results_leave_failure_and_decline_checks_incomplete() {
+    fn unsaved_or_unknown_outcomes_leave_failure_and_decline_checks_incomplete() {
         let mut evidence = evidence(vec![person("p1", 0, "fix it"), agent("a1", 1)]);
-        evidence.tool_records_not_kept = 2;
+        evidence.outcome_not_saved = 2;
+        evidence.outcome_unknown = 3;
         let found = decide(&evidence, &utc());
         let missing = CheckState::Incomplete {
-            missing: vec![Missing::ToolResultsNotKept { records: 2 }],
+            missing: vec![
+                Missing::OutcomeNotSaved { records: 2 },
+                Missing::OutcomeUnknown { results: 3 },
+            ],
         };
         assert_eq!(found.checks.repeated_failure, missing);
         assert_eq!(found.checks.interruption, missing);
@@ -1199,9 +1424,9 @@ mod tests {
         );
         assert_eq!(circling[0].at_ms, T0);
         assert!(
-            circling[0]
-                .reason
-                .starts_with("went in circles: 6 repeated calls in 9 active minutes, most often the same Bash call (5 times)"),
+            circling[0].reason.starts_with(
+                "went in circles: 6 repeated calls in 9 active minutes, most often the same Bash call (5 times)"
+            ),
             "{}",
             circling[0].reason
         );
@@ -1246,9 +1471,11 @@ mod tests {
     }
 
     #[test]
-    fn the_evidence_read_touches_no_argument() {
-        for forbidden in ["input_json", "command", "file_path"] {
-            assert!(!RECORD_QUERY.contains(forbidden), "{forbidden}");
+    fn the_evidence_reads_touch_no_content_and_no_argument() {
+        for query in [RECORD_QUERY, RESULT_QUERY, CALL_QUERY] {
+            for forbidden in ["content_json", "input_json", "command", "file_path"] {
+                assert!(!query.contains(forbidden), "{forbidden}");
+            }
         }
     }
 }

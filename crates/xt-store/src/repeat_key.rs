@@ -142,6 +142,16 @@ pub fn derive(name: &str, input: Option<&Value>) -> Option<GroupKey> {
     })
 }
 
+/// Whether a stored `(group_version, group_key)` is the key every call of
+/// `name` that names no identifying argument shares: the call stated none of
+/// [`IDENTIFYING_FIELDS`], so M-20 treats all such calls of that tool as one.
+/// Answered from the stored key alone; no argument is read.
+pub fn names_no_argument(name: &str, version: i64, digest: &str) -> bool {
+    version == i64::from(VERSION)
+        && derive(name, Some(&Value::Object(Default::default())))
+            .is_some_and(|key| key.digest == digest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +160,19 @@ mod tests {
 
     fn key(name: &str, input: Value) -> Option<String> {
         derive(name, Some(&input)).map(|key| key.digest().to_owned())
+    }
+
+    #[test]
+    fn a_call_naming_no_identifying_argument_is_recognised_from_its_key() {
+        let none = key("exec", json!({"code": "1+1"})).unwrap();
+        let other = key("exec", json!({"code": "2+2"})).unwrap();
+        assert_eq!(none, other);
+        assert!(names_no_argument("exec", 1, &none));
+        let stated = key("Bash", json!({"command": "ls"})).unwrap();
+        assert!(!names_no_argument("Bash", 1, &stated));
+        // The same key under another tool's name, or another version, is not it.
+        assert!(!names_no_argument("js", 1, &none));
+        assert!(!names_no_argument("exec", 2, &none));
     }
 
     #[test]

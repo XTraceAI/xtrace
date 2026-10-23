@@ -62,9 +62,10 @@ pub use session_hands_off::SessionHandsOff;
 pub use session_stretches::{SessionStretch, SessionStretches, ToolBlock};
 pub use session_summary::SessionListSummary;
 pub use session_warnings::{
-    CORRECTION_PHRASE, CORRECTION_WORDS, CheckState, DECLINED, Missing, REPEAT_AT_LEAST,
-    STILL_NEGATIVES, STILL_REACH, SessionWarning, SessionWarnings, WarningChecks, WarningKind,
-    correction,
+    CODEX_TURN_ABORTED, CORRECTION_PHRASE, CORRECTION_WORDS, CheckState, Missing, NO_MAX_WORDS,
+    PROMPT_MIN_WORDS, REPEAT_AT_LEAST, STILL_NEGATIVES, STILL_REACH, SessionWarning,
+    SessionWarnings, TASK_LIST_TOOLS, WAITING_TOOLS, WarningChecks, WarningKind, comparable_prompt,
+    correction, expected_repeat,
 };
 pub use sessions::{DaySessions, SessionsPerDay};
 pub use span_detail::{
@@ -159,7 +160,13 @@ impl MetricsDb {
             connection.prepare(&format!("{query} LIMIT 0"))?;
         }
         connection.prepare(&format!("{} LIMIT 0", repeats::BLOCK_QUERY))?;
-        connection.prepare(&format!("{} LIMIT 0", session_warnings::RECORD_QUERY))?;
+        for query in [
+            session_warnings::RECORD_QUERY,
+            session_warnings::RESULT_QUERY,
+            session_warnings::CALL_QUERY,
+        ] {
+            connection.prepare(&format!("{query} LIMIT 0"))?;
+        }
         connection.prepare(&format!("{} LIMIT 0", favorite::OUTPUT_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", favorite::TURN_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", cost::QUERY))?;
