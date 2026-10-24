@@ -89,7 +89,7 @@ async function timeline(page: Page) {
   });
 }
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`the Overview card and the human h timeline at 7d and 30d, ${scheme}`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));

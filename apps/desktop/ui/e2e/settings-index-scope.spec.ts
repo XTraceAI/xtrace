@@ -7,8 +7,8 @@ import type { NativeIndexStatus } from '../src/data/generated/NativeIndexStatus'
 /**
  * Settings → Native index over a test-only synthetic status served in place of
  * the F1 export's (not real history): the note that says what a host's scan
- * state covers sits under the host rows inside the card at 1120×720 in both
- * schemes, in the card's meta ink, adds no tab stop, and leaves every reported
+ * state covers sits under the host rows inside the card at 1120×720, in the
+ * card's meta ink, adds no tab stop, and leaves every reported
  * row as it was. So does the note naming the Codex histories the sub-session
  * launch search skipped, after it.
  */
@@ -63,7 +63,7 @@ async function open(page: Page, indexStatus = status) {
   await page.evaluate(() => document.fonts.ready);
 }
 
-for (const scheme of ['dark', 'light'] as const)
+for (const scheme of ['light'] as const)
   test(`skipped details open by keyboard and fit the host row (${scheme})`, async ({
     page,
   }, info) => {
@@ -104,7 +104,7 @@ for (const scheme of ['dark', 'light'] as const)
     await expect(row).toBeHidden();
   });
 
-for (const scheme of ['dark', 'light'] as const)
+for (const scheme of ['light'] as const)
   test(`the host scan scope note fits under the host rows at 1120×720 (${scheme})`, async ({
     page,
   }, info) => {

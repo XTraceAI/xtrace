@@ -414,6 +414,7 @@ it('keeps F7 unmeasured tokens, cost, coverage and favorite model explicit', asy
           model: null,
           output_tokens: null,
           unknown_reason: 'no_measured_output',
+          output_shares: [],
         };
       }),
     ),
@@ -1668,7 +1669,12 @@ for (const [reason, explanation] of [
 ] as const) {
   it(`preserves the previous favorite model reason: ${reason}`, async () => {
     const report = f1();
-    report.favorite.previous = { model: null, output_tokens: null, unknown_reason: reason };
+    report.favorite.previous = {
+      model: null,
+      output_tokens: null,
+      unknown_reason: reason,
+      output_shares: [],
+    };
     mount(nativeSource(() => report));
     await loaded();
     const trigger = within(screen.getByTestId('dashboard-summary')).getByRole('button');
@@ -1685,6 +1691,7 @@ it('keeps the known previous favorite model in its definition', async () => {
     model: 'synthetic-known-model',
     output_tokens: 100,
     unknown_reason: null,
+    output_shares: [],
   };
   mount(nativeSource(() => report));
   await loaded();
@@ -1693,4 +1700,65 @@ it('keeps the known previous favorite model in its definition', async () => {
   expect((await screen.findByRole('tooltip')).textContent).toContain(
     'Previous period: synthetic-known-model.',
   );
+});
+
+it("lists every model's share of output tokens under the favorite, known or not", async () => {
+  const report = f1();
+  report.favorite.current = {
+    model: null,
+    output_tokens: null,
+    unknown_reason: 'unknown_model_output',
+    output_shares: [
+      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 100 },
+      { of: { kind: 'model', model: 'synthetic-b' }, output_tokens: 80 },
+      { of: { kind: 'unknown_model' }, output_tokens: 50 },
+    ],
+  };
+  mount(nativeSource(() => report));
+  await loaded();
+  const trigger = within(screen.getByTestId('dashboard-summary')).getByRole('button');
+  act(() => trigger.focus());
+  const tip = await screen.findByRole('tooltip');
+  // In the report's order, each a share of the rows' sum (230): a table for
+  // the eye, one sentence for the description.
+  const table = tip.querySelector('table')!;
+  expect(table.getAttribute('aria-hidden')).toBe('true');
+  // Drawn alone: the definition and the table's title are words for the
+  // description, in the order they are read.
+  expect(table.querySelector('caption')).toBeNull();
+  expect([...tip.querySelectorAll('.sr-only')].map((words) => words.textContent)).toEqual([
+    'The model that wrote the most output in the selected range.',
+    'Share of output tokens: synthetic-a 43%, synthetic-b 35%, no model recorded 22%.',
+  ]);
+  expect(
+    [...table.querySelectorAll('tr')].map((row) =>
+      [...row.querySelectorAll('th, td')].map((cell) => cell.textContent),
+    ),
+  ).toEqual([
+    ['Model', 'Share'],
+    ['synthetic-a', '43%'],
+    ['synthetic-b', '35%'],
+    ['no model recorded', '22%'],
+  ]);
+  expect(tip.textContent).toContain('Previous period:');
+});
+
+it('lists no shares when the period measured no output', async () => {
+  const report = f1();
+  report.favorite.current = {
+    model: null,
+    output_tokens: null,
+    unknown_reason: 'no_measured_output',
+    output_shares: [],
+  };
+  mount(nativeSource(() => report));
+  await loaded();
+  const trigger = within(screen.getByTestId('dashboard-summary')).getByRole('button');
+  act(() => trigger.focus());
+  const tip = await screen.findByRole('tooltip');
+  expect(tip.textContent).toContain('The model that wrote the most output');
+  // With no rows, the definition stays a drawn line.
+  expect(tip.querySelector('.sr-only')).toBeNull();
+  expect(tip.textContent).not.toContain('Share of output tokens');
+  expect(tip.querySelector('table')).toBeNull();
 });

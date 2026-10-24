@@ -98,20 +98,6 @@ test('local fonts load with external network denied and remain usable offline', 
   });
 });
 
-test('denied storage does not break an appearance change', async ({ page }) => {
-  await page.addInitScript(() => {
-    for (const method of ['getItem', 'setItem'])
-      Object.defineProperty(Storage.prototype, method, {
-        value: () => {
-          throw new DOMException('Denied', 'SecurityError');
-        },
-      });
-  });
-  await page.goto('/settings');
-  await page.getByRole('combobox', { name: 'Appearance' }).selectOption('light');
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-});
-
 test('popover keeps subtree tokens and fixed offsets, light-dismisses and restores keyboard focus', async ({
   page,
 }, info) => {

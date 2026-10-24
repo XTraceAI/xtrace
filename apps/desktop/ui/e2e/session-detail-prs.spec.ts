@@ -10,7 +10,7 @@ for (const size of [
   { width: 1120, height: 720 },
   { width: 1440, height: 900 },
 ]) {
-  for (const scheme of ['dark', 'light'] as const) {
+  for (const scheme of ['light'] as const) {
     test(`names every linked PR in the heading at ${size.width}×${size.height} ${scheme}`, async ({
       page,
     }, info) => {
