@@ -51,19 +51,30 @@ function IssueAction({ issue }: { issue: AccountUsageIssue | null | undefined })
 
 /**
  * The one warning line a closed row shows instead of its reading's details:
- * "Signed out · run `claude auth login`", another issue's label, or, with no
- * issue, how long the reading has not been updated.
+ * "Signed out · `claude auth login`", another issue's label, or, with no
+ * issue, that the reading's reset has passed or how long it has not been
+ * updated.
  */
-function RowWarning({ issue, age }: { issue: AccountUsageIssue | null; age: string | null }) {
+function RowWarning({
+  issue,
+  resetPassed,
+  age,
+}: {
+  issue: AccountUsageIssue | null;
+  resetPassed: boolean;
+  age: string | null;
+}) {
   const fix = issue ? issueFixes[issue] : undefined;
   return (
     <span className="xt-account-warning xt-account-row-warning">
       {fix ? (
         <>
-          {fix.short} · run <code>{fix.command}</code>
+          {fix.short} · <code>{fix.command}</code>
         </>
       ) : issue ? (
         issueLabels[issue]
+      ) : resetPassed ? (
+        'Reset passed · Refresh'
       ) : (
         ['Not updated', age].filter(Boolean).join(' · ')
       )}
@@ -847,11 +858,12 @@ function Provider({
     main && readable ? provider.windows.find((window) => window.daily !== undefined) : undefined;
   const pace = week ? paceLabel(week, week === main ? '' : 'Week') : null;
   // A stale reading's closed row shows only one warning line under its
-  // dimmed numbers: the reason the last read failed, else how long it has not
-  // been updated (a first read still running is no reason). Its reset, age
-  // and pace, worked out from old numbers, move to the details. A missing
+  // dimmed numbers, whether or not its reset has passed: the reason the last
+  // read failed, else that the reset passed or how long it has not been
+  // updated (a first read still running is no reason). Its reset, age and
+  // pace, worked out from old numbers, move to the details. A missing
   // reading with a fix the user can run says only that, too.
-  const staleRow = Boolean(main && stale);
+  const staleRow = stale;
   const staleIssue =
     staleRow && provider?.issue && provider.issue !== 'reading' ? provider.issue : null;
   const fixable = !main && provider?.issue && issueFixes[provider.issue] ? provider.issue : null;
@@ -894,7 +906,7 @@ function Provider({
         tabIndex={0}
         aria-label={`${label} account usage: ${status}`}
         aria-describedby={
-          main ? (gap ? `${describedBy} ${gapId}` : describedBy) : fixable ? describedBy : undefined
+          gap ? `${describedBy} ${gapId}` : main || staleRow || fixable ? describedBy : undefined
         }
       >
         <span className="xt-host-glyph" aria-hidden="true">
@@ -931,7 +943,7 @@ function Provider({
           }
         >
           {staleRow || fixable ? (
-            <RowWarning issue={staleIssue ?? fixable} age={age} />
+            <RowWarning issue={staleIssue ?? fixable} resetPassed={resetPassed} age={age} />
           ) : (
             <>
               {sub}
@@ -952,10 +964,10 @@ function Provider({
         {!main && (
           <p>
             {statusLine}
-            <IssueAction issue={fixable} />
+            <IssueAction issue={staleIssue ?? fixable} />
           </p>
         )}
-        {staleRow && (
+        {staleRow && main && (
           <>
             <p className="xt-account-stale-detail">{sub}</p>
             {staleIssue && (

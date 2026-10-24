@@ -159,7 +159,7 @@ test('remaining bars fit the compact sidebar at 1120×720 in both themes', async
   }
 });
 
-test('a stale or signed-out Claude row is one warning line that fits the sidebar', async ({
+test('a stale or signed-out usage row is one warning line that fits the sidebar', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1120, height: 720 });
@@ -176,16 +176,23 @@ test('a stale or signed-out Claude row is one warning line that fits the sidebar
     'network',
     'invalid_response',
     'source_unavailable',
-    'missing-signed_out',
   ];
-  for (const issue of issues) {
-    await page.goto(`/e2e/sidebar.html?claude=${issue}`);
+  const cases = [
+    ...issues.map((issue) => ({ host: 'claude', value: issue })),
+    ...issues.map((issue) => ({ host: 'claude', value: `reset-${issue}` })),
+    { host: 'claude', value: 'missing-signed_out' },
+    { host: 'codex', value: 'none' },
+    { host: 'codex', value: 'reset-invalid_response' },
+  ];
+  for (const { host, value } of cases) {
+    const name = `${host}=${value}`;
+    await page.goto(`/e2e/sidebar.html?${name}`);
     const sidebar = page.getByRole('complementary', { name: 'Workspace' });
-    const row = sidebar.locator('.xt-host-claude summary');
+    const row = sidebar.locator(`.xt-host-${host} summary`);
     const warning = row.locator('.xt-account-row-warning');
-    await expect(warning, issue).toBeVisible();
+    await expect(warning, name).toBeVisible();
     // Only the warning line is under the numbers, on one line, not cut off.
-    await expect(row.locator('.xt-account-sub'), issue).toHaveText(
+    await expect(row.locator('.xt-account-sub'), name).toHaveText(
       (await warning.textContent()) ?? '',
     );
     const fits = await warning.evaluate((element) => ({
@@ -194,6 +201,6 @@ test('a stale or signed-out Claude row is one warning line that fits the sidebar
         element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight),
       ),
     }));
-    expect(fits, issue).toEqual({ whole: true, lines: 1 });
+    expect(fits, name).toEqual({ whole: true, lines: 1 });
   }
 });

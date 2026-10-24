@@ -54,23 +54,36 @@ const accountUsage: AccountUsage = {
   },
 };
 
-// `?claude=<issue>` shows the Claude reading stale 18 hours after it was
-// read, with that issue (`none` for no issue); `?claude=missing-<issue>`
-// shows no reading, with that issue.
-const claudeCase = new URLSearchParams(location.search).get('claude');
-if (claudeCase?.startsWith('missing-')) {
-  accountUsage.claude = {
-    state: 'unavailable',
-    issue: claudeCase.slice('missing-'.length) as AccountUsageIssue,
-    checked_at: null,
-    windows: [],
-  };
-} else if (claudeCase) {
-  accountUsage.claude = {
-    ...accountUsage.claude,
+// `?claude=<case>` and `?codex=<case>` change that provider's reading:
+// `<issue>` shows it stale 18 hours after it was read, with that issue
+// (`none` for no issue); `reset-<issue>` does too, with its weekly reset
+// passed; `missing-<issue>` shows no reading, with that issue.
+const search = new URLSearchParams(location.search);
+for (const host of ['claude', 'codex'] as const) {
+  const value = search.get(host);
+  if (!value) continue;
+  const issueOf = (name: string) => (name === 'none' ? null : (name as AccountUsageIssue));
+  if (value.startsWith('missing-')) {
+    accountUsage[host] = {
+      state: 'unavailable',
+      issue: issueOf(value.slice('missing-'.length)),
+      checked_at: null,
+      windows: [],
+    };
+    continue;
+  }
+  const resetPassed = value.startsWith('reset-');
+  const now = Math.floor(Date.now() / 1000);
+  accountUsage[host] = {
+    ...accountUsage[host],
     state: 'stale',
-    issue: claudeCase === 'none' ? null : (claudeCase as AccountUsageIssue),
-    checked_at: Math.floor(Date.now() / 1000) - 18 * 3600,
+    issue: issueOf(resetPassed ? value.slice('reset-'.length) : value),
+    checked_at: now - 18 * 3600,
+    windows: accountUsage[host].windows.map((window) =>
+      resetPassed && window.duration_minutes === 10080
+        ? { ...window, resets_at: now - 3600 }
+        : window,
+    ),
   };
 }
 

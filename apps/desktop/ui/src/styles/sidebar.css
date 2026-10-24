@@ -302,10 +302,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 8px keeps "Signed out · run claude auth login" inside the 228px sidebar. */
 .xt-account-row-warning code {
   font-family: 'Geist Mono', Menlo, monospace;
-  font-size: 8px;
+  font-size: 9px;
 }
 /* A fix to run, in a row's details. */
 .xt-account-action {
