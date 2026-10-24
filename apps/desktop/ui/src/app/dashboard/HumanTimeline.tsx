@@ -123,6 +123,12 @@ export function HumanTimeline({
   const [chosen, setChosen] = useState<string | null>(null);
   const found = rows.findIndex((row) => row.date === chosen);
   const current = found >= 0 ? found : rows.length - 1;
+  /**
+   * The one day whose sessions box is open, in "human + agent". Opening a
+   * day's box closes any other at once, without waiting for the pointer to
+   * move: a hover popup only notices the pointer has left when it moves.
+   */
+  const [sessionsDay, setSessionsDay] = useState<string | null>(null);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
     // Keys pressed inside a day's sessions box (it is portalled, but its
     // events still pass through here) are the box's own.
@@ -247,6 +253,10 @@ export function HumanTimeline({
               lower={index >= rows.length / 2}
               current={index === current}
               onFocus={() => setChosen(row.date)}
+              sessionsOpen={sessionsDay === row.date}
+              onSessions={(open) =>
+                setSessionsDay((day) => (open ? row.date : day === row.date ? null : day))
+              }
               window={report.window}
               range={range}
             />
@@ -312,6 +322,7 @@ const isAtBottom = (element: HTMLElement) =>
  * Escape closes it and returns focus to the day. A click on the date does
  * nothing, so it never leaves a box pinned open. Only one of the day's two
  * boxes shows at a time: the card waits until the sessions box has gone.
+ * Whether the box is open is the timeline's, which keeps one open at most.
  */
 function Row({
   row,
@@ -319,6 +330,8 @@ function Row({
   lower,
   current,
   onFocus,
+  sessionsOpen,
+  onSessions,
   window,
   range,
 }: {
@@ -328,6 +341,10 @@ function Row({
   lower: boolean;
   current: boolean;
   onFocus: () => void;
+  /** The day's sessions box is open: the timeline's one open box. */
+  sessionsOpen: boolean;
+  /** Ask to open or close the day's sessions box. */
+  onSessions: (open: boolean) => void;
   /** The report's window, which names the day's sessions read. */
   window: DashboardWindow;
   /** The Dashboard's range, which the day's session links carry. */
@@ -341,8 +358,6 @@ function Row({
   const [onTrack, setOnTrack] = useState(false);
   /** Hover or focus asks for the day's card. */
   const [card, setCard] = useState(false);
-  /** The sessions box is open. */
-  const [sessions, setSessions] = useState(false);
   /** The sessions box is open or still closing; the card waits until it has gone. */
   const [sessionsShown, setSessionsShown] = useState(false);
   const day = useRef<HTMLElement | null>(null);
@@ -368,6 +383,13 @@ function Row({
   const listRef = useCallback((list: HTMLElement | null) => {
     if (list && entering.current && document.activeElement === popup.current) enter(list);
   }, []);
+  // Another day's box opening closes this one: focus inside it goes back to
+  // the day rather than being lost with the box.
+  useLayoutEffect(() => {
+    if (sessionsOpen) return;
+    entering.current = false;
+    if (popup.current?.contains(document.activeElement)) day.current?.focus();
+  }, [sessionsOpen]);
   const track = (
     <span
       className="xt-human-track"
@@ -488,10 +510,10 @@ function Row({
                     entering.current = true;
                     // An open box takes focus now; a closed (or closing) one
                     // opens and takes it once shown.
-                    if (sessions && popup.current) enter(popup.current);
+                    if (sessionsOpen && popup.current) enter(popup.current);
                     else {
                       setSessionsShown(true);
-                      setSessions(true);
+                      onSessions(true);
                     }
                   }
                 : undefined
@@ -615,7 +637,7 @@ function Row({
   if (!paired) return dayCard;
   return (
     <Popover.Root
-      open={sessions}
+      open={sessionsOpen}
       onOpenChange={(open, details) => {
         // A click (or tap) on the date neither opens, pins nor closes the
         // box: a pinned box would stay open beside the next day's. Hover
@@ -625,13 +647,10 @@ function Row({
           return;
         }
         if (open) setSessionsShown(true);
-        else {
-          entering.current = false;
-          // Escape from inside the box hands focus back to the day.
-          if (details.reason === 'escape-key' && popup.current?.contains(document.activeElement))
-            day.current?.focus();
-        }
-        setSessions(open);
+        // Escape from inside the box hands focus back to the day.
+        else if (details.reason === 'escape-key' && popup.current?.contains(document.activeElement))
+          day.current?.focus();
+        onSessions(open);
       }}
       onOpenChangeComplete={(open) => {
         // A box reopened before it had gone keeps its element: focus moves

@@ -581,6 +581,22 @@ it('human + agent: hovering a date opens its sessions box instead of the day’s
   );
 });
 
+it('human + agent: opening a second date’s sessions box closes the first without any pointer move', async () => {
+  await mountPaired(paired());
+  const days = screen.getAllByTestId('human-day');
+  hoverDate(days.at(-1)!);
+  await sessionsBox('Sep 7');
+  // The pointer reaches the next date with no further move or leave event:
+  // only one box stays open all the same.
+  fireEvent.mouseEnter(days.at(-2)!);
+  fireEvent.mouseEnter(within(days.at(-2)!).getByRole('button', { name: 'Sessions on Sep 6' }));
+  await sessionsBox('Sep 6');
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: 'Sessions on Sep 7' })).toBeNull(),
+  );
+  expect(screen.getAllByRole('dialog')).toHaveLength(1);
+});
+
 it('human + agent: a click on a date neither opens nor closes its sessions box', async () => {
   await mountPaired(paired());
   const last = screen.getAllByTestId('human-day').at(-1)!;
