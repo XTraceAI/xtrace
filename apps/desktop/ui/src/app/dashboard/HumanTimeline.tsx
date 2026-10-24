@@ -28,16 +28,11 @@ import {
   type AgentLine,
   type TimelineRow,
 } from './overview';
+import { timelineRowHeight } from './timeline-rows';
 import '../../styles/overview.css';
 
-/** The 7-day range's eight days fill the plot; longer ranges keep that row size and scroll. */
-export const VISIBLE_ROWS = 8;
-/** Below this a row's bar and its gap stop reading as separate rows. */
-const MIN_ROW_PX = 28;
 /** The totals columns whose widths follow their widest text. */
 const TOTAL_COLUMNS = ['you', 'agents', 'leverage'] as const;
-/** With the agents line: a taller track, so the line's height reads. */
-const MIN_PAIRED_ROW_PX = 34;
 const HOURS = ['00', '06', '12', '18', '24'];
 
 /**
@@ -83,7 +78,6 @@ export function HumanTimeline({
       withAgents ? agentLines(report.leverage.by_day, report.leverage.agents_scale_top) : null,
     [withAgents, report.leverage],
   );
-  const minRow = withAgents ? MIN_PAIRED_ROW_PX : MIN_ROW_PX;
   const root = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   // No total is capped: a busy day's agent hours or a tiny day's leverage
@@ -129,6 +123,11 @@ export function HumanTimeline({
    * move: a hover popup only notices the pointer has left when it moves.
    */
   const [sessionsDay, setSessionsDay] = useState<string | null>(null);
+  // A box whose day is no longer drawn (a refresh moved the range on, or the
+  // view left "human + agent") is closed, never reopened when that day comes
+  // back with no pointer or focus on it.
+  if (sessionsDay !== null && (!withAgents || !rows.some((row) => row.date === sessionsDay)))
+    setSessionsDay(null);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
     // Keys pressed inside a day's sessions box (it is portalled, but its
     // events still pass through here) are the box's own.
@@ -150,14 +149,13 @@ export function HumanTimeline({
   useLayoutEffect(() => {
     const element = body.current;
     if (!element) return;
-    const fit = () =>
-      setRowHeight(Math.max(minRow, Math.floor(element.clientHeight / VISIBLE_ROWS)));
+    const fit = () => setRowHeight(timelineRowHeight(element.clientHeight, withAgents));
     fit();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(fit);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [minRow]);
+  }, [withAgents]);
   // Open on today, the last row, for each new range; follow a change of row
   // height. Nothing here runs for a new report of the same range.
   useLayoutEffect(() => {

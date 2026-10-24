@@ -597,6 +597,42 @@ it('human + agent: opening a second date’s sessions box closes the first witho
   expect(screen.getAllByRole('dialog')).toHaveLength(1);
 });
 
+it('human + agent: a box whose day leaves the range is not open when that day comes back', async () => {
+  const full = paired();
+  const source = new FixtureDataSource(exported());
+  const view = await mountPaired(full, source);
+  // The pointer rests on the oldest date: its box is open.
+  hoverDate(screen.getAllByTestId('human-day')[0]!);
+  await sessionsBox('Sep 1');
+  // A live refresh moves the range on: Sep 1 is no longer drawn.
+  const later = structuredClone(full);
+  later.human_hours.current.by_day.shift();
+  later.leverage.by_day.shift();
+  const draw = (r: DashboardMetrics) =>
+    view.rerender(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <ThemeProvider>
+          <DataProvider source={source}>
+            <Routes>
+              <Route
+                path="/dashboard"
+                element={<HumanTimeline report={r} range="7d" withAgents />}
+              />
+            </Routes>
+          </DataProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  draw(later);
+  expect((await screen.findAllByTestId('human-day'))[0]!.dataset.date).not.toBe('2026-09-01');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // A longer range brings Sep 1 back, with no pointer or focus on it.
+  draw(full);
+  expect((await screen.findAllByTestId('human-day'))[0]!.dataset.date).toBe('2026-09-01');
+  await act(async () => {});
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
 it('human + agent: a click on a date neither opens nor closes its sessions box', async () => {
   await mountPaired(paired());
   const last = screen.getAllByTestId('human-day').at(-1)!;

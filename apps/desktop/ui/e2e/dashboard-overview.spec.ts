@@ -3,6 +3,7 @@ import fixture from '../fixtures/F1.json' with { type: 'json' };
 import { decimalHours } from '../src/app/agent-duration';
 import { leverageText } from '../src/app/metric-format';
 import { syntheticMergedPage, syntheticOverview } from '../src/app/dashboard/overview.synthetic';
+import { timelineRowHeight } from '../src/app/dashboard/timeline-rows';
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
 
 /**
@@ -69,23 +70,20 @@ const effortCard = (page: Page) =>
   });
 
 /**
- * The "human + agent" timeline has sized its rows for this window. It reads
- * its own height after layout and applies the row height (`VISIBLE_ROWS` = 8
- * rows to the plot, at least `MIN_PAIRED_ROW_PX` = 34px) on the next render,
- * which headless Linux WebKit can deliver a frame or more after the page
- * looks ready. Date positions read before then move afterwards.
+ * The "human + agent" timeline has sized its rows for this window by its own
+ * rule. It reads its height after layout and applies the row height on the
+ * next render, which headless Linux WebKit can deliver a frame or more after
+ * the page looks ready. Date positions read before then move afterwards.
  */
 const rowsSized = (page: Page) =>
   expect
-    .poll(() =>
-      page
-        .getByTestId('human-timeline-body')
-        .evaluate(
-          (body) =>
-            body.style.getPropertyValue('--row-h') ===
-            `${Math.max(34, Math.floor(body.clientHeight / 8))}px`,
-        ),
-    )
+    .poll(async () => {
+      const { height, row } = await page.getByTestId('human-timeline-body').evaluate((body) => ({
+        height: body.clientHeight,
+        row: body.style.getPropertyValue('--row-h'),
+      }));
+      return row === `${timelineRowHeight(height, true)}px`;
+    })
     .toBe(true);
 
 /** The timeline's geometry: rows, their height, the scroll position and the bars. */
