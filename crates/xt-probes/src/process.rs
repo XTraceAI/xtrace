@@ -13,6 +13,11 @@
 //! * Both output streams are separately bounded and drained concurrently, so
 //!   a child that floods one of them can neither exhaust memory here nor
 //!   block on a full pipe. Bytes past a bound are read and dropped.
+//! * A caller may watch stdout line by line while the child runs
+//!   ([`collect_with`]): each complete line, up to [`MAX_OBSERVED_LINE_BYTES`],
+//!   is handed to its observer from the stdout drain. A longer line is
+//!   skipped up to its newline and never observed. This changes nothing
+//!   about what is retained.
 //! * The child's exit is observed without being consumed, so the leader stays
 //!   unreaped until the run is decided: its pid is what reserves the ID of
 //!   the group a termination signals, and it is given up exactly once,
@@ -50,14 +55,83 @@ impl CancelFlag {
     }
 }
 
+/// Longest stdout line handed to a [`LineObserver`], without its newline. A
+/// longer line is read and dropped up to its newline, and not observed.
+pub const MAX_OBSERVED_LINE_BYTES: usize = 256 * 1024;
+
+/// Called from the stdout drain with each complete line, without its
+/// newline, in order; a last line with no newline is handed over when the
+/// stream ends. It runs on the drain's own thread, so it must return quickly:
+/// while it runs, the child's stdout is not read.
+pub type LineObserver = Box<dyn FnMut(&[u8]) + Send>;
+
+/// Splits a byte stream into lines for a [`LineObserver`], holding at most
+/// `cap` bytes of the line being read.
+#[cfg_attr(not(unix), allow(dead_code))]
+struct Lines {
+    observer: LineObserver,
+    cap: usize,
+    line: Vec<u8>,
+    /// The line being read passed `cap`: it is dropped up to its newline.
+    skipping: bool,
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+impl Lines {
+    fn new(observer: LineObserver, cap: usize) -> Self {
+        Self {
+            observer,
+            cap,
+            line: Vec::new(),
+            skipping: false,
+        }
+    }
+
+    fn feed(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let end = bytes.iter().position(|&byte| byte == b'\n');
+            let piece = &bytes[..end.unwrap_or(bytes.len())];
+            if !self.skipping {
+                if self.line.len() + piece.len() > self.cap {
+                    self.skipping = true;
+                    self.line = Vec::new();
+                } else {
+                    self.line.extend_from_slice(piece);
+                }
+            }
+            let Some(end) = end else {
+                return;
+            };
+            self.end_line();
+            bytes = &bytes[end + 1..];
+        }
+    }
+
+    fn end_line(&mut self) {
+        if !self.skipping {
+            (self.observer)(&self.line);
+        }
+        self.line.clear();
+        self.skipping = false;
+    }
+
+    /// The stream ended: a last line without a newline is still a line.
+    fn finish(&mut self) {
+        if self.skipping || !self.line.is_empty() {
+            self.end_line();
+        }
+    }
+}
+
 #[cfg(unix)]
 pub use unix::{
-    Bounds, Captured, DRAIN_GRACE, Ended, Finished, collect, exit_observed, spawn_grouped,
+    Bounds, Captured, DRAIN_GRACE, Ended, Finished, collect, collect_with, exit_observed,
+    spawn_grouped,
 };
 
 #[cfg(unix)]
 mod unix {
-    use super::CancelFlag;
+    use super::{CancelFlag, LineObserver, Lines, MAX_OBSERVED_LINE_BYTES};
     use std::{
         io::Read,
         process::{Child, Command, ExitStatus},
@@ -243,10 +317,16 @@ mod unix {
     }
 
     impl Drain {
-        fn spawn(mut stream: impl Read + Send + 'static, limit: usize) -> Self {
+        fn spawn(
+            mut stream: impl Read + Send + 'static,
+            limit: usize,
+            observer: Option<LineObserver>,
+        ) -> Self {
             let overflowed = Arc::new(AtomicBool::new(false));
             let flag = Arc::clone(&overflowed);
             let handle = std::thread::spawn(move || {
+                let mut lines =
+                    observer.map(|observer| Lines::new(observer, MAX_OBSERVED_LINE_BYTES));
                 let mut kept: Vec<u8> = Vec::new();
                 let mut buffer = [0u8; CHUNK];
                 let mut total: usize = 0;
@@ -255,6 +335,9 @@ mod unix {
                         // A read error ends this stream exactly as its end does.
                         Ok(0) | Err(_) => break,
                         Ok(read) => {
+                            if let Some(lines) = lines.as_mut() {
+                                lines.feed(&buffer[..read]);
+                            }
                             total = total.saturating_add(read);
                             if total > limit {
                                 flag.store(true, Ordering::SeqCst);
@@ -263,6 +346,9 @@ mod unix {
                             kept.extend_from_slice(&buffer[..read.min(room)]);
                         }
                     }
+                }
+                if let Some(lines) = lines.as_mut() {
+                    lines.finish();
                 }
                 kept
             });
@@ -298,9 +384,22 @@ mod unix {
     /// child exited and what it wrote; a bound that ended the run returns its
     /// reason instead, with the group terminated and the child reaped.
     pub fn collect(
+        child: Child,
+        bounds: Bounds,
+        cancel: Option<&CancelFlag>,
+    ) -> Result<Finished, Ended> {
+        collect_with(child, bounds, cancel, None)
+    }
+
+    /// [`collect`], with each stdout line also handed to `on_stdout_line` as
+    /// the child writes it ([`LineObserver`]). The bounds and what is
+    /// retained are exactly [`collect`]'s; a line longer than
+    /// [`MAX_OBSERVED_LINE_BYTES`] is not observed.
+    pub fn collect_with(
         mut child: Child,
         bounds: Bounds,
         cancel: Option<&CancelFlag>,
+        on_stdout_line: Option<LineObserver>,
     ) -> Result<Finished, Ended> {
         // The leader's pid is also its process group's ID. Nothing below
         // reaps it — the poll observes its exit without consuming it — so
@@ -311,8 +410,8 @@ mod unix {
             terminate(pid, &mut child, bounds.term_grace);
             return Err(Ended::Unobservable);
         };
-        let mut stdout = Drain::spawn(stdout, bounds.max_stdout_bytes);
-        let mut stderr = Drain::spawn(stderr, bounds.max_stderr_bytes);
+        let mut stdout = Drain::spawn(stdout, bounds.max_stdout_bytes, on_stdout_line);
+        let mut stderr = Drain::spawn(stderr, bounds.max_stderr_bytes, None);
         let deadline = Instant::now() + bounds.deadline;
         let mut exited_at: Option<Instant> = None;
         let mut ended: Option<Ended> = None;
@@ -419,5 +518,53 @@ mod unix {
                 drop(drain.take());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lines;
+    use std::sync::{Arc, Mutex};
+
+    fn split(chunks: &[&[u8]], cap: usize) -> Vec<Vec<u8>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let mut lines = Lines::new(
+            Box::new(move |line: &[u8]| sink.lock().unwrap().push(line.to_vec())),
+            cap,
+        );
+        for chunk in chunks {
+            lines.feed(chunk);
+        }
+        lines.finish();
+        drop(lines);
+        Arc::try_unwrap(seen).unwrap().into_inner().unwrap()
+    }
+
+    #[test]
+    fn lines_split_across_reads_are_joined() {
+        assert_eq!(
+            split(&[b"ab", b"c\nde", b"f\n\ng"], 64),
+            [
+                b"abc".to_vec(),
+                b"def".to_vec(),
+                b"".to_vec(),
+                b"g".to_vec()
+            ]
+        );
+        assert_eq!(split(&[b"one\n"], 64), [b"one".to_vec()]);
+        assert!(split(&[], 64).is_empty());
+    }
+
+    #[test]
+    fn a_line_over_the_cap_is_skipped_up_to_its_newline() {
+        // Exactly the cap is kept; one more byte drops the whole line, even
+        // when it arrives in pieces, and the next line is read normally.
+        assert_eq!(
+            split(&[b"1234\n12", b"345", b"67\nok\n"], 4),
+            [b"1234".to_vec(), b"ok".to_vec()]
+        );
+        // A last line over the cap with no newline is not observed either.
+        assert_eq!(split(&[b"ok\n123456"], 4), [b"ok".to_vec()]);
     }
 }

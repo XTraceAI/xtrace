@@ -431,6 +431,10 @@ pub struct GradingRubricProgress {
     pub state: GradingProgressState,
     /// Whole seconds since the job started.
     pub elapsed_seconds: u32,
+    /// The step the job is on, as the one rule in `xt_judge::step` words
+    /// it ("Reading SKILL.md"); `None` before its first step and in the last
+    /// report.
+    pub step: Option<String>,
 }
 
 /// Where an installed skill was found.
@@ -983,6 +987,10 @@ pub struct GradingProgress {
     pub state: GradingProgressState,
     /// Whole seconds since the run started.
     pub elapsed_seconds: u32,
+    /// The step the run is on, as the one rule in `xt_judge::step` words it
+    /// ("Running analyze.py"); `None` before its first step and in the last
+    /// report.
+    pub step: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]

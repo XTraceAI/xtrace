@@ -20,6 +20,8 @@
 //!   [`rubric`].
 //! * [`runner`] — one bounded, cancellable run with an allow-listed
 //!   environment and a fixed Claude Code command line.
+//! * [`step`] — the step a run is on, read from Claude Code's output as it
+//!   goes, for the progress shown while it runs.
 //! * [`protocol`] — the strict reader of the `result.json` a run leaves.
 //! * [`staging`] — the private, whitespace-free folder a run happens in, and
 //!   what of it is kept afterwards.
@@ -39,10 +41,12 @@ pub mod runner;
 pub mod skill;
 pub mod skill_link;
 pub mod staging;
+pub mod step;
 
 pub use protocol::{CriterionScore, GradeResult, Insight, ResultError, Severity};
 pub use rubric::{Rubric, RubricError};
 pub use runner::{GradeError, GradeRun, Limits};
 pub use skill::{GradingSkill, SkillError};
 pub use staging::{CopyLimits, Staging};
+pub use step::StepCell;
 pub use xt_probes::process::CancelFlag;

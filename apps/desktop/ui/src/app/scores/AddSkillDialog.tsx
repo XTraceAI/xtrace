@@ -30,6 +30,7 @@ import {
   useInstalledSkills,
   useRefreshInstalled,
   useRubricProgress,
+  type Reported,
 } from './scores';
 
 /**
@@ -201,8 +202,8 @@ function Groups({
   /** Whether a read of it is going now. */
   reading: boolean;
   query: string;
-  /** Elapsed seconds the rubric-making progress reported, by job ID. */
-  progress: Record<string, number>;
+  /** What the rubric-making progress last reported, by job ID. */
+  progress: Record<string, Reported>;
 }) {
   const { source } = useData();
   const refresh = useRefreshInstalled();
@@ -496,15 +497,18 @@ function SkillRow({
   adding: boolean;
   /** A Make a rubric or Cancel press of this row is being answered. */
   pressed: boolean;
-  /** The elapsed seconds its running rubric job last reported. */
-  reported: number | undefined;
+  /** What its running rubric job last reported. */
+  reported: Reported | undefined;
   onAdd: () => void;
   onMake: () => void;
   onCancel: (jobId: string) => void;
 }) {
   const state = installedStateText(skill.scores);
   const job = skill.rubric_job;
-  const elapsed = useElapsed(job?.state === 'running' ? job.started_at_ms : undefined, reported);
+  const elapsed = useElapsed(
+    job?.state === 'running' ? job.started_at_ms : undefined,
+    reported?.elapsed,
+  );
   const action = skill.rubric_action;
   // A job that ended without a rubric is offered again as "Try again".
   const retry = job?.state === 'failed' || job?.state === 'refused' || job?.state === 'cancelled';
@@ -530,7 +534,7 @@ function SkillRow({
         // Not a live region: the time moves every second.
         <span className="xt-score-add-reason" data-tone="live">
           <i className="xt-scores-live" aria-hidden="true" />
-          {makingText(elapsed)}
+          {makingText(elapsed, reported?.step)}
         </span>
       )}
       {job?.state === 'failed' && (

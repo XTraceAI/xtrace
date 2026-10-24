@@ -515,6 +515,7 @@ it('re-reads grading runs after a committed status change or a purge, never for 
       run_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
       state: 'running',
       elapsed_seconds: 5,
+      step: null,
     });
     await vi.advanceTimersByTimeAsync(501);
   });

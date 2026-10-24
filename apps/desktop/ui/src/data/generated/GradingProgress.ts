@@ -9,4 +9,10 @@ export type GradingProgress = { run_id: string, state: GradingProgressState,
 /**
  * Whole seconds since the run started.
  */
-elapsed_seconds: number, };
+elapsed_seconds: number, 
+/**
+ * The step the run is on, as the one rule in `xt_judge::step` words it
+ * ("Running analyze.py"); `None` before its first step and in the last
+ * report.
+ */
+step: string | null, };

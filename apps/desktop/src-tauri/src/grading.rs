@@ -42,7 +42,7 @@
 //!   skill's fingerprint taken when its job started; it is listed only while
 //!   the skill's fingerprint is unchanged, and making a rubric again drops
 //!   it. `grading://rubric-progress` reports
-//!   a job's elapsed time; `grading://changed` follows its start, a saved
+//!   a job's elapsed time and step; `grading://changed` follows its start, a saved
 //!   rubric, and its end.
 //! * **One at a time, then in line.** A run or a rubric-making job holds the
 //!   service's single slot from the moment it is accepted until it is
@@ -70,8 +70,12 @@
 //!   `interrupted`. `grading://changed` is published after every committed
 //!   status change, never before.
 //! * **Progress.** `grading://progress` carries the run ID, `running` or
-//!   `finished` and the whole seconds elapsed: when the run starts, about
-//!   every five seconds while it runs, and once at the end.
+//!   `finished`, the whole seconds elapsed and, while it runs, the step it is
+//!   on as [`xt_judge::step`] words it from Claude Code's output (none before
+//!   the first step and none at the end): when the run starts, about every
+//!   five seconds while it runs, and once at the end.
+//!   `grading://rubric-progress` carries a rubric-making job's step the same
+//!   way.
 //! * **Where it runs.** In a private staging folder without whitespace
 //!   under the system temporary folder ([`xt_judge::staging`]); only the
 //!   result, the report and the cards beside it are kept, in
@@ -127,7 +131,7 @@ use std::{
 };
 use xt_judge::{
     CancelFlag, CopyLimits, GradeError, GradeResult, GradeRun, GradingSkill, Limits, Rubric,
-    RubricError, Staging,
+    RubricError, Staging, StepCell,
     installed::{self, Location, RubricStatus},
     maker::{self, MakeError, Written},
     refusals::{self, Refusal, RefusalStore},
@@ -1634,10 +1638,12 @@ fn work(inner: &Arc<Inner>, job: Job) {
         return;
     };
     let started = Instant::now();
+    let step = StepCell::new();
     let report = |state| GradingProgress {
         run_id: job.run_id.clone(),
         state,
         elapsed_seconds: u32::try_from(started.elapsed().as_secs()).unwrap_or(u32::MAX),
+        step: step_while(state, &step),
     };
     (inner.progress)(&report(GradingProgressState::Running));
     let (stop, stopped) = mpsc::channel::<()>();
@@ -1650,7 +1656,7 @@ fn work(inner: &Arc<Inner>, job: Job) {
                 (inner.progress)(&report(GradingProgressState::Running));
             }
         });
-        let outcome = run_job(inner, config, &job);
+        let outcome = run_job(inner, config, &job, &step);
         if !matches!(outcome, Outcome::Saved) {
             finish(inner, &job.run_id, &outcome);
         }
@@ -1661,9 +1667,19 @@ fn work(inner: &Arc<Inner>, job: Job) {
     (inner.progress)(&report(GradingProgressState::Finished));
 }
 
+/// The step a progress report carries: the run's latest, while it runs; none
+/// once it is over.
+fn step_while(state: GradingProgressState, step: &StepCell) -> Option<String> {
+    match state {
+        GradingProgressState::Running => step.get(),
+        GradingProgressState::Finished => None,
+    }
+}
+
 /// Stage, check, run and keep. A succeeded run is saved here, under the
-/// folder lock, together with its kept folder.
-fn run_job(inner: &Inner, config: &GradingConfig, job: &Job) -> Outcome {
+/// folder lock, together with its kept folder. The run keeps its step in
+/// `step`.
+fn run_job(inner: &Inner, config: &GradingConfig, job: &Job, step: &StepCell) -> Outcome {
     let stopped = || inner.stopped.load(Ordering::SeqCst);
     let failed = |error: &GradeError| match GradingFailure::of(error) {
         Some(reason) => Outcome::Failed(reason),
@@ -1716,6 +1732,7 @@ fn run_job(inner: &Inner, config: &GradingConfig, job: &Job) -> Outcome {
                 inherited_env: &job.environment,
                 limits: config.limits,
                 leader_record: Some(&staging.leader_record()),
+                step: Some(step),
             },
             Some(&job.cancel),
         );
@@ -1922,11 +1939,13 @@ fn make_work(inner: &Arc<Inner>, job: RubricJob) {
     // The skill as the job reads it: a refusal holds only while it stays so.
     guard.fingerprint = refusals::fingerprint(&job.folder);
     let started = Instant::now();
+    let step = StepCell::new();
     let report = |state| GradingRubricProgress {
         job_id: job.job_id.clone(),
         location: job.location_text.clone(),
         state,
         elapsed_seconds: u32::try_from(started.elapsed().as_secs()).unwrap_or(u32::MAX),
+        step: step_while(state, &step),
     };
     (inner.rubric_progress)(&report(GradingProgressState::Running));
     let (stop, stopped) = mpsc::channel::<()>();
@@ -1939,7 +1958,7 @@ fn make_work(inner: &Arc<Inner>, job: RubricJob) {
                 (inner.rubric_progress)(&report(GradingProgressState::Running));
             }
         });
-        guard.outcome = Some(make_job(inner, config, &job));
+        guard.outcome = Some(make_job(inner, config, &job, &step));
         drop(stop);
     });
     drop(guard);
@@ -1947,8 +1966,13 @@ fn make_work(inner: &Arc<Inner>, job: RubricJob) {
 }
 
 /// Stage, run, check, settle the id and save. Only this writes the rubric,
-/// and only after the reader accepted it.
-fn make_job(inner: &Inner, config: &GradingConfig, job: &RubricJob) -> GradingRubricJob {
+/// and only after the reader accepted it. The run keeps its step in `step`.
+fn make_job(
+    inner: &Inner,
+    config: &GradingConfig,
+    job: &RubricJob,
+    step: &StepCell,
+) -> GradingRubricJob {
     let failed = |failure| GradingRubricJob::Failed {
         job_id: job.job_id.clone(),
         failure,
@@ -1987,6 +2011,7 @@ fn make_job(inner: &Inner, config: &GradingConfig, job: &RubricJob) -> GradingRu
                 .map(|(error, path)| maker::Replaced { error, path }),
             inherited_env: &job.environment,
             limits: config.maker_limits,
+            step: Some(step),
         },
         Some(&job.cancel),
     );

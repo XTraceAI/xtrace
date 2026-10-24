@@ -112,12 +112,23 @@ const isProgress = (payload: unknown): payload is GradingProgress => {
     (report.state === 'running' || report.state === 'finished') &&
     typeof report.elapsed_seconds === 'number' &&
     Number.isFinite(report.elapsed_seconds) &&
-    report.elapsed_seconds >= 0
+    report.elapsed_seconds >= 0 &&
+    isStep(report.step)
   );
 };
 
+/** A reported step: the native rule's label, or none yet. */
+const isStep = (step: unknown): step is string | null => step === null || typeof step === 'string';
+
 /**
- * The elapsed seconds the latest `grading://progress` reported, by run ID.
+ * What the latest progress report of a going run or rubric job said: its
+ * elapsed seconds and the step it is on, as the native rule words it (none
+ * before its first step).
+ */
+export type Reported = { elapsed: number; step: string | null };
+
+/**
+ * The latest `grading://progress` report, by run ID.
  * Progress only drives this display: whether a run is going is the stored
  * status the overview carries. A report for a run the overview does not show
  * as going, or a run's last report, reads the overview again.
@@ -125,7 +136,7 @@ const isProgress = (payload: unknown): payload is GradingProgress => {
 export function useGradingProgress(runningRunId: string | undefined) {
   const { source } = useData();
   const refresh = useRefreshOverview();
-  const [elapsed, setElapsed] = useState<Record<string, number>>({});
+  const [reported, setReported] = useState<Record<string, Reported>>({});
   const running = useRef(runningRunId);
   const reread = useRef(refresh);
   useEffect(() => {
@@ -137,7 +148,10 @@ export function useGradingProgress(runningRunId: string | undefined) {
     let stop: Unsubscribe | undefined;
     const heard = (payload?: unknown) => {
       if (!live || !isProgress(payload)) return;
-      setElapsed((current) => ({ ...current, [payload.run_id]: payload.elapsed_seconds }));
+      setReported((current) => ({
+        ...current,
+        [payload.run_id]: { elapsed: payload.elapsed_seconds, step: payload.step },
+      }));
       if (payload.state === 'finished' || payload.run_id !== running.current) reread.current();
     };
     Promise.resolve(source.subscribe(events.gradingProgress, heard)).then(
@@ -152,7 +166,7 @@ export function useGradingProgress(runningRunId: string | undefined) {
       stop?.();
     };
   }, [source]);
-  return elapsed;
+  return reported;
 }
 
 const isRubricProgress = (payload: unknown): payload is GradingRubricProgress => {
@@ -163,12 +177,13 @@ const isRubricProgress = (payload: unknown): payload is GradingRubricProgress =>
     (report.state === 'running' || report.state === 'finished') &&
     typeof report.elapsed_seconds === 'number' &&
     Number.isFinite(report.elapsed_seconds) &&
-    report.elapsed_seconds >= 0
+    report.elapsed_seconds >= 0 &&
+    isStep(report.step)
   );
 };
 
 /**
- * The elapsed seconds the latest `grading://rubric-progress` reported, by
+ * The latest `grading://rubric-progress` report, by
  * job ID, while the Add a grading skill dialog is open. Progress only drives this
  * display: whether a job is going is the installed list's `rubric_job`. A
  * job's last report reads the installed skills and the overview again.
@@ -176,7 +191,7 @@ const isRubricProgress = (payload: unknown): payload is GradingRubricProgress =>
 export function useRubricProgress(open: boolean) {
   const { source } = useData();
   const refresh = useRefreshInstalled();
-  const [elapsed, setElapsed] = useState<Record<string, number>>({});
+  const [reported, setReported] = useState<Record<string, Reported>>({});
   const reread = useRef(refresh);
   useEffect(() => {
     reread.current = refresh;
@@ -187,7 +202,10 @@ export function useRubricProgress(open: boolean) {
     let stop: Unsubscribe | undefined;
     const heard = (payload?: unknown) => {
       if (!live || !isRubricProgress(payload)) return;
-      setElapsed((current) => ({ ...current, [payload.job_id]: payload.elapsed_seconds }));
+      setReported((current) => ({
+        ...current,
+        [payload.job_id]: { elapsed: payload.elapsed_seconds, step: payload.step },
+      }));
       if (payload.state === 'finished') reread.current();
     };
     Promise.resolve(source.subscribe(events.gradingRubricProgress, heard)).then(
@@ -202,7 +220,7 @@ export function useRubricProgress(open: boolean) {
       stop?.();
     };
   }, [source, open]);
-  return elapsed;
+  return reported;
 }
 
 /** A score as drawn: the number, or a dash when there is none. */
@@ -358,13 +376,31 @@ export function useElapsed(startedAtMs: number | undefined, reported: number | u
   return startedAtMs === undefined ? undefined : elapsedSeconds(startedAtMs, reported, now);
 }
 
-/** A row's newer run, in words: what it is doing or how it ended. */
-export function attemptText(attempt: GradingAttempt, elapsed: number | undefined) {
+/**
+ * A going run's step and elapsed time, as one line: the reported step (the
+ * native rule's words) in place of `lead` when there is one.
+ */
+export const goingText = (lead: string, step: string | null | undefined, elapsed: number) =>
+  `${step ?? lead} · ${elapsedText(elapsed)}`;
+
+/** A skill card's pill while it grades: its step and time once known. */
+export const gradingPillText = (elapsed: number | undefined, step: string | null | undefined) =>
+  elapsed === undefined ? 'Grading now' : goingText('Grading', step, elapsed);
+
+/**
+ * A row's newer run, in words: what it is doing (its step once reported) or
+ * how it ended.
+ */
+export function attemptText(
+  attempt: GradingAttempt,
+  elapsed: number | undefined,
+  step?: string | null,
+) {
   switch (attempt.state) {
     case 'running':
       return elapsed === undefined
         ? `Grading now · started ${startedText(attempt.started_at_ms)}`
-        : `Grading now · ${elapsedText(elapsed)}`;
+        : goingText('Grading now', step, elapsed);
     case 'failed':
       return `Last try failed: ${failureText[attempt.reason]}`;
     case 'cancelled':
@@ -402,6 +438,16 @@ export function oneAtATime(running: GradingRunningNow) {
   const skill = running.skill_name ? ` with ${running.skill_name}` : '';
   return `Only one grading runs at a time. ${project} is being graded${skill} now; wait for it to finish or cancel it.`;
 }
+
+/**
+ * The notice line of a run no row shows: who is graded, then its step and
+ * elapsed time once known.
+ */
+export const runningElsewhereLead = (
+  lead: string,
+  step: string | null | undefined,
+  elapsed: number | undefined,
+) => [lead, step, elapsed === undefined ? null : elapsedText(elapsed)].filter(Boolean).join(' · ');
 
 /**
  * The run going now when no row on the page shows it: which project, with
@@ -618,9 +664,11 @@ export function removeText(answer: Exclude<GradingSkillRemove, { state: 'removed
 export const MAKE_RUBRIC_NOTE =
   'Make a rubric runs Claude Code in the background to write one for that skill; it uses about a minute of your Claude usage.';
 
-/** A rubric being made, in words, with its elapsed time when known. */
-export const makingText = (elapsed: number | undefined) =>
-  elapsed === undefined ? 'Making a rubric…' : `Making a rubric · ${elapsedText(elapsed)}`;
+/** A rubric being made, in words, with its step and elapsed time when known. */
+export const makingText = (elapsed: number | undefined, step?: string | null) =>
+  elapsed === undefined
+    ? 'Making a rubric…'
+    : `Making a rubric · ${step ? `${step} · ` : ''}${elapsedText(elapsed)}`;
 
 /** Why no rubric was made, as the end of a sentence. */
 export function rubricFailureText(failure: GradingRubricFailure) {

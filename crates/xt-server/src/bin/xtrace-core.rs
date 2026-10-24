@@ -433,6 +433,7 @@ async fn grade(mut args: std::iter::Skip<std::env::ArgsOs>) -> Result<(), &'stat
                 inherited_env: &env,
                 limits: Limits::default(),
                 leader_record: None,
+                step: None,
             },
             Some(&flag),
         )
@@ -582,6 +583,7 @@ async fn make_rubric(mut args: std::iter::Skip<std::env::ArgsOs>) -> Result<(), 
                     deadline: maker::DEFAULT_DEADLINE,
                     ..Limits::default()
                 },
+                step: None,
             },
             Some(&flag),
         )
