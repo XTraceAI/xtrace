@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountUsage } from '../data/generated/AccountUsage';
 import type { AccountUsageWindow } from '../data/generated/AccountUsageWindow';
 import {
@@ -260,10 +260,11 @@ it('shows missing and failed providers without guessed percentages or cached val
     />,
   );
   const stale = screen.getByLabelText(
-    'Claude account usage: 0% remaining · Weekly · limit reached · stale',
+    'Claude account usage: 0% remaining · Weekly · limit reached · stale · Provider rate limited',
   );
   expect(stale.textContent).toContain('Stale');
   expect(stale.textContent).toContain('days ago');
+  expect(stale.querySelector('.xt-account-stale')!.textContent).toBe('Provider rate limited');
   rerender(
     <AccountUsageWidget
       usage={{
@@ -366,11 +367,14 @@ it('shows Reading while the first automatic Claude read runs, and keeps a saved 
       onRefresh={vi.fn()}
     />,
   );
+  // A first read still running is no reason: the row says how old it is.
   const stale = screen.getByLabelText(
     'Claude account usage: 0% remaining · Weekly · limit reached · stale',
   );
-  expect(stale.textContent).toContain('Stale');
-  expect(stale.textContent).toContain('days ago');
+  expect(stale.querySelector('.xt-account-stale')!.textContent).toMatch(
+    /^Not updated · \d+ days ago$/,
+  );
+  expect(stale.textContent).not.toContain('Reading…');
   expect(stale.querySelector('.xt-account-summary-track')).not.toBeNull();
 });
 
@@ -792,12 +796,112 @@ it('marks a reading stale exactly when the app said it would turn stale', () => 
     />,
   );
   const sub = () => document.querySelector('summary .xt-account-sub')!.firstChild!.textContent;
+  const warning = () => document.querySelector('summary .xt-account-stale');
   expect(sub()).toMatch(/ · 14 min ago$/);
   expect(sub()).not.toContain('Stale');
+  expect(warning()).toBeNull();
   // No new read arrives; the screen turns the reading stale on time, with its age.
   act(() => vi.advanceTimersByTime(60_000));
-  expect(sub()).toContain('Stale · 15 min ago');
+  expect(warning()!.textContent).toBe('Not updated · 15 min ago');
+  expect(sub()).not.toContain('min ago');
+  expect(document.querySelector('details')!.classList.contains('is-stale')).toBe(true);
   expect(document.querySelector('summary')!.getAttribute('aria-label')).toContain('· stale');
+});
+
+describe('a stale reading', () => {
+  const renderProvider = (claude: AccountUsage['claude']) =>
+    render(
+      <AccountUsageWidget
+        usage={{
+          claude,
+          codex: {
+            state: 'unavailable',
+            issue: 'source_unavailable',
+            checked_at: null,
+            windows: [],
+          },
+        }}
+        failed={false}
+        refreshing={false}
+        onRefresh={vi.fn()}
+      />,
+    );
+  const reading = (overrides: Partial<AccountUsage['claude']>): AccountUsage['claude'] => ({
+    state: 'stale',
+    issue: null,
+    checked_at: Date.now() / 1000 - 17 * 3600,
+    windows: [claudeWeek({ used_percent: 70 })],
+    ...overrides,
+  });
+  const summary = () => document.querySelector('summary')!;
+  const warning = () => summary().querySelector('.xt-account-stale');
+  const sub = () => summary().querySelector('.xt-account-sub')!.firstChild!.textContent;
+  beforeEach(() => {
+    vi.stubEnv('TZ', 'America/Los_Angeles');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(nowIso));
+  });
+
+  it('says Claude Code is signed out and how to sign in, in the closed row', () => {
+    renderProvider(reading({ issue: 'signed_out' }));
+    expect(summary().closest('details')!.open).toBe(false);
+    expect(warning()!.classList.contains('xt-account-warning')).toBe(true);
+    expect(warning()!.textContent).toBe(
+      'Claude Code is signed out Run claude auth login in Terminal',
+    );
+    expect(warning()!.querySelector('code')!.textContent).toBe('claude auth login');
+    // The age is said once, beside the reset.
+    expect(sub()).toBe('Week · resets Mon 8 PM · Stale · 17 hr ago');
+    expect(summary().getAttribute('aria-label')).toBe(
+      'Claude account usage: 30% remaining · Week · stale · Claude Code is signed out',
+    );
+    expect(summary().closest('details')!.classList.contains('is-stale')).toBe(true);
+  });
+
+  it('shows the reason the last read failed', () => {
+    renderProvider(reading({ issue: 'timeout' }));
+    expect(warning()!.textContent).toBe('Provider timed out');
+    expect(warning()!.querySelector('code')).toBeNull();
+    expect(sub()).toMatch(/ · Stale · 17 hr ago$/);
+    expect(summary().getAttribute('aria-label')).toMatch(/ · stale · Provider timed out$/);
+  });
+
+  it('without a reason says how long it has not been updated', () => {
+    renderProvider(reading({}));
+    expect(warning()!.textContent).toBe('Not updated · 17 hr ago');
+    expect(sub()).not.toContain('Stale');
+    expect(sub()).not.toContain('hr ago');
+    expect(summary().getAttribute('aria-label')).toBe(
+      'Claude account usage: 30% remaining · Week · stale',
+    );
+  });
+
+  it('leaves a fresh reading as it was', () => {
+    renderProvider(reading({ state: 'available', checked_at: Date.now() / 1000 - 60 }));
+    expect(warning()).toBeNull();
+    expect(summary().closest('details')!.classList.contains('is-stale')).toBe(false);
+    expect(sub()).not.toContain('Stale');
+    expect(summary().getAttribute('aria-label')).toBe('Claude account usage: 30% remaining · Week');
+  });
+});
+
+it('says how to sign in when Claude Code is signed out and no reading is saved', () => {
+  render(
+    <AccountUsageWidget
+      usage={{
+        claude: { state: 'unavailable', issue: 'signed_out', checked_at: null, windows: [] },
+        codex: usage.codex,
+      }}
+      failed={false}
+      refreshing={false}
+      onRefresh={vi.fn()}
+    />,
+  );
+  const claude = screen.getByLabelText('Claude account usage: Usage unavailable');
+  expect(claude.querySelector('.xt-account-sub')!.textContent).toBe(
+    'Claude Code is signed out Run claude auth login in Terminal',
+  );
+  expect(claude.querySelector('.xt-account-stale')).toBeNull();
 });
 
 it('shows a short one-line reset and an on-pace line for the week', () => {

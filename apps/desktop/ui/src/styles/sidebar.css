@@ -283,15 +283,35 @@
   font-size: 9px;
   line-height: 1.3;
 }
-.xt-account-pace {
+.xt-account-pace,
+.xt-account-warning {
   display: block;
   color: var(--meta);
   font-size: 9px;
   line-height: 1.3;
 }
-.xt-account-pace.is-warning {
+/* A warning in view on the row: a run-out time, or why a reading is old. */
+.xt-account-pace.is-warning,
+.xt-account-warning {
   color: var(--warning);
   font-weight: 600;
+}
+/* A fix to run, under a warning or a status line. */
+.xt-account-action {
+  display: block;
+  font-weight: 400;
+}
+.xt-account-action code {
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-size: 9px;
+  color: var(--ink);
+}
+/* An old reading's numbers are not current: they do not look it. */
+.xt-account-provider.is-stale .xt-account-value {
+  color: var(--meta);
+}
+.xt-account-provider.is-stale .xt-account-summary-track > span {
+  opacity: 0.45;
 }
 .xt-account-daily {
   display: flex;

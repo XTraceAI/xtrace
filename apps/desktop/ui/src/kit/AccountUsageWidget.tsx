@@ -22,9 +22,29 @@ const issueLabels: Record<AccountUsageIssue, string> = {
   network: 'Provider connection failed',
   invalid_response: 'Provider response unavailable',
   source_unavailable: 'Usage source unavailable',
+  signed_out: 'Claude Code is signed out',
   not_fetched: 'Refresh to load usage',
   reading: 'Reading…',
 };
+
+/** The Terminal command that fixes an issue, for the issues the user can fix that way. */
+const issueCommands: Partial<Record<AccountUsageIssue, string>> = {
+  signed_out: 'claude auth login',
+};
+
+/** "Run `claude auth login` in Terminal" under an issue that has a fix. */
+function IssueAction({ issue }: { issue: AccountUsageIssue | null | undefined }) {
+  const command = issue ? issueCommands[issue] : undefined;
+  if (!command) return null;
+  return (
+    <>
+      {' '}
+      <span className="xt-account-action">
+        Run <code>{command}</code> in Terminal
+      </span>
+    </>
+  );
+}
 
 /**
  * The percent remaining as shown everywhere (header, rows and chart labels).
@@ -801,13 +821,25 @@ function Provider({
   const week =
     main && readable ? provider.windows.find((window) => window.daily !== undefined) : undefined;
   const pace = week ? paceLabel(week, week === main ? '' : 'Week') : null;
+  // A stale reading shown with its numbers says why it is old, in view: the
+  // reason the last read failed, else how long it has not been updated. A
+  // first read still running is no reason.
+  const staleIssue =
+    main && stale && provider?.issue && provider.issue !== 'reading' ? provider.issue : null;
+  const staleWarning =
+    main && stale
+      ? staleIssue
+        ? issueLabels[staleIssue]
+        : ['Not updated', age].filter(Boolean).join(' · ')
+      : null;
   const sub = main
     ? [
         windowTitle(main),
         main.used_percent === 100 ? 'Limit reached' : null,
         resetLabel(main.resets_at),
-        stale ? 'Stale' : null,
-        age,
+        // The warning line already says it when it gives the age.
+        staleIssue ? 'Stale' : null,
+        stale && !staleIssue ? null : age,
       ]
         .filter(Boolean)
         .join(' · ')
@@ -835,10 +867,10 @@ function Provider({
   const gap = week === main && pace && main ? paceGapLabel(main) : null;
   const fill = main && gap ? paceFill(main.used_percent, main.pace?.expected_percent) : {};
   return (
-    <details className={`xt-account-provider xt-host-${host}`}>
+    <details className={`xt-account-provider xt-host-${host}${staleWarning ? ' is-stale' : ''}`}>
       <summary
         tabIndex={0}
-        aria-label={`${label} account usage: ${status}`}
+        aria-label={`${label} account usage: ${status}${staleIssue ? ` · ${issueLabels[staleIssue]}` : ''}`}
         aria-describedby={main ? (gap ? `${describedBy} ${gapId}` : describedBy) : undefined}
       >
         <span className="xt-host-glyph" aria-hidden="true">
@@ -875,6 +907,13 @@ function Provider({
           }
         >
           {sub}
+          {!main && <IssueAction issue={provider?.issue} />}
+          {staleWarning && (
+            <span className="xt-account-warning xt-account-stale">
+              {staleWarning}
+              <IssueAction issue={staleIssue} />
+            </span>
+          )}
           {/* A run-out warning stays in view; the on-pace line shows only
               when the row is open, but screen readers still hear it here. */}
           {pace?.warning && <span className="xt-account-pace is-warning">{pace.text}</span>}

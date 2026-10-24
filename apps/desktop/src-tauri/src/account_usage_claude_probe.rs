@@ -2,6 +2,8 @@
 //! pseudo-terminal, in a dedicated empty folder under the app's data folder,
 //! and typing `/usage`. `/usage` sends no message and uses no quota. XTrace
 //! never reads a credential on this path; Claude Code uses its own login.
+//! A signed-out Claude Code shows no plan limits in `/usage`, so after a
+//! failed read its own `claude auth status` says whether it is signed out.
 //!
 //! Claude Code saves what `/usage` fetched as `cachedUsageUtilization` in its
 //! own config file, which is the primary result. The rendered panel is the
@@ -14,8 +16,10 @@ use crate::account_usage_claude_local::{
 };
 use crate::account_usage_claude_screen::Screen;
 use crate::account_usage_dto::{
-    AccountProviderUsage, AccountUsageIssue, AccountUsageScope, AccountUsageWindow,
+    AccountProviderUsage, AccountUsageIssue, AccountUsageScope, AccountUsageState,
+    AccountUsageWindow,
 };
+use crate::account_usage_process::run_to_exit;
 use jiff::Timestamp;
 use std::{
     path::{Path, PathBuf},
@@ -52,14 +56,19 @@ pub(super) fn read_local(paths: &ClaudeUsagePaths) -> AccountProviderUsage {
     let Some(binary) = resolve_claude() else {
         return unavailable(AccountUsageIssue::SourceUnavailable);
     };
-    read_with_probe(paths, || {
-        run_probe(&binary, &paths.probe_dir, &paths.config_file)
-    })
+    read_with_probe(
+        paths,
+        || run_probe(&binary, &paths.probe_dir, &paths.config_file),
+        || signed_out(&binary, &paths.probe_dir),
+    )
 }
 
+/// `signed_out` runs only after a failed read, so a successful read costs
+/// nothing extra.
 fn read_with_probe(
     paths: &ClaudeUsagePaths,
     probe: impl FnOnce() -> ProbeOutcome,
+    signed_out: impl FnOnce() -> bool,
 ) -> AccountProviderUsage {
     if prepare_probe_dir(&paths.probe_dir).is_err() {
         return failed(AccountUsageIssue::SourceUnavailable);
@@ -68,7 +77,42 @@ fn read_with_probe(
     // Claude's encoded project path is not unique to this directory. Leave
     // every host transcript in place: neither a matching path nor a file
     // appearing during this read proves that this probe owns it.
-    result_from(outcome, read_cached_usage(&paths.config_file))
+    let usage = result_from(outcome, read_cached_usage(&paths.config_file));
+    if usage.state != AccountUsageState::Available && signed_out() {
+        return unavailable(AccountUsageIssue::SignedOut);
+    }
+    usage
+}
+
+/// Deadline for `claude auth status`, including killing it.
+const AUTH_STATUS_DEADLINE: Duration = Duration::from_secs(10);
+/// Output beyond this is not a sign-in status.
+const MAX_AUTH_STATUS_BYTES: usize = 16 * 1024;
+
+/// Whether the user's Claude Code says it is signed out, from its own
+/// `claude auth status`, run with the probe's environment in the probe's
+/// folder. XTrace reads no credential: it keeps only the `loggedIn` answer.
+/// A check that cannot run, times out or answers anything else is not
+/// "signed out".
+fn signed_out(binary: &Path, probe_dir: &Path) -> bool {
+    signed_out_within(binary, probe_dir, AUTH_STATUS_DEADLINE)
+}
+
+fn signed_out_within(binary: &Path, probe_dir: &Path, deadline: Duration) -> bool {
+    let mut command = std::process::Command::new(binary);
+    command
+        .args(["auth", "status", "--json"])
+        .current_dir(probe_dir);
+    configure_environment(&mut command, binary);
+    run_to_exit(&mut command, b"", deadline, MAX_AUTH_STATUS_BYTES, true)
+        .is_ok_and(|stdout| status_says_signed_out(&stdout))
+}
+
+/// `claude auth status --json` prints an object whose `loggedIn` is `false`
+/// when Claude Code has no sign-in. Only that exact answer counts.
+fn status_says_signed_out(stdout: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(stdout)
+        .is_ok_and(|status| status.get("loggedIn") == Some(&serde_json::Value::Bool(false)))
 }
 
 /// A saved reading older than this is not taken as the source of a panel
@@ -486,7 +530,7 @@ mod pty {
                 .stdin(Stdio::from(slave.try_clone()?))
                 .stdout(Stdio::from(slave.try_clone()?))
                 .stderr(Stdio::from(slave));
-            configure_environment(&mut command, binary);
+            super::configure_environment(&mut command, binary);
             // SAFETY: setsid and ioctl are async-signal-safe. The child gets
             // its own session with the pseudo-terminal (already its stdin) as
             // controlling terminal, so closing the master hangs it up and its
@@ -585,35 +629,37 @@ mod pty {
             }
         }
     }
+}
 
-    fn configure_environment(command: &mut Command, binary: &Path) {
-        // Finder starts apps with a short PATH; Claude Code may need node or
-        // its own helpers beside it.
-        let path = xt_probes::executable::claude_child_path_entries(
-            binary,
-            std::env::var_os("PATH").as_deref(),
-        );
-        if let Some(joined) = xt_probes::executable::join_path(&path) {
-            command.env("PATH", joined);
-        }
-        command.env("TERM", "xterm-256color");
-        command.env("DISABLE_AUTOUPDATER", "1");
-        if std::env::var_os("LANG").is_none() {
-            command.env("LANG", "en_US.UTF-8");
-        }
-        command.env_remove("COLUMNS");
-        command.env_remove("LINES");
-        // A probe reads the signed-in subscription's limits; an API key or a
-        // parent Claude Code session in the environment must not change that.
-        for (key, _) in std::env::vars_os() {
-            let Some(key) = key.to_str() else { continue };
-            if key.starts_with("ANTHROPIC_")
-                || key == "CLAUDECODE"
-                || key == "CLAUDE_CODE_ENTRYPOINT"
-                || key == "CLAUDE_CODE_SSE_PORT"
-            {
-                command.env_remove(key);
-            }
+/// The environment every Claude Code child of the probe gets: the probe
+/// itself and its sign-in check.
+fn configure_environment(command: &mut std::process::Command, binary: &Path) {
+    // Finder starts apps with a short PATH; Claude Code may need node or
+    // its own helpers beside it.
+    let path = xt_probes::executable::claude_child_path_entries(
+        binary,
+        std::env::var_os("PATH").as_deref(),
+    );
+    if let Some(joined) = xt_probes::executable::join_path(&path) {
+        command.env("PATH", joined);
+    }
+    command.env("TERM", "xterm-256color");
+    command.env("DISABLE_AUTOUPDATER", "1");
+    if std::env::var_os("LANG").is_none() {
+        command.env("LANG", "en_US.UTF-8");
+    }
+    command.env_remove("COLUMNS");
+    command.env_remove("LINES");
+    // A probe reads the signed-in subscription's limits; an API key or a
+    // parent Claude Code session in the environment must not change that.
+    for (key, _) in std::env::vars_os() {
+        let Some(key) = key.to_str() else { continue };
+        if key.starts_with("ANTHROPIC_")
+            || key == "CLAUDECODE"
+            || key == "CLAUDE_CODE_ENTRYPOINT"
+            || key == "CLAUDE_CODE_SSE_PORT"
+        {
+            command.env_remove(key);
         }
     }
 }
@@ -621,7 +667,6 @@ mod pty {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account_usage_dto::AccountUsageState;
 
     // Reproduce the host's lossy encoding only to construct collision fixtures.
     fn encoded_project_name(dir: &Path) -> String {
@@ -703,25 +748,31 @@ mod tests {
         for succeeds in [true, false] {
             let concurrent = collision.join(format!("concurrent-{succeeds}.jsonl"));
             let own = collision.join(format!("probe-{succeeds}.jsonl"));
-            let usage = read_with_probe(&paths, || {
-                assert!(paths.probe_dir.is_dir());
-                let other_session = concurrent.clone();
-                std::thread::spawn(move || {
-                    std::fs::write(other_session, "concurrent unrelated conversation").unwrap();
-                })
-                .join()
-                .unwrap();
-                std::fs::write(&own, "probe-created artifact").unwrap();
-                outcome(
-                    succeeds.then(|| Panel {
+            let usage = read_with_probe(
+                &paths,
+                || {
+                    assert!(paths.probe_dir.is_dir());
+                    let other_session = concurrent.clone();
+                    std::thread::spawn(move || {
+                        std::fs::write(other_session, "concurrent unrelated conversation").unwrap();
+                    })
+                    .join()
+                    .unwrap();
+                    std::fs::write(&own, "probe-created artifact").unwrap();
+                    outcome(
+                        succeeds.then(|| {
+                            Panel {
                         text:
                             "Current session\n██ 30% used\nCurrent week (all models)\n██ 41% used"
                                 .into(),
                         at: Timestamp::from_millisecond(PANEL_MS).unwrap(),
-                    }),
-                    (!succeeds).then_some(AccountUsageIssue::Timeout),
-                )
-            });
+                    }
+                        }),
+                        (!succeeds).then_some(AccountUsageIssue::Timeout),
+                    )
+                },
+                || false,
+            );
             for (path, content) in &originals {
                 assert_eq!(std::fs::read_to_string(path).unwrap(), *content);
             }
@@ -803,6 +854,104 @@ mod tests {
         );
         let neither = result_from(outcome(panel("nothing", PANEL_MS), None), None);
         assert_eq!(neither.issue, Some(AccountUsageIssue::InvalidResponse));
+    }
+
+    #[test]
+    fn only_an_exact_logged_out_status_is_signed_out() {
+        assert!(status_says_signed_out(
+            br#"{"loggedIn": false, "authMethod": "none", "apiProvider": "firstParty"}"#
+        ));
+        for stdout in [
+            &br#"{"loggedIn": true, "authMethod": "claude.ai"}"#[..],
+            br#"{"authMethod": "none"}"#,
+            br#"{"loggedIn": "false"}"#,
+            br#"{"loggedIn": null}"#,
+            br#"[false]"#,
+            b"Not logged in",
+            b"",
+        ] {
+            assert!(!status_says_signed_out(stdout), "{stdout:?}");
+        }
+    }
+
+    #[test]
+    fn a_failed_read_is_signed_out_only_when_the_status_says_so() {
+        let root = tempfile::tempdir().unwrap();
+        let paths =
+            ClaudeUsagePaths::new(&root.path().join("data"), &root.path().join("home"), None);
+        let failing = || outcome(None, Some(AccountUsageIssue::InvalidResponse));
+        let signed_out = read_with_probe(&paths, failing, || true);
+        assert_eq!(
+            (signed_out.state, signed_out.issue),
+            (
+                AccountUsageState::Unavailable,
+                Some(AccountUsageIssue::SignedOut)
+            )
+        );
+        assert!(signed_out.windows.is_empty());
+        let other = read_with_probe(&paths, failing, || false);
+        assert_eq!(
+            (other.state, other.issue),
+            (
+                AccountUsageState::Failed,
+                Some(AccountUsageIssue::InvalidResponse)
+            )
+        );
+        // A successful read never asks for the sign-in status.
+        let read = read_with_probe(
+            &paths,
+            || {
+                outcome(
+                    panel(
+                        "Current session\n██ 30% used\nCurrent week (all models)\n██ 41% used",
+                        PANEL_MS,
+                    ),
+                    None,
+                )
+            },
+            || panic!("the status check must not run after a successful read"),
+        );
+        assert_eq!(read.state, AccountUsageState::Available);
+    }
+
+    /// The real sign-in check against a stand-in `claude` that prints a
+    /// fixed status and the environment it was given.
+    #[cfg(unix)]
+    #[test]
+    fn the_status_check_runs_the_binary_with_the_probe_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(PROBE_DIR_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = |name: &str, body: &str| {
+            let path = root.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        // Any check that fails exits without printing, which is not "signed out".
+        let out = fake(
+            "signed-out",
+            &format!(
+                r#"[ "$#" = 3 ] && [ "$1 $2 $3" = "auth status --json" ] || exit 2
+[ "$(pwd -P)" = "$(cd '{}' && pwd -P)" ] || exit 3
+[ "$DISABLE_AUTOUPDATER" = 1 ] && [ "$TERM" = xterm-256color ] || exit 4
+printf '{{"loggedIn": false, "authMethod": "none"}}'"#,
+                dir.display()
+            ),
+        );
+        let signed_in = fake("signed-in", r#"printf '{"loggedIn": true}'"#);
+        let stalled = fake("stalled", "sleep 30");
+        assert!(signed_out(&out, &dir));
+        assert!(!signed_out(&signed_in, &dir));
+        assert!(!signed_out(&root.path().join("missing"), &dir));
+        let started = Instant::now();
+        assert!(!signed_out_within(
+            &stalled,
+            &dir,
+            Duration::from_millis(200)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     fn session(key: &str, percent: f64) -> AccountUsageWindow {

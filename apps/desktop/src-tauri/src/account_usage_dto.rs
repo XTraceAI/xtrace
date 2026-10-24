@@ -23,6 +23,10 @@ pub enum AccountUsageIssue {
     Network,
     InvalidResponse,
     SourceUnavailable,
+    /// The user's Claude Code is signed out (its own `claude auth status`
+    /// says `loggedIn: false`), so `/usage` shows no plan limits. Found only
+    /// after a failed Claude read; signing in again in Terminal fixes it.
+    SignedOut,
     /// No Claude read has run and none is scheduled (automatic reads are
     /// off). Never a read outcome.
     NotFetched,

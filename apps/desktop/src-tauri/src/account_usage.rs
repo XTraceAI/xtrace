@@ -413,10 +413,10 @@ impl AccountUsageService {
             );
         }
         let helper = super::account_usage_claude::read_via_helper();
-        let keep_local = self.claude_local.is_some()
-            && helper.state != AccountUsageState::Available
-            && local.issue != Some(AccountUsageIssue::SourceUnavailable);
-        (if keep_local { local } else { helper }, true)
+        (
+            after_fallback(self.claude_local.is_some(), local, helper),
+            true,
+        )
     }
 
     fn read_codex(&self) -> AccountProviderUsage {
@@ -444,6 +444,22 @@ impl AccountUsageService {
         self.record_history(Provider::Codex, &codex);
         codex
     }
+}
+
+/// The Refresh result once the credential helper ran after a failed local
+/// read. A helper success wins. Otherwise the local read's reason is kept
+/// (for example a signed-out Claude Code, which the helper would report as
+/// a missing or expired login), unless there is no local reader or it could
+/// not run at all.
+fn after_fallback(
+    has_local: bool,
+    local: AccountProviderUsage,
+    helper: AccountProviderUsage,
+) -> AccountProviderUsage {
+    let keep_local = has_local
+        && helper.state != AccountUsageState::Available
+        && local.issue != Some(AccountUsageIssue::SourceUnavailable);
+    if keep_local { local } else { helper }
 }
 
 /// A reading Claude Code saved on its own is used without a probe when it is
@@ -1516,6 +1532,75 @@ mod tests {
         let state = service.lock();
         assert_eq!(state.claude.failures, 0);
         assert_eq!(state.claude_snapshot().state, AccountUsageState::Available);
+    }
+
+    #[test]
+    fn a_signed_out_claude_code_is_shown_on_the_stale_reading() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = live_paths(root.path());
+        let service = AccountUsageService::with_claude_local(paths.clone());
+        service.automatic_claude_tick_with(&paths, |_| available(vec![week(70.0)]));
+        service.lock().claude.next_auto = Some(Timestamp::now().as_millisecond());
+        service.automatic_claude_tick_with(&paths, |_| unavailable(AccountUsageIssue::SignedOut));
+        let shown = service.lock().claude_snapshot();
+        assert_eq!(shown.state, AccountUsageState::Stale);
+        assert_eq!(shown.issue, Some(AccountUsageIssue::SignedOut));
+        assert_eq!(shown.windows[0].used_percent, 70.0);
+        // Refresh: the helper fallback also failed, and the local reason stays.
+        let refreshed = service.refresh_claude_with(|_| {
+            (
+                after_fallback(
+                    true,
+                    unavailable(AccountUsageIssue::SignedOut),
+                    unavailable(AccountUsageIssue::Unauthorized),
+                ),
+                true,
+            )
+        });
+        assert_eq!(refreshed.claude.state, AccountUsageState::Stale);
+        assert_eq!(refreshed.claude.issue, Some(AccountUsageIssue::SignedOut));
+        // With no earlier reading, the reason is the result itself.
+        let first_paths = live_paths(&root.path().join("first"));
+        let first = AccountUsageService::with_claude_local(first_paths.clone());
+        first.automatic_claude_tick_with(&first_paths, |_| {
+            unavailable(AccountUsageIssue::SignedOut)
+        });
+        let shown = first.lock().claude_snapshot();
+        assert_eq!(
+            (shown.state, shown.issue),
+            (
+                AccountUsageState::Unavailable,
+                Some(AccountUsageIssue::SignedOut)
+            )
+        );
+    }
+
+    #[test]
+    fn refresh_keeps_signed_out_unless_the_helper_reads_usage() {
+        let signed_out = || unavailable(AccountUsageIssue::SignedOut);
+        for helper in [
+            unavailable(AccountUsageIssue::Unauthorized),
+            unavailable(AccountUsageIssue::CredentialUnavailable),
+            failed(AccountUsageIssue::Network),
+        ] {
+            assert_eq!(
+                after_fallback(true, signed_out(), helper).issue,
+                Some(AccountUsageIssue::SignedOut)
+            );
+        }
+        let helper = after_fallback(true, signed_out(), available(vec![week(12.0)]));
+        assert_eq!(helper.state, AccountUsageState::Available);
+        assert_eq!(helper.issue, None);
+        // Unchanged: a local reader that could not run gives way to the helper.
+        assert_eq!(
+            after_fallback(
+                true,
+                unavailable(AccountUsageIssue::SourceUnavailable),
+                unavailable(AccountUsageIssue::Unauthorized)
+            )
+            .issue,
+            Some(AccountUsageIssue::Unauthorized)
+        );
     }
 
     #[test]
