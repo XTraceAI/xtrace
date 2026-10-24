@@ -966,6 +966,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     [commands.gradingStart]: { state: 'busy' },
     [commands.gradingCancel]: true,
     [commands.gradingRubricMake]: { state: 'busy' },
+    [commands.gradingRunDetails]: { state: 'not_found' },
+    [commands.gradingReportOpen]: { state: 'opened' },
   };
   vi.mocked(invoke).mockImplementation(async (cmd: string) => answers[cmd]);
   expect(await source.grading?.skills()).toEqual({ state: 'not_configured' });
@@ -974,6 +976,9 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
   expect(await source.grading?.start('/code/app', 'claude-md-doctor')).toEqual({ state: 'busy' });
   expect(await source.grading?.cancel('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(true);
   expect(await source.grading?.makeRubric('plugin:tools@market/lint')).toEqual({ state: 'busy' });
+  const run = '00000000-0000-4000-8000-000000000001';
+  expect(await source.grading?.runDetails(run)).toEqual({ state: 'not_found' });
+  expect(await source.grading?.openReport(run)).toEqual({ state: 'opened' });
   expect(vi.mocked(invoke).mock.calls).toEqual([
     [commands.gradingSkills],
     [commands.gradingOverview],
@@ -981,6 +986,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     [commands.gradingStart, { projectPath: '/code/app', skillId: 'claude-md-doctor' }],
     [commands.gradingCancel, { runId: '0f8fad5b-d9cb-469f-a165-70867728950e' }],
     [commands.gradingRubricMake, { location: 'plugin:tools@market/lint' }],
+    [commands.gradingRunDetails, { runId: run }],
+    [commands.gradingReportOpen, { runId: run }],
   ]);
   expect([
     commands.gradingSkills,
@@ -989,6 +996,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     commands.gradingStart,
     commands.gradingCancel,
     commands.gradingRubricMake,
+    commands.gradingRunDetails,
+    commands.gradingReportOpen,
   ]).toEqual([
     'grading_skills',
     'grading_overview',
@@ -996,6 +1005,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     'grading_start',
     'grading_cancel',
     'grading_rubric_make',
+    'grading_run_details',
+    'grading_report_open',
   ]);
 });
 
@@ -1058,6 +1069,9 @@ it('answers grading from a fixture exactly as fixture mode does and never runs a
   });
   expect(await fixture.grading?.cancel('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(false);
   expect(await fixture.grading?.makeRubric('/skills/x')).toEqual({ state: 'not_configured' });
+  const run = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  expect(await fixture.grading?.runDetails(run)).toEqual({ state: 'not_configured' });
+  expect(await fixture.grading?.openReport(run)).toEqual({ state: 'not_configured' });
   expect(invoke).not.toHaveBeenCalled();
 });
 

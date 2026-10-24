@@ -192,8 +192,9 @@ fn attempt(run: &GradeRow) -> Option<GradingAttempt> {
     })
 }
 
-/// How a finding weighs when ranked: higher first.
-fn weight(severity: GradingSeverity) -> u8 {
+/// How a finding weighs when ranked: higher first. The one ranking of
+/// severities: a skill's top findings and a run's details both use it.
+pub(crate) fn weight(severity: GradingSeverity) -> u8 {
     match severity {
         GradingSeverity::Critical => 3,
         GradingSeverity::Warning => 2,

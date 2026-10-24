@@ -19,7 +19,7 @@ import {
 } from './scores';
 
 /**
- * "Add from a link", at the top of the Add a skill dialog: a field for a
+ * "Add from a link", at the top of the Add a grading skill dialog: a field for a
  * public GitHub link and Look up. The native side reads the link, downloads
  * that commit and answers the skills it holds, each with whether it can be
  * kept (`GradingLinkLookup`); this shows the preview, lets the user choose

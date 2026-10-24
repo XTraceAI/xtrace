@@ -16,7 +16,7 @@
 //!
 //! * **Rubrics.** "Make a rubric" ([`GradingService::make_rubric`]) runs
 //!   Claude Code with the bundled `xtrace-rubric-maker` helper on a staged
-//!   copy of an installed skill the "Add a skill" rule offers it for (one
+//!   copy of an installed skill the "Add a grading skill" rule offers it for (one
 //!   that needs a rubric, or whose rubric has a problem, and that Scores
 //!   does not already have under another skill), contained like a grading
 //!   ([`xt_judge::maker`]); one retry gets the rubric reader's reason. The
@@ -70,6 +70,11 @@
 //!   are removed when a run finishes. A content purge removes every kept
 //!   folder and the kept rubric-making refusals
 //!   ([`GradingService::purge_with_folders`]); rows stay.
+//! * **Details.** [`GradingService::run_details`] reads a succeeded run's
+//!   row and its kept folder together under the folder lock, and
+//!   [`crate::grading_details`] decides what they show;
+//!   [`GradingService::open_report`] hands only the report that rule names to
+//!   `/usr/bin/open`. Neither writes anything.
 //! * **Quitting.** [`GradingService::shutdown`] cancels the run, whose process
 //!   group gets `SIGTERM` and then `SIGKILL` after the runner's grace; the
 //!   run is saved `interrupted` (`app_closed`) and its staging folder
@@ -86,13 +91,14 @@
 //! Fixture mode's service is not configured: it answers `not_configured`,
 //! never runs anything and never reads a skill.
 use crate::{
+    grading_details::{self, KeptFolder},
     grading_dto::{
         GradingFailure, GradingInsight, GradingInstalledRubric, GradingInstalledScores,
         GradingInstalledSkills, GradingOverview, GradingProgress, GradingProgressState,
-        GradingRubricCriterion, GradingRubricFailure, GradingRubricJob, GradingRubricMake,
-        GradingRubricNow, GradingRubricProgress, GradingRun, GradingRuns, GradingSkillAdd,
-        GradingSkillInfo, GradingSkillOrigin, GradingSkillProblem, GradingSkillRemove,
-        GradingSkills, GradingStart,
+        GradingReportOpen, GradingRubricCriterion, GradingRubricFailure, GradingRubricJob,
+        GradingRubricMake, GradingRubricNow, GradingRubricProgress, GradingRun, GradingRunDetails,
+        GradingRuns, GradingSkillAdd, GradingSkillInfo, GradingSkillOrigin, GradingSkillProblem,
+        GradingSkillRemove, GradingSkills, GradingStart,
     },
     projects_dto::ProjectList,
     state::StateError,
@@ -123,7 +129,7 @@ use xt_judge::{
 use xt_store::{
     Store,
     added_skills::AddedSkill,
-    grades::{GradeFinish, GradeRow, NewGradeRun},
+    grades::{GradeFinish, GradeRow, GradeStatus, NewGradeRun},
 };
 
 /// Where the bundled skills live below the app's resource folder.
@@ -162,6 +168,8 @@ const STORE_RUBRIC_MODE: u32 = 0o600;
 pub type ReadProjects = Arc<dyn Fn() -> ProjectList + Send + Sync>;
 /// The wall clock, in Unix milliseconds.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+/// Hands a file to the system to open; false when it could not.
+pub type OpenFile = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
 
 /// The database the service saves runs in: the app's state, reached when
 /// needed and refused once it is closed.
@@ -270,6 +278,8 @@ pub struct GradingConfig {
     pub shutdown_bound: Duration,
     /// Stamps a run's start and finish (tests move it).
     pub clock: Clock,
+    /// Opens a run's kept report ([`open_with_system`]; tests record it).
+    pub open_file: OpenFile,
     /// Called on the run's thread right before the skill is copied (tests
     /// change the skill there).
     #[cfg(test)]
@@ -308,6 +318,7 @@ impl GradingConfig {
             progress_every: PROGRESS_EVERY,
             shutdown_bound: SHUTDOWN_BOUND,
             clock: Arc::new(now_ms),
+            open_file: Arc::new(open_with_system),
             #[cfg(test)]
             before_staging: None,
             #[cfg(test)]
@@ -504,7 +515,7 @@ impl GradingService {
         GradingSkills::Loaded { skills }
     }
 
-    /// The skills installed under the native home, for the "Add a skill"
+    /// The skills installed under the native home, for the "Add a grading skill"
     /// dialog ([`crate::grading_picker::picker`]). Reading this starts and
     /// writes nothing.
     pub fn installed(&self) -> GradingInstalledSkills {
@@ -673,8 +684,44 @@ impl GradingService {
         GradingOverview::Loaded(loaded)
     }
 
+    /// The details of the succeeded run `run_id`
+    /// ([`crate::grading_details::details`]): its stored row and its kept
+    /// grade folder, read together. Reading this starts and writes nothing.
+    pub fn run_details(&self, run_id: &str) -> GradingRunDetails {
+        let Some(config) = &self.inner.config else {
+            return GradingRunDetails::NotConfigured;
+        };
+        match read_run(&self.inner, config, run_id) {
+            Ok(Some((row, kept))) => grading_details::details(&row, &kept)
+                .map_or(GradingRunDetails::Failed, GradingRunDetails::Loaded),
+            Ok(None) => GradingRunDetails::NotFound,
+            Err(_) => GradingRunDetails::Failed,
+        }
+    }
+
+    /// Open the succeeded run `run_id`'s kept report with the system's
+    /// default app for HTML. The file is the one the details rule names
+    /// ([`crate::grading_details::report_target`]); nothing else is opened.
+    pub fn open_report(&self, run_id: &str) -> GradingReportOpen {
+        let Some(config) = &self.inner.config else {
+            return GradingReportOpen::NotConfigured;
+        };
+        let target = match read_run(&self.inner, config, run_id) {
+            Ok(Some((row, kept))) => {
+                grading_details::report_target(&row, &kept).map(Path::to_path_buf)
+            }
+            Ok(None) => return GradingReportOpen::NotFound,
+            Err(_) => return GradingReportOpen::Failed,
+        };
+        match target {
+            Ok(path) if (config.open_file)(&path) => GradingReportOpen::Opened,
+            Ok(_) => GradingReportOpen::Failed,
+            Err(reason) => GradingReportOpen::Unavailable { reason },
+        }
+    }
+
     /// Make a rubric for the installed skill at `location`: exactly one the
-    /// "Add a skill" rule ([`crate::grading_picker::picker`]), re-run over a
+    /// "Add a grading skill" rule ([`crate::grading_picker::picker`]), re-run over a
     /// fresh discovery, offers a rubric action for. The job runs on its own
     /// thread in the one slot; this returns once it has started.
     /// `grading://changed` follows the start, a saved rubric and the end.
@@ -1183,6 +1230,45 @@ fn listed_project(projects: &ReadProjects, path: &str) -> Option<PathBuf> {
     let resolved = std::fs::canonicalize(given).ok()?;
     // Compared as text: `Path` equality ignores a trailing slash and `.`.
     (resolved.to_str() == Some(path)).then_some(resolved)
+}
+
+/// The succeeded run `run_id` and its kept grade folder, read under the
+/// folder lock, so a run being kept, a prune or a purge is never seen half
+/// done. `None` when no succeeded run has that ID.
+fn read_run(
+    inner: &Inner,
+    config: &GradingConfig,
+    run_id: &str,
+) -> Result<Option<(GradeRow, KeptFolder)>, StateError> {
+    let _folders = lock(&inner.folders);
+    let Some(row) = store_call(&*inner.store, |store| store.grade(run_id))? else {
+        return Ok(None);
+    };
+    if row.status != GradeStatus::Succeeded {
+        return Ok(None);
+    }
+    let kept = grading_details::read_kept(&config.grades_dir, &row);
+    Ok(Some((row, kept)))
+}
+
+/// Hand `path` to macOS's `open`, which opens it with the default app for
+/// its type, as the app opens its release page. False when it could not.
+pub fn open_with_system(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// A stored time a renderer reads exactly; `None` past what JavaScript holds.

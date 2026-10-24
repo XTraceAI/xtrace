@@ -10,6 +10,6 @@ export type GradingRubricNow = { job_id: string,
  */
 location: string, 
 /**
- * Its name as the Add a skill dialog listed it.
+ * Its name as the Add a grading skill dialog listed it.
  */
 name: string, started_at_ms: number, };

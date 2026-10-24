@@ -21,6 +21,9 @@ import type { GradingSkillRemove } from '../../data/generated/GradingSkillRemove
 import type { GradingSkillSource } from '../../data/generated/GradingSkillSource';
 import type { GradingOverview } from '../../data/generated/GradingOverview';
 import type { GradingProgress } from '../../data/generated/GradingProgress';
+import type { GradingReportOpen } from '../../data/generated/GradingReportOpen';
+import type { GradingRunDetails } from '../../data/generated/GradingRunDetails';
+import type { GradingRunGap } from '../../data/generated/GradingRunGap';
 import type { GradingRubricCriterion } from '../../data/generated/GradingRubricCriterion';
 import type { GradingRubricFailure } from '../../data/generated/GradingRubricFailure';
 import type { GradingRubricMake } from '../../data/generated/GradingRubricMake';
@@ -66,7 +69,22 @@ export function useRefreshOverview() {
 }
 
 /**
- * The installed skills for the Add a skill dialog, read while it is open.
+ * The details of the run `runId` behind a shown score, read while its
+ * dialog is open. What they hold, in which order, and why criteria or a
+ * report are missing is native.
+ */
+export function useRunDetails(runId: string | null, open: boolean) {
+  const { source } = useData();
+  const grading = source.grading;
+  return useQuery({
+    queryKey: queryKeys.gradingRunDetails(runId ?? ''),
+    queryFn: () => grading!.runDetails(runId!),
+    enabled: !!grading && open && runId !== null,
+  });
+}
+
+/**
+ * The installed skills for the Add a grading skill dialog, read while it is open.
  * Which rows are on Scores, in which group and order, is native.
  */
 export function useInstalledSkills(open: boolean) {
@@ -150,7 +168,7 @@ const isRubricProgress = (payload: unknown): payload is GradingRubricProgress =>
 
 /**
  * The elapsed seconds the latest `grading://rubric-progress` reported, by
- * job ID, while the Add a skill dialog is open. Progress only drives this
+ * job ID, while the Add a grading skill dialog is open. Progress only drives this
  * display: whether a job is going is the installed list's `rubric_job`. A
  * job's last report reads the installed skills and the overview again.
  */
@@ -247,6 +265,53 @@ export const severity: Record<GradingSeverity, { label: string; tone: ControlTon
   info: { label: 'Note', tone: 'info' },
   pass: { label: 'Pass', tone: 'success' },
 };
+
+/** Why a run's details could not be shown. */
+export function detailsText(answer: Exclude<GradingRunDetails, { state: 'loaded' }>) {
+  switch (answer.state) {
+    case 'not_found':
+      return 'This grading is no longer stored. Grade the project again to see its details.';
+    case 'not_configured':
+      return 'Grading details are not available in this copy of XTrace.';
+    case 'failed':
+      return 'The details could not be read. Try again.';
+  }
+}
+
+/** Why a run shows no points per criterion, as a sentence. */
+export const criteriaGapText: Record<GradingRunGap, string> = {
+  content_deleted: 'Stored content was deleted, so the points per criterion are gone.',
+  folder_not_kept:
+    'Only the newest grades keep their saved files, and this one’s were removed, so its points per criterion are gone.',
+  not_reported: 'This grade has no points per criterion: it was made before skills had rubrics.',
+  unreadable:
+    'This grade’s saved files could not be read, so its points per criterion are not shown.',
+};
+
+/** Why a run's full report cannot be opened, as a sentence. */
+export const reportGapText: Record<GradingRunGap, string> = {
+  content_deleted: 'Stored content was deleted, so the full report is gone.',
+  folder_not_kept: 'Only the newest grades keep their full report, and this one’s was removed.',
+  not_reported: 'The skill wrote no full report for this grade.',
+  unreadable: 'This grade’s full report could not be read.',
+};
+
+/** What an Open full report press that opened nothing says. */
+export function openReportText(answer: Exclude<GradingReportOpen, { state: 'opened' }>) {
+  switch (answer.state) {
+    case 'not_found':
+      return 'This grading is no longer stored, so there is no report to open.';
+    case 'unavailable':
+      return reportGapText[answer.reason];
+    case 'not_configured':
+      return 'Opening reports is not available in this copy of XTrace.';
+    case 'failed':
+      return OPEN_REPORT_FAILED;
+  }
+}
+
+/** An Open full report press whose request itself failed. */
+export const OPEN_REPORT_FAILED = 'The report could not be opened. Try again.';
 
 /** How long a run has been going, in the app's one way of writing agent time. */
 export const elapsedText = (seconds: number) => agentTime(seconds * 1000);
@@ -395,7 +460,7 @@ export const rubricProblemText: Record<GradingRubricProblem, string> = {
 /** The first letter of a sentence end, capitalised to start a line. */
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** A rubric problem as its own line in the Add a skill dialog. */
+/** A rubric problem as its own line in the Add a grading skill dialog. */
 export const rubricProblemLine = (problem: GradingRubricProblem) =>
   `${sentence(rubricProblemText[problem])}.`;
 

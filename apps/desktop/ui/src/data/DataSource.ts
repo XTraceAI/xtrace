@@ -30,6 +30,8 @@ import type { GradingSkillRemove } from './generated/GradingSkillRemove';
 import type { GradingRubricMake } from './generated/GradingRubricMake';
 import type { GradingLinkLookup } from './generated/GradingLinkLookup';
 import type { GradingLinkKeep } from './generated/GradingLinkKeep';
+import type { GradingRunDetails } from './generated/GradingRunDetails';
+import type { GradingReportOpen } from './generated/GradingReportOpen';
 import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
@@ -243,6 +245,17 @@ export interface GradingControls {
   linkKeep(lookupId: string, paths: string[]): Promise<GradingLinkKeep>;
   /** Drops a preview and its downloaded files. */
   linkDiscard(lookupId: string): Promise<boolean>;
+  /**
+   * The run behind a shown score: its summary, every finding most severe
+   * first, its rubric criteria with their points and whether its full
+   * report can be opened, decided natively. Reading starts nothing.
+   */
+  runDetails(runId: string): Promise<GradingRunDetails>;
+  /**
+   * Opens a run's kept HTML report with this Mac's default app for HTML.
+   * Sends only the run's ID; native names the file.
+   */
+  openReport(runId: string): Promise<GradingReportOpen>;
 }
 /**
  * The automatic pull-request check. The native side runs it by itself on

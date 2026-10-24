@@ -1,4 +1,4 @@
-//! The wire contract of "Add from a link" in the Add a skill dialog.
+//! The wire contract of "Add from a link" in the Add a grading skill dialog.
 //!
 //! Every decision is made in Rust: what the link names
 //! (`xt_judge::skill_link::parse`), which skills it holds, whether each can be

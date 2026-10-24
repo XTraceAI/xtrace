@@ -800,3 +800,191 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A shown score on a skill page: it opens the details of the run behind it. */
+.xt-scores-score-button {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.xt-scores-score-button:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.xt-scores-score-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A run's details: the header and score stay; the body scrolls between them
+   and Open full report. Both classes: the later .xt-scores-modal rule would
+   otherwise set the grid layout. */
+.xt-scores-modal.xt-score-details-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, calc(100vw - 16px));
+}
+.xt-score-details-modal > * {
+  flex: none;
+}
+.xt-score-details-path {
+  overflow: hidden;
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xt-score-details-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.xt-score-details-facts {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  margin: 0;
+  min-width: 0;
+}
+.xt-score-details-facts > div {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.xt-score-details-facts dt {
+  flex: 0 0 52px;
+  color: var(--meta);
+}
+.xt-score-details-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--body);
+}
+.xt-score-details-facts dd[data-state='partial'] {
+  color: var(--warning);
+}
+.xt-score-details-modal > .xt-score-details-body {
+  flex: 0 1 auto;
+  min-height: 80px;
+  overflow: auto;
+  border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+}
+.xt-score-details-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.xt-score-details-section {
+  display: grid;
+  gap: 6px;
+  padding: 10px 2px;
+}
+.xt-score-details-section + .xt-score-details-section {
+  border-top: 1px solid var(--divider);
+}
+.xt-score-details-section h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.xt-score-details-count {
+  color: var(--meta);
+  font:
+    400 10.5px 'Geist Mono',
+    Menlo,
+    monospace;
+}
+.xt-score-details-summary,
+.xt-score-details-gap {
+  margin: 0;
+  color: var(--body);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.xt-score-details-gap {
+  color: var(--secondary);
+}
+.xt-score-details-body > .xt-score-details-gap {
+  padding: 10px 2px;
+}
+.xt-score-criteria,
+.xt-score-findings {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.xt-score-criterion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  color: var(--body);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.xt-score-criterion-name {
+  overflow-wrap: anywhere;
+}
+.xt-score-criterion-points {
+  color: var(--ink);
+  font:
+    600 11.5px 'Geist Mono',
+    Menlo,
+    monospace;
+  white-space: nowrap;
+}
+.xt-score-finding {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+.xt-score-finding-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.xt-score-finding-text p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.xt-score-finding-title {
+  color: var(--ink);
+  font-weight: 600;
+}
+.xt-score-finding-detail {
+  color: var(--body);
+}
+.xt-score-finding-fix {
+  color: var(--secondary);
+}
+.xt-score-finding-fix strong {
+  margin-right: 4px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.xt-score-details-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.xt-score-details-message {
+  margin: 0;
+  min-width: 0;
+  color: var(--body);
+  font-size: 12px;
+  line-height: 1.45;
+}

@@ -49,7 +49,7 @@ export const queryKeys = {
   /** The grading skills: built in, then added; a change re-reads them. */
   gradingSkills: ['grading', 'skills'],
   /**
-   * The installed skills for the Add a skill dialog. Under `grading`, so an
+   * The installed skills for the Add a grading skill dialog. Under `grading`, so an
    * added or removed skill re-reads which rows are on Scores.
    */
   gradingInstalled: ['grading', 'installed'],
@@ -58,6 +58,11 @@ export const queryKeys = {
    * change and a content purge re-read it; it reads the project list fresh.
    */
   gradingOverview: ['grading', 'overview'],
+  /**
+   * One run's details. Under `grading`, so a committed status change (a
+   * pruned folder) and a content purge re-read them.
+   */
+  gradingRunDetails: (runId: string) => ['grading', 'run-details', runId] as const,
   /** The recent grading runs; every committed status change re-reads them. */
   gradingRuns: ['grading', 'runs'],
   /** The automatic pull-request check's status; its own event re-reads it. */

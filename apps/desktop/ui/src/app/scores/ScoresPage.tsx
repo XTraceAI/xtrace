@@ -16,6 +16,7 @@ import { Modal, ModalClose } from '../../kit/Modal';
 import { SectionCard } from '../../kit/SectionCard';
 import { plural } from '../dashboard/present';
 import { AddSkillCard } from './AddSkillDialog';
+import { RunDetailsDialog, type DetailsTarget } from './RunDetailsDialog';
 import {
   attemptText,
   cancelText,
@@ -43,8 +44,8 @@ import '../../styles/scores.css';
 /**
  * `/scores`: one card per grading skill (built in, then added) with its
  * average over the listed projects, how many are graded, and its top
- * findings; the "Your projects" list one press away, and the "Add a skill"
- * card last. Grading itself happens on a skill's page.
+ * findings; the "Your projects" list one press away, and the "Add a grading
+ * skill" card last. Grading itself happens on a skill's page.
  * Every value is the native overview's (`GradingOverview`), only formatted
  * here.
  */
@@ -396,7 +397,8 @@ function YourProjects({
 /**
  * `/scores/:skillId`: one skill's score for each listed project, with Grade
  * and, on the running row, Cancel. One grading runs at a time: while one
- * runs, another row's Grade explains that instead of being disabled.
+ * runs, another row's Grade explains that instead of being disabled. A
+ * shown score opens the details of the run behind it.
  */
 export function SkillScoresPage() {
   const { skillId = '' } = useParams();
@@ -447,6 +449,8 @@ function SkillDetail({
   const starting = useRef(false);
   const cancel = useCancel(setMessage);
   const problem = skill.skill.problem;
+  const [details, setDetails] = useState<DetailsTarget | null>(null);
+  const detailsTrigger = useRef<HTMLElement | null>(null);
   const grade = async (row: GradingProjectRow) => {
     // A skill shown as unable to grade still asks: it may be fixed by now,
     // and the native answer says whether it can (`skill_unavailable`).
@@ -489,7 +493,23 @@ function SkillDetail({
       align: 'right',
       render: (row) =>
         row.shown ? (
-          <span className="xt-scores-score">{row.shown.score}</span>
+          <button
+            type="button"
+            // WebKit skips a plain button on Tab without an explicit tab stop.
+            tabIndex={0}
+            className="xt-scores-score xt-scores-score-button"
+            aria-haspopup="dialog"
+            // Starts with the number shown, so a spoken "75" finds it too.
+            aria-label={`${row.shown.score}, details for ${row.name}`}
+            title="Show how this score was given"
+            onClick={(event) => {
+              detailsTrigger.current = event.currentTarget;
+              if (row.shown)
+                setDetails({ runId: row.shown.run_id, project: row.name, path: row.path });
+            }}
+          >
+            {row.shown.score}
+          </button>
         ) : (
           <span className="xt-scores-muted">not graded</span>
         ),
@@ -607,6 +627,12 @@ function SkillDetail({
           emptyMessage="No projects found in Claude Code, the Claude app, Codex or Cursor."
         />
       </SectionCard>
+      <RunDetailsDialog
+        target={details}
+        skill={skill.skill.name}
+        onClose={() => setDetails(null)}
+        returnFocusRef={detailsTrigger}
+      />
     </>
   );
 }

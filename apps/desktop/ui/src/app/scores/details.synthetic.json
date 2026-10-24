@@ -1,0 +1,206 @@
+{
+  "full": {
+    "state": "loaded",
+    "run_id": "00000000-0000-4000-8000-000000000001",
+    "project_path": "/work/atlas",
+    "skill_id": "claude-md-doctor",
+    "skill_version": "0.5.1+rubric.1 #3fa2b9c1d0e4",
+    "score": 75,
+    "graded_at_ms": 1791190860000,
+    "complete": true,
+    "content_deleted": false,
+    "summary": "The instructions are mostly accurate, but AGENTS.md never reaches the agent and one named script is missing.",
+    "findings": [
+      {
+        "severity": "critical",
+        "title": "AGENTS.md is not loaded",
+        "detail": "AGENTS.md holds the review rules, but nothing imports it and Claude Code does not read it by itself.",
+        "fix": "Add @AGENTS.md to CLAUDE.md, or move its rules into CLAUDE.md."
+      },
+      {
+        "severity": "critical",
+        "title": "A named script does not exist",
+        "detail": "CLAUDE.md says to run scripts/check.sh before a commit; the project has no such file.",
+        "fix": "Name the command the project uses now: pnpm check."
+      },
+      {
+        "severity": "warning",
+        "title": "CLAUDE.md is longer than 200 lines",
+        "detail": "CLAUDE.md has 342 lines. Claude Code loads all of it into every conversation, so the rules near the end get less attention.",
+        "fix": "Move the deployment and release sections into docs/ and link them from CLAUDE.md."
+      },
+      {
+        "severity": "info",
+        "title": "No hooks are set up"
+      },
+      {
+        "severity": "pass",
+        "title": "Commands run",
+        "detail": "Every build and test command in CLAUDE.md ran in this project."
+      }
+    ],
+    "criteria": {
+      "state": "reported",
+      "criteria": [
+        {
+          "name": "Instructions reach the agent",
+          "max": 30,
+          "awarded": 15
+        },
+        {
+          "name": "Instructions are accurate",
+          "max": 40,
+          "awarded": 35
+        },
+        {
+          "name": "Instructions are short and clear",
+          "max": 30,
+          "awarded": 25
+        }
+      ]
+    },
+    "report": {
+      "state": "kept"
+    }
+  },
+  "no_criteria": {
+    "state": "loaded",
+    "run_id": "00000000-0000-4000-8000-000000000002",
+    "project_path": "/work/beacon",
+    "skill_id": "claude-md-doctor",
+    "skill_version": "0.5.1+rubric.1 #3fa2b9c1d0e4",
+    "score": 90,
+    "graded_at_ms": 1791191460000,
+    "complete": true,
+    "content_deleted": false,
+    "summary": "Short, accurate instructions.",
+    "findings": [
+      {
+        "severity": "warning",
+        "title": "CLAUDE.md is longer than 200 lines",
+        "fix": "Trim the examples."
+      },
+      {
+        "severity": "info",
+        "title": "No hooks are set up"
+      }
+    ],
+    "criteria": {
+      "state": "unavailable",
+      "reason": "not_reported"
+    },
+    "report": {
+      "state": "kept"
+    }
+  },
+  "folder_not_kept": {
+    "state": "loaded",
+    "run_id": "00000000-0000-4000-8000-000000000003",
+    "project_path": "/work/cedar",
+    "skill_id": "claude-md-doctor",
+    "skill_version": "0.5.1+rubric.1 #3fa2b9c1d0e4",
+    "score": 61,
+    "graded_at_ms": 1791192060000,
+    "complete": false,
+    "content_deleted": false,
+    "summary": "Some files could not be read, so this score may miss something.",
+    "findings": [
+      {
+        "severity": "warning",
+        "title": "CLAUDE.md is longer than 200 lines"
+      },
+      {
+        "severity": "warning",
+        "title": "Two rules disagree",
+        "detail": "CLAUDE.md says to use npm; AGENTS.md says pnpm."
+      }
+    ],
+    "criteria": {
+      "state": "unavailable",
+      "reason": "folder_not_kept"
+    },
+    "report": {
+      "state": "unavailable",
+      "reason": "folder_not_kept"
+    }
+  },
+  "content_deleted": {
+    "state": "loaded",
+    "run_id": "00000000-0000-4000-8000-000000000001",
+    "project_path": "/work/atlas",
+    "skill_id": "claude-md-doctor",
+    "skill_version": "0.5.1+rubric.1 #3fa2b9c1d0e4",
+    "score": 75,
+    "graded_at_ms": 1791190860000,
+    "complete": true,
+    "content_deleted": true,
+    "summary": null,
+    "findings": [],
+    "criteria": {
+      "state": "unavailable",
+      "reason": "content_deleted"
+    },
+    "report": {
+      "state": "unavailable",
+      "reason": "content_deleted"
+    }
+  },
+  "unreadable": {
+    "state": "loaded",
+    "run_id": "00000000-0000-4000-8000-000000000001",
+    "project_path": "/work/atlas",
+    "skill_id": "claude-md-doctor",
+    "skill_version": "0.5.1+rubric.1 #3fa2b9c1d0e4",
+    "score": 75,
+    "graded_at_ms": 1791190860000,
+    "complete": true,
+    "content_deleted": false,
+    "summary": "The instructions are mostly accurate, but AGENTS.md never reaches the agent and one named script is missing.",
+    "findings": [
+      {
+        "severity": "critical",
+        "title": "AGENTS.md is not loaded",
+        "detail": "AGENTS.md holds the review rules, but nothing imports it and Claude Code does not read it by itself.",
+        "fix": "Add @AGENTS.md to CLAUDE.md, or move its rules into CLAUDE.md."
+      },
+      {
+        "severity": "critical",
+        "title": "A named script does not exist",
+        "detail": "CLAUDE.md says to run scripts/check.sh before a commit; the project has no such file.",
+        "fix": "Name the command the project uses now: pnpm check."
+      },
+      {
+        "severity": "warning",
+        "title": "CLAUDE.md is longer than 200 lines",
+        "detail": "CLAUDE.md has 342 lines. Claude Code loads all of it into every conversation, so the rules near the end get less attention.",
+        "fix": "Move the deployment and release sections into docs/ and link them from CLAUDE.md."
+      },
+      {
+        "severity": "info",
+        "title": "No hooks are set up"
+      },
+      {
+        "severity": "pass",
+        "title": "Commands run",
+        "detail": "Every build and test command in CLAUDE.md ran in this project."
+      }
+    ],
+    "criteria": {
+      "state": "unavailable",
+      "reason": "unreadable"
+    },
+    "report": {
+      "state": "unavailable",
+      "reason": "unreadable"
+    }
+  },
+  "not_found": {
+    "state": "not_found"
+  },
+  "failed": {
+    "state": "failed"
+  },
+  "not_configured": {
+    "state": "not_configured"
+  }
+}

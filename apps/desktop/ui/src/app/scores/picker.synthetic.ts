@@ -2,7 +2,7 @@ import synthetic from './picker.synthetic.json';
 import type { GradingInstalledSkills } from '../../data/generated/GradingInstalledSkills';
 
 /**
- * Test-only: the Add a skill dialog's answers as the app's own Rust rule gave
+ * Test-only: the Add a grading skill dialog's answers as the app's own Rust rule gave
  * them over made-up installed skills (`grading_picker_tests.rs`,
  * byte-checked there; regenerate with `XTRACE_WRITE_SCORES_SYNTHETIC=1`).
  * Nothing here computes a value.

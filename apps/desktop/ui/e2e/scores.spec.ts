@@ -15,11 +15,13 @@ type Calls = {
   linkCancels: number;
   keeps: [string, string[]][];
   discards: string[];
+  details: string[];
+  reports: string[];
 };
 const calls = (page: Page) =>
   page.evaluate(() => (window as unknown as { __grading: Calls }).__grading);
-const harness = (scenario: string, path = '/scores', start?: string, picker?: string) =>
-  `/e2e/scores.html?scenario=${scenario}&path=${encodeURIComponent(path)}${start ? `&start=${start}` : ''}${picker ? `&picker=${picker}` : ''}`;
+const harness = (scenario: string, path = '/scores', start?: string, picker?: string, extra = '') =>
+  `/e2e/scores.html?scenario=${scenario}&path=${encodeURIComponent(path)}${start ? `&start=${start}` : ''}${picker ? `&picker=${picker}` : ''}${extra}`;
 
 /** Nothing runs past the page's right edge and the page never scrolls sideways. */
 const assertFits = async (page: Page) => {
@@ -75,9 +77,9 @@ test('every page state fits in both themes, drawn from the Rust rule’s answers
       await expect(page.getByRole('heading', { level: 1 })).toHaveText('Scores');
       await expect(page.locator('html')).toHaveAttribute('data-theme', scheme);
       await expect(page.locator('.xt-score-card')).toHaveCount(1);
-      // Add a skill is the grid's last card, the same height as the skill card beside it.
+      // Add a grading skill is the grid's last card, the same height as the skill card beside it.
       await expect(page.locator('.xt-scores-grid > li').last()).toHaveClass('xt-score-add');
-      await expect(page.getByRole('button', { name: 'Add a skill' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Add a grading skill' })).toBeVisible();
       const [skillBox, addBox] = await Promise.all([
         page.locator('.xt-score-card').boundingBox(),
         page.locator('.xt-score-add-button').boundingBox(),
@@ -92,7 +94,7 @@ test('every page state fits in both themes, drawn from the Rust rule’s answers
       await page.screenshot({ path: info.outputPath(`scores-${state}-${scheme}.png`) });
       await page.goto(harness(state, '/scores/claude-md-doctor'));
       await expect(page.getByRole('heading', { level: 1 })).toHaveText('CLAUDE.md doctor');
-      await expect(page.getByRole('button', { name: 'Add a skill' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Add a grading skill' })).toHaveCount(0);
       await assertFits(page);
       await page.screenshot({ path: info.outputPath(`skill-${state}-${scheme}.png`) });
     }
@@ -140,17 +142,17 @@ test('Your projects lists every project with its apps, opens on Close and return
   expect((await calls(page)).starts).toEqual([]);
 });
 
-test('Add a skill is reached by Tab after the skill card and lists installed skills by group', async ({
+test('Add a grading skill is reached by Tab after the skill card and lists installed skills by group', async ({
   page,
 }, info) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto(harness('graded'));
   await page.getByRole('link', { name: 'CLAUDE.md doctor' }).focus();
   await page.keyboard.press('Tab');
-  const trigger = page.getByRole('button', { name: 'Add a skill' });
+  const trigger = page.getByRole('button', { name: 'Add a grading skill' });
   await expect(trigger).toBeFocused();
   await page.keyboard.press('Enter');
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
   const heading = (title: string) =>
@@ -218,8 +220,8 @@ test('a long installed list scrolls inside the dialog, by wheel and by keyboard'
   page,
 }, info) => {
   await page.goto(harness('graded', '/scores', undefined, 'many'));
-  await page.getByRole('button', { name: 'Add a skill' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   const list = dialog.getByRole('region', { name: 'Installed skills' });
   await expect(list).toBeVisible();
   await expect(dialog.getByRole('heading', { level: 3, name: /^Your skills/ })).toHaveText(
@@ -255,8 +257,8 @@ test('Add sends the location, keeps the dialog open with the row on Scores and t
 }, info) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto(harness('graded'));
-  await page.getByRole('button', { name: 'Add a skill' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   await dialog.getByRole('button', { name: 'Add README check' }).click();
   await expect(dialog.getByRole('status')).toHaveText('README check is on Scores now.');
   await expect(dialog).toBeVisible();
@@ -318,8 +320,8 @@ test('an added skill that cannot grade keeps its card and says why', async ({ pa
 
 test('the dialog says why plugin skills are not all listed', async ({ page }, info) => {
   await page.goto(harness('graded', '/scores', undefined, 'plugins_unread'));
-  await page.getByRole('button', { name: 'Add a skill' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   await expect(dialog).toContainText(
     'Plugin skills are not all listed: Claude Code’s installed_plugins.json is a link.',
   );
@@ -430,27 +432,29 @@ test('Make a rubric shows the job going with Cancel, then why it failed or the m
   await page.clock.setFixedTime(MAKING_STARTED + 70_000);
   const row = (name: string) =>
     page
-      .getByRole('dialog', { name: 'Add a skill' })
+      .getByRole('dialog', { name: 'Add a grading skill' })
       .locator('.xt-score-add-row')
       .filter({ has: page.locator('.xt-score-add-name', { hasText: new RegExp(`^${name}$`) }) });
   const shoot = async (name: string, target: string) => {
     await row(target).scrollIntoViewIfNeeded();
-    const fits = await page.getByRole('dialog', { name: 'Add a skill' }).evaluate((element) => {
-      const box = element.getBoundingClientRect();
-      const list = element.querySelector<HTMLElement>('.xt-score-add-list')!;
-      return {
-        inside: box.bottom <= window.innerHeight && box.right <= window.innerWidth,
-        sideways: list.scrollWidth - list.clientWidth,
-      };
-    });
+    const fits = await page
+      .getByRole('dialog', { name: 'Add a grading skill' })
+      .evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const list = element.querySelector<HTMLElement>('.xt-score-add-list')!;
+        return {
+          inside: box.bottom <= window.innerHeight && box.right <= window.innerWidth,
+          sideways: list.scrollWidth - list.clientWidth,
+        };
+      });
     expect(fits).toEqual({ inside: true, sideways: 0 });
     await page.screenshot({ path: info.outputPath(`${name}.png`) });
   };
   for (const scheme of ['dark', 'light'] as const) {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
     await page.goto(harness('graded'));
-    await page.getByRole('button', { name: 'Add a skill' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+    await page.getByRole('button', { name: 'Add a grading skill' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
     await expect(
       dialog.locator('[data-group="yours"] .xt-score-add-row', { hasText: 'deploy' }),
     ).toHaveCount(1);
@@ -499,7 +503,7 @@ test('Make a rubric shows the job going with Cancel, then why it failed or the m
     expect(recorded.starts).toEqual([]);
     // A made rubric: the row is ready to add, with its criteria.
     await page.goto(harness('graded', '/scores', undefined, 'made'));
-    await page.getByRole('button', { name: 'Add a skill' }).click();
+    await page.getByRole('button', { name: 'Add a grading skill' }).click();
     await expect(row('Deploy')).toContainText(
       'Rubric made: Build passes 40 · Staging deploy succeeds 40 · Rollback documented 20',
     );
@@ -527,7 +531,7 @@ test('the panel: three steps, an empty Ready to add, one list of your skills, fo
   page,
 }, info) => {
   const errors = watchErrors(page);
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   const list = dialog.getByRole('region', { name: 'Installed skills' });
   const fits = async () => {
     const geometry = await dialog.evaluate((element) => {
@@ -545,7 +549,7 @@ test('the panel: three steps, an empty Ready to add, one list of your skills, fo
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
     // A home like a real one: nothing ready, 50 skills, 2 refused, 1 built in.
     await page.goto(harness('graded', '/scores', undefined, 'yours'));
-    await page.getByRole('button', { name: 'Add a skill' }).click();
+    await page.getByRole('button', { name: 'Add a grading skill' }).click();
     await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
     await expect(list).toBeVisible();
     const steps = dialog.getByRole('list', { name: 'How a skill gets on Scores' });
@@ -601,7 +605,7 @@ test('the panel: three steps, an empty Ready to add, one list of your skills, fo
     await expect(dialog).toBeHidden();
     // Skills ready to add, each with its own Add.
     await page.goto(harness('graded', '/scores', undefined, 'made'));
-    await page.getByRole('button', { name: 'Add a skill' }).click();
+    await page.getByRole('button', { name: 'Add a grading skill' }).click();
     await expect(heading('Ready to add')).toHaveText('Ready to add5');
     await expect(
       dialog.locator('[data-group="ready"]').getByRole('button', { name: /^Add / }),
@@ -618,8 +622,8 @@ test('Try again from Can’t be scored keeps keyboard focus on the skill in Your
 }) => {
   const errors = watchErrors(page);
   await page.goto(harness('graded', '/scores', undefined, 'make_failed'));
-  await page.getByRole('button', { name: 'Add a skill' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   const cant = dialog.getByRole('button', { name: /^Can’t be scored/ });
   await cant.focus();
   await page.keyboard.press('Enter');
@@ -634,7 +638,7 @@ test('Try again from Can’t be scored keeps keyboard focus on the skill in Your
   expect((await calls(page)).makes).toEqual(['plugin:documents@official/pdf']);
   // Everything left was refused: Your skills says no other skill needs one.
   await page.goto(harness('graded', '/scores', undefined, 'all_refused'));
-  await page.getByRole('button', { name: 'Add a skill' }).click();
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
   await expect(dialog.locator('[data-group="yours"]')).toContainText(
     'No other skill needs a rubric.',
   );
@@ -654,7 +658,7 @@ test('Add from a link: look up, preview several with clashes, keep the chosen on
   page,
 }, info) => {
   const errors = watchErrors(page);
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   const box = dialog.getByRole('region', { name: 'Add from a link' });
   const field = box.getByRole('textbox', { name: 'GitHub link' });
   const fits = async () => {
@@ -673,7 +677,7 @@ test('Add from a link: look up, preview several with clashes, keep the chosen on
   for (const scheme of ['dark', 'light'] as const) {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
     await page.goto(`${harness('graded', '/scores', undefined, 'yours')}&link=several`);
-    await page.getByRole('button', { name: 'Add a skill' }).click();
+    await page.getByRole('button', { name: 'Add a grading skill' }).click();
     await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
     // The field is the next stop after Close, above the three steps.
     await page.keyboard.press('Tab');
@@ -735,12 +739,12 @@ test('Add from a link: one skill keeps with one button; errors and Cancel say wh
   page,
 }, info) => {
   const errors = watchErrors(page);
-  const dialog = page.getByRole('dialog', { name: 'Add a skill' });
+  const dialog = page.getByRole('dialog', { name: 'Add a grading skill' });
   const box = dialog.getByRole('region', { name: 'Add from a link' });
   const field = box.getByRole('textbox', { name: 'GitHub link' });
   await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
   await page.goto(`${harness('graded', '/scores', undefined, 'yours')}&link=one&keep=kept_one`);
-  await page.getByRole('button', { name: 'Add a skill' }).click();
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
   await field.fill('https://github.com/octo/skills/tree/main/skills/pdf');
   await box.getByRole('button', { name: 'Look up' }).click();
   const keep = box.getByRole('button', { name: 'Keep pdf' });
@@ -754,14 +758,14 @@ test('Add from a link: one skill keeps with one button; errors and Cancel say wh
   );
   // A link that is not GitHub's.
   await page.goto(`${harness('graded', '/scores', undefined, 'yours')}&link=not_github_link`);
-  await page.getByRole('button', { name: 'Add a skill' }).click();
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
   await field.fill('https://gitlab.com/octo/skills');
   await field.press('Enter');
   await expect(box.getByRole('alert')).toHaveText('Only public GitHub links work for now.');
   await page.screenshot({ path: linkShot(info, 'error-not-github-dark') });
   // A look-up going can be cancelled; closing drops nothing it did not keep.
   await page.goto(`${harness('graded', '/scores', undefined, 'yours')}&link=wait`);
-  await page.getByRole('button', { name: 'Add a skill' }).click();
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
   await field.fill('https://github.com/octo/skills');
   await field.press('Enter');
   await expect(box.getByRole('status')).toHaveText('Looking up https://github.com/octo/skills…');
@@ -770,7 +774,7 @@ test('Add from a link: one skill keeps with one button; errors and Cancel say wh
   expect((await calls(page)).linkCancels).toBe(1);
   // A preview is dropped when the dialog closes.
   await page.goto(`${harness('graded', '/scores', undefined, 'yours')}&link=several`);
-  await page.getByRole('button', { name: 'Add a skill' }).click();
+  await page.getByRole('button', { name: 'Add a grading skill' }).click();
   await field.fill('https://github.com/octo/team-skills');
   await field.press('Enter');
   await expect(box.getByRole('region', { name: 'Skills at this link' })).toBeVisible();
@@ -780,4 +784,79 @@ test('Add from a link: one skill keeps with one button; errors and Cancel say wh
     .poll(async () => (await calls(page)).discards)
     .toEqual(['00000000-0000-4000-8000-0000000000c1']);
   expect(errors).toEqual([]);
+});
+
+test('a shown score opens its grade’s details by keyboard, with every finding and Open full report', async ({
+  page,
+}, info) => {
+  const errors = watchErrors(page);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto(harness('graded', '/scores/claude-md-doctor'));
+  const trigger = page.getByRole('button', { name: '75, details for atlas' });
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'atlas · CLAUDE.md doctor' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+  await expect(dialog.getByText('Complete')).toBeVisible();
+  const findings = dialog.locator('.xt-score-finding');
+  await expect(findings).toHaveCount(5);
+  await expect(findings.first()).toContainText('AGENTS.md is not loaded');
+  await expect(findings.first()).toContainText('Fix Add @AGENTS.md to CLAUDE.md');
+  await expect(findings.last()).toContainText('Commands run');
+  await expect(dialog.locator('.xt-score-criterion')).toHaveCount(3);
+  await expect(dialog.locator('.xt-score-criterion').first()).toContainText('15 / 30');
+  // The dialog fits the window; only its middle scrolls, never sideways.
+  const fits = await dialog.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const body = element.querySelector<HTMLElement>('.xt-score-details-body')!;
+    return {
+      inside: box.top >= 0 && box.bottom <= window.innerHeight && box.right <= window.innerWidth,
+      sideways: body.scrollWidth - body.clientWidth,
+    };
+  });
+  expect(fits).toEqual({ inside: true, sideways: 0 });
+  await page.screenshot({ path: info.outputPath('grade-details-dark.png') });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.screenshot({ path: info.outputPath('grade-details-light.png') });
+  await dialog.getByRole('button', { name: 'Open full report' }).click();
+  await expect
+    .poll(async () => (await calls(page)).reports)
+    .toEqual(['00000000-0000-4000-8000-000000000001']);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+  const recorded = await calls(page);
+  expect(recorded.details).toEqual(['00000000-0000-4000-8000-000000000001']);
+  expect(recorded.starts).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('a grade without criteria, kept files or stored content says why, and opens no report', async ({
+  page,
+}, info) => {
+  await page.goto(harness('graded', '/scores/claude-md-doctor'));
+  await page.getByRole('button', { name: '61, details for cedar' }).click();
+  const cedar = page.getByRole('dialog', { name: 'cedar · CLAUDE.md doctor' });
+  await expect(cedar).toContainText(
+    'Partial: the skill skipped a step, so this score may miss something',
+  );
+  await expect(cedar).toContainText(
+    'Only the newest grades keep their full report, and this one’s was removed.',
+  );
+  await expect(cedar.getByRole('button', { name: 'Open full report' })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('grade-details-pruned.png') });
+  await page.keyboard.press('Escape');
+  await page.goto(
+    harness('graded', '/scores/claude-md-doctor', undefined, undefined, '&details=content_deleted'),
+  );
+  await page.getByRole('button', { name: '75, details for atlas' }).click();
+  const deleted = page.getByRole('dialog', { name: 'atlas · CLAUDE.md doctor' });
+  await expect(deleted).toContainText(
+    'Stored content was deleted. The score stays; its summary, findings, points and full report are gone.',
+  );
+  await expect(deleted.locator('.xt-score-finding')).toHaveCount(0);
+  await expect(deleted.getByRole('button', { name: 'Open full report' })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('grade-details-deleted.png') });
+  expect((await calls(page)).reports).toEqual([]);
 });
