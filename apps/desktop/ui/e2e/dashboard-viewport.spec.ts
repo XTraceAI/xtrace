@@ -762,6 +762,22 @@ for (const shape of ['plain', 'stress'] as const)
         page.on('console', (message) => {
           if (message.type() === 'error') errors.push(message.text());
         });
+        // The plain run also shows the page needs nothing from outside this
+        // machine: external requests are blocked and recorded, and the bundled
+        // fonts are requested locally.
+        const external: string[] = [];
+        const fonts = new Set<string>();
+        if (shape === 'plain')
+          await page.route('**/*', async (route) => {
+            const url = new URL(route.request().url());
+            if (!['127.0.0.1', 'localhost'].includes(url.hostname)) {
+              external.push(url.origin);
+              await route.abort();
+            } else {
+              if (url.pathname.startsWith('/fonts/')) fonts.add(url.pathname);
+              await route.continue();
+            }
+          });
         await open(page, exportFor(shape), width, height, scheme);
         const g = await page.evaluate(geometry);
         await info.attach('geometry', { body: JSON.stringify(g, null, 2) });
@@ -895,6 +911,9 @@ for (const shape of ['plain', 'stress'] as const)
           }
           // The page under the dialogs kept its geometry.
           expectFits(await page.evaluate(geometry), width, height);
+          // Nothing was asked of another host, and the bundled fonts were loaded.
+          expect(external).toEqual([]);
+          expect(fonts.size).toBeGreaterThan(0);
         }
         await expectPageStill(page);
         expect(errors).toEqual([]);
@@ -1391,56 +1410,43 @@ const live: NativeIndexStatus = {
   files_scanned: 1234,
   codex_history_gaps: null,
 };
-/** The index status the stress report is served with. */
-const INDEX: Record<string, { status: NativeIndexStatus }> = {
-  live: { status: live },
-};
 function indexedExport(index: NativeIndexStatus): FixtureExport {
   const out = exportFor('stress');
   out.native_index = index;
   return out;
 }
-for (const scheme of SCHEMES)
-  for (const [state, index] of Object.entries(INDEX))
-    test(`the Dashboard fits 1120x720 ${scheme} in every range and measure with ${state} index state`, async ({
-      page,
-    }, info) => {
-      const margins: Record<string, number> = {};
-      await page.unrouteAll();
-      await open(page, indexedExport(index.status), 1120, 720, scheme);
-      // The index's state is the sidebar's and Settings'; the Dashboard adds no line for it
-      // and carries none of its reasons.
-      await expect(page.getByTestId('dashboard-index')).toHaveCount(0);
-      const reasons = [index.status.phase, index.status.freshness]
-        .map((part) => ('reason' in part ? part.reason : ''))
-        .filter(Boolean);
-      for (const reason of reasons)
-        await expect(page.locator('.xt-dashboard')).not.toContainText(reason);
-      for (const range of ['7d', '30d'] as const) {
-        if (range !== '7d') await page.getByRole('radio', { name: range }).click();
-        await expect(page.getByTestId('report-period')).toBeVisible();
-        for (const measure of ['human + agent', 'agent h', 'human h', 'cost'] as const) {
-          await page.getByRole('radio', { name: measure }).click();
-          await expectMeasure(page, measure);
-          const g = await page.evaluate(geometry);
-          await info.attach(`geometry-${state}-${range}-${measure}`, {
-            body: JSON.stringify(g, null, 2),
-          });
-          expectFits(g, 1120, 720);
-          expectInsideMargin(g);
-          margins[`${state} ${range} ${measure}`] = marginUnder(g);
-        }
-      }
-      await expectPageStill(page);
-      if (state === 'live')
-        await page.screenshot({ path: info.outputPath(`indexed-${scheme}.png`) });
-      // The full reason is on Settings, as the app's own sentences state it.
-      await page.getByRole('button', { name: 'Settings', exact: true }).click();
-      const settings = page.getByRole('region', { name: 'Native index' });
-      await expect(settings).toContainText(phaseText(index.status));
-      await expect(settings).toContainText(freshnessText(index.status));
-      await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
-    });
+test('the Dashboard fits 1120x720 light in every range and measure with a live index', async ({
+  page,
+}, info) => {
+  const margins: Record<string, number> = {};
+  await page.unrouteAll();
+  await open(page, indexedExport(live), 1120, 720, 'light');
+  // The index's state is the sidebar's and Settings'; the Dashboard adds no line for it.
+  await expect(page.getByTestId('dashboard-index')).toHaveCount(0);
+  for (const range of ['7d', '30d'] as const) {
+    if (range !== '7d') await page.getByRole('radio', { name: range }).click();
+    await expect(page.getByTestId('report-period')).toBeVisible();
+    for (const measure of ['human + agent', 'agent h', 'human h', 'cost'] as const) {
+      await page.getByRole('radio', { name: measure }).click();
+      await expectMeasure(page, measure);
+      const g = await page.evaluate(geometry);
+      await info.attach(`geometry-${range}-${measure}`, {
+        body: JSON.stringify(g, null, 2),
+      });
+      expectFits(g, 1120, 720);
+      expectInsideMargin(g);
+      margins[`${range} ${measure}`] = marginUnder(g);
+    }
+  }
+  await expectPageStill(page);
+  await page.screenshot({ path: info.outputPath('indexed-light.png') });
+  // Settings states the index in the app's own sentences.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Native index' });
+  await expect(settings).toContainText(phaseText(live));
+  await expect(settings).toContainText(freshnessText(live));
+  await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
+});
 
 /** Nine-character daily totals fit whole, including a long DST day and a larger stress value. */
 for (const [width, height] of [

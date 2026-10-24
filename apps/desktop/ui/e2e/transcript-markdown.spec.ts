@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test.use({ viewport: { width: 900, height: 800 } });
 
-for (const theme of ['light'] as const) {
+for (const theme of ['light', 'dark'] as const) {
   test(`formatted answers are bounded, inert and keyboard-reachable in ${theme}`, async ({
     page,
     browserName,
@@ -120,7 +120,8 @@ for (const theme of ['light'] as const) {
       const [r, g, b] = rgb.match(/[\d.]+/g)!.map(Number);
       return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     };
-    expect(luminance(colours.ink)).toBeLessThan(luminance(colours.header));
+    if (theme === 'light') expect(luminance(colours.ink)).toBeLessThan(luminance(colours.header));
+    else expect(luminance(colours.ink)).toBeGreaterThan(luminance(colours.header));
 
     expect(foreign).toEqual([]);
     expect(errors).toEqual([]);
