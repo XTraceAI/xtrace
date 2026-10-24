@@ -120,8 +120,7 @@ for (const theme of ['light'] as const) {
       const [r, g, b] = rgb.match(/[\d.]+/g)!.map(Number);
       return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     };
-    if (theme === 'light') expect(luminance(colours.ink)).toBeLessThan(luminance(colours.header));
-    else expect(luminance(colours.ink)).toBeGreaterThan(luminance(colours.header));
+    expect(luminance(colours.ink)).toBeLessThan(luminance(colours.header));
 
     expect(foreign).toEqual([]);
     expect(errors).toEqual([]);
