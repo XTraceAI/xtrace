@@ -68,6 +68,26 @@ const effortCard = (page: Page) =>
     has: page.getByRole('heading', { level: 2, name: 'Effort', exact: true }),
   });
 
+/**
+ * The "human + agent" timeline has sized its rows for this window. It reads
+ * its own height after layout and applies the row height (`VISIBLE_ROWS` = 8
+ * rows to the plot, at least `MIN_PAIRED_ROW_PX` = 34px) on the next render,
+ * which headless Linux WebKit can deliver a frame or more after the page
+ * looks ready. Date positions read before then move afterwards.
+ */
+const rowsSized = (page: Page) =>
+  expect
+    .poll(() =>
+      page
+        .getByTestId('human-timeline-body')
+        .evaluate(
+          (body) =>
+            body.style.getPropertyValue('--row-h') ===
+            `${Math.max(34, Math.floor(body.clientHeight / 8))}px`,
+        ),
+    )
+    .toBe(true);
+
 /** The timeline's geometry: rows, their height, the scroll position and the bars. */
 async function timeline(page: Page) {
   return page.getByTestId('human-timeline-body').evaluate((body) => {
@@ -649,6 +669,7 @@ test('in human + agent, a click on a date neither pins nor toggles its sessions 
   const date = (day: string) => page.getByRole('button', { name: `Sessions on ${day}` });
   const boxes = page.getByRole('dialog', { name: /^Sessions on / });
   const shown = page.locator('.xt-effort-tip[data-open]');
+  await rowsSized(page);
   // Hover Sep 6's date, then click it: its box stays open, as hovering keeps it.
   await page.mouse.move(...(await centre(date('Sep 6'))), { steps: 5 });
   await expect(page.getByRole('dialog', { name: 'Sessions on Sep 6' })).toBeVisible();
@@ -694,6 +715,7 @@ for (const [width, height] of [
     await open(page, 'light', width, height);
     await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
     const boxes = page.getByRole('dialog', { name: /^Sessions on / });
+    await rowsSized(page);
     // Every date in view, top to bottom, with its centre.
     const dates = await page.getByTestId('human-timeline-body').evaluate((body) => {
       const view = body.getBoundingClientRect();
