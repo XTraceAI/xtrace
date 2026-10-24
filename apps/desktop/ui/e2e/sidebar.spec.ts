@@ -123,6 +123,10 @@ test('sidebar geometry, controlled state, theme and Hub dismissal', async ({ pag
   await trigger.click();
   await expect(coverage).toBeHidden();
   await expect(hub).toBeVisible();
+  // And the reverse: opening the status panel closes the Hub.
+  await capture.click();
+  await expect(hub).toBeHidden();
+  await expect(coverage).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Reserve native controls' }).click();
   await expect(sidebar).toHaveCSS('padding-top', '74px');

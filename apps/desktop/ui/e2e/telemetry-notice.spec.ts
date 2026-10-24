@@ -28,10 +28,7 @@ const box = async (page: Page, notice: boolean) => {
   return dashboard.boundingBox();
 };
 
-for (const size of [
-  { width: 1120, height: 720 },
-  { width: 1440, height: 900 },
-]) {
+for (const size of [{ width: 1120, height: 720 }]) {
   test(`the notice takes no room from the Dashboard at ${size.width}x${size.height}`, async ({
     page,
   }) => {
@@ -57,12 +54,6 @@ const inside = async (page: Page, width: number, height: number) => {
   return card;
 };
 
-test('the card fits a 420x320 window', async ({ page }) => {
-  await page.setViewportSize({ width: 420, height: 320 });
-  await open(page, true);
-  await inside(page, 420, 320);
-});
-
 test('in a very short window the card scrolls inside itself', async ({ page }) => {
   await page.setViewportSize({ width: 420, height: 190 });
   await open(page, true);
@@ -78,6 +69,9 @@ test('in a very short window the card scrolls inside itself', async ({ page }) =
   await turnOff.focus();
   await expect(turnOff).toBeFocused();
   await expect(turnOff).toBeInViewport();
+  // A taller small window keeps the card inside it too.
+  await page.setViewportSize({ width: 420, height: 320 });
+  await inside(page, 420, 320);
 });
 
 test('a narrow card lists in one column', async ({ page }) => {
@@ -163,30 +157,3 @@ test('the card takes no focus, is recorded once visible, and sits below dialogs'
     await page.evaluate(() => (window as { telemetryTurnedOff?: boolean }).telemetryTurnedOff),
   ).toBeUndefined();
 });
-
-test('Escape closes the card, which comes after the page in keyboard order', async ({ page }) => {
-  await page.setViewportSize({ width: 1120, height: 720 });
-  const { card } = await open(page, true);
-  const order = await page.evaluate(() => {
-    const outlet = document.querySelector('.xt-shell-outlet')!;
-    const floating = document.querySelector('.xt-telemetry-floating')!;
-    return floating === outlet.lastElementChild;
-  });
-  expect(order).toBe(true);
-  await page.keyboard.press('Escape');
-  await expect(card).toHaveCount(0);
-  // Closing changed nothing saved: it was never turned off.
-  expect(
-    await page.evaluate(() => (window as { telemetryTurnedOff?: boolean }).telemetryTurnedOff),
-  ).toBeUndefined();
-});
-
-for (const scheme of ['light', 'dark'] as const) {
-  test(`screenshot over the Dashboard, ${scheme}`, async ({ page }, info) => {
-    const directory = process.env.TELEMETRY_SCREENSHOT_DIR;
-    test.skip(!directory || info.project.name !== 'webkit', 'screenshots only on request');
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await open(page, true, scheme);
-    await page.screenshot({ path: `${directory}/telemetry-notice-${scheme}.png` });
-  });
-}

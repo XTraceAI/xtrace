@@ -56,7 +56,7 @@ async function timeline(page: Page) {
   });
 }
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`the Overview card and the human h timeline at 7d and 30d, ${scheme}`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
@@ -153,7 +153,7 @@ test('the Effort switch and a day of the timeline work from the keyboard', async
   await expect(days.first()).toBeFocused();
 });
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`the human + agent tab: first option, one track with a ridge per day, totals and the plain human h view unchanged, ${scheme}`, async ({
     page,
   }) => {

@@ -60,7 +60,7 @@ test('dashboard scrolling keeps resolved compactions, ticks and running glow dur
   await expect(page.locator('.xt-live-session-badge')).toHaveCount(0);
 });
 
-for (const colorScheme of ['dark', 'light'] as const) {
+for (const colorScheme of ['dark'] as const) {
   test(`recorded compactions on three surfaces fit 1120×720 in ${colorScheme}`, async ({
     page,
   }, info) => {

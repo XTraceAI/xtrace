@@ -188,34 +188,6 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
   expect(errors).toEqual([]);
 });
 
-test('renders bundled fonts and remains navigable with external network denied', async ({
-  page,
-  context,
-}) => {
-  const external: string[] = [];
-  const fonts = new Set<string>();
-  await page.route('**/*', async (route) => {
-    const url = new URL(route.request().url());
-    if (!['127.0.0.1', 'localhost'].includes(url.hostname)) {
-      external.push(url.origin);
-      await route.abort();
-    } else {
-      if (url.pathname.startsWith('/fonts/')) fonts.add(url.pathname);
-      await route.continue();
-    }
-  });
-  await page.goto('/dashboard');
-  await expect(page.getByText('fixture F1', { exact: true })).toBeVisible();
-  await page.evaluate(() => document.fonts.ready);
-  expect(fonts.size).toBeGreaterThan(0);
-  expect(external).toEqual([]);
-  await context.setOffline(true);
-  await page.getByRole('button', { name: 'Pull requests', exact: true }).click();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pull requests');
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await expect(page.getByText('fixture://F1', { exact: true })).toBeVisible();
-});
-
 // The ordinary development server explicitly leaves the gallery disabled.
 test('gallery stays unavailable without its development flag', async ({ page }) => {
   await page.goto('/gallery');

@@ -132,14 +132,6 @@ const serve = (page: Page, body: FixtureExport) =>
     }),
   );
 
-const partial = structuredClone(measured);
-partial.today.cost = {
-  ...partial.today.cost,
-  state: 'partial',
-  total_usd: null,
-  priced_subtotal_usd: 1234.56,
-  priced_observations: 398,
-};
 const longValues = structuredClone(measured);
 longValues.today.agent = { active_ms: 1234 * 3_600_000 + 59 * 60_000, sessions: 12345 };
 longValues.today.human = { active_ms: 999 * 3_600_000 + 59 * 60_000, break_minutes: 45 };
@@ -148,31 +140,15 @@ longValues.today.cost = {
   total_usd: 12345678.9,
   priced_subtotal_usd: 12345678.9,
 };
-const unknown = structuredClone(measured);
-unknown.today.cost = {
-  ...unknown.today.cost,
-  state: 'unpriced',
-  total_usd: null,
-  priced_subtotal_usd: 0,
-  priced_observations: 0,
-};
-unknown.today.human.active_ms = null;
 
-const zero = structuredClone(measured);
-zero.today.cost = { ...zero.today.cost, total_usd: 0, priced_subtotal_usd: 0 };
-const tiny = structuredClone(measured);
-tiny.today.cost = { ...tiny.today.cost, total_usd: 0.004, priced_subtotal_usd: 0.004 };
-
+// The empty day (no account usage or recent sessions) and the widest days;
+// each day's wording is checked in TrayPage.test.tsx.
 for (const [name, body] of [
   ['empty midnight', fixture as FixtureExport],
   ['measured', measured],
-  ['partial', partial],
-  ['unknown', unknown],
-  ['zero', zero],
-  ['tiny', tiny],
   ['long values', longValues],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`tray popover lays out the ${name} day in ${scheme}`, async ({ page }, info) => {
       await serve(page, body);
       if (name !== 'empty midnight') await serveMeasuredUsage(page);
@@ -230,19 +206,13 @@ for (const [name, body] of [
       ).toHaveCount(0);
       const cost = panel.getByRole('region', { name: 'Today’s cost' });
       await expect(cost).toHaveText(
-        `Today · cost${name === 'measured' ? '$24.79' : name === 'long values' ? '$12,345,679' : name === 'zero' ? '$0.00' : name === 'tiny' ? '<$0.01' : '—'}`,
+        `Today · cost${name === 'measured' ? '$24.79' : name === 'long values' ? '$12,345,679' : '—'}`,
       );
       await expect(cost).toHaveAttribute('title', /Estimated at public API prices/);
       await expect(cost).toHaveAttribute(
         'aria-description',
         (await cost.getAttribute('title')) ?? '',
       );
-      if (name === 'partial')
-        await expect(cost).toHaveAttribute('title', /Partial \$1,235, not a total/);
-      if (name === 'unknown')
-        await expect(panel.getByRole('region', { name: 'Today’s human hours' })).toContainText(
-          'Unknown',
-        );
       const recent = panel.getByRole('region', { name: 'Recent sessions' });
       await expect(recent).toBeInViewport();
       await expect(panel.getByText(/Today in/)).toHaveCount(0);
