@@ -101,6 +101,56 @@ test('every page state fits, drawn from the Rust rule’s answers', async ({ pag
   expect(errors).toEqual([]);
 });
 
+test('a long step on the narrowest card is cut off inside the card and the name stays', async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(STARTED + 12 * 60_000 + 10_000);
+  await page.goto(harness('running'));
+  // The narrowest a column is drawn.
+  await page.addStyleTag({
+    content: '.xt-scores-grid { grid-template-columns: repeat(auto-fill, 260px) !important; }',
+  });
+  const card = page.locator('.xt-score-card');
+  await expect(card).toContainText('Grading · 0 h 12 m');
+  const step = 'Running collect_signals_and_patterns.py';
+  await page.evaluate(
+    (step) =>
+      (window as unknown as { __progress: (payload: unknown) => void }).__progress({
+        run_id: '00000000-0000-4000-8000-000000000004',
+        state: 'running',
+        elapsed_seconds: 730,
+        step,
+      }),
+    step,
+  );
+  const pill = card.locator('.xt-score-card-top .xt-state');
+  await expect(pill).toContainText('Running collect_');
+  const geometry = await page.evaluate(() => {
+    const card = document.querySelector('.xt-score-card')!.getBoundingClientRect();
+    const pill = document.querySelector('.xt-score-card-top .xt-state')!.getBoundingClientRect();
+    const name = document.querySelector('.xt-score-card h2')!.getBoundingClientRect();
+    const text =
+      document.querySelector<HTMLElement>('.xt-score-card-top .xt-state [title]') ??
+      document.querySelector<HTMLElement>('.xt-score-card-top .xt-state')!;
+    return {
+      card: Math.round(card.width),
+      pillInside: pill.right <= card.right - 13 && pill.left >= name.right,
+      nameWidth: name.width,
+      cut: text.scrollWidth > text.clientWidth,
+    };
+  });
+  expect(geometry).toEqual({
+    card: 260,
+    pillInside: true,
+    nameWidth: geometry.nameWidth,
+    cut: true,
+  });
+  // The name keeps over a third of the row.
+  expect(geometry.nameWidth).toBeGreaterThanOrEqual(75);
+  // The whole line stays one hover away.
+  await expect(pill.locator('[title]')).toHaveAttribute('title', `${step} · 0 h 12 m`);
+});
+
 test('a card shows its average, count and findings, and opens the skill by pointer or keyboard', async ({
   page,
 }) => {

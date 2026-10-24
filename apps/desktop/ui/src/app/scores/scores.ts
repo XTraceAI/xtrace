@@ -377,11 +377,17 @@ export function useElapsed(startedAtMs: number | undefined, reported: number | u
 }
 
 /**
+ * The words of a going run or rubric job joined into one line, leaving out
+ * the ones not known: no step reported yet (or an empty one), no time yet.
+ */
+const goingLine = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(' · ');
+
+/**
  * A going run's step and elapsed time, as one line: the reported step (the
  * native rule's words) in place of `lead` when there is one.
  */
 export const goingText = (lead: string, step: string | null | undefined, elapsed: number) =>
-  `${step ?? lead} · ${elapsedText(elapsed)}`;
+  goingLine(step || lead, elapsedText(elapsed));
 
 /** A skill card's pill while it grades: its step and time once known. */
 export const gradingPillText = (elapsed: number | undefined, step: string | null | undefined) =>
@@ -447,7 +453,7 @@ export const runningElsewhereLead = (
   lead: string,
   step: string | null | undefined,
   elapsed: number | undefined,
-) => [lead, step, elapsed === undefined ? null : elapsedText(elapsed)].filter(Boolean).join(' · ');
+) => goingLine(lead, step, elapsed === undefined ? null : elapsedText(elapsed));
 
 /**
  * The run going now when no row on the page shows it: which project, with
@@ -668,7 +674,7 @@ export const MAKE_RUBRIC_NOTE =
 export const makingText = (elapsed: number | undefined, step?: string | null) =>
   elapsed === undefined
     ? 'Making a rubric…'
-    : `Making a rubric · ${step ? `${step} · ` : ''}${elapsedText(elapsed)}`;
+    : goingLine('Making a rubric', step, elapsedText(elapsed));
 
 /** Why no rubric was made, as the end of a sentence. */
 export function rubricFailureText(failure: GradingRubricFailure) {

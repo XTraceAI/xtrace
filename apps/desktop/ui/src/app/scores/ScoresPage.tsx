@@ -292,6 +292,7 @@ function SkillCard({
 }) {
   const name = useId();
   const elapsed = useElapsed(startedAtMs, reported?.elapsed);
+  const pill = gradingPillText(elapsed, reported?.step);
   const none = skill.graded === 0;
   return (
     <li className="xt-score-card" aria-labelledby={name} data-running={skill.running || undefined}>
@@ -304,7 +305,10 @@ function SkillCard({
         </h2>
         {skill.running && (
           <StatePill tone="accent" height={20} live>
-            {gradingPillText(elapsed, reported?.step)}
+            {/* A long step is cut off in the card; the whole line is its title. */}
+            <span className="xt-score-card-going" title={pill}>
+              {pill}
+            </span>
           </StatePill>
         )}
       </div>

@@ -133,27 +133,105 @@ fn tool_step(name: &str, input: Option<&Input>) -> String {
     }
 }
 
-/// What a shell command runs, as one name: the first script named on its
-/// first line (a word whose base name ends in a script extension), otherwise
-/// the program of its first part that is not `cd`. Only the first line is
-/// read, so a heredoc's body is never looked at.
+/// What a shell command runs, as one name. Only its first line is read, so
+/// a heredoc's body is never looked at. The line is split into parts (at
+/// `&&`, `||`, `;`, `|` and parentheses); in each, leading `NAME=value` words
+/// are skipped and the next word is its program.
+///
+/// * A script, when a part runs one: its program is the script itself
+///   (`./analyze.py`, `scripts/run.sh`), or an [`INTERPRETERS`] program
+///   whose first argument that is not an option is the script
+///   (`python3 scripts/analyze.py`). A shell given `-c` (or `-lc`, ...)
+///   runs its command string, which is read the same way. A script is a
+///   word whose base name ends in a [`SCRIPT_EXTENSIONS`] extension and has
+///   nothing a name may not show. A file that is only an argument
+///   (`grep x deploy.sh`, `echo > out.py`) is not a script being run.
+/// * Otherwise the program of the first part that is not `cd`, when it is a
+///   bare name (`git`, `make`); a program given as a path names nothing,
+///   since a path with a space in it cannot be told from its arguments.
 fn command_name(command: &str) -> Option<String> {
-    let first_line = command.lines().next().unwrap_or_default();
-    let parts = split_parts(first_line);
-    let script = parts.iter().flatten().find_map(|word| {
-        let base = base_name(word);
-        let (stem, extension) = base.rsplit_once('.')?;
-        let plain = !stem.is_empty() && base.chars().all(allowed);
-        (plain && SCRIPT_EXTENSIONS.contains(&extension)).then(|| clean_name(base))?
-    });
-    if script.is_some() {
-        return script;
+    let parts = programs(command);
+    if let Some(script) = parts.iter().find_map(|words| script_run(words, 2)) {
+        return Some(script);
     }
-    parts
+    let program = parts
         .iter()
-        .filter_map(|words| words.iter().find(|word| !is_assignment(word)))
-        .find(|program| program.as_str() != "cd")
-        .and_then(|program| clean_name(base_name(program)))
+        .map(|words| words[0].as_str())
+        .find(|program| *program != "cd")?;
+    if program.contains('/') {
+        return None;
+    }
+    clean_name(program)
+}
+
+/// The parts of a command's first line, each without its leading
+/// `NAME=value` words, so each starts with its program.
+fn programs(command: &str) -> Vec<Vec<String>> {
+    let first_line = command.lines().next().unwrap_or_default();
+    split_parts(first_line)
+        .into_iter()
+        .map(|words| {
+            words
+                .into_iter()
+                .skip_while(|word| is_assignment(word))
+                .collect::<Vec<_>>()
+        })
+        .filter(|words| !words.is_empty())
+        .collect()
+}
+
+/// Programs that run the script named as their first argument.
+const INTERPRETERS: [&str; 11] = [
+    "python", "node", "bash", "sh", "zsh", "ruby", "perl", "deno", "bun", "tsx", "ts-node",
+];
+
+/// Whether `program` (a base name) is an [`INTERPRETERS`] program; a version
+/// after `python` (`python3`, `python3.12`) is allowed.
+fn is_interpreter(program: &str) -> bool {
+    INTERPRETERS.contains(&program)
+        || program.strip_prefix("python").is_some_and(|version| {
+            version.starts_with(|c: char| c.is_ascii_digit())
+                && version.chars().all(|c| c.is_ascii_digit() || c == '.')
+        })
+}
+
+/// The script one part (its program first) runs, as [`command_name`] says;
+/// `depth` bounds how many nested `-c` strings are read.
+fn script_run(words: &[String], depth: usize) -> Option<String> {
+    let program = base_name(&words[0]);
+    if let Some(script) = script_name(program) {
+        return Some(script);
+    }
+    if !is_interpreter(program) {
+        return None;
+    }
+    let shell = matches!(program, "bash" | "sh" | "zsh");
+    let mut rest = words[1..].iter();
+    while let Some(word) = rest.next() {
+        if let Some(flags) = word.strip_prefix('-') {
+            if shell && !flags.starts_with('-') && flags.contains('c') {
+                // The command string a shell runs, read the same way, at most
+                // `depth` strings deep.
+                let inner = rest.next()?;
+                let depth = depth.checked_sub(1)?;
+                return programs(inner)
+                    .iter()
+                    .find_map(|words| script_run(words, depth));
+            }
+            continue;
+        }
+        return script_name(base_name(word));
+    }
+    None
+}
+
+/// `base` as a script's name: a plain name ending in a script extension.
+fn script_name(base: &str) -> Option<String> {
+    let (stem, extension) = base.rsplit_once('.')?;
+    let plain = !stem.is_empty() && base.chars().all(allowed);
+    (plain && SCRIPT_EXTENSIONS.contains(&extension))
+        .then(|| clean_name(base))
+        .flatten()
 }
 
 /// `NAME=value`, a variable set for the command.
@@ -165,7 +243,8 @@ fn is_assignment(word: &str) -> bool {
     })
 }
 
-/// A command line's parts (split at `&&`, `||`, `;` and `|`), each as its
+/// A command line's parts (split at `&&`, `||`, `;`, `|` and parentheses),
+/// each as its
 /// words, with quotes removed. Simple on purpose: it only has to find a name.
 fn split_parts(line: &str) -> Vec<Vec<String>> {
     let mut parts = vec![Vec::new()];
@@ -197,7 +276,7 @@ fn split_parts(line: &str) -> Vec<Vec<String>> {
                 }
             }
             (None, c) if c.is_whitespace() => end_word(&mut parts, &mut word, &mut in_word),
-            (None, ';' | '|' | '&') => {
+            (None, ';' | '|' | '&' | '(' | ')') => {
                 end_word(&mut parts, &mut word, &mut in_word);
                 if matches!(chars.peek(), Some('|' | '&')) {
                     chars.next();
@@ -355,29 +434,64 @@ mod tests {
                 "python3 /Users/me/skill/scripts/analyze.py --repo /x",
                 "Running analyze.py",
             ),
+            ("/usr/bin/python3.12 -u analyze.py", "Running analyze.py"),
             (
                 "cd /Users/me/project && python3 scripts/collect.py",
                 "Running collect.py",
             ),
-            ("cd '/a b' && bash \"run all.sh\"", "Running bash"),
             ("FOO=1 BAR='x y' node ./build.mjs", "Running build.mjs"),
             ("python3 analyze.py | head -50", "Running analyze.py"),
+            ("./analyze.py --all", "Running analyze.py"),
+            ("cd /x; scripts/run.sh", "Running run.sh"),
             ("bash -c 'deploy.sh'", "Running deploy.sh"),
+            ("bash -lc \"cd /s && python3 a.py\"", "Running a.py"),
+            ("sh -c \"bash -c 'zsh -c x.sh'\"", "Running sh"),
             ("ruby x.rb; perl y.pl", "Running x.rb"),
+            ("make && python3 later.py", "Running later.py"),
+        ];
+        for (command, label) in cases {
+            assert_eq!(bash(command).as_deref(), Some(label), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_only_an_argument_is_not_run() {
+        let cases = [
+            ("grep -r password deploy.sh", "Running grep"),
+            ("echo hi > /x/out.py", "Running echo"),
+            ("cat ~/.config/secret_token.sh", "Running cat"),
             ("ls -la /Users/me/project", "Running ls"),
-            ("cd /x && /usr/bin/git status --short", "Running git"),
             ("cd /x; LANG=C wc -l *.py", "Running wc"),
+            ("python3 -m pytest tests/test_a.py", "Running python3"),
             (
                 "python3 - <<'EOF'\nopen('other.py')\nEOF",
                 "Running python3",
             ),
-            ("cd /x", "Running a command"),
-            ("", "Running a command"),
-            ("   ", "Running a command"),
-            ("A=1", "Running a command"),
+            ("bash <<'EOF'\npython3 a.py\nEOF", "Running bash"),
+            ("cd '/a b' && bash \"run all.sh\"", "Running bash"),
+            ("(cd /x && make)", "Running make"),
         ];
         for (command, label) in cases {
             assert_eq!(bash(command).as_deref(), Some(label), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_program_given_as_a_path_names_nothing() {
+        for command in [
+            "/Users/me/Secret Folder/run --x",
+            "cd /x && /usr/bin/git status --short",
+            "./build",
+            "cd /x",
+            "A=1",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                bash(command).as_deref(),
+                Some("Running a command"),
+                "{command}"
+            );
         }
         assert_eq!(
             step(&tool("Bash", json!({}))).as_deref(),
