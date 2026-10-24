@@ -27,22 +27,47 @@ const issueLabels: Record<AccountUsageIssue, string> = {
   reading: 'Reading…',
 };
 
-/** The Terminal command that fixes an issue, for the issues the user can fix that way. */
-const issueCommands: Partial<Record<AccountUsageIssue, string>> = {
-  signed_out: 'claude auth login',
+/**
+ * The issues the user fixes with a Terminal command: a short name for the
+ * one-line warning on a closed row, and the command.
+ */
+const issueFixes: Partial<Record<AccountUsageIssue, { short: string; command: string }>> = {
+  signed_out: { short: 'Signed out', command: 'claude auth login' },
 };
 
 /** "Run `claude auth login` in Terminal" under an issue that has a fix. */
 function IssueAction({ issue }: { issue: AccountUsageIssue | null | undefined }) {
-  const command = issue ? issueCommands[issue] : undefined;
-  if (!command) return null;
+  const fix = issue ? issueFixes[issue] : undefined;
+  if (!fix) return null;
   return (
     <>
       {' '}
       <span className="xt-account-action">
-        Run <code>{command}</code> in Terminal
+        Run <code>{fix.command}</code> in Terminal
       </span>
     </>
+  );
+}
+
+/**
+ * The one warning line a closed row shows instead of its reading's details:
+ * "Signed out · run `claude auth login`", another issue's label, or, with no
+ * issue, how long the reading has not been updated.
+ */
+function RowWarning({ issue, age }: { issue: AccountUsageIssue | null; age: string | null }) {
+  const fix = issue ? issueFixes[issue] : undefined;
+  return (
+    <span className="xt-account-warning xt-account-row-warning">
+      {fix ? (
+        <>
+          {fix.short} · run <code>{fix.command}</code>
+        </>
+      ) : issue ? (
+        issueLabels[issue]
+      ) : (
+        ['Not updated', age].filter(Boolean).join(' · ')
+      )}
+    </span>
   );
 }
 
@@ -821,25 +846,22 @@ function Provider({
   const week =
     main && readable ? provider.windows.find((window) => window.daily !== undefined) : undefined;
   const pace = week ? paceLabel(week, week === main ? '' : 'Week') : null;
-  // A stale reading shown with its numbers says why it is old, in view: the
-  // reason the last read failed, else how long it has not been updated. A
-  // first read still running is no reason.
+  // A stale reading's closed row shows only one warning line under its
+  // dimmed numbers: the reason the last read failed, else how long it has not
+  // been updated (a first read still running is no reason). Its reset, age
+  // and pace, worked out from old numbers, move to the details. A missing
+  // reading with a fix the user can run says only that, too.
+  const staleRow = Boolean(main && stale);
   const staleIssue =
-    main && stale && provider?.issue && provider.issue !== 'reading' ? provider.issue : null;
-  const staleWarning =
-    main && stale
-      ? staleIssue
-        ? issueLabels[staleIssue]
-        : ['Not updated', age].filter(Boolean).join(' · ')
-      : null;
+    staleRow && provider?.issue && provider.issue !== 'reading' ? provider.issue : null;
+  const fixable = !main && provider?.issue && issueFixes[provider.issue] ? provider.issue : null;
   const sub = main
     ? [
         windowTitle(main),
         main.used_percent === 100 ? 'Limit reached' : null,
         resetLabel(main.resets_at),
-        // The warning line already says it when it gives the age.
-        staleIssue ? 'Stale' : null,
-        stale && !staleIssue ? null : age,
+        stale ? 'Stale' : null,
+        age,
       ]
         .filter(Boolean)
         .join(' · ')
@@ -864,14 +886,16 @@ function Provider({
   const gapId = useId();
   // The even-use mark goes only on the week's own bar, and only while its
   // pace line is shown. The row's description carries its text too.
-  const gap = week === main && pace && main ? paceGapLabel(main) : null;
+  const gap = !staleRow && week === main && pace && main ? paceGapLabel(main) : null;
   const fill = main && gap ? paceFill(main.used_percent, main.pace?.expected_percent) : {};
   return (
-    <details className={`xt-account-provider xt-host-${host}${staleWarning ? ' is-stale' : ''}`}>
+    <details className={`xt-account-provider xt-host-${host}${staleRow ? ' is-stale' : ''}`}>
       <summary
         tabIndex={0}
-        aria-label={`${label} account usage: ${status}${staleIssue ? ` · ${issueLabels[staleIssue]}` : ''}`}
-        aria-describedby={main ? (gap ? `${describedBy} ${gapId}` : describedBy) : undefined}
+        aria-label={`${label} account usage: ${status}`}
+        aria-describedby={
+          main ? (gap ? `${describedBy} ${gapId}` : describedBy) : fixable ? describedBy : undefined
+        }
       >
         <span className="xt-host-glyph" aria-hidden="true">
           <HostGlyph host={host} label={label} />
@@ -906,18 +930,17 @@ function Provider({
               : undefined
           }
         >
-          {sub}
-          {!main && <IssueAction issue={provider?.issue} />}
-          {staleWarning && (
-            <span className="xt-account-warning xt-account-stale">
-              {staleWarning}
-              <IssueAction issue={staleIssue} />
-            </span>
+          {staleRow || fixable ? (
+            <RowWarning issue={staleIssue ?? fixable} age={age} />
+          ) : (
+            <>
+              {sub}
+              {/* A run-out warning stays in view; the on-pace line shows only
+                  when the row is open, but screen readers still hear it here. */}
+              {pace?.warning && <span className="xt-account-pace is-warning">{pace.text}</span>}
+              {pace && !pace.warning && <span className="sr-only">{pace.text}</span>}
+            </>
           )}
-          {/* A run-out warning stays in view; the on-pace line shows only
-              when the row is open, but screen readers still hear it here. */}
-          {pace?.warning && <span className="xt-account-pace is-warning">{pace.text}</span>}
-          {pace && !pace.warning && <span className="sr-only">{pace.text}</span>}
         </span>
         {gap && (
           <span id={gapId} className="sr-only">
@@ -926,9 +949,29 @@ function Provider({
         )}
       </summary>
       <div className="xt-account-detail">
-        {!main && <p>{statusLine}</p>}
-        {pace && !pace.warning && (
-          <span className="xt-account-pace" aria-hidden="true">
+        {!main && (
+          <p>
+            {statusLine}
+            <IssueAction issue={fixable} />
+          </p>
+        )}
+        {staleRow && (
+          <>
+            <p className="xt-account-stale-detail">{sub}</p>
+            {staleIssue && (
+              <p className="xt-account-stale-detail">
+                {issueLabels[staleIssue]}
+                <IssueAction issue={staleIssue} />
+              </p>
+            )}
+          </>
+        )}
+        {pace && (staleRow || !pace.warning) && (
+          <span
+            className={`xt-account-pace${pace.warning ? ' is-warning' : ''}`}
+            // A fresh row's screen readers already hear it in the summary.
+            aria-hidden={staleRow ? undefined : 'true'}
+          >
             {pace.text}
           </span>
         )}

@@ -158,3 +158,42 @@ test('remaining bars fit the compact sidebar at 1120×720 in both themes', async
     await sidebar.screenshot({ path: info.outputPath(`remaining-${scheme}-1120x720.png`) });
   }
 });
+
+test('a stale or signed-out Claude row is one warning line that fits the sidebar', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1120, height: 720 });
+  const issues = [
+    'none',
+    'reading',
+    'signed_out',
+    'no_login',
+    'credential_access_required',
+    'credential_unavailable',
+    'unauthorized',
+    'rate_limited',
+    'timeout',
+    'network',
+    'invalid_response',
+    'source_unavailable',
+    'missing-signed_out',
+  ];
+  for (const issue of issues) {
+    await page.goto(`/e2e/sidebar.html?claude=${issue}`);
+    const sidebar = page.getByRole('complementary', { name: 'Workspace' });
+    const row = sidebar.locator('.xt-host-claude summary');
+    const warning = row.locator('.xt-account-row-warning');
+    await expect(warning, issue).toBeVisible();
+    // Only the warning line is under the numbers, on one line, not cut off.
+    await expect(row.locator('.xt-account-sub'), issue).toHaveText(
+      (await warning.textContent()) ?? '',
+    );
+    const fits = await warning.evaluate((element) => ({
+      whole: element.scrollWidth <= element.clientWidth,
+      lines: Math.round(
+        element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight),
+      ),
+    }));
+    expect(fits, issue).toEqual({ whole: true, lines: 1 });
+  }
+});

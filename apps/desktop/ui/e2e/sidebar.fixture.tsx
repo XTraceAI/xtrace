@@ -5,6 +5,7 @@ import { BrandMark } from '../src/kit/BrandMark';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeProvider';
 import '../src/index.css';
 import type { AccountUsage } from '../src/data/generated/AccountUsage';
+import type { AccountUsageIssue } from '../src/data/generated/AccountUsageIssue';
 
 const accountUsage: AccountUsage = {
   claude: {
@@ -52,6 +53,26 @@ const accountUsage: AccountUsage = {
     ],
   },
 };
+
+// `?claude=<issue>` shows the Claude reading stale 18 hours after it was
+// read, with that issue (`none` for no issue); `?claude=missing-<issue>`
+// shows no reading, with that issue.
+const claudeCase = new URLSearchParams(location.search).get('claude');
+if (claudeCase?.startsWith('missing-')) {
+  accountUsage.claude = {
+    state: 'unavailable',
+    issue: claudeCase.slice('missing-'.length) as AccountUsageIssue,
+    checked_at: null,
+    windows: [],
+  };
+} else if (claudeCase) {
+  accountUsage.claude = {
+    ...accountUsage.claude,
+    state: 'stale',
+    issue: claudeCase === 'none' ? null : (claudeCase as AccountUsageIssue),
+    checked_at: Math.floor(Date.now() / 1000) - 18 * 3600,
+  };
+}
 
 function Fixture() {
   const { theme, toggle } = useTheme();

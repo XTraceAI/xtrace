@@ -260,11 +260,12 @@ it('shows missing and failed providers without guessed percentages or cached val
     />,
   );
   const stale = screen.getByLabelText(
-    'Claude account usage: 0% remaining · Weekly · limit reached · stale · Provider rate limited',
+    'Claude account usage: 0% remaining · Weekly · limit reached · stale',
   );
-  expect(stale.textContent).toContain('Stale');
-  expect(stale.textContent).toContain('days ago');
-  expect(stale.querySelector('.xt-account-stale')!.textContent).toBe('Provider rate limited');
+  expect(stale.querySelector('.xt-account-sub')!.textContent).toBe('Provider rate limited');
+  const staleDetails = stale.closest('details')!.querySelector('.xt-account-detail')!;
+  expect(staleDetails.textContent).toContain('Stale');
+  expect(staleDetails.textContent).toContain('days ago');
   rerender(
     <AccountUsageWidget
       usage={{
@@ -371,7 +372,7 @@ it('shows Reading while the first automatic Claude read runs, and keeps a saved 
   const stale = screen.getByLabelText(
     'Claude account usage: 0% remaining · Weekly · limit reached · stale',
   );
-  expect(stale.querySelector('.xt-account-stale')!.textContent).toMatch(
+  expect(stale.querySelector('.xt-account-sub')!.textContent).toMatch(
     /^Not updated · \d+ days ago$/,
   );
   expect(stale.textContent).not.toContain('Reading…');
@@ -796,14 +797,14 @@ it('marks a reading stale exactly when the app said it would turn stale', () => 
     />,
   );
   const sub = () => document.querySelector('summary .xt-account-sub')!.firstChild!.textContent;
-  const warning = () => document.querySelector('summary .xt-account-stale');
+  const warning = () => document.querySelector('summary .xt-account-row-warning');
   expect(sub()).toMatch(/ · 14 min ago$/);
   expect(sub()).not.toContain('Stale');
   expect(warning()).toBeNull();
   // No new read arrives; the screen turns the reading stale on time, with its age.
   act(() => vi.advanceTimersByTime(60_000));
-  expect(warning()!.textContent).toBe('Not updated · 15 min ago');
-  expect(sub()).not.toContain('min ago');
+  expect(sub()).toBe('Not updated · 15 min ago');
+  expect(warning()).not.toBeNull();
   expect(document.querySelector('details')!.classList.contains('is-stale')).toBe(true);
   expect(document.querySelector('summary')!.getAttribute('aria-label')).toContain('· stale');
 });
@@ -826,66 +827,96 @@ describe('a stale reading', () => {
         onRefresh={vi.fn()}
       />,
     );
+  // Ahead of even use, so a fresh row would show a run-out time and a pace mark.
   const reading = (overrides: Partial<AccountUsage['claude']>): AccountUsage['claude'] => ({
     state: 'stale',
     issue: null,
     checked_at: Date.now() / 1000 - 17 * 3600,
-    windows: [claudeWeek({ used_percent: 70 })],
+    windows: [
+      claudeWeek({
+        used_percent: 70,
+        pace: {
+          projected_percent_at_reset: 100,
+          expected_percent: 50,
+          run_out_at: Date.now() / 1000 + 2 * 86_400,
+        },
+      }),
+    ],
     ...overrides,
   });
   const summary = () => document.querySelector('summary')!;
-  const warning = () => summary().querySelector('.xt-account-stale');
-  const sub = () => summary().querySelector('.xt-account-sub')!.firstChild!.textContent;
+  const details = () => summary().closest('details')!;
+  const line = () => summary().querySelector('.xt-account-sub')!;
+  const detail = () => details().querySelector('.xt-account-detail')!;
   beforeEach(() => {
     vi.stubEnv('TZ', 'America/Los_Angeles');
     vi.useFakeTimers();
     vi.setSystemTime(new Date(nowIso));
   });
 
-  it('says Claude Code is signed out and how to sign in, in the closed row', () => {
+  /** The closed row says only the one warning line, and dims its numbers. */
+  function expectOneLine(text: string) {
+    expect(details().open).toBe(false);
+    expect(line().textContent).toBe(text);
+    expect(line().children).toHaveLength(1);
+    expect(line().firstElementChild!.className).toBe('xt-account-warning xt-account-row-warning');
+    expect(summary().querySelector('.xt-account-pace')).toBeNull();
+    expect(summary().querySelector('.xt-account-pace-tick')).toBeNull();
+    expect(details().classList.contains('is-stale')).toBe(true);
+    // Screen readers hear the reading in the label and the warning once, as
+    // its description.
+    expect(summary().getAttribute('aria-label')).toBe(
+      'Claude account usage: 30% remaining · Week · stale',
+    );
+    expect(summary().getAttribute('aria-describedby')).toBe(line().id);
+  }
+
+  it('says Claude Code is signed out and the command, on one line', () => {
     renderProvider(reading({ issue: 'signed_out' }));
-    expect(summary().closest('details')!.open).toBe(false);
-    expect(warning()!.classList.contains('xt-account-warning')).toBe(true);
-    expect(warning()!.textContent).toBe(
+    expectOneLine('Signed out · run claude auth login');
+    expect(line().querySelector('code')!.textContent).toBe('claude auth login');
+    // The details keep the reset, the age, the full reason and command, and
+    // the pace from the old numbers.
+    expect(detail().textContent).toContain('Week · resets Mon 8 PM · Stale · 17 hr ago');
+    expect(detail().textContent).toContain(
       'Claude Code is signed out Run claude auth login in Terminal',
     );
-    expect(warning()!.querySelector('code')!.textContent).toBe('claude auth login');
-    // The age is said once, beside the reset.
-    expect(sub()).toBe('Week · resets Mon 8 PM · Stale · 17 hr ago');
-    expect(summary().getAttribute('aria-label')).toBe(
-      'Claude account usage: 30% remaining · Week · stale · Claude Code is signed out',
+    expect(detail().querySelector('.xt-account-pace.is-warning')!.textContent).toMatch(
+      /^Runs out ~/,
     );
-    expect(summary().closest('details')!.classList.contains('is-stale')).toBe(true);
+    expect(line().getAttribute('title')).toMatch(/^Read /);
   });
 
   it('shows the reason the last read failed', () => {
     renderProvider(reading({ issue: 'timeout' }));
-    expect(warning()!.textContent).toBe('Provider timed out');
-    expect(warning()!.querySelector('code')).toBeNull();
-    expect(sub()).toMatch(/ · Stale · 17 hr ago$/);
-    expect(summary().getAttribute('aria-label')).toMatch(/ · stale · Provider timed out$/);
+    expectOneLine('Provider timed out');
+    expect(line().querySelector('code')).toBeNull();
+    expect(detail().textContent).toContain('Provider timed out');
   });
 
   it('without a reason says how long it has not been updated', () => {
     renderProvider(reading({}));
-    expect(warning()!.textContent).toBe('Not updated · 17 hr ago');
-    expect(sub()).not.toContain('Stale');
-    expect(sub()).not.toContain('hr ago');
-    expect(summary().getAttribute('aria-label')).toBe(
-      'Claude account usage: 30% remaining · Week · stale',
+    expectOneLine('Not updated · 17 hr ago');
+    renderProvider(reading({ issue: 'reading' }));
+    expect(document.querySelectorAll('summary')[2].textContent).toContain(
+      'Not updated · 17 hr ago',
     );
   });
 
   it('leaves a fresh reading as it was', () => {
     renderProvider(reading({ state: 'available', checked_at: Date.now() / 1000 - 60 }));
-    expect(warning()).toBeNull();
-    expect(summary().closest('details')!.classList.contains('is-stale')).toBe(false);
-    expect(sub()).not.toContain('Stale');
+    expect(summary().querySelector('.xt-account-row-warning')).toBeNull();
+    expect(details().classList.contains('is-stale')).toBe(false);
+    expect(line().firstChild!.textContent).toBe('Week · resets Mon 8 PM');
+    expect(summary().querySelector('.xt-account-pace.is-warning')!.textContent).toMatch(
+      /^Runs out ~/,
+    );
+    expect(summary().querySelector('.xt-account-pace-tick')).not.toBeNull();
     expect(summary().getAttribute('aria-label')).toBe('Claude account usage: 30% remaining · Week');
   });
 });
 
-it('says how to sign in when Claude Code is signed out and no reading is saved', () => {
+it('says how to sign in on one line when Claude Code is signed out and no reading is saved', () => {
   render(
     <AccountUsageWidget
       usage={{
@@ -898,10 +929,13 @@ it('says how to sign in when Claude Code is signed out and no reading is saved',
     />,
   );
   const claude = screen.getByLabelText('Claude account usage: Usage unavailable');
-  expect(claude.querySelector('.xt-account-sub')!.textContent).toBe(
+  const line = claude.querySelector('.xt-account-sub')!;
+  expect(line.textContent).toBe('Signed out · run claude auth login');
+  expect(line.children).toHaveLength(1);
+  expect(claude.getAttribute('aria-describedby')).toBe(line.id);
+  expect(claude.closest('details')!.querySelector('.xt-account-detail')!.textContent).toBe(
     'Claude Code is signed out Run claude auth login in Terminal',
   );
-  expect(claude.querySelector('.xt-account-stale')).toBeNull();
 });
 
 it('shows a short one-line reset and an on-pace line for the week', () => {

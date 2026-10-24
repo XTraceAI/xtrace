@@ -296,7 +296,18 @@
   color: var(--warning);
   font-weight: 600;
 }
-/* A fix to run, under a warning or a status line. */
+/* A closed row's one warning line: never wraps. */
+.xt-account-row-warning {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 8px keeps "Signed out · run claude auth login" inside the 228px sidebar. */
+.xt-account-row-warning code {
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-size: 8px;
+}
+/* A fix to run, in a row's details. */
 .xt-account-action {
   display: block;
   font-weight: 400;
