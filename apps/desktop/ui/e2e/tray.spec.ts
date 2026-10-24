@@ -132,14 +132,6 @@ const serve = (page: Page, body: FixtureExport) =>
     }),
   );
 
-const partial = structuredClone(measured);
-partial.today.cost = {
-  ...partial.today.cost,
-  state: 'partial',
-  total_usd: null,
-  priced_subtotal_usd: 1234.56,
-  priced_observations: 398,
-};
 const longValues = structuredClone(measured);
 longValues.today.agent = { active_ms: 1234 * 3_600_000 + 59 * 60_000, sessions: 12345 };
 longValues.today.human = { active_ms: 999 * 3_600_000 + 59 * 60_000, break_minutes: 45 };
@@ -158,24 +150,16 @@ unknown.today.cost = {
 };
 unknown.today.human.active_ms = null;
 
-const zero = structuredClone(measured);
-zero.today.cost = { ...zero.today.cost, total_usd: 0, priced_subtotal_usd: 0 };
-const tiny = structuredClone(measured);
-tiny.today.cost = { ...tiny.today.cost, total_usd: 0.004, priced_subtotal_usd: 0.004 };
-
+// The widest days; each day's wording is checked in TrayPage.test.tsx.
 for (const [name, body] of [
-  ['empty midnight', fixture as FixtureExport],
   ['measured', measured],
-  ['partial', partial],
   ['unknown', unknown],
-  ['zero', zero],
-  ['tiny', tiny],
   ['long values', longValues],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`tray popover lays out the ${name} day in ${scheme}`, async ({ page }, info) => {
       await serve(page, body);
-      if (name !== 'empty midnight') await serveMeasuredUsage(page);
+      await serveMeasuredUsage(page);
       await page.setViewportSize({ width: 360, height: 540 });
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto('/tray');
@@ -230,15 +214,13 @@ for (const [name, body] of [
       ).toHaveCount(0);
       const cost = panel.getByRole('region', { name: 'Today’s cost' });
       await expect(cost).toHaveText(
-        `Today · cost${name === 'measured' ? '$24.79' : name === 'long values' ? '$12,345,679' : name === 'zero' ? '$0.00' : name === 'tiny' ? '<$0.01' : '—'}`,
+        `Today · cost${name === 'measured' ? '$24.79' : name === 'long values' ? '$12,345,679' : '—'}`,
       );
       await expect(cost).toHaveAttribute('title', /Estimated at public API prices/);
       await expect(cost).toHaveAttribute(
         'aria-description',
         (await cost.getAttribute('title')) ?? '',
       );
-      if (name === 'partial')
-        await expect(cost).toHaveAttribute('title', /Partial \$1,235, not a total/);
       if (name === 'unknown')
         await expect(panel.getByRole('region', { name: 'Today’s human hours' })).toContainText(
           'Unknown',
@@ -248,48 +230,46 @@ for (const [name, body] of [
       await expect(panel.getByText(/Today in/)).toHaveCount(0);
       await expect(panel.getByText(/Hours use the Dashboard/)).toHaveCount(0);
       await expect(panel.locator('.xt-tray-footnote')).toHaveCount(0);
-      if (name !== 'empty midnight') {
-        await expect(panel.locator('.xt-account-value').filter({ hasText: '34%' })).toBeVisible();
-        await expect(panel.locator('.xt-account-value').filter({ hasText: '46%' })).toBeVisible();
-        await expect(recent.getByRole('listitem')).toHaveCount(3);
-        await expect(recent.getByText('Waiting for approval')).toBeVisible();
-        await expect(recent.getByText('Running', { exact: true })).toHaveCount(0);
-        await expect(recent.getByText(/^Codex/)).toHaveCount(0);
-        const running = recent.getByRole('img', { name: 'Codex · Running' });
-        await expect(running).toHaveCount(2);
-        await expect(recent.getByRole('img', { name: 'Codex', exact: true })).toHaveCount(1);
-        const icons = await recent.locator('.xt-tray-session-meta').evaluateAll((rows) =>
-          rows.map((row) => {
-            const icon = row.firstElementChild!;
-            const bounds = icon.getBoundingClientRect();
-            const parent = row.getBoundingClientRect();
-            return {
-              width: bounds.width,
-              height: bounds.height,
-              inside: bounds.left >= parent.left && bounds.right <= parent.right,
-            };
-          }),
-        );
-        for (const icon of icons) expect(icon).toEqual({ width: 18, height: 18, inside: true });
-        const animation = () =>
-          running.first().evaluate((icon) => {
-            const style = getComputedStyle(icon, '::before');
-            return {
-              name: style.animationName,
-              duration: style.animationDuration,
-              iterations: style.animationIterationCount,
-            };
-          });
-        expect(await animation()).toEqual({
-          name: 'xt-live-logo-spin',
-          duration: '1.4s',
-          iterations: 'infinite',
+      await expect(panel.locator('.xt-account-value').filter({ hasText: '34%' })).toBeVisible();
+      await expect(panel.locator('.xt-account-value').filter({ hasText: '46%' })).toBeVisible();
+      await expect(recent.getByRole('listitem')).toHaveCount(3);
+      await expect(recent.getByText('Waiting for approval')).toBeVisible();
+      await expect(recent.getByText('Running', { exact: true })).toHaveCount(0);
+      await expect(recent.getByText(/^Codex/)).toHaveCount(0);
+      const running = recent.getByRole('img', { name: 'Codex · Running' });
+      await expect(running).toHaveCount(2);
+      await expect(recent.getByRole('img', { name: 'Codex', exact: true })).toHaveCount(1);
+      const icons = await recent.locator('.xt-tray-session-meta').evaluateAll((rows) =>
+        rows.map((row) => {
+          const icon = row.firstElementChild!;
+          const bounds = icon.getBoundingClientRect();
+          const parent = row.getBoundingClientRect();
+          return {
+            width: bounds.width,
+            height: bounds.height,
+            inside: bounds.left >= parent.left && bounds.right <= parent.right,
+          };
+        }),
+      );
+      for (const icon of icons) expect(icon).toEqual({ width: 18, height: 18, inside: true });
+      const animation = () =>
+        running.first().evaluate((icon) => {
+          const style = getComputedStyle(icon, '::before');
+          return {
+            name: style.animationName,
+            duration: style.animationDuration,
+            iterations: style.animationIterationCount,
+          };
         });
-        await page.emulateMedia({ reducedMotion: 'reduce' });
-        expect((await animation()).name).toBe('none');
-        await page.screenshot({ path: info.outputPath(`tray-reduced-motion-${scheme}.png`) });
-        await page.emulateMedia({ reducedMotion: 'no-preference' });
-      }
+      expect(await animation()).toEqual({
+        name: 'xt-live-logo-spin',
+        duration: '1.4s',
+        iterations: 'infinite',
+      });
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      expect((await animation()).name).toBe('none');
+      await page.screenshot({ path: info.outputPath(`tray-reduced-motion-${scheme}.png`) });
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
       await page.screenshot({
         path: info.outputPath(`tray-initial-${name.replace(' ', '-')}-${scheme}.png`),
       });

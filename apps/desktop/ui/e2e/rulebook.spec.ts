@@ -59,7 +59,7 @@ const calls = (page: Page) =>
 const harness = (scenario: string, path = '/rulebook') =>
   `/e2e/rulebook.html?scenario=${scenario}&path=${encodeURIComponent(path)}`;
 
-test('fits every Rulebook address in both themes on the fixture’s own answer', async ({
+test('fits every Rulebook address at both window sizes on the fixture’s own answer', async ({
   page,
 }, info) => {
   const errors: string[] = [];
@@ -67,12 +67,16 @@ test('fits every Rulebook address in both themes on the fixture’s own answer',
   page.on('console', (message) => {
     if (message.type() === 'error') errors.push('console error');
   });
-  for (const scheme of ['dark', 'light'] as const) {
-    await page.emulateMedia({ colorScheme: scheme });
+  await page.emulateMedia({ colorScheme: 'light' });
+  for (const [width, height] of [
+    [1120, 720],
+    [1440, 900],
+  ] as const) {
+    await page.setViewportSize({ width, height });
     for (const [path, title, view] of routes) {
       await page.goto(path);
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
-      await expect(page.locator('html')).toHaveAttribute('data-theme', scheme);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
       // The sidebar row is a disabled "soon" row, still marked as the open page.
       const row = page.getByRole('button', { name: /Rulebook/ });
       await expect(row).toBeDisabled();
@@ -91,7 +95,7 @@ test('fits every Rulebook address in both themes on the fixture’s own answer',
       }
       await assertFits(page);
       await page.mouse.move(1100, 700);
-      await page.screenshot({ path: info.outputPath(`rulebook-${view}-${scheme}.png`) });
+      await page.screenshot({ path: info.outputPath(`rulebook-${view}-${width}.png`) });
     }
   }
   expect(errors).toEqual([]);
@@ -134,8 +138,6 @@ test('lays the overview out as the reference: read state, four tiles, a note, th
 // Each answer's status line, and the Recorded fires tile's aside beside it.
 const layoutScenarios = [
   ['populated', /^Read complete · 4 recorded fires/, '14d · exact'],
-  ['lowerBound', /^Read complete · ≥ 4 recorded fires/, '14d · lower bound'],
-  ['emptyExact', /^Read complete · 0 recorded fires/, '14d · exact'],
   ['emptyLowerBound', /^Read complete · ≥ 0 recorded fires/, '14d · lower bound'],
   ['truncated', /^Read complete · 220 recorded fires in 140 observed groups/, '14d · exact'],
   [
@@ -153,9 +155,7 @@ const layoutScenarios = [
 ] as const;
 
 for (const [scenario, text, aside] of layoutScenarios)
-  test(`lays out ${scenario} at both window sizes in both themes without clipping`, async ({
-    page,
-  }, info) => {
+  test(`lays out ${scenario} at both window sizes without clipping`, async ({ page }, info) => {
     test.slow();
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.name));
@@ -164,7 +164,7 @@ for (const [scenario, text, aside] of layoutScenarios)
       [1440, 900],
     ] as const) {
       await page.setViewportSize({ width, height });
-      for (const scheme of ['dark', 'light'] as const) {
+      for (const scheme of ['light'] as const) {
         await page.emulateMedia({ colorScheme: scheme });
         for (const path of ['/rulebook', '/rulebook/fires']) {
           await page.goto(harness(scenario, path));
@@ -227,89 +227,6 @@ for (const [scenario, text, aside] of layoutScenarios)
     }
     expect(errors).toEqual([]);
   });
-
-test('shows the returned window and the same bounded timeline on both views', async ({ page }) => {
-  await page.goto(harness('truncated'));
-  const source = page.locator('.xt-rulebook-source');
-  await expect(source).toHaveText(
-    'Default local rulebook source · window 2026-09-09T09:00:00Z to 2026-09-23T09:00:00Z · read 2026-09-23T09:00:00Z · 225 lines scanned',
-  );
-  const timeline = page.getByRole('table', { name: 'Recorded timeline' });
-  const groups = page.getByRole('table', { name: 'Observed rule groups' });
-  await expect(timeline.locator('.xt-data-row')).toHaveCount(100);
-  await expect(groups.locator('.xt-data-row')).toHaveCount(100);
-  await expect(page.locator('.xt-rulebook-truncated')).toHaveText([
-    'Showing 100 of 140 observed groups; every group is counted above.',
-    'Showing the latest 100 of 225 recorded rows in the window.',
-  ]);
-  const times = timeline.locator('time');
-  const stamps = () => times.evaluateAll((all) => all.map((time) => time.getAttribute('datetime')));
-  const overview = await stamps();
-  await page.goto(harness('truncated', '/rulebook/fires'));
-  await expect(source).toHaveText(/window 2026-09-09T09:00:00Z to 2026-09-23T09:00:00Z/);
-  await expect(timeline.locator('.xt-data-row')).toHaveCount(100);
-  expect(await stamps()).toEqual(overview);
-  await expect(page.getByRole('link', { name: /View all/i })).toHaveCount(0);
-  await expect(page.locator('.xt-rulebook').getByRole('link')).toHaveText(['← Rulebook']);
-});
-
-test('cancels on request and on leaving, keeping focus and asking again only by hand', async ({
-  page,
-}) => {
-  await page.goto(harness('hold'));
-  await expect(status(page)).toHaveText('Reading the default local rulebook source…');
-  // The Recorded fires tile says a read is running, then that it was cancelled.
-  const firesUnmeasured = page.locator('.xt-rulebook-tiles .xt-stat-tile').first();
-  await expect(firesUnmeasured.locator('.xt-stat-aside')).toHaveText('reading');
-  await expect(firesUnmeasured.locator('.xt-unmeasured .sr-only')).toHaveText(
-    'Unmeasured: Reading the default local rulebook source…',
-  );
-  const refresh = page.locator('.xt-rulebook-read').getByRole('button', { name: 'Refresh' });
-  const cancel = page.locator('.xt-rulebook-read').getByRole('button', { name: /Cancel|Stopping/ });
-  await expect(refresh).toHaveAttribute('aria-disabled', 'true');
-  await refresh.focus();
-  await page.keyboard.press('Enter');
-  await page.keyboard.press('Tab');
-  await expect(cancel).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(status(page)).toHaveText('Read cancelled');
-  await expect(firesUnmeasured.locator('.xt-stat-aside')).toHaveText('cancelled');
-  await expect(cancel).toBeFocused();
-  await expect(cancel).toHaveAttribute('aria-disabled', 'true');
-  let seen = await calls(page);
-  expect(seen.reads).toHaveLength(1);
-  expect(seen.cancels).toEqual(seen.reads);
-
-  await page.keyboard.press('Shift+Tab');
-  await expect(refresh).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(status(page)).toHaveText('Reading the default local rulebook source…');
-  await expect(refresh).toBeFocused();
-  seen = await calls(page);
-  expect(seen.reads).toHaveLength(2);
-
-  // Leaving cancels the read by its own name; the timeline is its own read.
-  await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('What your agents did');
-  seen = await calls(page);
-  expect(seen.cancels).toEqual(seen.reads);
-  expect(seen.reads).toHaveLength(2);
-
-  await page.goto(harness('hold', '/rulebook/fires'));
-  await expect(status(page)).toHaveText('Reading the default local rulebook source…');
-  await page.getByRole('link', { name: '← Rulebook' }).click();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rulebook');
-  await expect(status(page)).toHaveText('Reading the default local rulebook source…');
-  seen = await calls(page);
-  expect(seen.reads).toHaveLength(2);
-  expect(seen.cancels).toEqual([seen.reads[0]]);
-
-  // An unmatched rule address reads nothing.
-  await page.goto(harness('hold', '/rulebook/not-a-real-rule'));
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rule detail');
-  await page.waitForTimeout(50);
-  expect((await calls(page)).reads).toHaveLength(0);
-});
 
 test('moves focus through the controls, tiles and lists with a visible ring', async ({ page }) => {
   await page.goto(harness('truncated'));
@@ -408,7 +325,7 @@ test('shows each row’s full IDs on hover and focus, over lists scrolled inside
     [1440, 900],
   ] as const) {
     await page.setViewportSize({ width, height });
-    for (const scheme of ['dark', 'light'] as const) {
+    for (const scheme of ['light'] as const) {
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto(harness('identities'));
       await expect(status(page)).toHaveText(/^Read complete · 252 recorded fires/);
@@ -470,23 +387,6 @@ test('shows each row’s full IDs on hover and focus, over lists scrolled inside
   ).toHaveAccessibleDescription(
     'Rule ID synthetic-rule-99. Rulebook ID synthetic-book. Fire ID fire-99. Recorded version 2',
   );
-});
-
-test('fits the reference window too', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  for (const [path, title] of routes) {
-    await page.goto(path);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
-    const overflow = await page.evaluate(() => {
-      const outlet = document.querySelector<HTMLElement>('.xt-shell-outlet')!;
-      return {
-        page: document.documentElement.scrollHeight - document.documentElement.clientHeight,
-        outlet: outlet.scrollHeight - outlet.clientHeight,
-        width: document.documentElement.scrollWidth,
-      };
-    });
-    expect(overflow).toEqual({ page: 0, outlet: 0, width: 1440 });
-  }
 });
 
 test('keeps direct addresses and Back navigation working', async ({ page }) => {

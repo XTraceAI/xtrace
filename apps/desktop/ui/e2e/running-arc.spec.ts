@@ -142,113 +142,118 @@ async function arc(page: Page) {
   });
 }
 
-for (const host of ['claude', 'codex'] as const)
-  for (const scheme of ['dark', 'light'] as const)
-    for (const dpr of [1, 2])
-      test.describe(`${host} ${scheme} DPR ${dpr}`, () => {
-        test.use({
-          colorScheme: scheme,
-          deviceScaleFactor: dpr,
-          viewport: { width: 1120, height: 720 },
-        });
-        test('running arc clears its 22px Dashboard row at eight angles and returns to idle', async ({
-          page,
-        }, info) => {
-          await serve(page, host);
-          await page.goto('/dashboard');
-          await expect(page.locator('.xt-lane-live-host')).toHaveCount(1);
-          const label = host === 'claude' ? 'Claude Code' : 'Codex';
-          const runtime = host === 'claude' ? 'Claude Code runtime' : 'Codex desktop runtime';
-          await expect(
-            page.getByRole('img', { name: `${label} · Running`, exact: true }),
-          ).toHaveAttribute('title', `${runtime} · Running`);
-          // Dashboard idle rows keep their ordinary host glyph; textual live
-          // badges belong to other views. Address each synthetic row exactly.
-          const idleRow = (number: number) =>
-            page
-              .getByRole('table', { name: 'Session lanes', exact: true })
-              .getByRole('row')
-              .filter({
-                has: page.locator(
-                  `[data-visible-id="${host}-00000000-0000-4000-8000-${String(number).padStart(12, '0')}"]`,
-                ),
-              });
-          await expect(
-            idleRow(2).getByRole('img', {
-              name: host === 'claude' ? 'Codex' : 'Claude Code',
-              exact: true,
-            }),
-          ).toHaveCount(1);
-          await expect(idleRow(3).getByRole('img', { name: label, exact: true })).toHaveCount(1);
-          for (const number of [2, 3])
-            await expect(idleRow(number).locator('.xt-lane-live-host')).toHaveCount(0);
-          await page.evaluate(async () => {
-            await document.fonts.ready;
-            await Promise.all([...document.querySelectorAll('img')].map((image) => image.decode()));
+// The arc's one theme rule is its colour: every host and density in dark, one light run.
+for (const [host, scheme, dpr] of [
+  ['claude', 'dark', 1],
+  ['claude', 'dark', 2],
+  ['codex', 'dark', 1],
+  ['codex', 'dark', 2],
+  ['claude', 'light', 1],
+] as const)
+  test.describe(`${host} ${scheme} DPR ${dpr}`, () => {
+    test.use({
+      colorScheme: scheme,
+      deviceScaleFactor: dpr,
+      viewport: { width: 1120, height: 720 },
+    });
+    test('running arc clears its 22px Dashboard row at eight angles and returns to idle', async ({
+      page,
+    }, info) => {
+      await serve(page, host);
+      await page.goto('/dashboard');
+      await expect(page.locator('.xt-lane-live-host')).toHaveCount(1);
+      const label = host === 'claude' ? 'Claude Code' : 'Codex';
+      const runtime = host === 'claude' ? 'Claude Code runtime' : 'Codex desktop runtime';
+      await expect(
+        page.getByRole('img', { name: `${label} · Running`, exact: true }),
+      ).toHaveAttribute('title', `${runtime} · Running`);
+      // Dashboard idle rows keep their ordinary host glyph; textual live
+      // badges belong to other views. Address each synthetic row exactly.
+      const idleRow = (number: number) =>
+        page
+          .getByRole('table', { name: 'Session lanes', exact: true })
+          .getByRole('row')
+          .filter({
+            has: page.locator(
+              `[data-visible-id="${host}-00000000-0000-4000-8000-${String(number).padStart(12, '0')}"]`,
+            ),
           });
-          expect(await page.evaluate(() => window.devicePixelRatio)).toBe(dpr);
-          expect(await page.locator('html').getAttribute('data-theme')).toBe(scheme);
-          const before = await rows(page);
-          expect(before).toHaveLength(3);
-          for (const row of before) {
-            expect.soft(row.height).toBe(22);
-            expect.soft(row.glyphX).toBeCloseTo(before[0].glyphX, 5);
-            expect.soft(Math.abs(row.glyphY - before[0].glyphY)).toBeLessThanOrEqual(1);
-            expect.soft(row.columns).toEqual(before[0].columns);
-          }
-          const initial = await arc(page);
-          expect(initial.animation).toEqual({ name: 'xt-live-logo-spin', duration: '1.4s' });
-          expect(initial.arcColor).toBe(initial.expectedColor);
-          const measurements = [];
-          for (let angle = 0; angle < 360; angle += 45) {
-            // Freeze the production animation, rather than substitute a square
-            // outline or replace the production arc with test geometry.
-            await page.locator('.xt-lane-live-host').evaluate((host, degrees) => {
-              const animation = host.getAnimations({ subtree: true })[0];
-              animation.pause();
-              animation.currentTime = (degrees / 360) * 1400;
-            }, angle);
-            const fit = await arc(page);
-            measurements.push({ angle, ...fit });
-            expect.soft(fit.wrapper, `${angle}° wrapper`).toEqual({ width: 18, height: 18 });
-            expect.soft(fit.diameter, `${angle}° outer circle`).toBe(18);
-            expect.soft(fit.circleHeight).toBe(fit.diameter);
-            expect.soft(fit.rounding).toBe('50%');
-            expect.soft(fit.transformOrigin).toBe(`${fit.diameter / 2}px ${fit.diameter / 2}px`);
-            expect.soft(fit.rotation, `${angle}° frozen animation`).toBeCloseTo(angle, 3);
-            expect.soft(fit.top, `${angle}° top clearance`).toBeGreaterThanOrEqual(2);
-            expect.soft(fit.bottom, `${angle}° bottom clearance`).toBeGreaterThanOrEqual(2);
-            expect.soft(fit.logoGap, `${angle}° rounded logo gap`).toBeGreaterThanOrEqual(1);
-            expect.soft(fit.logo).toEqual({ width: 12, height: 12, rounding: 4 });
-            expect.soft(fit.image).toEqual({
-              padding: '0px',
-              border: '0px',
-              background: 'rgba(0, 0, 0, 0)',
-              path: host === 'claude' ? '/hosts/claude.svg' : '/hosts/codex.webp',
-              loaded: true,
-            });
-          }
-          await info.attach('circular-paint-clearance', {
-            body: JSON.stringify(measurements, null, 2),
-          });
-          await page.getByRole('table', { name: 'Session lanes', exact: true }).screenshot({
-            path: info.outputPath(`running-${host}-${scheme}-${dpr}.png`),
-          });
-          await page.emulateMedia({ reducedMotion: 'reduce' });
-          expect((await arc(page)).animation.name).toBe('none');
-          const reduced = await arc(page);
-          expect.soft(reduced.top).toBeGreaterThanOrEqual(2);
-          expect.soft(reduced.bottom).toBeGreaterThanOrEqual(2);
-          await page.evaluate(() => {
-            document.documentElement.dataset.arcIdle = 'true';
-          });
-          await expect(page.locator('.xt-lane-live-host')).toHaveCount(0);
-          const after = await rows(page);
-          expect(after.map(({ top, height, columns }) => ({ top, height, columns }))).toEqual(
-            before.map(({ top, height, columns }) => ({ top, height, columns })),
-          );
-          for (const row of after) {
-            expect.soft(Math.abs(row.glyphY - after[0].glyphY)).toBeLessThanOrEqual(1);
-          }
-        });
+      await expect(
+        idleRow(2).getByRole('img', {
+          name: host === 'claude' ? 'Codex' : 'Claude Code',
+          exact: true,
+        }),
+      ).toHaveCount(1);
+      await expect(idleRow(3).getByRole('img', { name: label, exact: true })).toHaveCount(1);
+      for (const number of [2, 3])
+        await expect(idleRow(number).locator('.xt-lane-live-host')).toHaveCount(0);
+      await page.evaluate(async () => {
+        await document.fonts.ready;
+        await Promise.all([...document.querySelectorAll('img')].map((image) => image.decode()));
       });
+      expect(await page.evaluate(() => window.devicePixelRatio)).toBe(dpr);
+      expect(await page.locator('html').getAttribute('data-theme')).toBe(scheme);
+      const before = await rows(page);
+      expect(before).toHaveLength(3);
+      for (const row of before) {
+        expect.soft(row.height).toBe(22);
+        expect.soft(row.glyphX).toBeCloseTo(before[0].glyphX, 5);
+        expect.soft(Math.abs(row.glyphY - before[0].glyphY)).toBeLessThanOrEqual(1);
+        expect.soft(row.columns).toEqual(before[0].columns);
+      }
+      const initial = await arc(page);
+      expect(initial.animation).toEqual({ name: 'xt-live-logo-spin', duration: '1.4s' });
+      expect(initial.arcColor).toBe(initial.expectedColor);
+      const measurements = [];
+      for (let angle = 0; angle < 360; angle += 45) {
+        // Freeze the production animation, rather than substitute a square
+        // outline or replace the production arc with test geometry.
+        await page.locator('.xt-lane-live-host').evaluate((host, degrees) => {
+          const animation = host.getAnimations({ subtree: true })[0];
+          animation.pause();
+          animation.currentTime = (degrees / 360) * 1400;
+        }, angle);
+        const fit = await arc(page);
+        measurements.push({ angle, ...fit });
+        expect.soft(fit.wrapper, `${angle}° wrapper`).toEqual({ width: 18, height: 18 });
+        expect.soft(fit.diameter, `${angle}° outer circle`).toBe(18);
+        expect.soft(fit.circleHeight).toBe(fit.diameter);
+        expect.soft(fit.rounding).toBe('50%');
+        expect.soft(fit.transformOrigin).toBe(`${fit.diameter / 2}px ${fit.diameter / 2}px`);
+        expect.soft(fit.rotation, `${angle}° frozen animation`).toBeCloseTo(angle, 3);
+        expect.soft(fit.top, `${angle}° top clearance`).toBeGreaterThanOrEqual(2);
+        expect.soft(fit.bottom, `${angle}° bottom clearance`).toBeGreaterThanOrEqual(2);
+        expect.soft(fit.logoGap, `${angle}° rounded logo gap`).toBeGreaterThanOrEqual(1);
+        expect.soft(fit.logo).toEqual({ width: 12, height: 12, rounding: 4 });
+        expect.soft(fit.image).toEqual({
+          padding: '0px',
+          border: '0px',
+          background: 'rgba(0, 0, 0, 0)',
+          path: host === 'claude' ? '/hosts/claude.svg' : '/hosts/codex.webp',
+          loaded: true,
+        });
+      }
+      await info.attach('circular-paint-clearance', {
+        body: JSON.stringify(measurements, null, 2),
+      });
+      await page.getByRole('table', { name: 'Session lanes', exact: true }).screenshot({
+        path: info.outputPath(`running-${host}-${scheme}-${dpr}.png`),
+      });
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      expect((await arc(page)).animation.name).toBe('none');
+      const reduced = await arc(page);
+      expect.soft(reduced.top).toBeGreaterThanOrEqual(2);
+      expect.soft(reduced.bottom).toBeGreaterThanOrEqual(2);
+      await page.evaluate(() => {
+        document.documentElement.dataset.arcIdle = 'true';
+      });
+      await expect(page.locator('.xt-lane-live-host')).toHaveCount(0);
+      const after = await rows(page);
+      expect(after.map(({ top, height, columns }) => ({ top, height, columns }))).toEqual(
+        before.map(({ top, height, columns }) => ({ top, height, columns })),
+      );
+      for (const row of after) {
+        expect.soft(Math.abs(row.glyphY - after[0].glyphY)).toBeLessThanOrEqual(1);
+      }
+    });
+  });

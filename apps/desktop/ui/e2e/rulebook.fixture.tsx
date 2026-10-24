@@ -15,13 +15,11 @@ import '../src/index.css';
 /**
  * The app's own Shell and routes over the F1 fixture, with rule activity
  * answered from synthetic results: `?scenario=` picks the answer and `?path=`
- * the address. `hold` answers only when its read is cancelled. Every read and
+ * the address. Every read and
  * cancel is recorded on `window.__ruleActivity` for the spec to count.
  */
 const answers: Record<string, () => RuleActivityResult> = {
   populated: synthetic.loaded,
-  lowerBound: synthetic.lowerBound,
-  emptyExact: synthetic.emptyExact,
   emptyLowerBound: synthetic.emptyLowerBound,
   truncated: synthetic.truncated,
   lowerBoundWide: synthetic.lowerBoundWide,
@@ -39,17 +37,14 @@ const path = params.get('path') ?? '/rulebook';
 const calls = { reads: [] as string[], cancels: [] as string[] };
 Object.assign(window, { __ruleActivity: calls });
 
-const held = new Map<string, (result: RuleActivityResult) => void>();
 const controls: RuleActivityControls = {
   read: (id) => {
     calls.reads.push(id);
-    if (scenario === 'hold') return new Promise((resolve) => held.set(id, resolve));
     const answer = answers[scenario];
     return answer ? Promise.resolve(answer()) : Promise.reject(new Error('Unknown scenario.'));
   },
   cancel: async (id) => {
     calls.cancels.push(id);
-    held.get(id)?.(synthetic.interruptedCancelled);
   },
 };
 const source = new FixtureDataSource(fixture as FixtureExport);

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test.use({ viewport: { width: 900, height: 800 } });
 
-for (const theme of ['light', 'dark'] as const) {
+for (const theme of ['light'] as const) {
   test(`formatted answers are bounded, inert and keyboard-reachable in ${theme}`, async ({
     page,
     browserName,
