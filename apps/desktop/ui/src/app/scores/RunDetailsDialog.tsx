@@ -2,6 +2,8 @@ import { useEffect, useId, useState, type RefObject } from 'react';
 import { useData } from '../../data/DataProvider';
 import type { GradingInsight } from '../../data/generated/GradingInsight';
 import type { GradingRunDetailsLoaded } from '../../data/generated/GradingRunDetailsLoaded';
+import type { GradingRunKept } from '../../data/generated/GradingRunKept';
+import type { GradingRunReport } from '../../data/generated/GradingRunReport';
 import { Button } from '../../kit/Button';
 import { LoadingRows } from '../../kit/EmptyState';
 import { Icon } from '../../kit/icons';
@@ -9,6 +11,7 @@ import { Modal, ModalClose } from '../../kit/Modal';
 import {
   criteriaGapText,
   detailsText,
+  FINDINGS_UNREADABLE,
   OPEN_REPORT_FAILED,
   openReportText,
   reportGapText,
@@ -95,9 +98,6 @@ export function RunDetailsDialog({
 }
 
 function Loaded({ details }: { details: GradingRunDetailsLoaded }) {
-  const summary = useId();
-  const criteria = useId();
-  const findings = useId();
   return (
     <>
       <div className="xt-score-details-top">
@@ -129,56 +129,69 @@ function Loaded({ details }: { details: GradingRunDetailsLoaded }) {
         // WebKit skips a scrolling region on Tab without an explicit tab stop.
         tabIndex={0}
       >
-        {details.content_deleted ? (
+        {details.content.state === 'deleted' ? (
           <p className="xt-score-details-gap">
             Stored content was deleted. The score stays; its summary, findings, points and full
             report are gone.
           </p>
         ) : (
-          <>
-            {details.summary !== null && (
-              <section className="xt-score-details-section" aria-labelledby={summary}>
-                <h3 id={summary}>Summary</h3>
-                <p className="xt-score-details-summary">{details.summary}</p>
-              </section>
-            )}
-            <section className="xt-score-details-section" aria-labelledby={criteria}>
-              <h3 id={criteria}>Points by criterion</h3>
-              {details.criteria.state === 'reported' ? (
-                <ul className="xt-score-criteria" role="list">
-                  {details.criteria.criteria.map((criterion) => (
-                    <li key={criterion.name} className="xt-score-criterion">
-                      <span className="xt-score-criterion-name">{criterion.name}</span>
-                      <span className="xt-score-criterion-points">
-                        {criterion.awarded} / {criterion.max}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="xt-score-details-gap">{criteriaGapText[details.criteria.reason]}</p>
-              )}
-            </section>
-          </>
-        )}
-        {!details.content_deleted && (
-          <section className="xt-score-details-section" aria-labelledby={findings}>
-            <h3 id={findings}>
-              Findings <span className="xt-score-details-count">{details.findings.length}</span>
-            </h3>
-            {details.findings.length === 0 ? (
-              <p className="xt-score-details-gap">This grade has no findings.</p>
-            ) : (
-              <ol className="xt-score-findings" role="list">
-                {details.findings.map((finding, index) => (
-                  <Finding key={index} finding={finding} />
-                ))}
-              </ol>
-            )}
-          </section>
+          <Kept kept={details.content} />
         )}
       </div>
-      <Report details={details} />
+      {details.content.state === 'kept' && (
+        <Report runId={details.run_id} report={details.content.report} />
+      )}
+    </>
+  );
+}
+
+/** A kept run's summary, points per criterion and findings. */
+function Kept({ kept }: { kept: GradingRunKept }) {
+  const summary = useId();
+  const criteria = useId();
+  const findings = useId();
+  return (
+    <>
+      <section className="xt-score-details-section" aria-labelledby={summary}>
+        <h3 id={summary}>Summary</h3>
+        <p className="xt-score-details-summary">{kept.summary}</p>
+      </section>
+      <section className="xt-score-details-section" aria-labelledby={criteria}>
+        <h3 id={criteria}>Points by criterion</h3>
+        {kept.criteria.state === 'reported' ? (
+          <ul className="xt-score-criteria" role="list">
+            {kept.criteria.criteria.map((criterion) => (
+              <li key={criterion.name} className="xt-score-criterion">
+                <span className="xt-score-criterion-name">{criterion.name}</span>
+                <span className="xt-score-criterion-points">
+                  {criterion.awarded} / {criterion.max}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="xt-score-details-gap">{criteriaGapText[kept.criteria.reason]}</p>
+        )}
+      </section>
+      <section className="xt-score-details-section" aria-labelledby={findings}>
+        <h3 id={findings}>
+          Findings
+          {kept.findings.state === 'listed' && (
+            <span className="xt-score-details-count">{kept.findings.findings.length}</span>
+          )}
+        </h3>
+        {kept.findings.state === 'unreadable' ? (
+          <p className="xt-score-details-gap">{FINDINGS_UNREADABLE}</p>
+        ) : kept.findings.findings.length === 0 ? (
+          <p className="xt-score-details-gap">This grade has no findings.</p>
+        ) : (
+          <ol className="xt-score-findings" role="list">
+            {kept.findings.findings.map((finding, index) => (
+              <Finding key={index} finding={finding} />
+            ))}
+          </ol>
+        )}
+      </section>
     </>
   );
 }
@@ -210,18 +223,18 @@ function Finding({ finding }: { finding: GradingInsight }) {
 }
 
 /** Open full report, or why there is none. */
-function Report({ details }: { details: GradingRunDetailsLoaded }) {
+function Report({ runId, report }: { runId: string; report: GradingRunReport }) {
   const { source } = useData();
   const [message, setMessage] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   // Another run's details say nothing of this one's press.
-  useEffect(() => setMessage(null), [details.run_id]);
+  useEffect(() => setMessage(null), [runId]);
   const open = async () => {
     if (opening || !source.grading) return;
     setOpening(true);
     setMessage(null);
     try {
-      const answer = await source.grading.openReport(details.run_id);
+      const answer = await source.grading.openReport(runId);
       setMessage(answer.state === 'opened' ? null : openReportText(answer));
     } catch {
       setMessage(OPEN_REPORT_FAILED);
@@ -231,7 +244,7 @@ function Report({ details }: { details: GradingRunDetailsLoaded }) {
   };
   return (
     <footer className="xt-score-details-footer">
-      {details.report.state === 'kept' ? (
+      {report.state === 'kept' ? (
         <Button
           variant="primary"
           height={28}
@@ -241,9 +254,7 @@ function Report({ details }: { details: GradingRunDetailsLoaded }) {
           Open full report
         </Button>
       ) : (
-        !details.content_deleted && (
-          <p className="xt-score-details-gap">{reportGapText[details.report.reason]}</p>
-        )
+        <p className="xt-score-details-gap">{reportGapText[report.reason]}</p>
       )}
       <p className="xt-score-details-message" role="status">
         {message}

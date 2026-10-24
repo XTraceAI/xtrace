@@ -902,16 +902,20 @@
     Menlo,
     monospace;
 }
-.xt-score-details-summary,
-.xt-score-details-gap {
+.xt-score-details-summary {
   margin: 0;
   color: var(--body);
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+/* Why something is not shown. */
 .xt-score-details-gap {
+  margin: 0;
   color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .xt-score-details-body > .xt-score-details-gap {
   padding: 10px 2px;

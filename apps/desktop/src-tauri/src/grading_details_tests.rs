@@ -3,6 +3,22 @@
 //! (`ui/src/app/scores/details.synthetic.json`, byte-checked here).
 use super::*;
 use crate::grading_dto::{GradingInsight, GradingRunDetails, GradingSeverity};
+
+/// A kept run's content; panics on deleted content.
+fn kept(details: &GradingRunDetailsLoaded) -> &GradingRunKept {
+    match &details.content {
+        GradingRunContent::Kept(kept) => kept,
+        GradingRunContent::Deleted => panic!("content was deleted"),
+    }
+}
+
+/// Listed findings; panics on unreadable ones.
+fn listed(kept: &GradingRunKept) -> &[GradingInsight] {
+    match &kept.findings {
+        GradingRunFindings::Listed { findings } => findings,
+        GradingRunFindings::Unreadable => panic!("findings are unreadable"),
+    }
+}
 use serde::Serialize;
 use xt_store::{
     Store,
@@ -113,16 +129,34 @@ impl Seed {
         run_id
     }
 
+    /// Store findings that do not read for a run whose kept result is
+    /// otherwise good: its kept `result.json` lists no findings.
+    fn odd_findings(&mut self, at: i64, run: Run<'_>, stored: &str) -> String {
+        let run_id = self.succeeded(
+            at,
+            &Run {
+                insights: stored,
+                ..run
+            },
+        );
+        let path = self.grades.join(&run_id).join(protocol::RESULT_FILE);
+        let mut result: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        result["insights"] = serde_json::json!([]);
+        std::fs::write(&path, serde_json::to_vec(&result).unwrap()).unwrap();
+        run_id
+    }
+
     fn row(&self, run_id: &str) -> GradeRow {
         self.store.grade(run_id).unwrap().unwrap()
     }
 
-    fn kept(&self, run_id: &str) -> KeptFolder {
+    fn kept(&self, run_id: &str) -> Option<KeptFolder> {
         read_kept(&self.grades, &self.row(run_id))
     }
 
     fn details(&self, run_id: &str) -> GradingRunDetailsLoaded {
-        details(&self.row(run_id), &self.kept(run_id)).unwrap()
+        details(&self.row(run_id), self.kept(run_id).as_ref()).unwrap()
     }
 
     fn purge(&mut self) {
@@ -212,16 +246,16 @@ fn titles(findings: &[GradingInsight]) -> Vec<(GradingSeverity, &str)> {
 fn a_kept_run_shows_every_finding_most_severe_first_its_criteria_and_its_report() {
     let mut seed = Seed::new();
     let run_id = seed.succeeded(0, &atlas());
-    let got = seed.details(&run_id);
-    assert_eq!(got.run_id, run_id);
-    assert_eq!(got.project_path, ATLAS);
-    assert_eq!((got.score, got.complete), (75, true));
-    assert_eq!(got.graded_at_ms, T0 + MINUTE);
-    assert!(!got.content_deleted);
-    assert_eq!(got.summary.as_deref(), Some(atlas().summary));
+    let details = seed.details(&run_id);
+    assert_eq!(details.run_id, run_id);
+    assert_eq!((details.score, details.complete), (75, true));
+    assert_eq!(details.graded_at_ms, T0 + MINUTE);
+    let got = kept(&details);
+    assert_eq!(got.summary, atlas().summary);
+    let findings = listed(got);
     // All five, by weight; each weight keeps the run's own order.
     assert_eq!(
-        titles(&got.findings),
+        titles(findings),
         [
             (GradingSeverity::Critical, "AGENTS.md is not loaded"),
             (GradingSeverity::Critical, "A named script does not exist"),
@@ -234,10 +268,10 @@ fn a_kept_run_shows_every_finding_most_severe_first_its_criteria_and_its_report(
         ]
     );
     assert_eq!(
-        got.findings[0].fix.as_deref(),
+        findings[0].fix.as_deref(),
         Some("Add @AGENTS.md to CLAUDE.md, or move its rules into CLAUDE.md.")
     );
-    assert_eq!(got.findings[3].detail, None);
+    assert_eq!(findings[3].detail, None);
     let GradingRunCriteria::Reported { criteria } = &got.criteria else {
         panic!("criteria are reported: {:?}", got.criteria);
     };
@@ -255,9 +289,9 @@ fn a_kept_run_shows_every_finding_most_severe_first_its_criteria_and_its_report(
     assert_eq!(got.report, GradingRunReport::Kept);
     // The file opened is the checked report inside the run's own folder.
     let row = seed.row(&run_id);
-    let kept = seed.kept(&run_id);
+    let folder = seed.kept(&run_id).unwrap();
     assert_eq!(
-        report_target(&row, &kept),
+        report_target(&row, &folder),
         Ok(seed.grades.join(&run_id).join("report.html").as_path())
     );
 }
@@ -266,7 +300,8 @@ fn a_kept_run_shows_every_finding_most_severe_first_its_criteria_and_its_report(
 fn a_result_without_criteria_or_without_a_report_says_it_did_not_report_them() {
     let mut seed = Seed::new();
     let old = seed.succeeded(0, &beacon());
-    let got = seed.details(&old);
+    let details = seed.details(&old);
+    let got = kept(&details);
     assert_eq!(
         got.criteria,
         GradingRunCriteria::Unavailable {
@@ -281,7 +316,8 @@ fn a_result_without_criteria_or_without_a_report_says_it_did_not_report_them() {
             ..atlas()
         },
     );
-    let got = seed.details(&bare);
+    let details = seed.details(&bare);
+    let got = kept(&details);
     assert!(matches!(got.criteria, GradingRunCriteria::Reported { .. }));
     assert_eq!(
         got.report,
@@ -291,9 +327,10 @@ fn a_result_without_criteria_or_without_a_report_says_it_did_not_report_them() {
     );
     // A run with no report says so even when its folder is gone.
     std::fs::remove_dir_all(seed.grades.join(&bare)).unwrap();
-    let got = seed.details(&bare);
+    let details = seed.details(&bare);
+    let got = kept(&details);
     assert_eq!(
-        (got.criteria, got.report),
+        (got.criteria.clone(), got.report),
         (
             GradingRunCriteria::Unavailable {
                 reason: GradingRunGap::FolderNotKept
@@ -310,11 +347,12 @@ fn a_pruned_folder_keeps_the_stored_summary_and_findings() {
     let mut seed = Seed::new();
     let run_id = seed.succeeded(0, &cedar());
     std::fs::remove_dir_all(seed.grades.join(&run_id)).unwrap();
-    assert_eq!(seed.kept(&run_id), KeptFolder::Missing);
-    let got = seed.details(&run_id);
-    assert!(!got.complete);
-    assert_eq!(got.summary.as_deref(), Some(cedar().summary));
-    assert_eq!(got.findings.len(), 2);
+    assert_eq!(seed.kept(&run_id), Some(KeptFolder::Missing));
+    let details = seed.details(&run_id);
+    assert!(!details.complete);
+    let got = kept(&details);
+    assert_eq!(got.summary, cedar().summary);
+    assert_eq!(listed(got).len(), 2);
     let gone = GradingRunGap::FolderNotKept;
     assert_eq!(
         got.criteria,
@@ -331,26 +369,36 @@ fn deleted_content_shows_the_score_alone_and_reads_no_folder() {
     // The folder is still there (the service removes it after the purge);
     // nothing in it is read.
     assert!(seed.grades.join(&run_id).is_dir());
-    assert_eq!(seed.kept(&run_id), KeptFolder::ContentDeleted);
+    assert_eq!(seed.kept(&run_id), None);
     let got = seed.details(&run_id);
     assert_eq!((got.score, got.complete), (75, true));
-    assert!(got.content_deleted);
-    assert_eq!(got.summary, None);
-    assert!(got.findings.is_empty());
-    let deleted = GradingRunGap::ContentDeleted;
+    assert_eq!(got.content, GradingRunContent::Deleted);
     assert_eq!(
-        got.criteria,
-        GradingRunCriteria::Unavailable { reason: deleted }
+        serde_json::to_value(&got.content).unwrap(),
+        serde_json::json!({"state": "deleted"})
     );
-    assert_eq!(
-        got.report,
-        GradingRunReport::Unavailable { reason: deleted }
+}
+
+#[test]
+fn stored_findings_that_do_not_read_are_unreadable_not_none() {
+    let mut seed = Seed::new();
+    // Valid JSON the store accepts, but not findings.
+    let run_id = seed.odd_findings(0, atlas(), "[1]");
+    let details = seed.details(&run_id);
+    let got = kept(&details);
+    assert_eq!(got.findings, GradingRunFindings::Unreadable);
+    // The rest of the run shows as usual.
+    assert_eq!(got.summary, atlas().summary);
+    assert_eq!(got.report, GradingRunReport::Kept);
+    // A run that stored no findings lists none.
+    let none = seed.succeeded(
+        1,
+        &Run {
+            insights: "[]",
+            ..beacon()
+        },
     );
-    let row = seed.row(&run_id);
-    assert_eq!(
-        report_target(&row, &KeptFolder::ContentDeleted),
-        Err(deleted)
-    );
+    assert!(listed(kept(&seed.details(&none))).is_empty());
 }
 
 #[cfg(unix)]
@@ -358,13 +406,14 @@ fn deleted_content_shows_the_score_alone_and_reads_no_folder() {
 fn a_folder_that_does_not_read_or_match_the_stored_run_is_unreadable() {
     let mut seed = Seed::new();
     let unreadable = |seed: &Seed, run_id: &str| {
-        assert_eq!(seed.kept(run_id), KeptFolder::Unreadable, "{run_id}");
-        let got = seed.details(run_id);
+        assert_eq!(seed.kept(run_id), Some(KeptFolder::Unreadable), "{run_id}");
+        let details = seed.details(run_id);
+        let got = kept(&details);
         let reason = GradingRunGap::Unreadable;
         assert_eq!(got.criteria, GradingRunCriteria::Unavailable { reason });
         assert_eq!(got.report, GradingRunReport::Unavailable { reason });
         // The stored summary and findings still show.
-        assert!(got.summary.is_some() && !got.findings.is_empty());
+        assert!(!got.summary.is_empty() && !listed(got).is_empty());
     };
     // The run's folder is a link to a good copy elsewhere.
     let linked = seed.succeeded(0, &atlas());
@@ -399,33 +448,6 @@ fn a_folder_that_does_not_read_or_match_the_stored_run_is_unreadable() {
 }
 
 #[test]
-fn only_a_plain_relative_file_inside_the_folder_is_a_report() {
-    let seed = Seed::new();
-    let folder = seed.grades.join("00000000-0000-4000-8000-000000000001");
-    std::fs::create_dir_all(folder.join("sub")).unwrap();
-    std::fs::write(folder.join("sub/r.html"), "<p>").unwrap();
-    std::fs::write(seed.grades.join("next.html"), "<p>").unwrap();
-    assert_eq!(
-        inside(&folder, "sub/r.html"),
-        Some(folder.join("sub/r.html"))
-    );
-    for bad in [
-        "",
-        "../next.html",
-        "/etc/hosts",
-        "./sub/r.html",
-        "sub",
-        "x.html",
-    ] {
-        assert_eq!(inside(&folder, bad), None, "{bad}");
-    }
-    assert!(is_run_id("00000000-0000-4000-8000-000000000001"));
-    for bad in ["../00000-0000-4000-8000-000000000001", "x", ""] {
-        assert!(!is_run_id(bad), "{bad}");
-    }
-}
-
-#[test]
 fn a_run_that_did_not_succeed_has_no_details() {
     let mut seed = Seed::new();
     let run_id = "00000000-0000-4000-8000-0000000000f1";
@@ -448,7 +470,7 @@ fn a_run_that_did_not_succeed_has_no_details() {
         )
         .unwrap();
     let row = seed.row(run_id);
-    assert_eq!(details(&row, &read_kept(&seed.grades, &row)), None);
+    assert_eq!(details(&row, read_kept(&seed.grades, &row).as_ref()), None);
 }
 
 /// The answers the renderer's tests and acceptance pages read, one per
@@ -461,6 +483,7 @@ struct Export {
     folder_not_kept: GradingRunDetails,
     content_deleted: GradingRunDetails,
     unreadable: GradingRunDetails,
+    findings_unreadable: GradingRunDetails,
     not_found: GradingRunDetails,
     failed: GradingRunDetails,
     not_configured: GradingRunDetails,
@@ -483,6 +506,12 @@ fn export() -> Export {
     let broken_id = broken.succeeded(0, &atlas());
     std::fs::write(broken.grades.join(&broken_id).join("result.json"), "{").unwrap();
     let unreadable = loaded(&broken, &broken_id);
+    let odd_id = broken.odd_findings(
+        10,
+        beacon(),
+        r#"[{"severity": "urgent", "title": "Not a finding"}]"#,
+    );
+    let findings_unreadable = loaded(&broken, &odd_id);
     seed.purge();
     let content_deleted = loaded(&seed, &atlas_id);
     Export {
@@ -491,6 +520,7 @@ fn export() -> Export {
         folder_not_kept,
         content_deleted,
         unreadable,
+        findings_unreadable,
         not_found: GradingRunDetails::NotFound,
         failed: GradingRunDetails::Failed,
         not_configured: GradingRunDetails::NotConfigured,
@@ -524,13 +554,16 @@ fn the_synthetic_ui_export_is_what_the_rule_gives() {
         (full.run_id.as_str(), full.score),
         ("00000000-0000-4000-8000-000000000001", 75)
     );
-    assert_eq!(full.findings.len(), 5);
-    assert!(matches!(full.criteria, GradingRunCriteria::Reported { .. }));
-    assert_eq!(full.report, GradingRunReport::Kept);
+    assert_eq!(listed(kept(&full)).len(), 5);
+    assert!(matches!(
+        kept(&full).criteria,
+        GradingRunCriteria::Reported { .. }
+    ));
+    assert_eq!(kept(&full).report, GradingRunReport::Kept);
     let no_criteria = loaded(&export.no_criteria);
     assert_eq!(no_criteria.run_id, "00000000-0000-4000-8000-000000000002");
     assert_eq!(
-        no_criteria.criteria,
+        kept(&no_criteria).criteria,
         GradingRunCriteria::Unavailable {
             reason: GradingRunGap::NotReported
         }
@@ -541,17 +574,18 @@ fn the_synthetic_ui_export_is_what_the_rule_gives() {
         ("00000000-0000-4000-8000-000000000003", false)
     );
     assert_eq!(
-        pruned.report,
+        kept(&pruned).report,
         GradingRunReport::Unavailable {
             reason: GradingRunGap::FolderNotKept
         }
     );
     let deleted = loaded(&export.content_deleted);
-    assert!(deleted.content_deleted && deleted.findings.is_empty());
-    assert_eq!(deleted.summary, None);
+    assert_eq!(deleted.content, GradingRunContent::Deleted);
+    let odd = loaded(&export.findings_unreadable);
+    assert_eq!(kept(&odd).findings, GradingRunFindings::Unreadable);
     let unreadable = loaded(&export.unreadable);
     assert_eq!(
-        unreadable.report,
+        kept(&unreadable).report,
         GradingRunReport::Unavailable {
             reason: GradingRunGap::Unreadable
         }

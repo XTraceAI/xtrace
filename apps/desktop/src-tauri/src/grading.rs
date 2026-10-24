@@ -67,7 +67,8 @@
 //!   result, the report and the cards beside it are kept, in
 //!   `<data>/grades/<run id>/`, and the staging folder is removed. The kept
 //!   folders of the newest [`KEEP_FOLDERS`] succeeded runs stay; older ones
-//!   are removed when a run finishes. A content purge removes every kept
+//!   are removed when a run finishes, and `grading://changed` follows when
+//!   one was. A content purge removes every kept
 //!   folder and the kept rubric-making refusals
 //!   ([`GradingService::purge_with_folders`]); rows stay.
 //! * **Details.** [`GradingService::run_details`] reads a succeeded run's
@@ -692,7 +693,7 @@ impl GradingService {
             return GradingRunDetails::NotConfigured;
         };
         match read_run(&self.inner, config, run_id) {
-            Ok(Some((row, kept))) => grading_details::details(&row, &kept)
+            Ok(Some((row, kept))) => grading_details::details(&row, kept.as_ref())
                 .map_or(GradingRunDetails::Failed, GradingRunDetails::Loaded),
             Ok(None) => GradingRunDetails::NotFound,
             Err(_) => GradingRunDetails::Failed,
@@ -707,9 +708,10 @@ impl GradingService {
             return GradingReportOpen::NotConfigured;
         };
         let target = match read_run(&self.inner, config, run_id) {
-            Ok(Some((row, kept))) => {
+            Ok(Some((row, Some(kept)))) => {
                 grading_details::report_target(&row, &kept).map(Path::to_path_buf)
             }
+            Ok(Some((_, None))) => return GradingReportOpen::ContentDeleted,
             Ok(None) => return GradingReportOpen::NotFound,
             Err(_) => return GradingReportOpen::Failed,
         };
@@ -1232,14 +1234,15 @@ fn listed_project(projects: &ReadProjects, path: &str) -> Option<PathBuf> {
     (resolved.to_str() == Some(path)).then_some(resolved)
 }
 
-/// The succeeded run `run_id` and its kept grade folder, read under the
-/// folder lock, so a run being kept, a prune or a purge is never seen half
-/// done. `None` when no succeeded run has that ID.
+/// The succeeded run `run_id` and its kept grade folder (none after its
+/// stored content was deleted), read under the folder lock, so a run being
+/// kept, a prune or a purge is never seen half done. `None` when no
+/// succeeded run has that ID.
 fn read_run(
     inner: &Inner,
     config: &GradingConfig,
     run_id: &str,
-) -> Result<Option<(GradeRow, KeptFolder)>, StateError> {
+) -> Result<Option<(GradeRow, Option<KeptFolder>)>, StateError> {
     let _folders = lock(&inner.folders);
     let Some(row) = store_call(&*inner.store, |store| store.grade(run_id))? else {
         return Ok(None);
@@ -1526,7 +1529,9 @@ fn finish(inner: &Inner, run_id: &str, outcome: &Outcome) {
     }
 }
 
-/// Remove the kept folders of all but the newest succeeded runs.
+/// Remove the kept folders of all but the newest succeeded runs, and
+/// publish `grading://changed` when one went: a run's details no longer
+/// show its criteria or report then.
 fn prune(inner: &Inner, config: &GradingConfig) {
     let Ok(keep) = store_call(&*inner.store, |store| {
         store.grade_newest_succeeded_ids(config.keep_folders)
@@ -1534,8 +1539,13 @@ fn prune(inner: &Inner, config: &GradingConfig) {
         return;
     };
     let keep: HashSet<String> = keep.into_iter().collect();
-    let _folders = lock(&inner.folders);
-    remove_run_folders(&config.grades_dir, |name| !keep.contains(name));
+    let removed = {
+        let _folders = lock(&inner.folders);
+        remove_run_folders(&config.grades_dir, |name| !keep.contains(name))
+    };
+    if removed > 0 {
+        (inner.changed)();
+    }
 }
 
 /// One accepted rubric-making job.

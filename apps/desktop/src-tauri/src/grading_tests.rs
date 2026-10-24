@@ -987,6 +987,10 @@ fn only_the_newest_succeeded_runs_keep_their_folders() {
     );
     assert!(world.grades.join("not-a-run").is_dir());
     assert_eq!(world.rows(), 3, "rows stay");
+    // Each run publishes its start and its finish; a prune that removed a
+    // folder publishes once more (the first run's removed the stray folder,
+    // the third's the first run's), one that removed nothing does not.
+    assert_eq!(lock(&world.seen).changed, 2 + 1 + 2 + 2 + 1);
 }
 
 #[test]
@@ -1025,10 +1029,16 @@ fn a_kept_run_shows_its_details_and_opens_only_its_own_report() {
         panic!("details not loaded");
     };
     assert_eq!((details.score, details.complete), (75, true));
-    assert_eq!(details.summary.as_deref(), Some("One dead reference."));
-    assert_eq!(details.findings.len(), 2);
+    let crate::grading_dto::GradingRunContent::Kept(kept) = &details.content else {
+        panic!("content kept");
+    };
+    assert_eq!(kept.summary, "One dead reference.");
+    let crate::grading_dto::GradingRunFindings::Listed { findings } = &kept.findings else {
+        panic!("findings listed");
+    };
+    assert_eq!(findings.len(), 2);
     assert_eq!(
-        details.criteria,
+        kept.criteria,
         crate::grading_dto::GradingRunCriteria::Reported {
             criteria: vec![crate::grading_dto::GradingCriterionScore {
                 name: "Health of the memory files".into(),
@@ -1037,7 +1047,7 @@ fn a_kept_run_shows_its_details_and_opens_only_its_own_report() {
             }]
         }
     );
-    assert_eq!(details.report, crate::grading_dto::GradingRunReport::Kept);
+    assert_eq!(kept.report, crate::grading_dto::GradingRunReport::Kept);
     assert_eq!(service.open_report(&run_id), GradingReportOpen::Opened);
     assert_eq!(
         *lock(&world.opened),
@@ -1084,13 +1094,14 @@ fn a_kept_run_shows_its_details_and_opens_only_its_own_report() {
     let GradingRunDetails::Loaded(details) = service.run_details(&run_id) else {
         panic!("details not loaded after a purge");
     };
-    assert!(details.content_deleted);
-    assert_eq!((details.score, details.summary), (75, None));
-    assert!(details.findings.is_empty());
-    let deleted = crate::grading_dto::GradingRunGap::ContentDeleted;
+    assert_eq!(details.score, 75);
+    assert_eq!(
+        details.content,
+        crate::grading_dto::GradingRunContent::Deleted
+    );
     assert_eq!(
         service.open_report(&run_id),
-        GradingReportOpen::Unavailable { reason: deleted }
+        GradingReportOpen::ContentDeleted
     );
     assert_eq!(lock(&world.opened).len(), 1);
 }

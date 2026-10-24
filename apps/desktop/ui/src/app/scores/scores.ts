@@ -278,9 +278,11 @@ export function detailsText(answer: Exclude<GradingRunDetails, { state: 'loaded'
   }
 }
 
+/** Stored findings that could not be read. */
+export const FINDINGS_UNREADABLE = 'This grade’s stored findings could not be read.';
+
 /** Why a run shows no points per criterion, as a sentence. */
 export const criteriaGapText: Record<GradingRunGap, string> = {
-  content_deleted: 'Stored content was deleted, so the points per criterion are gone.',
   folder_not_kept:
     'Only the newest grades keep their saved files, and this one’s were removed, so its points per criterion are gone.',
   not_reported: 'This grade has no points per criterion: it was made before skills had rubrics.',
@@ -290,7 +292,6 @@ export const criteriaGapText: Record<GradingRunGap, string> = {
 
 /** Why a run's full report cannot be opened, as a sentence. */
 export const reportGapText: Record<GradingRunGap, string> = {
-  content_deleted: 'Stored content was deleted, so the full report is gone.',
   folder_not_kept: 'Only the newest grades keep their full report, and this one’s was removed.',
   not_reported: 'The skill wrote no full report for this grade.',
   unreadable: 'This grade’s full report could not be read.',
@@ -301,6 +302,8 @@ export function openReportText(answer: Exclude<GradingReportOpen, { state: 'open
   switch (answer.state) {
     case 'not_found':
       return 'This grading is no longer stored, so there is no report to open.';
+    case 'content_deleted':
+      return 'Stored content was deleted, so the full report is gone.';
     case 'unavailable':
       return reportGapText[answer.reason];
     case 'not_configured':

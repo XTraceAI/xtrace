@@ -14,6 +14,7 @@ export type DetailsScenario =
   | 'folder_not_kept'
   | 'content_deleted'
   | 'unreadable'
+  | 'findings_unreadable'
   | 'not_found'
   | 'failed'
   | 'not_configured';

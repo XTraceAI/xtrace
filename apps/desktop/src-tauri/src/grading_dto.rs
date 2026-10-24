@@ -962,30 +962,49 @@ pub enum GradingRunDetails {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct GradingRunDetailsLoaded {
     pub run_id: String,
-    /// The project's full absolute folder path.
-    pub project_path: String,
-    pub skill_id: String,
-    pub skill_version: String,
     pub score: u8,
     /// When the run finished.
     #[ts(type = "number")]
     pub graded_at_ms: i64,
     /// False when the skill skipped a stage; the score still counts.
     pub complete: bool,
-    /// "Delete stored content" removed the run's summary, findings, criteria
-    /// and report; its score stays.
-    pub content_deleted: bool,
-    /// None after stored content was deleted.
-    pub summary: Option<String>,
+    /// The run's summary, findings, criteria and report, or that "Delete
+    /// stored content" removed them (the score stays).
+    pub content: GradingRunContent,
+}
+
+/// What a run keeps besides its score.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingRunContent {
+    /// "Delete stored content" removed the summary, findings, criteria and
+    /// report.
+    Deleted,
+    Kept(GradingRunKept),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct GradingRunKept {
+    pub summary: String,
     /// Every finding the run stored, most severe first (critical, warning,
-    /// info, then pass), each weight in the run's own order. Empty after
-    /// stored content was deleted.
-    pub findings: Vec<GradingInsight>,
+    /// info, then pass), each weight in the run's own order.
+    pub findings: GradingRunFindings,
     /// The points each rubric criterion was awarded, or why they are not
     /// shown.
     pub criteria: GradingRunCriteria,
     /// Whether "Open full report" can open the run's report, or why not.
     pub report: GradingRunReport,
+}
+
+/// A run's stored findings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingRunFindings {
+    Listed {
+        findings: Vec<GradingInsight>,
+    },
+    /// The stored findings could not be read.
+    Unreadable,
 }
 
 /// A run's rubric criteria with their points.
@@ -1020,12 +1039,10 @@ pub enum GradingRunReport {
     },
 }
 
-/// Why a run's criteria or report are not shown.
+/// Why a kept run's criteria or report are not shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum GradingRunGap {
-    /// "Delete stored content" removed it.
-    ContentDeleted,
     /// Only the newest succeeded runs keep their grade folder
     /// ([`crate::grading::KEEP_FOLDERS`]); this run's was removed.
     FolderNotKept,
@@ -1045,6 +1062,8 @@ pub enum GradingReportOpen {
     Opened,
     /// No succeeded run has that ID.
     NotFound,
+    /// "Delete stored content" removed the run's report.
+    ContentDeleted,
     /// The run's report cannot be opened, for this reason.
     Unavailable { reason: GradingRunGap },
     /// Fixture mode never opens anything.

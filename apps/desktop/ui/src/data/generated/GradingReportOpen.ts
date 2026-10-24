@@ -4,4 +4,4 @@ import type { GradingRunGap } from "./GradingRunGap";
 /**
  * What `grading_report_open` did. Only `opened` opened anything.
  */
-export type GradingReportOpen = { "state": "opened" } | { "state": "not_found" } | { "state": "unavailable", reason: GradingRunGap, } | { "state": "not_configured" } | { "state": "failed" };
+export type GradingReportOpen = { "state": "opened" } | { "state": "not_found" } | { "state": "content_deleted" } | { "state": "unavailable", reason: GradingRunGap, } | { "state": "not_configured" } | { "state": "failed" };

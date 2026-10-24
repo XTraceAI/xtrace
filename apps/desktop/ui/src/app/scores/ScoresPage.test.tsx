@@ -710,16 +710,20 @@ it('opens a shown score’s details by its run ID: every finding most severe fir
   await within(dialog).findByText('Complete');
   expect(within(dialog).getByText('Score 75')).toBeTruthy();
   expect(within(dialog).getByText('/work/atlas')).toBeTruthy();
-  const full = detailsScenario('full');
-  if (full.state !== 'loaded') throw new Error('the full answer is loaded');
-  expect(within(dialog).getByText(full.summary!)).toBeTruthy();
+  const answer = detailsScenario('full');
+  if (answer.state !== 'loaded' || answer.content.state !== 'kept')
+    throw new Error('the full answer is loaded and kept');
+  const full = answer.content;
+  if (full.findings.state !== 'listed') throw new Error('the full answer lists its findings');
+  const listed = full.findings.findings;
+  expect(within(dialog).getByText(full.summary)).toBeTruthy();
   // All five findings, in the native order, each with its explanation and fix.
   const findings = within(
     within(dialog).getByRole('region', { name: /Findings/ }) as HTMLElement,
   ).getAllByRole('listitem');
   expect(
     findings.map((item) => item.querySelector('.xt-score-finding-title')?.textContent),
-  ).toEqual(full.findings.map((finding) => finding.title));
+  ).toEqual(listed.map((finding) => finding.title));
   expect(findings.map((item) => within(item).getByRole('img').getAttribute('aria-label'))).toEqual([
     'Critical',
     'Critical',
@@ -727,8 +731,8 @@ it('opens a shown score’s details by its run ID: every finding most severe fir
     'Note',
     'Pass',
   ]);
-  expect(findings[0]!.textContent).toContain(full.findings[0]!.detail!);
-  expect(findings[0]!.textContent).toContain(`Fix ${full.findings[0]!.fix!}`);
+  expect(findings[0]!.textContent).toContain(listed[0]!.detail!);
+  expect(findings[0]!.textContent).toContain(`Fix ${listed[0]!.fix!}`);
   // A finding without an explanation or fix shows only its title.
   expect(findings[3]!.querySelector('.xt-score-finding-detail')).toBeNull();
   expect(findings[3]!.querySelector('.xt-score-finding-fix')).toBeNull();
@@ -835,6 +839,53 @@ it('says when a grade’s details could not be read and reads them again on requ
     'This grading is no longer stored. Grade the project again to see its details.',
   );
   expect(within(gone).queryByRole('button', { name: 'Try again' })).toBeNull();
+});
+
+it('says stored findings that could not be read, never that a grade has none', async () => {
+  const { source, controls } = sourceWith('graded');
+  controls.runDetails.mockResolvedValueOnce(detailsScenario('findings_unreadable'));
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  fireEvent.click(screen.getByRole('button', { name: '90, details for beacon' }));
+  const dialog = await detailsDialog();
+  await within(dialog).findByText('This grade’s stored findings could not be read.');
+  expect(within(dialog).queryByText('This grade has no findings.')).toBeNull();
+  expect(dialog.querySelector('.xt-score-details-count')).toBeNull();
+  // The rest of the grade shows as usual.
+  expect(within(dialog).getByText('Short, accurate instructions.')).toBeTruthy();
+  expect(within(dialog).getByRole('button', { name: 'Open full report' })).toBeTruthy();
+});
+
+it('reopens a grade’s details on a fresh read after Delete stored content, never the old text', async () => {
+  const { source, controls } = sourceWith('graded');
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  const trigger = screen.getByRole('button', { name: '75, details for atlas' });
+  fireEvent.click(trigger);
+  let dialog = await detailsDialog();
+  const summary = 'The instructions are mostly accurate';
+  await within(dialog).findByText(new RegExp(summary));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  act(() => source.emit(events.contentPurged));
+  // The next read is held, so nothing but a fresh answer can fill the dialog.
+  let answer: (value: Awaited<ReturnType<GradingControls['runDetails']>>) => void = () => {};
+  controls.runDetails.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+  );
+  fireEvent.click(trigger);
+  dialog = await detailsDialog();
+  await waitFor(() => expect(controls.runDetails).toHaveBeenCalledTimes(2));
+  expect(within(dialog).queryByText(new RegExp(summary))).toBeNull();
+  expect(dialog.querySelector('.xt-score-finding')).toBeNull();
+  act(() => answer(detailsScenario('content_deleted')));
+  await within(dialog).findByText(
+    'Stored content was deleted. The score stays; its summary, findings, points and full report are gone.',
+  );
+  expect(within(dialog).queryByText(new RegExp(summary))).toBeNull();
 });
 
 it('starts a grading with only the project path and skill ID, and says why one did not start', async () => {
