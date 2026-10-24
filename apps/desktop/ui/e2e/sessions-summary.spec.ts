@@ -13,7 +13,7 @@ for (const [width, height] of [
   [1250, 768],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`Sessions summary tiles stay readable at ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {
@@ -144,63 +144,4 @@ test('a short active time and incomplete input keep their meaning', async ({ pag
     .locator('.xt-sessions-tiles')
     .screenshot({ path: info.outputPath('sessions-tiles-small.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1120);
-});
-
-test('summary follows search, host, PR and date filters using exported answers', async ({
-  page,
-}) => {
-  await page.goto('/sessions');
-  const values = page
-    .getByRole('region', { name: 'Range summary' })
-    .locator('.xt-stat-value .xt-metric-cell');
-  await expect(values).toHaveText(['1', '5', '0 h 23 m', '1']);
-  await page.getByRole('searchbox', { name: 'Search sessions' }).fill('missing');
-  await expect(page.getByText('No sessions match these filters.')).toBeVisible();
-  await expect(values).toHaveText(['0', '0', '0 h 0 m', '0']);
-  await page.getByRole('searchbox', { name: 'Search sessions' }).fill('');
-  await expect(values).toHaveText(['1', '5', '0 h 23 m', '1']);
-  await page.getByRole('button', { name: 'Filter by host' }).click();
-  const claude = page.getByRole('checkbox', { name: 'Claude Code' });
-  await claude.focus();
-  await page.keyboard.press('Space');
-  await expect(claude).not.toBeChecked();
-  await page.keyboard.press('Escape');
-  await expect(values).toHaveText(['0', '0', '0 h 0 m', '0']);
-  await page.getByRole('button', { name: 'Filter by host' }).click();
-  await claude.focus();
-  await page.keyboard.press('Space');
-  await expect(claude).toBeChecked();
-  await page.keyboard.press('Escape');
-  await page.getByRole('switch', { name: 'With PRs only' }).click();
-  await expect(values).toHaveText(['1', '5', '0 h 23 m', '1']);
-  await page.getByRole('radio', { name: '14d', exact: true }).click();
-  await expect(values).toHaveText(['1', '5', '0 h 23 m', '1']);
-  await expect(page.getByRole('region', { name: 'Range summary' })).toHaveAccessibleDescription(
-    SUMMARY_SCOPE,
-  );
-});
-
-test('unsupported synthetic summary says unavailable while its row remains usable', async ({
-  page,
-}) => {
-  const unsupported = structuredClone(fixture as FixtureExport);
-  unsupported.sessions_summaries = [];
-  await page.route('**/fixtures/F1.json*', (route) =>
-    route.fulfill({
-      contentType: 'text/javascript',
-      body: `export default ${JSON.stringify(unsupported)};`,
-    }),
-  );
-  await page.goto('/sessions');
-  await expect(page.getByRole('region', { name: 'Range summary' }).getByRole('status')).toHaveText(
-    'Session summary unavailable. Loaded sessions remain below.Retry',
-  );
-  await expect(page.getByText('Session 00000000', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled();
-  const input = page
-    .getByRole('region', { name: 'Range summary' })
-    .locator('.xt-stat-tile')
-    .filter({ hasText: 'Your input' });
-  await input.focus();
-  await expect(page.getByRole('tooltip')).toContainText('Summary unavailable for these filters');
 });

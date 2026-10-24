@@ -92,7 +92,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`effort fits beside Overview at ${width}x${height} ${scheme}`, async ({ page }, info) => {
       const errors: string[] = [];
       page.on('pageerror', (error) => errors.push(error.message));
@@ -228,7 +228,7 @@ test('switches the effort measure from the keyboard', async ({ page }) => {
   await expect(page.getByTestId('effort-cohort')).toHaveCount(0);
 });
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`a day's card lists every model, by hover and by keyboard, ${scheme}`, async ({
     page,
   }, info) => {

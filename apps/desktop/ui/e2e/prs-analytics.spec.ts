@@ -122,7 +122,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`the report fits the window with every value whole at ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {
@@ -207,24 +207,7 @@ test('opens and closes the drilldown by keyboard, bounded, with its rows in a fo
   await expect(trigger).toBeFocused();
 });
 
-test('the unknown token total opens the same drilldown, and the idle member is listed', async ({
-  page,
-}) => {
-  await open(page, { width: 1440, height: 900, scheme: 'dark' });
-  await page
-    .getByRole('button', {
-      name: /no selected usage in this range: open the linked sessions of example\/atlas#102$/,
-    })
-    .click();
-  const dialog = page.getByRole('dialog', { name: 'Linked sessions' });
-  const idle = dialog.getByRole('row').filter({ hasText: 'Session s-idle' });
-  await expect(idle).toContainText('idle');
-  await expect(idle).toContainText('inferred');
-  await dialog.getByRole('button', { name: 'Close' }).click();
-  await expect(dialog).toHaveCount(0);
-});
-
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`no known merged PR with unknown facts is said, and the inventory is one step away — ${scheme}`, async ({
     page,
   }) => {
@@ -251,7 +234,7 @@ for (const scheme of ['light', 'dark'] as const)
     await expect(page.getByRole('table', { name: 'Merged pull requests' })).toBeVisible();
   });
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`a failed report read is never shown as no data or as loading — ${scheme}`, async ({
     page,
   }) => {

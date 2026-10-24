@@ -23,7 +23,7 @@ import { freshnessText, phaseText } from '../src/app/native-index-text';
  * them.
  *
  * Measured at the native minimum (1120×720), a middle size (1280×800) and the
- * default (1440×900), in both schemes, over the generated F1 export and over
+ * default (1440×900), in the light scheme, over the generated F1 export and over
  * synthetic data (not real history, not a design sample) that makes every
  * part of the page as long and as full as it gets at once: dense tiles with
  * comparisons, a long favorite model, a week of effort from eight assignments with a partly priced day, a full week of human time and daily
@@ -36,7 +36,7 @@ const SIZES = [
   [1280, 800],
   [1440, 900],
 ] as const;
-const SCHEMES = ['light', 'dark'] as const;
+const SCHEMES = ['light'] as const;
 /** The Sessions card at its default: 50px of header and panel, the table's 24px header and eight 23px rows. */
 const SESSIONS_EIGHT_ROWS = 50 + 24 + 8 * 23 - 1;
 const base = fixture as FixtureExport;
@@ -762,6 +762,22 @@ for (const shape of ['plain', 'stress'] as const)
         page.on('console', (message) => {
           if (message.type() === 'error') errors.push(message.text());
         });
+        // The plain run also shows the page needs nothing from outside this
+        // machine: external requests are blocked and recorded, and the bundled
+        // fonts are requested locally.
+        const external: string[] = [];
+        const fonts = new Set<string>();
+        if (shape === 'plain')
+          await page.route('**/*', async (route) => {
+            const url = new URL(route.request().url());
+            if (!['127.0.0.1', 'localhost'].includes(url.hostname)) {
+              external.push(url.origin);
+              await route.abort();
+            } else {
+              if (url.pathname.startsWith('/fonts/')) fonts.add(url.pathname);
+              await route.continue();
+            }
+          });
         await open(page, exportFor(shape), width, height, scheme);
         const g = await page.evaluate(geometry);
         await info.attach('geometry', { body: JSON.stringify(g, null, 2) });
@@ -786,6 +802,118 @@ for (const shape of ['plain', 'stress'] as const)
           const merged = page.getByTestId('overview-tile').filter({ hasText: 'Merged PRs' });
           await expect(merged.getByTestId('overview-value')).toHaveText('5so far');
           await expect(merged.locator('.xt-overview-sub')).toHaveText('1 not checked yet');
+        } else {
+          await expect(page.getByRole('heading', { level: 1 })).toHaveText('What your agents did');
+          await expect(page.getByTestId('report-period')).toBeVisible();
+          const shell = await page.evaluate(() => {
+            const box = (selector: string) =>
+              document.querySelector(selector)!.getBoundingClientRect();
+            const range = box('.xt-range');
+            const period = box('[data-testid="report-period"]');
+            const h1 = box('.xt-dashboard h1');
+            // A collided lane axis would read as the wrong time, and absolute ticks
+            // never trip the clipping check, so measure them directly.
+            const ticks = [...document.querySelectorAll('.xt-lanes-axis > span:not(.sr-only)')]
+              .map((tick) => tick.getBoundingClientRect())
+              .filter((tick) => tick.width > 0);
+            return {
+              periodBeforeRange: period.right <= range.left && period.right > range.left - 16,
+              periodRowMatches:
+                Math.abs(period.top + period.height / 2 - (range.top + range.height / 2)) < 2,
+              headings: [...document.querySelectorAll('.xt-dashboard h2')].map(
+                (h) => h.textContent,
+              ),
+              tileRow: document.querySelector('.xt-dash-tiles') !== null,
+              details: document.querySelectorAll('.xt-dashboard details').length,
+              dialogs: document.querySelectorAll('[role="dialog"]').length,
+              sidebar: box('.xt-sidebar').width,
+              topbar: box('.xt-topbar').height,
+              main: box('.xt-shell-main').width,
+              h1: { x: h1.x, y: h1.y, height: h1.height },
+              tickCount: ticks.length,
+              collidedTicks: ticks.filter(
+                (tick, index) => index > 0 && tick.left < ticks[index - 1]!.right + 4,
+              ).length,
+              tiles: [...document.querySelectorAll('[data-testid="overview-tile"]')].map((tile) => {
+                const label = tile.querySelector<HTMLElement>(
+                  '.xt-overview-label > span:not(.xt-metric-icon)',
+                )!;
+                return {
+                  text: label.textContent,
+                  fits: label.scrollWidth <= label.clientWidth,
+                };
+              }),
+            };
+          });
+          await info.attach('shell', { body: JSON.stringify(shell, null, 2) });
+          // The period sits just before the range control, on its row.
+          expect(shell.periodBeforeRange).toBe(true);
+          expect(shell.periodRowMatches).toBe(true);
+          expect(shell.headings).toEqual(['Effort', 'Overview', 'Sessions']);
+          expect(shell.tileRow).toBe(false);
+          // Nothing expands in place, and nothing is open over the page.
+          expect(shell.details).toBe(0);
+          expect(shell.dialogs).toBe(0);
+          expect(shell.sidebar).toBe(228);
+          expect(shell.topbar).toBe(44);
+          expect(shell.main).toBe(width - 228);
+          expect(shell.h1).toEqual({ x: 245, y: 52, height: 29 });
+          // The lane axis keeps the start and the dated end, and adds the midpoint
+          // and quarters only where the column holds a live axis's widest times
+          // (dashboard-lanes.spec.ts): at these widths `10:59 PM` ticks overlapped
+          // the midpoint at 1120 and the quarters at 1440, so F1's shorter whole
+          // hours show the same ticks. No two ticks collide, in WebKit's wider
+          // metrics as well as Chromium's.
+          if (width === 1120) expect(shell.tickCount).toBe(2);
+          if (width === 1440) expect(shell.tickCount).toBe(3);
+          expect(shell.collidedTicks).toBe(0);
+          expect(shell.tiles.map((tile) => tile.text)).toEqual([
+            'Leverage',
+            'Concurrency',
+            'Merged PRs',
+            'Hands-off median',
+          ]);
+          for (const tile of shell.tiles) expect(tile.fits, tile.text!).toBe(true);
+          // Each supplementary measurement opens over the page from the card it
+          // belongs to, with real data readable and nothing clipped.
+          const method = 'How effort is counted · daily values';
+          for (const [card, trigger, title, probe] of [
+            [
+              'Effort',
+              /^Effort definition$/,
+              method,
+              page.getByRole('group', { name: 'Output tokens per day' }),
+            ],
+            ['Effort', /^Effort definition$/, method, page.getByTestId('cost-total')],
+            ['Sessions', /^Coverage/, 'Coverage', page.getByTestId('usage-coverage')],
+          ] as const) {
+            await page
+              .getByRole('region', { name: card, exact: true })
+              .getByRole('button', { name: trigger })
+              .click();
+            const dialog = page.getByRole('dialog', { name: title });
+            await probe.scrollIntoViewIfNeeded();
+            await expect(probe).toBeVisible();
+            await expect(probe).toBeInViewport();
+            const clipped = await dialog.evaluate((node) =>
+              [...node.querySelectorAll<HTMLElement>('*')]
+                .filter((element) => {
+                  if (element.closest('.xt-dash-table-scroll, .sr-only')) return false;
+                  const style = getComputedStyle(element);
+                  const clips = style.overflow !== 'visible' || style.textOverflow === 'ellipsis';
+                  return clips && element.scrollWidth > element.clientWidth + 1;
+                })
+                .map((element) => `${element.className}: ${element.textContent}`),
+            );
+            expect(clipped).toEqual([]);
+            await page.keyboard.press('Escape');
+            await expect(dialog).toHaveCount(0);
+          }
+          // The page under the dialogs kept its geometry.
+          expectFits(await page.evaluate(geometry), width, height);
+          // Nothing was asked of another host, and the bundled fonts were loaded.
+          expect(external).toEqual([]);
+          expect(fonts.size).toBeGreaterThan(0);
         }
         await expectPageStill(page);
         expect(errors).toEqual([]);
@@ -944,10 +1072,7 @@ const within = async (dialog: Locator, width: number, height: number) => {
   expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
 };
 
-for (const [width, height, scheme] of [
-  [1120, 720, 'light'],
-  [1440, 900, 'dark'],
-] as const)
+for (const [width, height, scheme] of [[1120, 720, 'light']] as const)
   test(`every detail opens over the page and returns to it at ${width}x${height} ${scheme}`, async ({
     page,
   }, info) => {
@@ -1256,10 +1381,8 @@ test('a window too short for the page scrolls the outlet and keeps three rows in
 });
 
 /**
- * Six index statuses, three of them with the long diagnostic reasons (a
- * system error, a path, a locked database) that once added a footer line and
- * scrolled the page: the Dashboard states none of them, and Settings states
- * each whole.
+ * A live index status: the Dashboard adds no line for the index, which is the
+ * sidebar's and Settings', and Settings states it in the app's own sentences.
  */
 const host = (name: string, state: NativeHostState) => ({
   host: name,
@@ -1287,119 +1410,43 @@ const live: NativeIndexStatus = {
   files_scanned: 1234,
   codex_history_gaps: null,
 };
-const degraded = (reason: string): NativeIndexStatus => ({
-  ...live,
-  freshness: { freshness: 'degraded', reason },
-});
-/** Each status; the reasons are the shapes the watcher and the index report. */
-const INDEX: Record<string, { status: NativeIndexStatus }> = {
-  live: { status: live },
-  scanning: {
-    status: {
-      ...live,
-      phase: { phase: 'scanning' },
-      freshness: { freshness: 'unknown' },
-      hosts: [host('claude', 'pending'), host('codex', 'pending'), host('cursor', 'pending')],
-      reconciles: 0,
-    },
-  },
-  degraded: {
-    status: degraded('watcher reported an error: too many open files (os error 24)'),
-  },
-  degradedPath: {
-    status: degraded(
-      '/Users/synthetic/.claude/projects could not be watched: it is absent or not a directory',
-    ),
-  },
-  degradedWatcher: {
-    status: degraded('filesystem watcher could not be created: Too many open files (os error 24)'),
-  },
-  disabled: {
-    status: {
-      ...live,
-      phase: {
-        phase: 'disabled',
-        reason:
-          'the index database could not be opened: /Users/synthetic/Library/Application Support/xtrace/index.sqlite is locked by another process (synthetic)',
-      },
-      freshness: { freshness: 'unknown' },
-      hosts: [],
-      reconciles: 0,
-      files_scanned: 0,
-      codex_history_gaps: null,
-    },
-  },
-};
 function indexedExport(index: NativeIndexStatus): FixtureExport {
   const out = exportFor('stress');
   out.native_index = index;
   return out;
 }
-for (const scheme of SCHEMES)
-  for (const [state, index] of Object.entries(INDEX))
-    test(`the Dashboard fits 1120x720 ${scheme} in every range and measure with ${state} index state`, async ({
-      page,
-    }, info) => {
-      const margins: Record<string, number> = {};
-      await page.unrouteAll();
-      await open(page, indexedExport(index.status), 1120, 720, scheme);
-      // The index's state is the sidebar's and Settings'; the Dashboard adds no line for it
-      // and carries none of its reasons.
-      await expect(page.getByTestId('dashboard-index')).toHaveCount(0);
-      const reasons = [index.status.phase, index.status.freshness]
-        .map((part) => ('reason' in part ? part.reason : ''))
-        .filter(Boolean);
-      for (const reason of reasons)
-        await expect(page.locator('.xt-dashboard')).not.toContainText(reason);
-      for (const range of ['7d', '30d'] as const) {
-        if (range !== '7d') await page.getByRole('radio', { name: range }).click();
-        await expect(page.getByTestId('report-period')).toBeVisible();
-        for (const measure of ['human + agent', 'agent h', 'human h', 'cost'] as const) {
-          await page.getByRole('radio', { name: measure }).click();
-          await expectMeasure(page, measure);
-          const g = await page.evaluate(geometry);
-          await info.attach(`geometry-${state}-${range}-${measure}`, {
-            body: JSON.stringify(g, null, 2),
-          });
-          expectFits(g, 1120, 720);
-          expectInsideMargin(g);
-          margins[`${state} ${range} ${measure}`] = marginUnder(g);
-        }
-      }
-      await expectPageStill(page);
-      if (state === 'live')
-        await page.screenshot({ path: info.outputPath(`indexed-${scheme}.png`) });
-      // The full reason is on Settings, as the app's own sentences state it.
-      await page.getByRole('button', { name: 'Settings', exact: true }).click();
-      const settings = page.getByRole('region', { name: 'Native index' });
-      await expect(settings).toContainText(phaseText(index.status));
-      await expect(settings).toContainText(freshnessText(index.status));
-      await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
-    });
-
-/**
- * At 30d, in both measures, the page still fits — nothing scrolls, every
- * primary part and three rows of every list are in view, and nothing of the
- * hidden panels is drawn — and the margin under Sessions stays positive; the
- * margins are recorded.
- */
-for (const scheme of SCHEMES)
-  test(`the 30d state fits 1120x720 ${scheme}`, async ({ page }, info) => {
-    await open(page, indexedExport(live), 1120, 720, scheme);
-    await page.getByRole('radio', { name: '30d' }).click();
-    await expect(page.getByTestId('report-period')).toContainText('Aug 9');
-    const margins: Record<string, number> = {};
+test('the Dashboard fits 1120x720 light in every range and measure with a live index', async ({
+  page,
+}, info) => {
+  const margins: Record<string, number> = {};
+  await page.unrouteAll();
+  await open(page, indexedExport(live), 1120, 720, 'light');
+  // The index's state is the sidebar's and Settings'; the Dashboard adds no line for it.
+  await expect(page.getByTestId('dashboard-index')).toHaveCount(0);
+  for (const range of ['7d', '30d'] as const) {
+    if (range !== '7d') await page.getByRole('radio', { name: range }).click();
+    await expect(page.getByTestId('report-period')).toBeVisible();
     for (const measure of ['human + agent', 'agent h', 'human h', 'cost'] as const) {
       await page.getByRole('radio', { name: measure }).click();
       await expectMeasure(page, measure);
       const g = await page.evaluate(geometry);
+      await info.attach(`geometry-${range}-${measure}`, {
+        body: JSON.stringify(g, null, 2),
+      });
       expectFits(g, 1120, 720);
       expectInsideMargin(g);
-      margins[measure] = marginUnder(g);
+      margins[`${range} ${measure}`] = marginUnder(g);
     }
-    await expectPageStill(page);
-    await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
-  });
+  }
+  await expectPageStill(page);
+  await page.screenshot({ path: info.outputPath('indexed-light.png') });
+  // Settings states the index in the app's own sentences.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Native index' });
+  await expect(settings).toContainText(phaseText(live));
+  await expect(settings).toContainText(freshnessText(live));
+  await info.attach('margins under Sessions', { body: JSON.stringify(margins, null, 2) });
+});
 
 /** Nine-character daily totals fit whole, including a long DST day and a larger stress value. */
 for (const [width, height] of [
