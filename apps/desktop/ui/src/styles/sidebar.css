@@ -336,6 +336,11 @@
   font-weight: 600;
   color: var(--accent);
 }
+/* A failed sign-in click, beside the opened row's button. */
+.xt-account-sign-in-error {
+  color: var(--warning);
+  font-weight: 600;
+}
 .xt-account-sign-in:hover {
   text-decoration: underline;
 }

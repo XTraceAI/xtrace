@@ -87,58 +87,71 @@ const signInHint = 'Opens Terminal and runs claude auth login';
 
 /**
  * The closed signed-out row's one line, as a button. It sits outside the
- * row's summary, so pressing it never opens or closes the row.
+ * row's summary, so pressing it never opens or closes the row. While the
+ * app watches for the sign-in it says so and opens Terminal again; a
+ * failure shows in its place for a few seconds. It stays the same button
+ * throughout, so keyboard focus stays on it.
  */
-function SignInLine({ id, signIn }: { id: string; signIn: SignIn }) {
+function SignInLine({ id, signIn, waiting }: { id: string; signIn: SignIn; waiting: boolean }) {
   const fix = issueFixes.signed_out!;
+  const label = signIn.error
+    ? `${signIn.error}: try again`
+    : waiting
+      ? 'Waiting for sign-in…: open Terminal again'
+      : `${fix.short} · ${fix.command}: sign in in Terminal`;
   return (
     <div className="xt-account-sign-in-row">
-      {signIn.error ? (
-        <span id={id} role="status" className="xt-account-warning xt-account-row-warning">
-          {signIn.error}
-        </span>
-      ) : (
-        <button
-          type="button"
-          // WebKit skips buttons on Tab unless they say otherwise.
-          tabIndex={0}
-          id={id}
-          className="xt-account-warning xt-account-row-warning xt-account-sign-in"
-          aria-label={`${fix.short} · ${fix.command}: sign in in Terminal`}
-          title={signInHint}
-          aria-busy={signIn.busy || undefined}
-          onClick={() => void signIn.start()}
-        >
-          {fix.short} · <code>{fix.command}</code>
-        </button>
-      )}
+      <button
+        type="button"
+        // WebKit skips buttons on Tab unless they say otherwise.
+        tabIndex={0}
+        id={id}
+        className="xt-account-warning xt-account-row-warning xt-account-sign-in"
+        aria-label={label}
+        title={signInHint}
+        aria-busy={signIn.busy || undefined}
+        onClick={() => void signIn.start()}
+      >
+        {signIn.error ? (
+          signIn.error
+        ) : waiting ? (
+          'Waiting for sign-in…'
+        ) : (
+          <>
+            {fix.short} · <code>{fix.command}</code>
+          </>
+        )}
+      </button>
     </div>
   );
 }
 
 /**
- * The opened row's sign-in button, in place of the command to run. A
- * failure shows here only while the row is open; the closed row's line
- * shows it otherwise.
+ * The opened row's sign-in button, in place of the command to run: "Sign in
+ * in Terminal", or "Open Terminal again" while the app watches for the
+ * sign-in. A failure shows beside it, for sight only; the row's live
+ * region says it.
  */
-function SignInAction({ signIn, open }: { signIn: SignIn; open: boolean }) {
+function SignInAction({ signIn, waiting }: { signIn: SignIn; waiting: boolean }) {
   return (
     <>
       {' '}
       <span className="xt-account-action">
-        {signIn.error && open ? (
-          <span role="status">{signIn.error}</span>
-        ) : (
-          <button
-            type="button"
-            tabIndex={0}
-            className="xt-account-sign-in"
-            title={signInHint}
-            aria-busy={signIn.busy || undefined}
-            onClick={() => void signIn.start()}
-          >
-            Sign in in Terminal
-          </button>
+        <button
+          type="button"
+          tabIndex={0}
+          className="xt-account-sign-in"
+          title={signInHint}
+          aria-busy={signIn.busy || undefined}
+          onClick={() => void signIn.start()}
+        >
+          {waiting ? 'Open Terminal again' : 'Sign in in Terminal'}
+        </button>
+        {signIn.error && (
+          <span className="xt-account-sign-in-error" aria-hidden="true">
+            {' '}
+            {signIn.error}
+          </span>
         )}
       </span>
     </>
@@ -799,8 +812,8 @@ function DailyChart({ days, resetsAt }: { days: AccountUsageDay[]; resetsAt: num
 const maxTimeoutMs = 2_147_483_647;
 
 /**
- * One UI wakeup for the next reported reset or the next time a reading turns
- * stale; this never reads a provider.
+ * One UI wakeup for the next reported reset, the next time a reading turns
+ * stale, or the end of a watched sign-in; this never reads a provider.
  */
 function useResetWakeup(usage: AccountUsage | undefined, failed: boolean) {
   const [wakeups, setWakeups] = useState(0);
@@ -812,6 +825,8 @@ function useResetWakeup(usage: AccountUsage | undefined, failed: boolean) {
     );
     const nextStale = readable
       .map((provider) => (provider.stale_at ?? Number.NaN) * 1000)
+      // A watched sign-in's end, too, so "Waiting for sign-in…" goes on time.
+      .concat((usage.claude.sign_in_watch_until ?? Number.NaN) * 1000)
       .filter((at) => Number.isFinite(at) && at > now);
     const nextReset = readable
       .flatMap((provider) => provider.windows)
@@ -971,6 +986,9 @@ function Provider({
   const signIn = useSignIn(onSignIn);
   const [open, setOpen] = useState(false);
   const signInId = useId();
+  // The app is watching for a sign-in the user started (its own decision).
+  const waiting =
+    provider?.sign_in_watch_until !== undefined && provider.sign_in_watch_until * 1000 > Date.now();
   const sub = main
     ? [
         windowTitle(main),
@@ -1081,7 +1099,7 @@ function Provider({
             <p>
               {statusLine}
               {canSignIn ? (
-                <SignInAction signIn={signIn} open={open} />
+                <SignInAction signIn={signIn} waiting={waiting} />
               ) : (
                 <IssueAction issue={staleIssue ?? fixable} />
               )}
@@ -1094,7 +1112,7 @@ function Provider({
                 <p className="xt-account-stale-detail">
                   {issueLabels[staleIssue]}
                   {canSignIn ? (
-                    <SignInAction signIn={signIn} open={open} />
+                    <SignInAction signIn={signIn} waiting={waiting} />
                   ) : (
                     <IssueAction issue={staleIssue} />
                   )}
@@ -1132,7 +1150,13 @@ function Provider({
           )}
         </div>
       </details>
-      {canSignIn && !open && <SignInLine id={signInId} signIn={signIn} />}
+      {canSignIn && !open && <SignInLine id={signInId} signIn={signIn} waiting={waiting} />}
+      {/* Present before any failure, so screen readers hear the failure. */}
+      {canSignIn && (
+        <span role="status" className="sr-only">
+          {signIn.error ?? ''}
+        </span>
+      )}
     </div>
   );
 }

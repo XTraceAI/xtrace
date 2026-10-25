@@ -55,9 +55,17 @@ const SIGN_IN_WATCH: Duration = Duration::from_secs(15 * 60);
 /// A passive read reuses a Codex result younger than this.
 const CODEX_REUSE: Duration = Duration::from_secs(60);
 
+/// Called after a watched sign-in ends, so the screen reads again at once.
+pub type SignInPublish = Box<dyn Fn() + Send + Sync>;
+
 pub struct AccountUsageService {
     read: Mutex<ReadState>,
     finished: Condvar,
+    /// Wakes the automatic reader early (`ReadState::claude_wake`).
+    wake: Condvar,
+    /// One sign-in click writes and opens the script at a time.
+    sign_in: Mutex<()>,
+    sign_in_publish: Option<SignInPublish>,
     /// Present only in the live app; tests and fixtures never start a probe.
     claude_local: Option<ClaudeUsagePaths>,
     /// The reading history; present only in the live app. Never locked while
@@ -102,6 +110,8 @@ struct ReadState {
     claude: ClaudeState,
     /// Set after the credential helper fallback was rate limited.
     claude_retry_after: Option<Instant>,
+    /// The automatic reader should wake now instead of finishing its wait.
+    claude_wake: bool,
 }
 
 #[derive(Default)]
@@ -124,7 +134,7 @@ struct ClaudeState {
     config_seen: Option<SystemTime>,
     /// Wall-clock milliseconds until which the automatic reader watches for
     /// a sign-in the user started: each wakeup asks only whether Claude Code
-    /// is still signed out, and reads usage at once when it is not.
+    /// is signed in, and reads usage at once when it says so.
     sign_in_until: Option<i64>,
 }
 
@@ -140,8 +150,12 @@ impl Default for AccountUsageService {
                 claude_generation: 0,
                 claude: ClaudeState::default(),
                 claude_retry_after: None,
+                claude_wake: false,
             }),
             finished: Condvar::new(),
+            wake: Condvar::new(),
+            sign_in: Mutex::new(()),
+            sign_in_publish: None,
             claude_local: None,
             history: Mutex::new(None),
         }
@@ -163,6 +177,24 @@ impl AccountUsageService {
             claude_local: Some(paths),
             ..service
         }
+    }
+
+    /// Tells the screen when a watched sign-in ends.
+    pub fn with_sign_in_publish(self, publish: SignInPublish) -> Self {
+        Self {
+            sign_in_publish: Some(publish),
+            ..self
+        }
+    }
+
+    /// Waits up to `wait`, or less when something asks the reader to wake.
+    fn sleep_until_woken(&self, wait: Duration) {
+        let state = self.lock();
+        let (mut state, _) = self
+            .wake
+            .wait_timeout_while(state, wait, |state| !state.claude_wake)
+            .unwrap_or_else(|error| error.into_inner());
+        state.claude_wake = false;
     }
 
     /// Starts the automatic Claude reader thread. It reads at once, then every
@@ -187,7 +219,7 @@ impl AccountUsageService {
         let started = spawn(Box::new(move || {
             loop {
                 let wait = service.automatic_claude_tick();
-                std::thread::sleep(wait);
+                service.sleep_until_woken(wait);
             }
         }));
         if started.is_err() {
@@ -267,7 +299,7 @@ impl AccountUsageService {
         self.automatic_claude_tick_watching(
             &paths,
             super::account_usage_claude_probe::read_local,
-            super::account_usage_claude_probe::still_signed_out,
+            super::account_usage_claude_probe::sign_in_status,
         )
     }
 
@@ -294,28 +326,41 @@ impl AccountUsageService {
         self.sign_in_with(|| super::account_usage_claude_sign_in::open_sign_in(paths))
     }
 
+    /// Starts (or restarts) the watch only when the terminal opened, and
+    /// wakes the reader so the first check runs at once.
     fn sign_in_with(&self, open: impl FnOnce() -> Result<(), SignInError>) -> Result<(), String> {
-        open().map_err(|error| error.message().to_owned())?;
-        self.lock().claude.sign_in_until =
+        {
+            let _one_at_a_time = self
+                .sign_in
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            open().map_err(|error| error.message().to_owned())?;
+        }
+        let mut state = self.lock();
+        state.claude.sign_in_until =
             Some(Timestamp::now().as_millisecond() + SIGN_IN_WATCH.as_millis() as i64);
+        state.claude_wake = true;
+        self.wake.notify_all();
         Ok(())
     }
 
     /// One wakeup of the automatic reader: use a newer reading Claude Code
     /// saved on its own, else probe when a read is due. While a sign-in the
     /// user started is watched, it instead asks only whether Claude Code is
-    /// still signed out, and reads at once when it is not; no probe runs
-    /// while it is. Returns the wait until the next wakeup.
+    /// signed in (`Some(true)`), and reads at once only when it says so;
+    /// signed out or can't tell (`None`) keeps watching with no probe. When a
+    /// watch ends, the screen is told. Returns the wait until the next wakeup.
     fn automatic_claude_tick_watching(
         &self,
         paths: &ClaudeUsagePaths,
         probe: impl FnOnce(&ClaudeUsagePaths) -> AccountProviderUsage,
-        still_signed_out: impl FnOnce(&ClaudeUsagePaths) -> bool,
+        sign_in_status: impl FnOnce(&ClaudeUsagePaths) -> Option<bool>,
     ) -> Duration {
         let mut state = self.lock();
         if state.claude_refreshing {
             return Duration::from_secs(5);
         }
+        let had_watch = state.claude.sign_in_until.is_some();
         let now_ms = Timestamp::now().as_millisecond();
         // An end further away than the whole watch means the clock was set
         // back: stop watching rather than watch longer.
@@ -355,7 +400,7 @@ impl AccountUsageService {
         let mut signed_in = false;
         if result.is_none() {
             if watching {
-                signed_in = !still_signed_out(paths);
+                signed_in = sign_in_status(paths) == Some(true);
                 if signed_in {
                     result = Some(probe(paths));
                 }
@@ -386,11 +431,15 @@ impl AccountUsageService {
                 .unwrap_or(TICK)
                 .clamp(Duration::from_secs(1), TICK)
         };
+        let watch_ended = had_watch && state.claude.sign_in_until.is_none();
         completion.finish(&mut state);
         drop(state);
         if let Some(reading) = save {
             let _ = save_last_reading(&paths.last_reading, &reading);
             self.record_history(Provider::Claude, &reading);
+        }
+        if watch_ended && let Some(publish) = &self.sign_in_publish {
+            publish();
         }
         wait
     }
@@ -1708,17 +1757,19 @@ mod tests {
     #[test]
     fn while_watching_only_the_sign_in_check_runs_until_it_says_signed_in() {
         let root = tempfile::tempdir().unwrap();
-        // The backed-off read is long past due: still no probe while signed out.
+        // The backed-off read is long past due: still no probe while signed
+        // out, or while the check cannot tell (no Claude Code, a timeout, an
+        // odd answer).
         let (service, paths) = signed_out_service(root.path(), -60_000);
         service.sign_in_with(|| Ok(())).unwrap();
-        for _ in 0..3 {
+        for answer in [Some(false), None, Some(false), None] {
             let checked = std::cell::Cell::new(0);
             let wait = service.automatic_claude_tick_watching(
                 &paths,
-                |_| panic!("probe ran while Claude Code was signed out"),
+                |_| panic!("probe ran before Claude Code said it was signed in"),
                 |_| {
                     checked.set(checked.get() + 1);
-                    true
+                    answer
                 },
             );
             assert_eq!(checked.get(), 1);
@@ -1742,7 +1793,7 @@ mod tests {
                 probed.set(true);
                 available(vec![week(80.0)])
             },
-            |_| false,
+            |_| Some(true),
         );
         assert!(probed.get());
         let shown = service.lock().claude_snapshot();
@@ -1762,7 +1813,7 @@ mod tests {
         service.automatic_claude_tick_watching(
             &paths,
             |_| failed(AccountUsageIssue::Timeout),
-            |_| false,
+            |_| Some(true),
         );
         let state = service.lock();
         assert!(state.claude.sign_in_until.is_none());
@@ -1770,6 +1821,49 @@ mod tests {
             state.claude_snapshot().issue,
             Some(AccountUsageIssue::Timeout)
         );
+    }
+
+    #[test]
+    fn a_click_wakes_the_reader_and_an_ended_watch_is_published() {
+        let root = tempfile::tempdir().unwrap();
+        let (service, paths) = signed_out_service(root.path(), 40 * 60_000);
+        let published = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&published);
+        let service = Arc::new(service.with_sign_in_publish(Box::new(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })));
+        // The reader is waiting a whole minute; the click wakes it at once.
+        let sleeper = Arc::clone(&service);
+        let woke = std::thread::spawn(move || {
+            let started = Instant::now();
+            sleeper.sleep_until_woken(TICK);
+            started.elapsed()
+        });
+        // Let it start waiting first (a wake set before it waits also counts).
+        std::thread::sleep(Duration::from_millis(100));
+        service.sign_in_with(|| Ok(())).unwrap();
+        assert!(woke.join().unwrap() < Duration::from_secs(5));
+        // A wait with no wake still runs its course.
+        let started = Instant::now();
+        service.sleep_until_woken(Duration::from_millis(150));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        // Checks that leave the watch on publish nothing; the read that ends it does.
+        service.automatic_claude_tick_watching(&paths, |_| panic!("no probe"), |_| None);
+        assert_eq!(published.load(std::sync::atomic::Ordering::SeqCst), 0);
+        service.automatic_claude_tick_watching(
+            &paths,
+            |_| available(vec![week(80.0)]),
+            |_| Some(true),
+        );
+        assert_eq!(published.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // So does a watch that runs out.
+        service.lock().claude.sign_in_until = Some(Timestamp::now().as_millisecond() - 1);
+        service.automatic_claude_tick_watching(
+            &paths,
+            |_| panic!("not due"),
+            |_| panic!("the sign-in check ran after the watch ended"),
+        );
+        assert_eq!(published.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]

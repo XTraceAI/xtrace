@@ -81,6 +81,10 @@ pub const GRADING_PROGRESS_EVENT: &str = "grading://progress";
 /// run's status, never before the commit; and when a rubric-making job
 /// starts, saves its rubric and ends.
 pub const GRADING_CHANGED_EVENT: &str = "grading://changed";
+/// Published, with no payload, when the app stops watching for a Claude Code
+/// sign-in the user started from the Usage panel: the read it waited for ran,
+/// or the watch ran out. The frontend reads account usage again.
+pub const CLAUDE_SIGN_IN_EVENT: &str = "account-usage://sign-in-ended";
 /// A rubric-making job's progress (`dto::GradingRubricProgress`): when it
 /// starts, about every five seconds while it runs, and once when it is over.
 pub const GRADING_RUBRIC_PROGRESS_EVENT: &str = "grading://rubric-progress";
@@ -1278,6 +1282,12 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             )
         }
         _ => account_usage::AccountUsageService::default(),
+    };
+    let usage = {
+        let handle = app.handle().clone();
+        usage.with_sign_in_publish(Box::new(move || {
+            let _ = handle.emit(CLAUDE_SIGN_IN_EVENT, ());
+        }))
     };
     let usage = Arc::new(usage);
     usage.start_automatic();

@@ -84,14 +84,15 @@ fn read_with_probe(
     usage
 }
 
-/// Whether the user's Claude Code says it is signed out right now, from the
-/// same check a failed read makes. Used while the app watches for a sign-in
-/// after the user's click. No Claude Code found is not "signed out".
-pub(super) fn still_signed_out(paths: &ClaudeUsagePaths) -> bool {
-    let Some(binary) = resolve_claude() else {
-        return false;
-    };
-    prepare_probe_dir(&paths.probe_dir).is_ok() && signed_out(&binary, &paths.probe_dir)
+/// Whether the user's Claude Code says it is signed in right now, from the
+/// same check a failed read makes: `Some(true)` signed in, `Some(false)`
+/// signed out, `None` when it cannot tell (no Claude Code found, or the check
+/// failed, timed out or answered anything else). Used while the app watches
+/// for a sign-in after the user's click.
+pub(super) fn sign_in_status(paths: &ClaudeUsagePaths) -> Option<bool> {
+    let binary = resolve_claude()?;
+    prepare_probe_dir(&paths.probe_dir).ok()?;
+    auth_status(&binary, &paths.probe_dir, AUTH_STATUS_DEADLINE)
 }
 
 /// Deadline for `claude auth status`, including killing it.
@@ -105,24 +106,28 @@ const MAX_AUTH_STATUS_BYTES: usize = 16 * 1024;
 /// A check that cannot run, times out or answers anything else is not
 /// "signed out".
 fn signed_out(binary: &Path, probe_dir: &Path) -> bool {
-    signed_out_within(binary, probe_dir, AUTH_STATUS_DEADLINE)
+    auth_status(binary, probe_dir, AUTH_STATUS_DEADLINE) == Some(false)
 }
 
-fn signed_out_within(binary: &Path, probe_dir: &Path, deadline: Duration) -> bool {
+/// The `loggedIn` answer of `claude auth status --json`, or `None` when the
+/// check cannot run, times out or gives no such answer.
+fn auth_status(binary: &Path, probe_dir: &Path, deadline: Duration) -> Option<bool> {
     let mut command = std::process::Command::new(binary);
     command
         .args(["auth", "status", "--json"])
         .current_dir(probe_dir);
     configure_environment(&mut command, binary);
-    run_to_exit(&mut command, b"", deadline, MAX_AUTH_STATUS_BYTES, true)
-        .is_ok_and(|stdout| status_says_signed_out(&stdout))
+    let stdout = run_to_exit(&mut command, b"", deadline, MAX_AUTH_STATUS_BYTES, true).ok()?;
+    logged_in(&stdout)
 }
 
-/// `claude auth status --json` prints an object whose `loggedIn` is `false`
-/// when Claude Code has no sign-in. Only that exact answer counts.
-fn status_says_signed_out(stdout: &[u8]) -> bool {
+/// `claude auth status --json` prints an object whose `loggedIn` is `true`
+/// or `false`. Only that exact answer counts.
+fn logged_in(stdout: &[u8]) -> Option<bool> {
     serde_json::from_slice::<serde_json::Value>(stdout)
-        .is_ok_and(|status| status.get("loggedIn") == Some(&serde_json::Value::Bool(false)))
+        .ok()?
+        .get("loggedIn")?
+        .as_bool()
 }
 
 /// A saved reading older than this is not taken as the source of a panel
@@ -679,6 +684,10 @@ fn configure_environment(command: &mut std::process::Command, binary: &Path) {
 mod tests {
     use super::*;
 
+    fn status_says_signed_out(stdout: &[u8]) -> bool {
+        logged_in(stdout) == Some(false)
+    }
+
     // Reproduce the host's lossy encoding only to construct collision fixtures.
     fn encoded_project_name(dir: &Path) -> String {
         let mut name = String::new();
@@ -883,6 +892,10 @@ mod tests {
         ] {
             assert!(!status_says_signed_out(stdout), "{stdout:?}");
         }
+        assert_eq!(logged_in(br#"{"loggedIn": true}"#), Some(true));
+        for unknown in [&br#"{"loggedIn": "true"}"#[..], b"{}", b"Logged in", b""] {
+            assert_eq!(logged_in(unknown), None, "{unknown:?}");
+        }
     }
 
     #[test]
@@ -956,12 +969,19 @@ printf '{{"loggedIn": false, "authMethod": "none"}}'"#,
         assert!(signed_out(&out, &dir));
         assert!(!signed_out(&signed_in, &dir));
         assert!(!signed_out(&root.path().join("missing"), &dir));
+        // The three answers the sign-in watch tells apart.
+        let deadline = Duration::from_secs(10);
+        assert_eq!(auth_status(&out, &dir, deadline), Some(false));
+        assert_eq!(auth_status(&signed_in, &dir, deadline), Some(true));
+        assert_eq!(
+            auth_status(&root.path().join("missing"), &dir, deadline),
+            None
+        );
         let started = Instant::now();
-        assert!(!signed_out_within(
-            &stalled,
-            &dir,
-            Duration::from_millis(200)
-        ));
+        assert_eq!(
+            auth_status(&stalled, &dir, Duration::from_millis(200)),
+            None
+        );
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 

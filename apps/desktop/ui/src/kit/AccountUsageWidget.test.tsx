@@ -1035,18 +1035,73 @@ describe('signing in from a signed-out Claude row', () => {
     expect(row().open).toBe(false);
   });
 
-  it('shows a failure on the line for a few seconds', async () => {
+  it('shows a failure on the same button, keeping focus, and says it aloud', async () => {
     const onSignIn = vi.fn(() => Promise.reject('Claude Code not found'));
     renderRow(signedOut(), onSignIn);
-    await act(async () => fireEvent.click(line()));
     const group = row().parentElement!;
+    // The live region is there, empty, before anything fails.
     const status = within(group).getByRole('status');
+    expect(status.textContent).toBe('');
+    const button = line();
+    button.focus();
+    await act(async () => fireEvent.click(button));
     expect(status.textContent).toBe('Claude Code not found');
-    expect(status.classList.contains('xt-account-row-warning')).toBe(true);
-    expect(summary().getAttribute('aria-describedby')).toBe(status.id);
+    // The same button, still focused, shows the failure on its one line.
+    expect(document.activeElement).toBe(button);
+    expect(button.isConnected).toBe(true);
+    expect(button.textContent).toBe('Claude Code not found');
+    expect(button.getAttribute('aria-label')).toBe('Claude Code not found: try again');
+    expect(summary().getAttribute('aria-describedby')).toBe(button.id);
     act(() => vi.advanceTimersByTime(6_000));
-    expect(within(group).queryByRole('status')).toBeNull();
-    expect(line()).toBeTruthy();
+    expect(status.textContent).toBe('');
+    expect(line()).toBe(button);
+    expect(document.activeElement).toBe(button);
+    // Clicking the failure tries again.
+    await act(async () => fireEvent.click(button));
+    expect(onSignIn).toHaveBeenCalledTimes(2);
+  });
+
+  it('while the app waits for the sign-in, says so and opens Terminal again', async () => {
+    const onSignIn = vi.fn(async () => {});
+    const until = Date.now() / 1000 + 15 * 60;
+    renderRow(signedOut({ sign_in_watch_until: until }), onSignIn);
+    const waiting = screen.getByRole('button', {
+      name: 'Waiting for sign-in…: open Terminal again',
+    });
+    expect(waiting.textContent).toBe('Waiting for sign-in…');
+    expect(waiting.classList.contains('xt-account-row-warning')).toBe(true);
+    await act(async () => fireEvent.click(waiting));
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    expect(row().open).toBe(false);
+    // The opened row's button says the same.
+    row().open = true;
+    fireEvent(row(), new Event('toggle'));
+    expect(
+      within(row().querySelector<HTMLElement>('.xt-account-detail')!).getByRole('button', {
+        name: 'Open Terminal again',
+      }),
+    ).toBeTruthy();
+    row().open = false;
+    fireEvent(row(), new Event('toggle'));
+    // When the app's watch runs out, the line goes back on its own.
+    act(() => vi.advanceTimersByTime(15 * 60_000 + 1_000));
+    expect(line().textContent).toBe('Signed out · claude auth login');
+  });
+
+  it('shows an opened-row failure beside a button that stays', async () => {
+    const onSignIn = vi.fn(() => Promise.reject('Terminal did not open'));
+    renderRow(signedOut(), onSignIn);
+    row().open = true;
+    fireEvent(row(), new Event('toggle'));
+    const detail = row().querySelector<HTMLElement>('.xt-account-detail')!;
+    const button = within(detail).getByRole('button', { name: 'Sign in in Terminal' });
+    button.focus();
+    await act(async () => fireEvent.click(button));
+    expect(document.activeElement).toBe(button);
+    expect(detail.textContent).toContain('Sign in in Terminal Terminal did not open');
+    expect(within(row().parentElement!).getByRole('status').textContent).toBe(
+      'Terminal did not open',
+    );
   });
 
   it('in the opened row, offers a sign-in button in place of the command', async () => {

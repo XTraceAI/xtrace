@@ -74,6 +74,7 @@ export const events = {
   gradingProgress: 'grading://progress',
   gradingChanged: 'grading://changed',
   gradingRubricProgress: 'grading://rubric-progress',
+  claudeSignInEnded: 'account-usage://sign-in-ended',
   contentPurged: 'store://content-purged',
 } as const;
 export type DataEvent = (typeof events)[keyof typeof events];

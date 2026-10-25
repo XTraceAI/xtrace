@@ -234,13 +234,30 @@ test('the signed-out line signs in by click or key without opening the row', asy
   await expect(line).toHaveCount(0);
   await row.getByRole('button', { name: 'Sign in in Terminal' }).click();
   await expect.poll(signIns).toHaveLength(4);
-  // A failure takes the closed line's place, on one line, then goes.
+  // A failure shows on the same focused button, on one line, then goes.
   await page.goto('/e2e/sidebar.html?claude=signed_out&signin=fail');
-  await sidebar.getByRole('button', { name: /^Signed out · claude auth login/ }).click();
-  const failure = sidebar.locator('.xt-account-sign-in-row [role="status"]');
-  await expect(failure).toHaveText('Claude Code not found');
-  expect(await failure.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+  const button = sidebar.locator('.xt-account-sign-in-row button');
+  await button.focus();
+  await page.keyboard.press('Enter');
+  await expect(button).toHaveText('Claude Code not found');
+  await expect(button).toBeFocused();
+  await expect(sidebar.locator('.xt-account-provider-group [role="status"]')).toHaveText(
+    'Claude Code not found',
+  );
+  expect(await button.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(button).toHaveText('Signed out · claude auth login', { timeout: 10_000 });
+  await expect(button).toBeFocused();
+  // While the app waits for the sign-in, the line says so and opens Terminal again.
+  await page.goto('/e2e/sidebar.html?claude=signed_out&watch=1');
+  const waiting = sidebar.getByRole('button', {
+    name: 'Waiting for sign-in…: open Terminal again',
+  });
+  await expect(waiting).toHaveText('Waiting for sign-in…');
+  expect(await waiting.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
     true,
   );
-  await expect(failure).toHaveCount(0, { timeout: 10_000 });
+  await waiting.click();
+  await expect.poll(signIns).toEqual(['claude']);
+  await row.locator('summary').click();
+  await expect(row.getByRole('button', { name: 'Open Terminal again' })).toBeVisible();
 });

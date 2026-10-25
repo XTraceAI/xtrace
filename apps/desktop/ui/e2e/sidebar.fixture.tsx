@@ -87,6 +87,14 @@ for (const host of ['claude', 'codex'] as const) {
   };
 }
 
+// `?watch=1` shows the app watching for a Claude sign-in for 15 minutes.
+if (search.get('watch')) {
+  accountUsage.claude = {
+    ...accountUsage.claude,
+    sign_in_watch_until: Math.floor(Date.now() / 1000) + 15 * 60,
+  };
+}
+
 // The sign-in click is recorded here instead of opening Terminal;
 // `?signin=fail` answers as the app does when Claude Code is missing.
 const signIns: string[] = [];
