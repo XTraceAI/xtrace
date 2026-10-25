@@ -2,6 +2,7 @@
 import type { GradingRubricNow } from "./GradingRubricNow";
 import type { GradingRunningNow } from "./GradingRunningNow";
 import type { GradingSkillOverview } from "./GradingSkillOverview";
+import type { GradingWaitingElsewhere } from "./GradingWaitingElsewhere";
 import type { ProjectEntry } from "./ProjectEntry";
 
 export type GradingOverviewLoaded = { 
@@ -22,7 +23,13 @@ skills: Array<GradingSkillOverview>,
 running: GradingRunningNow | null, 
 /**
  * The rubric-making job going now, if any. It holds the same one slot
- * as a grading, so nothing can be graded meanwhile. Boxed: the answer
- * stays small while no job runs.
+ * as a grading, so gradings started meanwhile wait in line until it is
+ * done. Boxed: the answer stays small while no job runs.
  */
-making_rubric: GradingRubricNow | null, };
+making_rubric: GradingRubricNow | null, 
+/**
+ * The waiting gradings no row shows (their project is no longer listed,
+ * or their skill is not on Scores), oldest first, so each can still be
+ * cancelled.
+ */
+waiting_elsewhere: Array<GradingWaitingElsewhere>, };

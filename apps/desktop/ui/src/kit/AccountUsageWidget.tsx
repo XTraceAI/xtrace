@@ -22,9 +22,174 @@ const issueLabels: Record<AccountUsageIssue, string> = {
   network: 'Provider connection failed',
   invalid_response: 'Provider response unavailable',
   source_unavailable: 'Usage source unavailable',
+  signed_out: 'Claude Code is signed out',
   not_fetched: 'Refresh to load usage',
   reading: 'Reading…',
 };
+
+/**
+ * The issues the user fixes with a Terminal command: a short name for the
+ * one-line warning on a closed row, and the command.
+ */
+const issueFixes: Partial<Record<AccountUsageIssue, { short: string; command: string }>> = {
+  signed_out: { short: 'Signed out', command: 'claude auth login' },
+};
+
+/** "Run `claude auth login` in Terminal" under an issue that has a fix. */
+function IssueAction({ issue }: { issue: AccountUsageIssue | null | undefined }) {
+  const fix = issue ? issueFixes[issue] : undefined;
+  if (!fix) return null;
+  return (
+    <>
+      {' '}
+      <span className="xt-account-action">
+        Run <code>{fix.command}</code> in Terminal
+      </span>
+    </>
+  );
+}
+
+/** How long a failed sign-in click says why, in place of its line. */
+const signInErrorMs = 6_000;
+
+/**
+ * The sign-in click: asks the app to open Terminal running `claude auth
+ * login`. A failure is shown for a few seconds; a second click while one
+ * is starting does nothing.
+ */
+function useSignIn(onSignIn: (() => Promise<void>) | undefined) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setTimeout(() => setError(null), signInErrorMs);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+  const start = async () => {
+    if (busy || !onSignIn) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSignIn();
+    } catch (failure) {
+      const text =
+        typeof failure === 'string' ? failure : failure instanceof Error ? failure.message : '';
+      setError(text || 'Terminal did not open');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, error, start };
+}
+
+type SignIn = ReturnType<typeof useSignIn>;
+const signInHint = 'Opens Terminal and runs claude auth login';
+
+/**
+ * The closed signed-out row's one line, as a button. It sits outside the
+ * row's summary, so pressing it never opens or closes the row. While the
+ * app watches for the sign-in it says so and opens Terminal again; a
+ * failure shows in its place for a few seconds. It stays the same button
+ * throughout, so keyboard focus stays on it.
+ */
+function SignInLine({ id, signIn, waiting }: { id: string; signIn: SignIn; waiting: boolean }) {
+  const fix = issueFixes.signed_out!;
+  const label = signIn.error
+    ? `${signIn.error}: try again`
+    : waiting
+      ? 'Waiting for sign-in…: open Terminal again'
+      : `${fix.short} · ${fix.command}: sign in in Terminal`;
+  return (
+    <div className="xt-account-sign-in-row">
+      <button
+        type="button"
+        // WebKit skips buttons on Tab unless they say otherwise.
+        tabIndex={0}
+        id={id}
+        className="xt-account-warning xt-account-row-warning xt-account-sign-in"
+        aria-label={label}
+        title={signInHint}
+        aria-busy={signIn.busy || undefined}
+        onClick={() => void signIn.start()}
+      >
+        {signIn.error ? (
+          signIn.error
+        ) : waiting ? (
+          'Waiting for sign-in…'
+        ) : (
+          <>
+            {fix.short} · <code>{fix.command}</code>
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The opened row's sign-in button, in place of the command to run: "Sign in
+ * in Terminal", or "Open Terminal again" while the app watches for the
+ * sign-in. A failure shows beside it, for sight only; the row's live
+ * region says it.
+ */
+function SignInAction({ signIn, waiting }: { signIn: SignIn; waiting: boolean }) {
+  return (
+    <>
+      {' '}
+      <span className="xt-account-action">
+        <button
+          type="button"
+          tabIndex={0}
+          className="xt-account-sign-in"
+          title={signInHint}
+          aria-busy={signIn.busy || undefined}
+          onClick={() => void signIn.start()}
+        >
+          {waiting ? 'Open Terminal again' : 'Sign in in Terminal'}
+        </button>
+        {signIn.error && (
+          <span className="xt-account-sign-in-error" aria-hidden="true">
+            {' '}
+            {signIn.error}
+          </span>
+        )}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The one warning line a closed row shows instead of its reading's details:
+ * "Signed out · `claude auth login`", another issue's label, or, with no
+ * issue, that the reading's reset has passed or how long it has not been
+ * updated.
+ */
+function RowWarning({
+  issue,
+  resetPassed,
+  age,
+}: {
+  issue: AccountUsageIssue | null;
+  resetPassed: boolean;
+  age: string | null;
+}) {
+  const fix = issue ? issueFixes[issue] : undefined;
+  return (
+    <span className="xt-account-warning xt-account-row-warning">
+      {fix ? (
+        <>
+          {fix.short} · <code>{fix.command}</code>
+        </>
+      ) : issue ? (
+        issueLabels[issue]
+      ) : resetPassed ? (
+        'Reset passed · Refresh'
+      ) : (
+        ['Not updated', age].filter(Boolean).join(' · ')
+      )}
+    </span>
+  );
+}
 
 /**
  * The percent remaining as shown everywhere (header, rows and chart labels).
@@ -647,8 +812,8 @@ function DailyChart({ days, resetsAt }: { days: AccountUsageDay[]; resetsAt: num
 const maxTimeoutMs = 2_147_483_647;
 
 /**
- * One UI wakeup for the next reported reset or the next time a reading turns
- * stale; this never reads a provider.
+ * One UI wakeup for the next reported reset, the next time a reading turns
+ * stale, or the end of a watched sign-in; this never reads a provider.
  */
 function useResetWakeup(usage: AccountUsage | undefined, failed: boolean) {
   const [wakeups, setWakeups] = useState(0);
@@ -660,6 +825,8 @@ function useResetWakeup(usage: AccountUsage | undefined, failed: boolean) {
     );
     const nextStale = readable
       .map((provider) => (provider.stale_at ?? Number.NaN) * 1000)
+      // A watched sign-in's end, too, so "Waiting for sign-in…" goes on time.
+      .concat((usage.claude.sign_in_watch_until ?? Number.NaN) * 1000)
       .filter((at) => Number.isFinite(at) && at > now);
     const nextReset = readable
       .flatMap((provider) => provider.windows)
@@ -749,9 +916,12 @@ const listsWindowRows: Record<'claude' | 'codex', boolean> = {
 function Provider({
   host,
   provider,
+  onSignIn,
 }: {
   host: 'claude' | 'codex';
   provider: AccountProviderUsage | undefined;
+  /** Present where the app can open Terminal to sign in to Claude Code. */
+  onSignIn?: () => Promise<void>;
 }) {
   const label = host === 'claude' ? 'Claude' : 'Codex';
   const readable = provider?.state === 'available' || provider?.state === 'stale';
@@ -801,6 +971,24 @@ function Provider({
   const week =
     main && readable ? provider.windows.find((window) => window.daily !== undefined) : undefined;
   const pace = week ? paceLabel(week, week === main ? '' : 'Week') : null;
+  // A stale reading's closed row shows only one warning line under its
+  // dimmed numbers, whether or not its reset has passed: the reason the last
+  // read failed, else that the reset passed or how long it has not been
+  // updated (a first read still running is no reason). Its reset, age and
+  // pace, worked out from old numbers, move to the details. A missing
+  // reading with a fix the user can run says only that, too.
+  const staleRow = stale;
+  const staleIssue =
+    staleRow && provider?.issue && provider.issue !== 'reading' ? provider.issue : null;
+  const fixable = !main && provider?.issue && issueFixes[provider.issue] ? provider.issue : null;
+  // Only a signed-out Claude Code gets the sign-in button.
+  const canSignIn = onSignIn !== undefined && (staleIssue ?? fixable) === 'signed_out';
+  const signIn = useSignIn(onSignIn);
+  const [open, setOpen] = useState(false);
+  const signInId = useId();
+  // The app is watching for a sign-in the user started (its own decision).
+  const waiting =
+    provider?.sign_in_watch_until !== undefined && provider.sign_in_watch_until * 1000 > Date.now();
   const sub = main
     ? [
         windowTitle(main),
@@ -832,88 +1020,144 @@ function Provider({
   const gapId = useId();
   // The even-use mark goes only on the week's own bar, and only while its
   // pace line is shown. The row's description carries its text too.
-  const gap = week === main && pace && main ? paceGapLabel(main) : null;
+  const gap = !staleRow && week === main && pace && main ? paceGapLabel(main) : null;
   const fill = main && gap ? paceFill(main.used_percent, main.pace?.expected_percent) : {};
   return (
-    <details className={`xt-account-provider xt-host-${host}`}>
-      <summary
-        tabIndex={0}
-        aria-label={`${label} account usage: ${status}`}
-        aria-describedby={main ? (gap ? `${describedBy} ${gapId}` : describedBy) : undefined}
+    <div className="xt-account-provider-group">
+      <details
+        className={`xt-account-provider xt-host-${host}${staleRow ? ' is-stale' : ''}`}
+        onToggle={(event) => setOpen(event.currentTarget.open)}
       >
-        <span className="xt-host-glyph" aria-hidden="true">
-          <HostGlyph host={host} label={label} />
-        </span>
-        <span className="xt-account-name">{label}</span>
-        <span className="xt-account-value">
-          {main ? remainingLabel(main.used_percent) : '—'}
-          <span className="xt-account-chevron" aria-hidden="true">
-            ⌄
-          </span>
-        </span>
-        {main && (
-          <span className="xt-account-summary-bar">
-            <span className="xt-account-track xt-account-summary-track" aria-hidden="true">
-              <span
-                className={fill.className}
-                style={{
-                  width: `${100 - main.used_percent}%`,
-                  ...(fill.split ? { '--pace-split': fill.split } : {}),
-                }}
-              />
-            </span>
-            {gap && <PaceTick window={main} />}
-          </span>
-        )}
-        <span
-          className="xt-account-sub"
-          id={describedBy}
-          title={
-            checked && Number.isFinite(checked.getTime())
-              ? `Read ${checked.toLocaleString()}`
-              : undefined
+        <summary
+          tabIndex={0}
+          aria-label={`${label} account usage: ${status}`}
+          aria-describedby={
+            canSignIn
+              ? signInId
+              : gap
+                ? `${describedBy} ${gapId}`
+                : main || staleRow || fixable
+                  ? describedBy
+                  : undefined
           }
         >
-          {sub}
-          {/* A run-out warning stays in view; the on-pace line shows only
-              when the row is open, but screen readers still hear it here. */}
-          {pace?.warning && <span className="xt-account-pace is-warning">{pace.text}</span>}
-          {pace && !pace.warning && <span className="sr-only">{pace.text}</span>}
-        </span>
-        {gap && (
-          <span id={gapId} className="sr-only">
-            {gap}
+          <span className="xt-host-glyph" aria-hidden="true">
+            <HostGlyph host={host} label={label} />
           </span>
-        )}
-      </summary>
-      <div className="xt-account-detail">
-        {!main && <p>{statusLine}</p>}
-        {pace && !pace.warning && (
-          <span className="xt-account-pace" aria-hidden="true">
-            {pace.text}
+          <span className="xt-account-name">{label}</span>
+          <span className="xt-account-value">
+            {main ? remainingLabel(main.used_percent) : '—'}
+            <span className="xt-account-chevron" aria-hidden="true">
+              ⌄
+            </span>
           </span>
-        )}
-        {detail.length > 0 && (
-          <>
-            {/* When the header already says all the main window's row would
+          {main && (
+            <span className="xt-account-summary-bar">
+              <span className="xt-account-track xt-account-summary-track" aria-hidden="true">
+                <span
+                  className={fill.className}
+                  style={{
+                    width: `${100 - main.used_percent}%`,
+                    ...(fill.split ? { '--pace-split': fill.split } : {}),
+                  }}
+                />
+              </span>
+              {gap && <PaceTick window={main} />}
+            </span>
+          )}
+          {!canSignIn && (
+            <span
+              className="xt-account-sub"
+              id={describedBy}
+              title={
+                checked && Number.isFinite(checked.getTime())
+                  ? `Read ${checked.toLocaleString()}`
+                  : undefined
+              }
+            >
+              {staleRow || fixable ? (
+                <RowWarning issue={staleIssue ?? fixable} resetPassed={resetPassed} age={age} />
+              ) : (
+                <>
+                  {sub}
+                  {/* A run-out warning stays in view; the on-pace line shows only
+                  when the row is open, but screen readers still hear it here. */}
+                  {pace?.warning && <span className="xt-account-pace is-warning">{pace.text}</span>}
+                  {pace && !pace.warning && <span className="sr-only">{pace.text}</span>}
+                </>
+              )}
+            </span>
+          )}
+          {gap && (
+            <span id={gapId} className="sr-only">
+              {gap}
+            </span>
+          )}
+        </summary>
+        <div className="xt-account-detail">
+          {!main && (
+            <p>
+              {statusLine}
+              {canSignIn ? (
+                <SignInAction signIn={signIn} waiting={waiting} />
+              ) : (
+                <IssueAction issue={staleIssue ?? fixable} />
+              )}
+            </p>
+          )}
+          {staleRow && main && (
+            <>
+              <p className="xt-account-stale-detail">{sub}</p>
+              {staleIssue && (
+                <p className="xt-account-stale-detail">
+                  {issueLabels[staleIssue]}
+                  {canSignIn ? (
+                    <SignInAction signIn={signIn} waiting={waiting} />
+                  ) : (
+                    <IssueAction issue={staleIssue} />
+                  )}
+                </p>
+              )}
+            </>
+          )}
+          {pace && (staleRow || !pace.warning) && (
+            <span
+              className={`xt-account-pace${pace.warning ? ' is-warning' : ''}`}
+              // A fresh row's screen readers already hear it in the summary.
+              aria-hidden={staleRow ? undefined : 'true'}
+            >
+              {pace.text}
+            </span>
+          )}
+          {detail.length > 0 && (
+            <>
+              {/* When the header already says all the main window's row would
                 (percent, reset and its own pace), the details add only its
                 charts, then the other windows (for providers that list them). */}
-            {charted && hasCharts(charted) && (
-              <div className="xt-account-window">
-                <WindowCharts window={charted} />
-              </div>
-            )}
-            {listsRows &&
-              detail
-                .filter((window) => !repeated || !sameWindow(window, repeated))
-                .map((window) => (
-                  <WindowRow key={`${window.bucket_key}:${window.window_key}`} window={window} />
-                ))}
-            {readAt && <small>Read {readAt}</small>}
-          </>
-        )}
-      </div>
-    </details>
+              {charted && hasCharts(charted) && (
+                <div className="xt-account-window">
+                  <WindowCharts window={charted} />
+                </div>
+              )}
+              {listsRows &&
+                detail
+                  .filter((window) => !repeated || !sameWindow(window, repeated))
+                  .map((window) => (
+                    <WindowRow key={`${window.bucket_key}:${window.window_key}`} window={window} />
+                  ))}
+              {readAt && <small>Read {readAt}</small>}
+            </>
+          )}
+        </div>
+      </details>
+      {canSignIn && !open && <SignInLine id={signInId} signIn={signIn} waiting={waiting} />}
+      {/* Present before any failure, so screen readers hear the failure. */}
+      {canSignIn && (
+        <span role="status" className="sr-only">
+          {signIn.error ?? ''}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -1061,6 +1305,7 @@ export function AccountUsageWidget({
   refreshEnabled = true,
   failureMessage,
   onRefresh,
+  onSignIn,
 }: {
   usage?: AccountUsage;
   failed: boolean;
@@ -1068,6 +1313,11 @@ export function AccountUsageWidget({
   refreshEnabled?: boolean;
   failureMessage?: string;
   onRefresh: () => void;
+  /**
+   * Opens Terminal running `claude auth login`. Without it a signed-out
+   * Claude row shows the command as text.
+   */
+  onSignIn?: () => Promise<void>;
 }) {
   useResetWakeup(usage, failed);
   return (
@@ -1092,7 +1342,7 @@ export function AccountUsageWidget({
         </p>
       ) : (
         <>
-          <Provider host="claude" provider={usage?.claude} />
+          <Provider host="claude" provider={usage?.claude} onSignIn={onSignIn} />
           <Provider host="codex" provider={usage?.codex} />
         </>
       )}

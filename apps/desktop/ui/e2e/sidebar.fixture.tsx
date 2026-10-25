@@ -5,6 +5,7 @@ import { BrandMark } from '../src/kit/BrandMark';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeProvider';
 import '../src/index.css';
 import type { AccountUsage } from '../src/data/generated/AccountUsage';
+import type { AccountUsageIssue } from '../src/data/generated/AccountUsageIssue';
 
 const accountUsage: AccountUsage = {
   claude: {
@@ -53,6 +54,56 @@ const accountUsage: AccountUsage = {
   },
 };
 
+// `?claude=<case>` and `?codex=<case>` change that provider's reading:
+// `<issue>` shows it stale 18 hours after it was read, with that issue
+// (`none` for no issue); `reset-<issue>` does too, with its weekly reset
+// passed; `missing-<issue>` shows no reading, with that issue.
+const search = new URLSearchParams(location.search);
+for (const host of ['claude', 'codex'] as const) {
+  const value = search.get(host);
+  if (!value) continue;
+  const issueOf = (name: string) => (name === 'none' ? null : (name as AccountUsageIssue));
+  if (value.startsWith('missing-')) {
+    accountUsage[host] = {
+      state: 'unavailable',
+      issue: issueOf(value.slice('missing-'.length)),
+      checked_at: null,
+      windows: [],
+    };
+    continue;
+  }
+  const resetPassed = value.startsWith('reset-');
+  const now = Math.floor(Date.now() / 1000);
+  accountUsage[host] = {
+    ...accountUsage[host],
+    state: 'stale',
+    issue: issueOf(resetPassed ? value.slice('reset-'.length) : value),
+    checked_at: now - 18 * 3600,
+    windows: accountUsage[host].windows.map((window) =>
+      resetPassed && window.duration_minutes === 10080
+        ? { ...window, resets_at: now - 3600 }
+        : window,
+    ),
+  };
+}
+
+// `?watch=1` shows the app watching for a Claude sign-in for 15 minutes.
+if (search.get('watch')) {
+  accountUsage.claude = {
+    ...accountUsage.claude,
+    sign_in_watch_until: Math.floor(Date.now() / 1000) + 15 * 60,
+  };
+}
+
+// The sign-in click is recorded here instead of opening Terminal;
+// `?signin=fail` answers as the app does when Claude Code is missing.
+const signIns: string[] = [];
+(window as unknown as { signIns: string[] }).signIns = signIns;
+async function signIn() {
+  signIns.push('claude');
+  if (search.get('signin') === 'fail') throw 'Claude Code not found';
+}
+
 function Fixture() {
   const { theme, toggle } = useTheme();
   const [activeKey, setActiveKey] = useState<SidebarKey>('dashboard');
@@ -68,6 +119,7 @@ function Fixture() {
           onNavigate={setActiveKey}
           rulebookCount={5}
           accountUsage={accountUsage}
+          onAccountSignIn={signIn}
           listener={{ status: 'listening', port: 47421 }}
           version="0.1.0"
           updateLabel="up to date"

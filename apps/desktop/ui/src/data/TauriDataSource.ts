@@ -99,6 +99,9 @@ export class TauriDataSource implements DataSource {
   refreshClaudeUsage() {
     return invoke<AccountUsage>(commands.refreshClaudeUsage);
   }
+  claudeSignIn() {
+    return invoke<void>(commands.claudeSignIn);
+  }
   readonly tray = windowLabel() === TRAY_WINDOW ? trayControls : undefined;
   readonly prAutoCheck = {
     status: () => invoke<PrAutoCheckStatus>(commands.prAutoCheckStatus),

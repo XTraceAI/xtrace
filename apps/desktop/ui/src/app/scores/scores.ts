@@ -32,6 +32,7 @@ import type { GradingRubricProgress } from '../../data/generated/GradingRubricPr
 import type { GradingRunningNow } from '../../data/generated/GradingRunningNow';
 import type { GradingSeverity } from '../../data/generated/GradingSeverity';
 import type { GradingStart } from '../../data/generated/GradingStart';
+import type { GradingWaitingElsewhere } from '../../data/generated/GradingWaitingElsewhere';
 import type { ProjectSourceId } from '../../data/generated/ProjectSourceId';
 import { events } from '../../data/ipc-names';
 import { queryKeys } from '../../data/query-client';
@@ -255,6 +256,7 @@ export const failureText: Record<GradingFailure, string> = {
   result_invalid: 'its result could not be read',
   archive_failed: 'its result could not be saved',
   internal_error: 'XTrace hit an error while saving it',
+  claude_unavailable: 'Claude Code was not found on this Mac when its turn came',
   other: 'of a reason this version of XTrace does not know',
 };
 
@@ -372,7 +374,29 @@ export function attemptText(attempt: GradingAttempt, elapsed: number | undefined
   }
 }
 
-/** Why another grading cannot start now, naming the one that is going. */
+/** A waiting grading's place in line, by how many wait before it. */
+const placeText = (ahead: number) => (ahead === 0 ? 'next in line' : `${ahead} ahead`);
+
+/** A waiting grading's row state, in words. */
+export const waitingText = (ahead: number) => `Waiting · ${placeText(ahead)}`;
+
+/**
+ * A waiting grading no row shows: which project, with which skill, its place
+ * in line, and why it has no row.
+ */
+export function waitingElsewhereText(waiting: GradingWaitingElsewhere) {
+  const project = waiting.project_name ?? waiting.project_path;
+  const skill = waiting.skill_name ? ` with ${waiting.skill_name}` : '';
+  return {
+    lead: `${project} is waiting to be graded${skill} · ${placeText(waiting.ahead)}`,
+    detail:
+      waiting.project_name === null
+        ? 'This project is no longer in your project list, so no row shows it.'
+        : 'This skill is not on Scores, so no row shows it.',
+  };
+}
+
+/** Why a rubric cannot be made now, naming the grading that is going. */
 export function oneAtATime(running: GradingRunningNow) {
   const project = running.project_name ?? running.project_path;
   const skill = running.skill_name ? ` with ${running.skill_name}` : '';
@@ -401,11 +425,14 @@ export function rubricOneAtATime(making: GradingRubricNow) {
   return `Only one grading runs at a time, and making a rubric counts as one. A rubric for ${making.name} is being made now; wait for it to finish or cancel it.`;
 }
 
-/** What a Grade press that did not start a run says. */
-export function startText(answer: Exclude<GradingStart, { state: 'started' }>, project: string) {
+/** What a Grade press that neither started a run nor joined the line says. */
+export function startText(
+  answer: Exclude<GradingStart, { state: 'started' } | { state: 'waiting' }>,
+  project: string,
+) {
   switch (answer.state) {
-    case 'busy':
-      return 'Only one grading runs at a time. Another grading is going now; wait for it to finish or cancel it.';
+    case 'already_going':
+      return `${project} is already being graded with this skill, or waiting to be.`;
     case 'not_a_project':
       return `${project} is no longer in your project list, so it was not graded.`;
     case 'unknown_skill':
@@ -427,9 +454,18 @@ export function startText(answer: Exclude<GradingStart, { state: 'started' }>, p
 export const STARTING = 'Starting a grading…';
 /** A Grade press whose request itself failed. */
 export const START_FAILED = 'The grading could not be started. Try again.';
-/** What a Cancel press says, by whether the run was still going. */
-export const cancelText = (stopping: boolean) =>
-  stopping ? 'Stopping the grading…' : 'That grading had already finished.';
+/**
+ * What a Cancel press says, by whether the run was still going (or, for a
+ * waiting one, still in line).
+ */
+export const cancelText = (stopping: boolean, waiting = false) =>
+  waiting
+    ? stopping
+      ? 'Cancelling the grading…'
+      : 'That grading was no longer waiting.'
+    : stopping
+      ? 'Stopping the grading…'
+      : 'That grading had already finished.';
 
 /** Why a rubric was refused, as the end of a sentence. */
 export const rubricProblemText: Record<GradingRubricProblem, string> = {
@@ -570,7 +606,7 @@ export function removeText(answer: Exclude<GradingSkillRemove, { state: 'removed
     case 'not_found':
       return 'This skill is already off Scores.';
     case 'running':
-      return 'This skill is grading a project now. Wait for it to finish or cancel it, then remove it.';
+      return 'This skill is grading a project now or waiting to. Wait for it to finish or cancel it, then remove it.';
     case 'not_configured':
       return 'Removing skills is not available in this copy of XTrace.';
     case 'failed':

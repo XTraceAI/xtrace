@@ -294,6 +294,13 @@ fn started(start: GradingStart) -> String {
     }
 }
 
+fn waiting(start: GradingStart) -> String {
+    match start {
+        GradingStart::Waiting { run_id } => run_id,
+        other => panic!("not waiting: {other:?}"),
+    }
+}
+
 fn alive(pid: &str) -> bool {
     std::process::Command::new("/bin/kill")
         .args(["-0", pid])
@@ -485,14 +492,15 @@ fn a_project_that_leaves_the_list_before_launch_fails_without_running() {
 }
 
 #[test]
-fn one_run_at_a_time_and_cancel_stops_it_with_progress_meanwhile() {
+fn the_pair_going_is_already_going_and_cancel_stops_it_with_progress_meanwhile() {
     let world = World::new(HANG);
     let service = world.service();
     let run_id = started(service.start(world.project_path(), "claude-md-doctor"));
     assert_eq!(service.active_run().as_deref(), Some(run_id.as_str()));
+    // The same project with the same skill neither waits nor saves anything.
     assert_eq!(
         service.start(world.project_path(), "claude-md-doctor"),
-        GradingStart::Busy
+        GradingStart::AlreadyGoing
     );
     world.wait_ready();
     std::thread::sleep(Duration::from_millis(350));
@@ -1236,7 +1244,7 @@ fn the_overview_reads_the_list_the_skill_and_the_stored_runs_fresh() {
     ));
     let service = world.service();
     let loaded = |overview: GradingOverview| match overview {
-        GradingOverview::Loaded(loaded) => loaded,
+        GradingOverview::Loaded(loaded) => *loaded,
         other => panic!("not loaded: {other:?}"),
     };
     let before = loaded(service.overview());
@@ -1863,9 +1871,10 @@ fn cancel_never_waits_on_the_store_while_a_removal_or_start_does() {
     assert_eq!(removing.join().unwrap(), GradingSkillRemove::Removed);
     let row = world.settle(&service, &run_id);
     assert_eq!(row.status, GradeStatus::Cancelled);
-    // The waiting start found the slot taken, or free once the run ended.
+    // The waiting start found its pair still going, or the slot free once
+    // the run ended.
     match starting.join().unwrap() {
-        GradingStart::Busy => {}
+        GradingStart::AlreadyGoing => {}
         GradingStart::Started { run_id } => {
             world.wait_ready();
             assert!(service.cancel(&run_id));
@@ -1901,6 +1910,459 @@ fn a_skill_removed_while_its_start_waits_never_starts() {
     assert_eq!(starting.join().unwrap(), GradingStart::UnknownSkill);
     assert_eq!(world.rows(), 0);
     assert!(service.active_run().is_none());
+}
+
+// ---- Waiting in line --------------------------------------------------------
+
+/// Each line of `body` indented one level, for a branch of the fake.
+fn indented(body: &str) -> String {
+    body.lines()
+        .map(|line| format!("    {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A world whose fake appends each launched project's folder name to
+/// `<root>/order`, hangs on `project` and grades any other project well,
+/// with two more listed projects, `second` and `third`. Returns their paths.
+fn line_world() -> (World, String, String) {
+    let world = World::new(&format!(
+        "with open(os.path.join(MARKS, 'order'), 'a') as f:\n\
+         \x20   f.write(os.path.basename(os.getcwd()) + '\\n')\n\
+         if os.path.basename(os.getcwd()) == 'project':\n{hang}\nelse:\n{good}",
+        hang = indented(HANG),
+        good = indented(WRITE_GOOD),
+    ));
+    let [second, third] = ["second", "third"].map(|name| {
+        let path = world.root.join(name);
+        std::fs::create_dir(&path).unwrap();
+        path.to_str().unwrap().to_owned()
+    });
+    lock(&world.listed).extend([second.clone(), third.clone()]);
+    (world, second, third)
+}
+
+impl World {
+    /// The folder names of the projects the fake was launched on, in order.
+    fn order(&self) -> Vec<String> {
+        std::fs::read_to_string(self.root.join("order"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Waits until nothing holds the slot: no run going and none waiting.
+    fn idle(&self, service: &GradingService) {
+        let until = Instant::now() + Duration::from_secs(60);
+        while service.active_run().is_some() {
+            assert!(Instant::now() < until, "the line did not empty");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+fn loaded(service: &GradingService) -> crate::grading_dto::GradingOverviewLoaded {
+    match service.overview() {
+        GradingOverview::Loaded(loaded) => *loaded,
+        other => panic!("overview not loaded: {other:?}"),
+    }
+}
+
+fn row_waiting(run_id: &str, ahead: u32) -> Option<crate::grading_dto::GradingRowWaiting> {
+    Some(crate::grading_dto::GradingRowWaiting {
+        run_id: run_id.to_owned(),
+        ahead,
+    })
+}
+
+/// Holds exactly the next project recheck, without blocking an overview's
+/// independent project read or holding storage. Its answer can fail after
+/// Cancel or shutdown has had time to act.
+struct PausedTurn {
+    world: World,
+    service: GradingService,
+    next: String,
+    last: String,
+    resume: mpsc::Sender<()>,
+}
+
+impl PausedTurn {
+    fn new(fail: bool) -> Self {
+        let world = World::new(HANG);
+        let paths: Vec<_> = ["second", "third"]
+            .into_iter()
+            .map(|name| {
+                let path = world.root.join(name);
+                std::fs::create_dir(&path).unwrap();
+                path.to_str().unwrap().to_owned()
+            })
+            .collect();
+        lock(&world.listed).extend(paths.clone());
+        let mut config = world.config();
+        let projects = Arc::clone(&config.projects);
+        let armed = Arc::new(AtomicBool::new(false));
+        let check_armed = Arc::clone(&armed);
+        let (reached, at_check) = mpsc::channel();
+        let (resume, resumed) = mpsc::channel();
+        let resumed = Mutex::new(resumed);
+        config.projects = Arc::new(move || {
+            if check_armed.swap(false, Ordering::SeqCst) {
+                reached.send(()).unwrap();
+                lock(&resumed).recv().unwrap();
+                if fail {
+                    return ProjectList::Failed;
+                }
+            }
+            projects()
+        });
+        let service = world.service_with(config);
+        let first = started(service.start(world.project_path(), "claude-md-doctor"));
+        world.wait_ready();
+        let next = waiting(service.start(&paths[0], "claude-md-doctor"));
+        let last = waiting(service.start(&paths[1], "claude-md-doctor"));
+        armed.store(true, Ordering::SeqCst);
+        assert!(service.cancel(&first));
+        at_check.recv_timeout(Duration::from_secs(30)).unwrap();
+        Self {
+            world,
+            service,
+            next,
+            last,
+            resume,
+        }
+    }
+}
+
+#[test]
+fn a_dequeued_grading_stays_visible_with_cancel_until_its_row_is_saved() {
+    let paused = PausedTurn::new(false);
+    let overview = loaded(&paused.service);
+    assert_eq!(overview.skills[0].waiting, 2);
+    assert_eq!(
+        overview.skills[0].rows[1].waiting,
+        row_waiting(&paused.next, 0)
+    );
+    assert_eq!(
+        overview.skills[0].rows[2].waiting,
+        row_waiting(&paused.last, 1)
+    );
+    assert_eq!(paused.world.rows(), 1);
+    // Keep the next one hanging so its committed running row is observable.
+    assert!(paused.service.cancel(&paused.last));
+    paused.resume.send(()).unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        let overview = loaded(&paused.service);
+        if overview
+            .running
+            .as_ref()
+            .is_some_and(|run| run.run_id == paused.next)
+        {
+            assert_eq!(overview.skills[0].waiting, 0);
+            assert!(overview.skills[0].rows[1].waiting.is_none());
+            assert!(overview.skills[0].rows[1].running);
+            break;
+        }
+        assert!(Instant::now() < until, "the waiting run never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(paused.service.shutdown());
+}
+
+#[test]
+fn cancelling_during_a_failing_recheck_writes_nothing_and_advances_the_line() {
+    let paused = PausedTurn::new(true);
+    assert!(paused.service.cancel(&paused.next));
+    paused.resume.send(()).unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    while loaded(&paused.service)
+        .running
+        .as_ref()
+        .is_none_or(|run| run.run_id != paused.last)
+    {
+        assert!(Instant::now() < until, "the next grading never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(paused.world.rows(), 2, "the cancelled grading wrote no row");
+    assert!(
+        paused
+            .world
+            .state
+            .with_store(|store| Ok(store.grade(&paused.next)?))
+            .unwrap()
+            .is_none()
+    );
+    assert!(paused.service.shutdown());
+}
+
+#[test]
+fn quitting_during_a_failing_recheck_drops_the_line_without_failed_rows() {
+    let paused = PausedTurn::new(true);
+    let inner = Arc::clone(&paused.service.inner);
+    let quitting = std::thread::spawn(move || shutdown(&inner));
+    let until = Instant::now() + Duration::from_secs(30);
+    while !lock(&paused.service.inner.slot)
+        .active
+        .as_ref()
+        .is_some_and(|active| active.cancel.is_cancelled())
+    {
+        assert!(Instant::now() < until, "shutdown never began");
+        std::thread::yield_now();
+    }
+    paused.resume.send(()).unwrap();
+    assert!(quitting.join().unwrap());
+    assert_eq!(paused.world.rows(), 1);
+    assert!(paused.service.active_run().is_none());
+    let overview = loaded(&paused.service);
+    assert_eq!(overview.skills[0].waiting, 0);
+    assert!(
+        overview.skills[0]
+            .rows
+            .iter()
+            .all(|row| row.waiting.is_none())
+    );
+}
+
+#[test]
+fn a_grade_while_one_runs_waits_in_line_and_starts_by_itself_oldest_first() {
+    let (world, second, third) = line_world();
+    let service = world.service();
+    let first = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.wait_ready();
+    let changed = lock(&world.seen).changed;
+    let next = waiting(service.start(&second, "claude-md-doctor"));
+    let last = waiting(service.start(&third, "claude-md-doctor"));
+    // Joining the line is a change the page hears; nothing is saved for it.
+    assert_eq!(lock(&world.seen).changed, changed + 2);
+    assert_eq!(world.rows(), 1);
+    // A pair already going or waiting is not queued twice.
+    for path in [world.project_path(), second.as_str()] {
+        assert_eq!(
+            service.start(path, "claude-md-doctor"),
+            GradingStart::AlreadyGoing
+        );
+    }
+    let overview = loaded(&service);
+    let skill = &overview.skills[0];
+    assert_eq!(skill.waiting, 2);
+    let rows: Vec<_> = skill
+        .rows
+        .iter()
+        .map(|row| (row.running, row.waiting.clone()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (true, None),
+            (false, row_waiting(&next, 0)),
+            (false, row_waiting(&last, 1)),
+        ]
+    );
+    assert!(overview.waiting_elsewhere.is_empty());
+    assert!(service.cancel(&first));
+    world.idle(&service);
+    assert_eq!(world.row(&first).status, GradeStatus::Cancelled);
+    // Each started by itself with the run ID it was given in line, in order.
+    for run_id in [&next, &last] {
+        let row = world.row(run_id);
+        assert_eq!(
+            row.status,
+            GradeStatus::Succeeded,
+            "{:?}",
+            row.failure_reason
+        );
+        assert_eq!(row.skill_version, bundled_version());
+    }
+    assert_eq!(world.order(), ["project", "second", "third"]);
+    assert!(world.row(&next).finished_at_ms <= Some(world.row(&last).started_at_ms));
+    let overview = loaded(&service);
+    assert_eq!(overview.skills[0].waiting, 0);
+    assert!(
+        overview.skills[0]
+            .rows
+            .iter()
+            .all(|row| row.waiting.is_none())
+    );
+}
+
+#[test]
+fn cancel_takes_a_waiting_grading_out_of_the_line_and_writes_nothing() {
+    let (world, second, _) = line_world();
+    let service = world.service();
+    let first = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.wait_ready();
+    let queued = waiting(service.start(&second, "claude-md-doctor"));
+    // Its project leaves the list: no row shows it, the answer still names
+    // it so it can be cancelled.
+    lock(&world.listed).retain(|path| *path != second);
+    let overview = loaded(&service);
+    assert_eq!(overview.skills[0].waiting, 1);
+    assert_eq!(
+        overview.waiting_elsewhere,
+        [crate::grading_dto::GradingWaitingElsewhere {
+            run_id: queued.clone(),
+            skill_id: "claude-md-doctor".into(),
+            skill_name: Some(overview.skills[0].skill.name.clone()),
+            project_path: second.clone(),
+            project_name: None,
+            ahead: 0,
+        }]
+    );
+    let changed = lock(&world.seen).changed;
+    // Cancel never waits on storage, for a waiting grading either.
+    let (release, holder) = hold_store(&world);
+    let begun = Instant::now();
+    assert!(service.cancel(&queued));
+    assert!(begun.elapsed() < Duration::from_millis(500));
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    assert_eq!(lock(&world.seen).changed, changed + 1);
+    assert!(!service.cancel(&queued), "it is no longer waiting");
+    assert!(loaded(&service).waiting_elsewhere.is_empty());
+    assert!(service.cancel(&first));
+    world.idle(&service);
+    assert_eq!(world.rows(), 1, "no row was ever written for it");
+    assert_eq!(world.order(), ["project"]);
+}
+
+#[test]
+fn a_waiting_grading_that_fails_its_check_is_saved_failed_and_the_next_one_starts() {
+    let (world, second, third) = line_world();
+    let service = world.service();
+    let readme = install(&world, "readme", Some("readme-check"));
+    service.add_skill(&readme);
+    let first = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.wait_ready();
+    let unopenable = waiting(service.start(world.project_path(), "readme-check"));
+    let unlisted = waiting(service.start(&second, "claude-md-doctor"));
+    let fine = waiting(service.start(&third, "claude-md-doctor"));
+    // While they wait, the added skill's rubric goes and `second` leaves the
+    // project list.
+    std::fs::remove_file(rubric_at(Path::new(&readme))).unwrap();
+    lock(&world.listed).retain(|path| *path != second);
+    assert!(service.cancel(&first));
+    world.idle(&service);
+    for (run_id, reason) in [
+        (&unopenable, "skill_unavailable"),
+        (&unlisted, "project_changed"),
+    ] {
+        let row = world.row(run_id);
+        assert_eq!(
+            (row.status, row.failure_reason.as_deref()),
+            (GradeStatus::Failed, Some(reason))
+        );
+        assert!(!world.staging_root(run_id).exists());
+    }
+    assert!(world.row(&unopenable).skill_version.starts_with("2.0 #"));
+    assert_eq!(world.row(&fine).status, GradeStatus::Succeeded);
+    assert_eq!(world.order(), ["project", "third"], "only the fine one ran");
+    // The rows say why.
+    let overview = loaded(&service);
+    assert_eq!(
+        overview.skills[1].rows[0].attempt,
+        Some(crate::grading_dto::GradingAttempt::Failed {
+            run_id: unopenable.clone(),
+            finished_at_ms: world.row(&unopenable).finished_at_ms.unwrap(),
+            reason: GradingFailure::SkillUnavailable,
+        })
+    );
+}
+
+#[test]
+fn a_waiting_grading_whose_claude_is_gone_at_its_turn_says_so() {
+    let (world, second, _) = line_world();
+    let service = world.service();
+    let first = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.wait_ready();
+    let queued = waiting(service.start(&second, "claude-md-doctor"));
+    std::fs::rename(&world.claude, world.root.join("bin/claude-gone")).unwrap();
+    assert!(service.cancel(&first));
+    world.idle(&service);
+    let row = world.row(&queued);
+    assert_eq!(
+        (row.status, row.failure_reason.as_deref()),
+        (GradeStatus::Failed, Some("claude_unavailable"))
+    );
+    assert_eq!(
+        GradingFailure::from_code("claude_unavailable"),
+        GradingFailure::ClaudeUnavailable
+    );
+}
+
+#[test]
+fn an_added_skill_cannot_be_removed_while_it_waits_to_grade() {
+    let (world, _, _) = line_world();
+    let service = world.service();
+    let readme = install(&world, "readme", Some("readme-check"));
+    service.add_skill(&readme);
+    let first = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.wait_ready();
+    let queued = waiting(service.start(world.project_path(), "readme-check"));
+    assert_eq!(
+        service.remove_skill("readme-check"),
+        GradingSkillRemove::Running
+    );
+    assert!(service.cancel(&queued));
+    assert_eq!(
+        service.remove_skill("readme-check"),
+        GradingSkillRemove::Removed
+    );
+    assert!(service.cancel(&first));
+    world.idle(&service);
+    assert_eq!(world.rows(), 1);
+}
+
+#[test]
+fn quitting_drops_the_line_and_starts_nothing_after_the_run() {
+    let (world, second, third) = line_world();
+    let service = world.service();
+    let first = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.wait_ready();
+    waiting(service.start(&second, "claude-md-doctor"));
+    waiting(service.start(&third, "claude-md-doctor"));
+    assert!(service.shutdown());
+    assert!(service.active_run().is_none());
+    let row = world.row(&first);
+    assert_eq!(
+        (row.status, row.failure_reason.as_deref()),
+        (GradeStatus::Interrupted, Some("app_closed"))
+    );
+    assert_eq!(world.rows(), 1, "nothing ran for the waiting ones");
+    assert_eq!(world.order(), ["project"]);
+    assert_eq!(
+        service.start(&second, "claude-md-doctor"),
+        GradingStart::Stopped
+    );
+    assert!(
+        loaded(&service).skills[0]
+            .rows
+            .iter()
+            .all(|row| row.waiting.is_none())
+    );
+}
+
+#[test]
+fn a_grading_waiting_for_a_rubric_job_starts_once_the_job_ends() {
+    let world = maker_world(HANG, WRITE_GOOD);
+    let service = world.service();
+    let readme = install(&world, "readme", None);
+    let job_id = job_started(service.make_rubric(&readme));
+    world.wait_ready();
+    let queued = waiting(service.start(world.project_path(), "claude-md-doctor"));
+    let overview = loaded(&service);
+    assert!(overview.making_rubric.is_some());
+    assert_eq!(overview.skills[0].rows[0].waiting, row_waiting(&queued, 0));
+    assert_eq!(world.rows(), 0);
+    assert!(service.cancel(&job_id));
+    world.idle(&service);
+    let row = world.row(&queued);
+    assert_eq!(
+        row.status,
+        GradeStatus::Succeeded,
+        "{:?}",
+        row.failure_reason
+    );
 }
 
 // ---- Making a rubric -------------------------------------------------------
@@ -2491,20 +2953,26 @@ fn a_rubric_job_and_a_grading_never_run_together() {
     assert_eq!(service.make_rubric(&readme), GradingRubricMake::Busy);
     assert!(service.cancel(&run_id));
     world.settle(&service, &run_id);
-    // A rubric job is going: no grading starts, and the Scores page's answer
-    // names the job.
+    // A rubric job is going: a grading waits in line instead of starting,
+    // and the Scores page's answer names the job.
     std::fs::remove_file(&world.ready).unwrap();
     let job_id = job_started(service.make_rubric(&readme));
     world.wait_ready();
     let rows = world.rows();
-    assert_eq!(
-        service.start(world.project_path(), "claude-md-doctor"),
-        GradingStart::Busy
-    );
-    assert_eq!(world.rows(), rows, "nothing was saved for a refused start");
+    let queued = waiting(service.start(world.project_path(), "claude-md-doctor"));
+    assert_eq!(world.rows(), rows, "nothing is saved for a waiting grading");
     let GradingOverview::Loaded(overview) = service.overview() else {
         panic!("overview not loaded");
     };
+    assert_eq!(
+        overview.skills[0].rows[0].waiting,
+        Some(crate::grading_dto::GradingRowWaiting {
+            run_id: queued.clone(),
+            ahead: 0
+        })
+    );
+    // Taken out of the line, it never runs after the job.
+    assert!(service.cancel(&queued));
     let making = overview.making_rubric.unwrap();
     assert_eq!(
         (

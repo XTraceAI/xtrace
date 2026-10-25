@@ -14,4 +14,11 @@ checked_at: number | null,
  * time without asking again. Absent when there is no read time. Never
  * saved with the reading.
  */
-stale_at?: number, windows: Array<AccountUsageWindow>, };
+stale_at?: number, 
+/**
+ * Unix seconds until which the app checks every minute whether Claude
+ * Code is signed in again, after the user chose to sign in, and reads
+ * usage as soon as it is. Absent otherwise and for Codex. Never saved
+ * with the reading.
+ */
+sign_in_watch_until?: number, windows: Array<AccountUsageWindow>, };

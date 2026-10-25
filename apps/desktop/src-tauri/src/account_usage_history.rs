@@ -530,6 +530,7 @@ mod tests {
             issue: None,
             checked_at: Some(at),
             stale_at: None,
+            sign_in_watch_until: None,
             windows,
         }
     }

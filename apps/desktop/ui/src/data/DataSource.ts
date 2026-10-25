@@ -287,6 +287,11 @@ export interface DataSource {
   accountUsage(): Promise<AccountUsage>;
   /** Claude login is read only after the user presses Refresh in Usage. */
   refreshClaudeUsage(): Promise<AccountUsage>;
+  /**
+   * Opens Terminal running the user's own `claude auth login`; the app then
+   * watches for the sign-in. Native app only. Rejects with a short reason.
+   */
+  claudeSignIn?(): Promise<void>;
   dashboard(windowDays: number): Promise<DashboardMetrics>;
   tokensByHost(windowDays: number): Promise<TokensByHost>;
   /** Local midnight to one captured instant, read in one snapshot. */

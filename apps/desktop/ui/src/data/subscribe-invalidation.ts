@@ -26,6 +26,9 @@ export const eventPrefixes: Record<DataEvent, readonly string[]> = {
   [events.gradingRubricProgress]: [],
   // Only the narrower keys below: no top-level key is wholly its.
   [events.sessionCreationsChanged]: [],
+  // The app stopped watching for a Claude Code sign-in: its read ran, or
+  // the watch ran out. Only account usage changed.
+  [events.claudeSignInEnded]: queryKeys.accountUsage,
 };
 
 /**

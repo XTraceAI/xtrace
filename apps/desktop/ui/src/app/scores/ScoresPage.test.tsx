@@ -18,6 +18,7 @@ import {
   LINK_HELP,
   LINK_KEEP_NOTE,
   MAKE_RUBRIC_NOTE,
+  attemptText,
   linkKeepStateText,
   rubricProblemText,
 } from './scores';
@@ -643,12 +644,12 @@ it('removes an added skill from Scores by its id and goes back; a built-in one h
       'The skill could not be removed. Try again.',
     ),
   );
-  // While it grades, native refuses and the page says so.
+  // While it grades or waits to, native refuses and the page says so.
   controls.removeSkill.mockResolvedValueOnce({ state: 'running' });
   fireEvent.click(screen.getByRole('button', { name: 'Remove from Scores' }));
   await waitFor(() =>
     expect(page().querySelector('.xt-scores-message')!.textContent).toBe(
-      'This skill is grading a project now. Wait for it to finish or cancel it, then remove it.',
+      'This skill is grading a project now or waiting to. Wait for it to finish or cancel it, then remove it.',
     ),
   );
   expect(screen.getByRole('heading', { level: 1, name: 'README check' })).toBeTruthy();
@@ -888,7 +889,7 @@ it('reopens a grade’s details on a fresh read after Delete stored content, nev
   expect(within(dialog).queryByText(new RegExp(summary))).toBeNull();
 });
 
-it('starts a grading with only the project path and skill ID, and says why one did not start', async () => {
+it('starts a grading with only the project path and skill ID, and says why one did not start or wait', async () => {
   const { source, controls } = sourceWith('empty');
   await mount('/scores/claude-md-doctor', source);
   await screen.findByRole('heading', { name: 'Grade your first project' });
@@ -904,9 +905,11 @@ it('starts a grading with only the project path and skill ID, and says why one d
     ],
     [{ state: 'not_a_project' }, 'beacon is no longer in your project list, so it was not graded.'],
     [
-      { state: 'busy' },
-      'Only one grading runs at a time. Another grading is going now; wait for it to finish or cancel it.',
+      { state: 'already_going' },
+      'beacon is already being graded with this skill, or waiting to be.',
     ],
+    // Waiting in line needs no words: the row says so once it is read again.
+    [{ state: 'waiting', run_id: '00000000-0000-4000-8000-0000000000fd' }, ''],
   ] as const) {
     controls.start.mockResolvedValueOnce(answer);
     fireEvent.click(screen.getByRole('button', { name: 'Grade beacon' }));
@@ -921,7 +924,7 @@ it('starts a grading with only the project path and skill ID, and says why one d
   );
 });
 
-it('while one grading runs, another Grade explains instead of starting, and Cancel stops it', async () => {
+it('while one grading runs, another Grade is asked of native, which puts it in line, and Cancel stops the run', async () => {
   clockAt(STARTED + 4 * MINUTE + 10_000);
   const { source, controls } = sourceWith('running');
   await mount('/scores', source);
@@ -934,14 +937,19 @@ it('while one grading runs, another Grade explains instead of starting, and Canc
   expect(screen.queryByTestId('running-elsewhere')).toBeNull();
   const delta = rows()[3]!;
   expect(delta.textContent).toContain('Grading now · 0 h 4 m');
-  // Grade stays pressable and says why it cannot start; nothing is sent.
+  // Grade stays pressable and is sent: native decides it waits in line.
+  controls.start.mockResolvedValueOnce({
+    state: 'waiting',
+    run_id: '00000000-0000-4000-8000-0000000000fd',
+  });
   const again = screen.getByRole('button', { name: 'Grade again atlas' });
   expect(again.hasAttribute('disabled')).toBe(false);
   fireEvent.click(again);
-  expect(within(page()).getByRole('status').textContent).toBe(
-    'Only one grading runs at a time. delta is being graded with CLAUDE.md doctor now; wait for it to finish or cancel it.',
+  await waitFor(() =>
+    expect(controls.start).toHaveBeenCalledWith('/work/atlas', 'claude-md-doctor'),
   );
-  expect(controls.start).not.toHaveBeenCalled();
+  await waitFor(() => expect(again.getAttribute('aria-disabled')).toBeNull());
+  expect(within(page()).getByRole('status').textContent).toBe('');
   fireEvent.click(screen.getByRole('button', { name: 'Cancel grading delta' }));
   await waitFor(() =>
     expect(controls.cancel).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000004'),
@@ -1042,13 +1050,112 @@ it('offers Cancel for a going run whose project is no longer listed, on both pag
   // No row shows the run, so the notice above the table does, with Cancel.
   expect(rows().some((row) => row.textContent?.includes('Grading now'))).toBe(false);
   const above = screen.getByTestId('running-elsewhere');
+  // Grade is sent all the same; native puts it in line.
   fireEvent.click(screen.getByRole('button', { name: 'Grade again atlas' }));
-  expect(within(page()).getByRole('status').textContent).toBe(
-    'Only one grading runs at a time. /work/old-atlas is being graded with CLAUDE.md doctor now; wait for it to finish or cancel it.',
+  await waitFor(() =>
+    expect(controls.start).toHaveBeenCalledWith('/work/atlas', 'claude-md-doctor'),
   );
-  expect(controls.start).not.toHaveBeenCalled();
   fireEvent.click(within(above).getByRole('button', { name: 'Cancel grading /work/old-atlas' }));
   await waitFor(() => expect(controls.cancel).toHaveBeenCalledTimes(2));
+});
+
+it('shows a waiting row’s place in line with its own Cancel, and a waiting grading no row shows', async () => {
+  clockAt(STARTED + 4 * MINUTE);
+  const { source, controls } = sourceWith('waiting');
+  await mount('/scores', source);
+  const doctor = await waitFor(() => card('CLAUDE.md doctor'));
+  // The card counts its waiting gradings beside the one going.
+  expect(within(doctor).getByText('Grading · 0 h 4 m')).toBeTruthy();
+  expect(doctor.querySelector('.xt-score-card-count')!.textContent).toBe(
+    '3 of 4 projects graded · 2 waiting',
+  );
+  const elsewhere = screen.getByTestId('waiting-elsewhere');
+  expect(elsewhere.textContent).toBe(
+    '/work/old-beacon is waiting to be graded with CLAUDE.md doctor · 1 aheadThis project is no longer in your project list, so no row shows it.Cancel',
+  );
+  fireEvent.click(within(doctor).getByRole('link', { name: 'CLAUDE.md doctor' }));
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  const [atlas, , , delta] = rows();
+  expect(atlas!.textContent).toContain('Waiting · next in line');
+  expect(delta!.textContent).toContain('Grading now · 0 h 4 m');
+  // It may take its turn before Cancel reaches native. A successful cancel
+  // must not claim it never started: native also accepts a running run.
+  expect(within(atlas!).queryByRole('button', { name: /Grade/ })).toBeNull();
+  fireEvent.click(within(atlas!).getByRole('button', { name: 'Cancel waiting grading atlas' }));
+  await waitFor(() =>
+    expect(controls.cancel).toHaveBeenCalledWith('00000000-0000-4000-8000-0000000000c1'),
+  );
+  await waitFor(() =>
+    expect(within(page()).getByRole('status').textContent).toBe('Cancelling the grading…'),
+  );
+  // The one no row shows is listed above the table too.
+  controls.cancel.mockResolvedValueOnce(false);
+  fireEvent.click(
+    within(screen.getByTestId('waiting-elsewhere')).getByRole('button', {
+      name: 'Cancel waiting grading /work/old-beacon',
+    }),
+  );
+  await waitFor(() =>
+    expect(controls.cancel).toHaveBeenCalledWith('00000000-0000-4000-8000-0000000000c2'),
+  );
+  await waitFor(() =>
+    expect(within(page()).getByRole('status').textContent).toBe(
+      'That grading was no longer waiting.',
+    ),
+  );
+  expect(controls.start).not.toHaveBeenCalled();
+});
+
+it('keeps the shown grade’s details and report separate from a waiting or running replacement’s Cancel', async () => {
+  for (const replacement of ['waiting', 'running'] as const) {
+    const overview = scenario('waiting');
+    if (overview.state !== 'loaded') throw new Error('the waiting overview is loaded');
+    const atlas = overview.skills[0]!.rows[0]!;
+    const shownId = atlas.shown!.run_id;
+    const replacementId = atlas.waiting!.run_id;
+    if (replacement === 'running') {
+      atlas.waiting = null;
+      atlas.attempt = {
+        state: 'running',
+        run_id: replacementId,
+        started_at_ms: STARTED,
+      };
+    }
+    const { source, controls } = sourceWith(async () => overview);
+    await mount('/scores/claude-md-doctor', source);
+    const trigger = await screen.findByRole('button', { name: '75, details for atlas' });
+    fireEvent.click(trigger);
+    const dialog = await detailsDialog();
+    await within(dialog).findByText('Complete');
+    expect(controls.runDetails).toHaveBeenLastCalledWith(shownId);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+    await waitFor(() => expect(controls.openReport).toHaveBeenLastCalledWith(shownId));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: replacement === 'waiting' ? 'Cancel waiting grading atlas' : 'Cancel grading atlas',
+      }),
+    );
+    await waitFor(() => expect(controls.cancel).toHaveBeenLastCalledWith(replacementId));
+    expect(replacementId).not.toBe(shownId);
+    expect(controls.start).not.toHaveBeenCalled();
+    cleanup();
+  }
+});
+
+it('says why a waiting grading failed when Claude Code was gone at its turn', () => {
+  expect(
+    attemptText(
+      {
+        state: 'failed',
+        run_id: '00000000-0000-4000-8000-0000000000c1',
+        finished_at_ms: STARTED,
+        reason: 'claude_unavailable',
+      },
+      undefined,
+    ),
+  ).toBe('Last try failed: Claude Code was not found on this Mac when its turn came');
 });
 
 it('explains a Grade press while another press’s start is still being answered', async () => {
@@ -1230,12 +1337,13 @@ it('a grading going now makes Make a rubric explain instead of starting', async 
   expect(controls.makeRubric).not.toHaveBeenCalled();
 });
 
-it('names a rubric being made on Scores with its own Cancel, and Grade explains it', async () => {
+it('names a rubric being made on Scores with its own Cancel, and says gradings wait for it', async () => {
   clockAt(MAKING_STARTED + 2 * MINUTE + 5_000);
   const { source, controls } = sourceWith('making_rubric');
   await mount('/scores', source);
   const notice = await screen.findByTestId('making-rubric');
   expect(notice.textContent).toContain('A rubric for deploy is being made · 0 h 2 m');
+  expect(notice.textContent).toContain('Gradings you start wait until it is done.');
   fireEvent.click(
     within(notice).getByRole('button', { name: 'Cancel making a rubric for deploy' }),
   );
@@ -1245,11 +1353,11 @@ it('names a rubric being made on Scores with its own Cancel, and Grade explains 
   fireEvent.click(within(card('CLAUDE.md doctor')).getByRole('link', { name: 'CLAUDE.md doctor' }));
   await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
   expect(screen.getByTestId('making-rubric')).toBeTruthy();
+  // Grade is sent all the same; native puts it in line after the job.
   fireEvent.click(screen.getByRole('button', { name: 'Grade again atlas' }));
-  expect(within(page()).getByRole('status').textContent).toBe(
-    'Only one grading runs at a time, and making a rubric counts as one. A rubric for deploy is being made now; wait for it to finish or cancel it.',
+  await waitFor(() =>
+    expect(controls.start).toHaveBeenCalledWith('/work/atlas', 'claude-md-doctor'),
   );
-  expect(controls.start).not.toHaveBeenCalled();
 });
 
 it('shows the rubric job’s reported elapsed time and reads again when it is over', async () => {
