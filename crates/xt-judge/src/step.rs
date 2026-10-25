@@ -140,8 +140,9 @@ fn tool_step(name: &str, input: Option<&Input>) -> String {
 ///
 /// * A script, when a part runs one: its program is the script itself
 ///   (`./analyze.py`, `scripts/run.sh`), or an [`INTERPRETERS`] program
-///   whose first argument that is not an option is the script
-///   (`python3 scripts/analyze.py`). A shell given `-c` (or `-lc`, ...)
+///   whose first argument is the script (`python3 scripts/analyze.py`),
+///   optionally after Python's standalone `-u` flag. Other interpreter
+///   options name no script. A shell given exactly `-c` or `-lc`
 ///   runs its command string, which is read the same way. A script is a
 ///   word whose base name ends in a [`SCRIPT_EXTENSIONS`] extension and has
 ///   nothing a name may not show. A file that is only an argument
@@ -208,8 +209,8 @@ fn script_run(words: &[String], depth: usize) -> Option<String> {
     let shell = matches!(program, "bash" | "sh" | "zsh");
     let mut rest = words[1..].iter();
     while let Some(word) = rest.next() {
-        if let Some(flags) = word.strip_prefix('-') {
-            if shell && !flags.starts_with('-') && flags.contains('c') {
+        if word.starts_with('-') {
+            if shell && matches!(word.as_str(), "-c" | "-lc") {
                 // The command string a shell runs, read the same way, at most
                 // `depth` strings deep.
                 let inner = rest.next()?;
@@ -218,7 +219,12 @@ fn script_run(words: &[String], depth: usize) -> Option<String> {
                     .iter()
                     .find_map(|words| script_run(words, depth));
             }
-            continue;
+            if program.starts_with("python") && word == "-u" {
+                continue;
+            }
+            // An option may take code, a module or a value as its next word.
+            // Only skip the standalone flag whose meaning is known here.
+            return None;
         }
         return script_name(base_name(word));
     }
@@ -430,6 +436,8 @@ mod tests {
     #[test]
     fn a_command_is_named_by_its_script() {
         let cases = [
+            ("python3 analyze.py", "Running analyze.py"),
+            ("python3 -u analyze.py", "Running analyze.py"),
             (
                 "python3 /Users/me/skill/scripts/analyze.py --repo /x",
                 "Running analyze.py",
@@ -448,6 +456,27 @@ mod tests {
             ("sh -c \"bash -c 'zsh -c x.sh'\"", "Running sh"),
             ("ruby x.rb; perl y.pl", "Running x.rb"),
             ("make && python3 later.py", "Running later.py"),
+        ];
+        for (command, label) in cases {
+            assert_eq!(bash(command).as_deref(), Some(label), "{command}");
+        }
+    }
+
+    #[test]
+    fn interpreter_options_never_name_inline_code_or_option_values() {
+        let cases = [
+            ("python3 -c 'module.secret.py'", "Running python3"),
+            ("node -e 'module.secret.js'", "Running node"),
+            ("ruby -e 'module.secret.rb'", "Running ruby"),
+            ("perl -e 'module.secret.pl'", "Running perl"),
+            ("python3 -X private.py analyze.py", "Running python3"),
+            ("python3 -W private.py analyze.py", "Running python3"),
+            ("python3 -m private.py analyze.py", "Running python3"),
+            ("node --require private.js analyze.js", "Running node"),
+            ("python3 --unknown private.py analyze.py", "Running python3"),
+            ("python3 -u -X private.py analyze.py", "Running python3"),
+            ("bash -secretc 'private.py'", "Running bash"),
+            ("bash --command 'private.py'", "Running bash"),
         ];
         for (command, label) in cases {
             assert_eq!(bash(command).as_deref(), Some(label), "{command}");
