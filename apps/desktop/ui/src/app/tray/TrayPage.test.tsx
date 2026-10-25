@@ -819,9 +819,11 @@ it('reads once more when a commit lands during its first read', async () => {
   mount(source);
   await show();
   await waitFor(() => expect(source.today).toHaveBeenCalledTimes(1));
+  vi.useFakeTimers();
   emit(events.importReceived);
   // Past the 500 ms coalescing: the in-flight read is joined, not restarted.
-  await act(() => new Promise((done) => setTimeout(done, 600)));
+  await flush(600);
+  vi.useRealTimers();
   expect(source.today).toHaveBeenCalledTimes(1);
   // It may predate the commit, so it is read again when it lands.
   first.resolve(summary({ cost: { ...summary().cost, total_usd: 1, priced_subtotal_usd: 1 } }));

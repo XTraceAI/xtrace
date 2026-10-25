@@ -1,3 +1,4 @@
+import { afterRendering } from './rendering';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
@@ -738,11 +739,11 @@ async function expectPageStill(page: Page) {
   const box = (await heading.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, 900);
-  await page.waitForTimeout(150);
+  await afterRendering(page);
   await heading.click();
   await page.keyboard.press('PageDown');
   await page.keyboard.press('End');
-  await page.waitForTimeout(150);
+  await afterRendering(page);
   const tops = await page.evaluate(() => [
     window.scrollY,
     document.querySelector('.xt-shell-outlet')!.scrollTop,
