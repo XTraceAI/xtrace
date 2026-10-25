@@ -78,7 +78,30 @@ it('says why a tile has no number in plain words, and keeps an unknown reason as
 });
 
 it('uses the UI wording for unavailable tiles and preserves a new backend reason', () => {
-  for (const [reason, wording] of Object.entries(plainReasons)) {
+  // These are the ten shipped backend reasons today. This table protects existing
+  // translations; new backend reasons still use the fallback until added here.
+  const cases = [
+    ['Agent time is unmeasured', 'Agent time could not be measured in this range.'],
+    [
+      'Human classification or required typing length is unmeasured',
+      'Could not tell which messages a person sent or how long they were.',
+    ],
+    ['Human classification is unmeasured', 'Could not tell which messages a person sent.'],
+    ['No positive-duration active spans', 'No measurable agent activity in this range.'],
+    [
+      'No measurable eligible hands-off stretches',
+      'No stretch where an agent worked on its own in this range.',
+    ],
+    ['Sessions are unmeasured', 'Sessions could not be counted in this range.'],
+    ['Tool count is unmeasured', 'Tool calls could not be counted in this range.'],
+    ['Selected usage counters are absent or incomplete', 'Some token counts are missing.'],
+    [
+      'Selected usage is absent or unpriced; see cost reasons',
+      'Some usage has no price; the cost details say why.',
+    ],
+    ['Rule-fire data is unavailable', 'Rule fire data is not available.'],
+  ];
+  for (const [reason, wording] of cases) {
     const unavailable = { value: null, reason } as Parameters<typeof tileReason>[0];
     expect(tileReason(unavailable)).toBe(wording);
     expect(tileReason({ ...unavailable, value: 0 })).toBeUndefined();

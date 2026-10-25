@@ -1,4 +1,4 @@
-import { afterRendering } from './rendering';
+import { afterSplitSettles } from './rendering';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
@@ -308,7 +308,9 @@ async function open(
   width: number,
   height: number,
   scheme: 'light' | 'dark',
+  controlClock = false,
 ) {
+  if (controlClock) await page.clock.install();
   await serve(page, body);
   await page.setViewportSize({ width, height });
   await page.emulateMedia({ colorScheme: scheme });
@@ -739,11 +741,11 @@ async function expectPageStill(page: Page) {
   const box = (await heading.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, 900);
-  await afterRendering(page);
+  await afterSplitSettles(page);
   await heading.click();
   await page.keyboard.press('PageDown');
   await page.keyboard.press('End');
-  await afterRendering(page);
+  await afterSplitSettles(page);
   const tops = await page.evaluate(() => [
     window.scrollY,
     document.querySelector('.xt-shell-outlet')!.scrollTop,
@@ -779,7 +781,7 @@ for (const shape of ['plain', 'stress'] as const)
               await route.continue();
             }
           });
-        await open(page, exportFor(shape), width, height, scheme);
+        await open(page, exportFor(shape), width, height, scheme, true);
         const g = await page.evaluate(geometry);
         await info.attach('geometry', { body: JSON.stringify(g, null, 2) });
         await writeFile(info.outputPath('geometry.json'), JSON.stringify(g, null, 2));
@@ -1018,7 +1020,7 @@ test('the longest share list opens under the favorite and fits 1120x720', async 
 
 for (const shape of ['empty', 'partial'] as const)
   test(`${shape} Dashboard fits 1120x720 without scrolling`, async ({ page }, info) => {
-    await open(page, exportFor(shape), 1120, 720, shape === 'empty' ? 'light' : 'dark');
+    await open(page, exportFor(shape), 1120, 720, shape === 'empty' ? 'light' : 'dark', true);
     if (shape === 'empty')
       await expect(page.getByText(/No agent activity was recorded in this range/)).toBeVisible();
     else await expect(page.getByTestId('dashboard-summary')).toContainText('Unmeasured');
@@ -1421,7 +1423,7 @@ test('the Dashboard fits 1120x720 light in every range and measure with a live i
 }, info) => {
   const margins: Record<string, number> = {};
   await page.unrouteAll();
-  await open(page, indexedExport(live), 1120, 720, 'light');
+  await open(page, indexedExport(live), 1120, 720, 'light', true);
   // The index's state is the sidebar's and Settings'; the Dashboard adds no line for it.
   await expect(page.getByTestId('dashboard-index')).toHaveCount(0);
   for (const range of ['7d', '30d'] as const) {
