@@ -45,9 +45,10 @@ import {
   groupSessionLanes,
   laneRows,
   listedLanes,
-  notListed,
+  rowGroup,
   sessionKey,
-  type LaneParent,
+  showsTotal,
+  unresolvedIn,
   type LaneRow,
   type SessionLane,
 } from './lanes';
@@ -196,14 +197,7 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
   // not verified, is not listed here at all, nor anything returned under it;
   // nor does the Sessions page. A report with no context for a session, or
   // without its display check, leaves it out: it is not known to be shown.
-  const unresolved = ({ session_id, host }: LaneParent) => {
-    const session = context.get(sessionKey(host, session_id));
-    return notListed(
-      session,
-      host,
-      verifiedParent({ id: session_id, parent: session?.parent }) !== null,
-    );
-  };
+  const unresolved = unresolvedIn((id, host) => context.get(sessionKey(host, id)));
   const returned = groupSessionLanes(lanes);
   const checking = lanesStillChecking(report);
   // The listed sessions' sub-sessions with no span here, whenever they ran,
@@ -351,8 +345,8 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
    * opening it lists, with any sub-sessions the report left out counted.
    */
   const rowCost = (row: Row): ShownCost | null => {
-    if (row.children > 0 && !row.expanded) {
-      const group = [...(row.kind === 'session' ? [row.lane] : []), ...row.members].map(found);
+    if (showsTotal(row)) {
+      const group = rowGroup(row).map(found);
       const notShown = group.reduce(
         (sum, session) => sum + (session?.sub_sessions_not_shown ?? 0),
         0,
@@ -367,7 +361,7 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
    * them — one with none listed, or an open group — said beside its own cost.
    */
   const leftOutNote = (row: Row) => {
-    if (row.kind !== 'session' || (row.children > 0 && !row.expanded)) return '';
+    if (row.kind !== 'session' || showsTotal(row)) return '';
     const session = found(row.lane);
     return hiddenNote(
       session?.sub_sessions_not_shown ?? 0,

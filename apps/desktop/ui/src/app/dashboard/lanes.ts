@@ -1,6 +1,8 @@
 import type { DashboardLane } from '../../data/generated/DashboardLane';
 import type { SessionChildCheck } from '../../data/generated/SessionChildCheck';
+import type { SessionParentLink } from '../../data/generated/SessionParentLink';
 import { count } from '../../kit/format';
+import { verifiedParent } from '../session-parent';
 
 /**
  * The returned spans of one session, in the order the report sorted them
@@ -110,6 +112,21 @@ export const checkingHiddenShort = (hidden: number) =>
   `${count(hidden)} hidden: check not finished`;
 
 /**
+ * How many sub-sessions a list leaves out because it cannot show the session
+ * that started them: a known sub-session whose creator is not verified, or
+ * one under a session the list leaves out. Said only where a list accounts
+ * for every session it was given, as a day's sessions box does for the day's
+ * agent time; nothing here says who started them.
+ */
+export const creatorHidden = (hidden: number) =>
+  hidden === 1
+    ? '1 sub-session is hidden because XTrace cannot show the session that started it.'
+    : `${count(hidden)} sub-sessions are hidden because XTrace cannot show the sessions that started them.`;
+
+/** The same, short enough for one line. */
+export const creatorHiddenShort = (hidden: number) => `${count(hidden)} hidden: creator not shown`;
+
+/**
  * Whether a list leaves a session out: it is still being checked, or it is a
  * known sub-session whose creator is not verified (`verified` says whether its
  * parent link is). A checked main session, and a known sub-session under a
@@ -119,6 +136,30 @@ export const checkingHiddenShort = (hidden: number) =>
 export const notListed = (found: ShownContext | undefined, host: string, verified: boolean) =>
   stillChecking(found, host) ||
   ((found!.child_check === 'child' || found!.known_child === true) && !verified);
+
+/** What a context read says about one session: its host, bit, check and parent. */
+export interface ChildContext extends ShownContext {
+  parent?: SessionParentLink | null;
+}
+
+/**
+ * A session left out, by exact host and identity, as every list decides it
+ * ([`notListed`]): still being checked, or a known sub-session whose creator
+ * is not verified. `find` is the list's context for a session — its own row,
+ * or a context-only entry for a parent it does not list — and nothing known
+ * about a session leaves it out too. The Dashboard's Sessions section, the
+ * Sessions page and a day's sessions box all judge by this.
+ */
+export const unresolvedIn =
+  (find: (id: string, host: string) => ChildContext | undefined) =>
+  ({ session_id, host }: LaneParent) => {
+    const found = find(session_id, host);
+    return notListed(
+      found,
+      host,
+      verifiedParent({ id: session_id, parent: found?.parent }) !== null,
+    );
+  };
 
 /** The part of a verified parent link the grouping reads: which session, on which host. */
 export interface LaneParent {
@@ -163,6 +204,21 @@ export type LaneRow<P extends LaneParent = LaneParent, L extends ListedSession =
     };
 
 export const sessionKey = (host: string, sessionId: string) => `${host}\u0000${sessionId}`;
+
+/**
+ * Every session a row stands for: its own, when it has a row, and every
+ * session placed under it at any depth. A collapsed group's numbers are the
+ * total of these — the rows opening it would list — so the numbers in view
+ * add up to the same whether a group is open or not.
+ */
+export const rowGroup = <P extends LaneParent, L extends ListedSession>(row: LaneRow<P, L>) => [
+  ...(row.kind === 'session' ? [row.lane] : []),
+  ...row.members,
+];
+
+/** Whether a row shows its group's total ([`rowGroup`]) rather than its own numbers. */
+export const showsTotal = (row: { children: number; expanded: boolean }) =>
+  row.children > 0 && !row.expanded;
 /** The key of the row that stands for an absent parent with this session key. */
 export const absentKey = (key: string) => `absent\u0000${key}`;
 
