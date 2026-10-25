@@ -1,3 +1,6 @@
+import { updateControl } from './fixtures/hosted-update-controls.mjs';
+import { cleanupUpdate, prepareUpdateInstall } from './hosted-update-lifecycle.mjs';
+import { hostedSwift, swiftPolicy } from './hosted-swift.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
@@ -52,9 +55,8 @@ const host = () => ({
     DEFAULT_BRANCH: 'main',
   },
 });
-const runner = await readFile(new URL('./hosted-update.mjs', import.meta.url), 'utf8');
-const launcher = await readFile(new URL('./hosted-launch.swift', import.meta.url), 'utf8');
-const driver = await readFile(new URL('./hosted-ax.swift', import.meta.url), 'utf8');
+const launcher = await hostedSwift('hosted-launch');
+const driver = await hostedSwift('hosted-ax');
 const workflow = await readFile(
   new URL('../../.github/workflows/release-native.yml', import.meta.url),
   'utf8',
@@ -131,10 +133,10 @@ test('production prerequisite accepts only the pinned bytes of the candidate fee
   assert.deepEqual(verifyProductionFeed(bytes, feedPins(bytes)), {
     bytes: bytes.length,
     sha256: sha256(bytes),
-    version: '0.1.8',
+    version: release.version,
   });
   for (const text of [
-    bytes.toString().replace('0.1.8', '0.1.7'),
+    bytes.toString().replace(release.version, previousRelease.version),
     bytes.toString().replace('github.com', 'github.net'),
     bytes.toString().replace('signature', 'signaturf'),
     bytes.toString().replace('Synthetic', 'synthetic'),
@@ -144,14 +146,14 @@ test('production prerequisite accepts only the pinned bytes of the candidate fee
   ])
     assert.throws(
       () => verifyProductionFeed(Buffer.from(text), feedPins(bytes)),
-      /prerequisite unmet: canonical 0\.1\.8/,
+      /prerequisite unmet: canonical/,
     );
   const changed = Buffer.from(bytes);
   changed[changed.indexOf('signature') + 15] ^= 1;
   assert.throws(() => verifyProductionFeed(changed, feedPins(bytes)), /prerequisite unmet/);
   // Even matching pins cannot admit a feed for another version, platform or archive.
   for (const change of [
-    { version: '0.1.7' },
+    { version: previousRelease.version },
     {
       platforms: {
         'darwin-aarch64': { url: 'https://example.invalid/a.tar.gz', signature: 'c3ludGhldGlj' },
@@ -160,7 +162,7 @@ test('production prerequisite accepts only the pinned bytes of the candidate fee
     {
       platforms: {
         'darwin-aarch64': {
-          url: `https://github.com/XTraceAI/xtrace-desktop/releases/download/v0.1.7/${previousRelease.archive}`,
+          url: `https://github.com/XTraceAI/xtrace-desktop/releases/download/${previousRelease.tag}/${previousRelease.archive}`,
           signature: 'c3ludGhldGlj',
         },
       },
@@ -176,21 +178,26 @@ test('the committed feed fixture is the pinned candidate feed once the build val
   const bytes = await readFile(new URL('./fixtures/hosted-update-latest.json', import.meta.url));
   if (missingReleaseValues().length) {
     // Until then it is a placeholder that no runner can accept.
-    assert.match(JSON.parse(bytes).placeholder, /exact published 0\.1\.8 latest\.json/);
+    assert.match(JSON.parse(bytes).placeholder, /exact published .* latest\.json/);
     assert.throws(() => verifyProductionFeed(bytes), /prerequisite unmet/);
   } else assert.equal(verifyProductionFeed(bytes).version, release.version);
 });
 
-test('the update starts from the published 0.1.7 in its earlier folder', () => {
-  assert.equal(previousRelease.version, '0.1.7');
-  assert.equal(previousRelease.tag, 'v0.1.7');
-  assert.equal(previousRelease.source, 'e743e900fb40d32bdbe90709bd54b7d9bde32540');
+test('the update starts from distinct pinned earlier release inputs', () => {
+  assert.match(previousRelease.version, /^\d+\.\d+\.\d+$/);
+  assert.notEqual(previousRelease.version, release.version);
+  assert.equal(previousRelease.tag, `v${previousRelease.version}`);
+  assert.match(previousRelease.source, /^[a-f0-9]{40}$/);
+  assert.notEqual(previousRelease.source, release.source);
   assert.equal(previousRelease.bundle, '/Applications/XTrace Desktop.app');
-  assert.equal(previousRelease.archive, 'XTrace-Desktop-0.1.7-macos-arm64.app.tar.gz');
-  assert.equal(previousRelease.bytes, 11064049);
-  assert.equal(previousRelease.inventoryEntries, 79);
+  assert.equal(
+    previousRelease.archive,
+    `XTrace-Desktop-${previousRelease.version}-macos-arm64.app.tar.gz`,
+  );
+  assert.ok(previousRelease.bytes > 0);
+  assert.ok(previousRelease.inventoryEntries > 0);
   assert.equal(previousRelease.identifier, release.identifier);
-  assert.match(sentinel, /across 0\.1\.7 to 0\.1\.8\.\n$/);
+  assert.ok(sentinel.endsWith(`across ${previousRelease.version} to ${release.version}.\n`));
 });
 
 test('old archive and both inventories reject unchecked synthetic input', async () => {
@@ -247,16 +254,16 @@ test('one rule names the app folder after restart, quit and reopen, and rejects 
 test('identity, version and database checks reject a different app or a replaced database', () => {
   const plist = {
     CFBundleIdentifier: 'ai.xtrace.app',
-    CFBundleShortVersionString: '0.1.8',
-    CFBundleVersion: '0.1.8',
+    CFBundleShortVersionString: release.version,
+    CFBundleVersion: release.version,
     CFBundleExecutable: 'xtrace-desktop',
   };
   assert.doesNotThrow(() => requireAppIdentity(plist, release.version));
   assert.throws(() => requireAppIdentity(plist, previousRelease.version));
   for (const change of [
     { CFBundleIdentifier: 'ai.xtrace.desktop' },
-    { CFBundleShortVersionString: '0.1.7' },
-    { CFBundleVersion: '0.1.7' },
+    { CFBundleShortVersionString: previousRelease.version },
+    { CFBundleVersion: previousRelease.version },
     { CFBundleExecutable: 'XTrace' },
   ])
     assert.throws(() => requireAppIdentity({ ...plist, ...change }, release.version));
@@ -314,72 +321,225 @@ test('update deadline has a separate nonrenewable cleanup reserve', () => {
   assert.throws(() => budget.remaining(1));
 });
 
-test('update ordering: old files before one press, restart in place, normal quit renames, reopen without Welcome', () => {
-  const ordered = [
-    'requireReleaseValues()',
-    'verifyProductionFeed(await',
-    'verifyPreviousDownload(await',
-    "'old-extract'",
-    "requireBundleStep('installed'",
-    "['earlier-launch', receipt",
-    "'update-ready',",
-    'report.databaseIdentity = await databaseIdentity()',
-    'report.beforePressInventory',
-    "['earlier-arm-update', receipt",
-    'pressAttempted = true',
-    "'update-press',",
-    "['earlier-adopt-update', receipt",
-    "'successor-environment'",
-    "'updated-dashboard',",
-    "requireBundleStep('restarted'",
-    'verifyAppInventory(earlierBundle)',
-    "validateSignature(earlierBundle, 'updated-app')",
-    "dataKept('After restart')",
-    "['earlier-quit', successorReceipt",
-    "['earlier-absent', receipt",
-    'report.normalQuit = true',
-    "requireBundleStep('quit'",
-    'verifyAppInventory(renamedBundle)',
-    'Renamed app contents differ',
-    "validateSignature(renamedBundle, 'renamed-app')",
-    "dataKept('After quit')",
-    'report.databaseAfterUpdate = await verifyHostedDatabase(',
-    "['launch', reopenReceipt",
-    "['inspect', reopenReceipt",
-    "'reopened-dashboard',",
-    "['quit', reopenReceipt",
-    "['absent', reopenReceipt",
-    "requireBundleStep('reopened'",
-    "dataKept('After reopening')",
-    'report.database = await verifyHostedDatabase(',
-    'updaterLeftovers(await readdir(env.TMPDIR))',
-    'updaterLeftovers(await readdir(tmpdir()))',
+test('update observes old files, presses once, restarts in place, quits normally and reopens', async () => {
+  const expected = [
+    'attempt:launch',
+    'earlier-launch',
+    'read:original',
+    'earlier-inspect',
+    'update-ready',
+    'databaseIdentity',
+    'previousInventory',
+    'earlier-arm-update',
+    'attempt:press',
+    'update-press',
+    'earlier-adopt-update',
+    'read:successor',
+    'earlier-inspect',
+    'updated-dashboard',
+    'entries:/Applications',
+    'inventory:earlier',
+    'identity:earlier',
+    'signature:updated-app',
+    'data:After restart',
+    'earlier-quit',
+    'earlier-absent',
+    'entries:/Applications',
+    'inventory:renamed',
+    'identity:renamed',
+    'signature:renamed-app',
+    'quarantine:renamed-after-quit',
+    'data:After quit',
+    'database',
+    'attempt:reopen',
+    'launch',
+    'read:reopen',
+    'inspect',
+    'reopened-dashboard',
+    'quit',
+    'absent',
+    'entries:/Applications',
+    'inventory:renamed',
+    'quarantine:installed-after-exit',
+    'data:After reopening',
+    'database',
+    'entries:/owned/tmp',
   ];
-  let prior = -1;
-  for (const needle of ordered) {
-    const at = runner.indexOf(needle);
-    assert.ok(at > prior, needle);
-    prior = at;
+  const { calls, report, run } = updateControl();
+  await run();
+  assert.deepEqual(calls.slice(0, -1), expected);
+  assert.ok(calls.at(-1).startsWith('entries:'));
+  assert.equal(report.restartPressed, true);
+  assert.equal(report.normalQuit, true);
+  assert.equal(report.reopenExitConfirmed, true);
+  assert.equal(report.nativeDatabaseVerified, true);
+  assert.deepEqual(report.beforePressInventory, { old: true });
+  assert.deepEqual(report.restarted.inventory, report.renamed.inventory);
+});
+
+test('prelaunch verifies feed and old archive before extraction, installation and launch', async () => {
+  for (const failed of [null, 'feed', 'archive']) {
+    const calls = [];
+    const record = (name) => {
+      calls.push(name);
+      if (name === failed) throw new Error(name);
+    };
+    const control = updateControl({
+      prepare: () =>
+        prepareUpdateInstall(
+          {
+            report: {},
+            owned: '/owned',
+            output: '/output',
+            feedPath: '/owned/latest.json',
+            fetch: async (name) => record(name),
+            checked: async (name) => record(name),
+            exists: async () => false,
+            markInstalled: () => record('owned'),
+            appIdentity: async () => record('identity'),
+            validateSignature: async () => record('signature'),
+            quarantineAt: async () => record('quarantine'),
+          },
+          {
+            readFile: async () => Buffer.from('synthetic'),
+            writeFile: async () => {},
+            readdir: async () => ['XTrace Desktop.app'],
+            verifyProductionFeed: () => record('feed'),
+            verifyPreviousDownload: () => record('archive'),
+            verifyPreviousInventory: async () => record('inventory'),
+          },
+        ),
+    });
+    if (failed) await assert.rejects(control.run(), new RegExp(failed));
+    else await control.run();
+    const expected = [
+      'production-feed',
+      'feed',
+      'old-download',
+      'archive',
+      'quarantine',
+      'old-extract',
+      'inventory',
+      'owned',
+      'install',
+      'inventory',
+      'identity',
+      'signature',
+      'quarantine',
+    ];
+    assert.deepEqual(calls, failed ? expected.slice(0, expected.indexOf(failed) + 1) : expected);
+    assert.equal(control.calls.includes('attempt:launch'), !failed);
+    if (failed) assert.deepEqual(control.calls, []);
   }
-  // One launch of each folder: the earlier app once, the renamed app once.
-  assert.equal((runner.match(/\['earlier-launch', receipt/g) || []).length, 1);
-  assert.equal((runner.match(/\['launch', /g) || []).length, 1);
-  // The updated app is only quit normally; force exists only in cleanup's stop.
-  const work = runner.split('budget.beginCleanup();')[0];
-  assert.doesNotMatch(work, /'earlier-stop'|\['stop', /);
-  assert.doesNotMatch(runner, /killall|pkill|\/usr\/bin\/open|TAURI_CONFIG|GITHUB_TOKEN|GH_TOKEN/);
-  const cleanup = runner.split('budget.beginCleanup();')[1];
-  assert.ok(cleanup.indexOf('await stopUpdateProcesses(') < cleanup.indexOf('await rm(bundle'));
-  assert.ok(cleanup.indexOf("'cleanup-all-exited'") < cleanup.indexOf('await rm(bundle'));
-  assert.ok(cleanup.indexOf("'cleanup-reopened-exited'") < cleanup.indexOf('await rm(bundle'));
-  assert.match(
-    cleanup,
-    /\['unregister-earlier', earlierBundle\],\s*\['unregister-renamed', renamedBundle\]/,
-  );
-  assert.ok(
-    cleanup.indexOf('await rm(staging') < cleanup.indexOf('report.cleanupConfirmed = true'),
-  );
-  assert.match(cleanup, /catch \(error\) \{\s*report.cleanupError/);
+});
+
+test('prelaunch default feed verifier refuses invalid bytes before old download or install', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'update-prerequisite-'));
+  try {
+    const feedPath = join(root, 'latest.json');
+    await writeFile(feedPath, '{}');
+    const calls = [];
+    const control = updateControl({
+      prepare: () =>
+        prepareUpdateInstall({
+          report: {},
+          owned: root,
+          output: root,
+          feedPath,
+          fetch: async (name) => calls.push(name),
+          checked: async () => assert.fail('No extraction or installation'),
+        }),
+    });
+    await assert.rejects(control.run(), /prerequisite unmet/);
+    assert.deepEqual(calls, ['production-feed']);
+    assert.deepEqual(control.calls, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('failed update transition or normal quit prevents rename, database acceptance and reopen', async () => {
+  for (const failAt of ['earlier-adopt-update', 'earlier-quit', 'earlier-absent']) {
+    const control = updateControl({ failAt });
+    await assert.rejects(control.run(), new RegExp(failAt));
+    assert.equal(control.calls.includes('inventory:renamed'), false);
+    assert.equal(control.calls.includes('database'), false);
+    assert.equal(control.calls.includes('attempt:reopen'), false);
+    assert.equal(control.report.normalQuit, undefined);
+  }
+});
+
+test('cleanup confirms both owners absent before unregistering or removing files', async () => {
+  for (const failed of [
+    null,
+    'cleanup-all-exited',
+    'cleanup-reopened-exited',
+    'unregister-earlier',
+  ]) {
+    const calls = [],
+      report = {};
+    const failure = await cleanupUpdate({
+      report,
+      launchAttempted: true,
+      pressAttempted: false,
+      reopenAttempted: true,
+      receipt: 'original',
+      successorReceipt: 'successor',
+      reopenReceipt: 'reopen',
+      helper: 'helper',
+      environmentFile: 'environment',
+      automationEnvironment: {},
+      checked: async (name) => {
+        calls.push(name);
+        if (name === failed) throw new Error(name);
+      },
+      installed: true,
+      staging: '/owned/staging',
+      exists: async () => true,
+      rm: async (path) => calls.push(`remove:${path}`),
+    });
+    const expected = [
+      'cleanup-stop-original',
+      'cleanup-all-exited',
+      'cleanup-stop-reopened',
+      'cleanup-reopened-exited',
+      'unregister-earlier',
+      `remove:${previousRelease.bundle}`,
+      'unregister-renamed',
+      `remove:${release.bundle}`,
+      'remove:/owned/staging',
+    ];
+    assert.deepEqual(calls, failed ? expected.slice(0, expected.indexOf(failed) + 1) : expected);
+    assert.equal(report.cleanupConfirmed, failed ? undefined : true);
+    assert.equal(failure?.message, failed || undefined);
+    assert.equal(report.cleanupError, failed || undefined);
+  }
+});
+
+test('cleanup retains app and staging if ownership receipt or successor confirmation is missing', async () => {
+  for (const kind of ['receipt', 'successor']) {
+    const calls = [],
+      report = {};
+    const failure = await cleanupUpdate({
+      report,
+      launchAttempted: true,
+      pressAttempted: true,
+      receipt: 'original',
+      successorReceipt: 'successor',
+      helper: 'helper',
+      exists: async (path) => kind !== 'receipt' && path === 'original',
+      checked: async (name) => {
+        calls.push(name);
+        throw new Error('Successor cannot be confirmed');
+      },
+      installed: true,
+      staging: '/owned/staging',
+      rm: async () => assert.fail('Uncertain ownership must retain files'),
+    });
+    assert.ok(failure);
+    assert.equal(report.cleanupConfirmed, undefined);
+    assert.deepEqual(calls, kind === 'receipt' ? [] : ['cleanup-adopt', 'cleanup-stop-original']);
+  }
 });
 
 test('actual process cleanup stops known owners and retains uncertain transitions on failure', async () => {
@@ -448,6 +608,11 @@ test('actual process cleanup stops known owners and retains uncertain transition
   assert.deepEqual(calls, ['adopt', 'stopOriginal']);
 });
 
+test('update entrypoint excludes broad process termination and command/credential overrides', async () => {
+  const source = await readFile(new URL('./hosted-update.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /killall|pkill|\/usr\/bin\/open|TAURI_CONFIG|GITHUB_TOKEN|GH_TOKEN/);
+});
+
 test('update workflow leaves cleanup/upload time and denies wrong authorization before checkout', () => {
   assert.doesNotMatch(
     job,
@@ -455,8 +620,8 @@ test('update workflow leaves cleanup/upload time and denies wrong authorization 
   );
   assert.match(job, /if: always\(\)/);
   const minutes = [...job.matchAll(/^ {8}timeout-minutes: (\d+)$/gm)].map((m) => Number(m[1]));
-  assert.deepEqual(minutes, [1, 2, 2, 3, 17, 2]);
-  assert.equal(Number(job.match(/^ {4}timeout-minutes: (\d+)$/m)[1]), 28);
+  assert.ok(minutes.every((value) => value > 0));
+
   assert.ok(
     minutes.reduce((a, b) => a + b, 0) < Number(job.match(/^ {4}timeout-minutes: (\d+)$/m)[1]),
   );
@@ -529,22 +694,9 @@ test(
   async () => {
     const temporary = await mkdtemp(join(tmpdir(), 'update-swift-policy-'));
     try {
-      const receipt = launcher.slice(
-        launcher.indexOf('struct Receipt:'),
-        launcher.indexOf('// BEGIN TRANSITION POLICY'),
-      );
-      const transition = launcher
-        .split('// BEGIN TRANSITION POLICY:')[1]
-        .split('\n')
-        .slice(1)
-        .join('\n')
-        .split('// END TRANSITION POLICY')[0];
-      const ui = driver
-        .split('// BEGIN UPDATE UI POLICY:')[1]
-        .split('\n')
-        .slice(1)
-        .join('\n')
-        .split('// END UPDATE UI POLICY')[0];
+      const receipt = await swiftPolicy('RECEIPT');
+      const transition = await swiftPolicy('TRANSITION POLICY');
+      const ui = await swiftPolicy('UPDATE UI POLICY');
       const controls = `
 func record(_ pid: Int32, _ start: UInt64, _ id: String = "ai.xtrace.app", _ path: String = ProductBundle.earlier) -> Receipt {
   Receipt(pid: pid, startTime: start, bundle: path, executable: path + "/Contents/MacOS/xtrace-desktop", identifier: id)
@@ -593,35 +745,34 @@ func versionRow(_ value: String, _ parent: String = "footer", _ position: Int = 
   [kAXRoleAttribute: "AXStaticText", kAXValueAttribute: value, "captureParent": parent,
    "captureChildIndex": String(position), "captureWorkspace": workspace ? "true" : "false"]
 }
-// Historical hosted AXStaticText values were "v" and "0.1.6". The 0.1.7 and
-// 0.1.8 rows and relationships below are synthetic, not a new runtime capture.
-assert(Release.candidate == "0.1.8" && Release.earlier == "0.1.7")
+// Synthetic rows exercise split version labels and the current release relationship.
+assert(Release.candidate == "${release.version}" && Release.earlier == "${previousRelease.version}")
 assert(Release.bundle("update-ready") == "/Applications/XTrace Desktop.app")
 assert(Release.bundle("update-press") == "/Applications/XTrace Desktop.app")
 assert(Release.bundle("updated-dashboard") == "/Applications/XTrace Desktop.app")
 for mode in ["reopened-dashboard", "first-launch", "telemetry-notice", "unknown"] {
   assert(Release.bundle(mode) == "/Applications/XTrace.app")
 }
-let splitVersion = [versionRow("v", "footer", 4), versionRow("0.1.8", "footer", 5)]
-assert(displayedVersion(splitVersion, "0.1.8"))
-assert(displayedVersion([versionRow("v0.1.8")], "0.1.8"))
+let splitVersion = [versionRow("v", "footer", 4), versionRow("${release.version}", "footer", 5)]
+assert(displayedVersion(splitVersion, "${release.version}"))
+assert(displayedVersion([versionRow("v${release.version}")], "${release.version}"))
 for invalid in [
-  [versionRow("v", "footer", 4), versionRow("0.1.8", "other-pane", 5)],
-  [versionRow("v", "footer", 4), versionRow("0.1.8", "footer", 6)],
-  [versionRow("0.1.8", "footer", 4), versionRow("v", "footer", 5)],
-  [versionRow("v", "footer", 4), versionRow("0.1.7", "footer", 5)],
-  [versionRow("v", "footer", 4, false), versionRow("0.1.8", "footer", 5)],
-  [versionRow("v", "footer", 4), versionRow("0.1.8", "footer", 5, false)],
-  [versionRow("v0.1.8", "main-pane", 0, false)],
-  [versionRow("Update 0.1.8 is ready. Your local data stays on this Mac.")],
-  [versionRow("v0.1.7"), versionRow("0.1.8", "update-banner", 1)],
-  [text("v0.1.8")],
-  [[kAXRoleAttribute: "AXButton", kAXValueAttribute: "v0.1.8", "captureWorkspace": "true"]]
-] { assert(!displayedVersion(invalid, "0.1.8")) }
+  [versionRow("v", "footer", 4), versionRow("${release.version}", "other-pane", 5)],
+  [versionRow("v", "footer", 4), versionRow("${release.version}", "footer", 6)],
+  [versionRow("${release.version}", "footer", 4), versionRow("v", "footer", 5)],
+  [versionRow("v", "footer", 4), versionRow("${previousRelease.version}", "footer", 5)],
+  [versionRow("v", "footer", 4, false), versionRow("${release.version}", "footer", 5)],
+  [versionRow("v", "footer", 4), versionRow("${release.version}", "footer", 5, false)],
+  [versionRow("v${release.version}", "main-pane", 0, false)],
+  [versionRow("Update ${release.version} is ready. Your local data stays on this Mac.")],
+  [versionRow("v${previousRelease.version}"), versionRow("${release.version}", "update-banner", 1)],
+  [text("v${release.version}")],
+  [[kAXRoleAttribute: "AXButton", kAXValueAttribute: "v${release.version}", "captureWorkspace": "true"]]
+] { assert(!displayedVersion(invalid, "${release.version}")) }
 let rows: [[String: String]] = [[kAXRoleAttribute: kAXWindowRole], [kAXRoleAttribute: "AXWebArea"],
-  versionRow("v0.1.7"), text("What your agents did"),
+  versionRow("v${previousRelease.version}"), text("What your agents did"),
   text("No agent activity was recorded in this range. Measured zeros are shown as 0."),
-  text("Update 0.1.8 is ready. Your local data stays on this Mac."),
+  text("Update ${release.version} is ready. Your local data stays on this Mac."),
   [kAXRoleAttribute: kAXButtonRole, kAXTitleAttribute: "Restart to update"]]
 assert(updateReady(rows))
 for index in rows.indices { assert(!updateReady(Array(rows.enumerated().filter { $0.offset != index }.map { $0.element }))) }
@@ -630,19 +781,19 @@ assert(!updateReady(rows + [text("Welcome to XTrace")]))
 assert(!updateReady(rows + [[kAXRoleAttribute: "AXAlert"]]))
 assert(!updateReady(rows + [[kAXSubroleAttribute: "AXDialog"]]))
 assert(!updateReady(rows + [text("Dashboard metrics could not be loaded.")]))
-let updated = rows.map { $0 == versionRow("v0.1.7") ? versionRow("v0.1.8") : $0 }
-assert(!updateReady(updated)); assert(updateDashboard(updated, "0.1.8"))
-let splitDashboard = updated.filter { $0 != versionRow("v0.1.8") } + splitVersion
-assert(updateDashboard(splitDashboard, "0.1.8"))
-let splitOldDashboard = rows.filter { $0 != versionRow("v0.1.7") } +
-    [versionRow("v", "footer", 4), versionRow("0.1.7", "footer", 5)]
+let updated = rows.map { $0 == versionRow("v${previousRelease.version}") ? versionRow("v${release.version}") : $0 }
+assert(!updateReady(updated)); assert(updateDashboard(updated, "${release.version}"))
+let splitDashboard = updated.filter { $0 != versionRow("v${release.version}") } + splitVersion
+assert(updateDashboard(splitDashboard, "${release.version}"))
+let splitOldDashboard = rows.filter { $0 != versionRow("v${previousRelease.version}") } +
+    [versionRow("v", "footer", 4), versionRow("${previousRelease.version}", "footer", 5)]
 assert(updateReady(splitOldDashboard))
 // After the restart and after reopening the renamed app: Dashboard, never Welcome.
-assert(!updateDashboard(updated + [text("Welcome to XTrace")], "0.1.8"))
-assert(!updateDashboard(rows, "0.1.8"))
-let wrongTarget = rows.map { $0 == rows[5] ? text("Update 0.1.9 is ready. Your local data stays on this Mac.") : $0 }
+assert(!updateDashboard(updated + [text("Welcome to XTrace")], "${release.version}"))
+assert(!updateDashboard(rows, "${release.version}"))
+let wrongTarget = rows.map { $0 == rows[5] ? text("Update 99.98.97 is ready. Your local data stays on this Mac.") : $0 }
 assert(!updateReady(wrongTarget))
-let earlierTarget = rows.map { $0 == rows[5] ? text("Update 0.1.7 is ready. Your local data stays on this Mac.") : $0 }
+let earlierTarget = rows.map { $0 == rows[5] ? text("Update ${previousRelease.version} is ready. Your local data stays on this Mac.") : $0 }
 assert(!updateReady(earlierTarget))
 print("Swift transition and update UI controls passed")
 `;

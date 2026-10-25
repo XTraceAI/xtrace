@@ -1,4 +1,7 @@
-import { spawnSync } from 'node:child_process';
+import { finalizeHostedLaunch } from './hosted-telemetry-run.mjs';
+import { reservedCommand } from './hosted-command.mjs';
+import { writeHostedSwift } from './hosted-swift.mjs';
+
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -12,10 +15,6 @@ import {
 import {
   runTelemetryPhases,
   telemetrySession,
-  stopTelemetryOwners,
-  stopTelemetryProxies,
-  telemetryCleanupFacts,
-  cleanupTelemetry,
   unregisterTelemetryProbe,
   telemetryProxiesHealthy,
   removeTelemetryProfiles,
@@ -74,17 +73,7 @@ async function main() {
   let helper, receipt, environmentFile, automationEnvironment;
   let telemetryContext;
   let proxyStopReserve = 0;
-  const run = (command, args, timeout = 30_000, env = systemEnvironment) => {
-    const remaining = budget.remaining(timeout + proxyStopReserve) - proxyStopReserve;
-    if (remaining <= 0) throw new Error('Command would consume reserved proxy cleanup time');
-    return spawnSync(command, args, {
-      encoding: 'utf8',
-      env,
-      timeout: remaining,
-      killSignal: 'SIGKILL',
-      maxBuffer: 4 * 1024 * 1024,
-    });
-  };
+  const run = reservedCommand(budget, () => proxyStopReserve, systemEnvironment);
   const checked = async (name, command, args, timeout, env) => {
     const result = run(command, args, timeout, env);
     await writeFile(join(output, `${name}.log`), `${result.stdout || ''}\n${result.stderr || ''}`);
@@ -216,7 +205,7 @@ async function main() {
           'swiftc',
           '-module-cache-path',
           join(owned, 'compiler-cache'),
-          join(source, `${name}.swift`),
+          await writeHostedSwift(source, name, join(owned, `${name}.swift`)),
           '-o',
           binary,
         ],
@@ -458,64 +447,26 @@ async function main() {
       session.appAndProfilesRemoved = true;
     }
   };
-  try {
-    if (session) {
-      await cleanupTelemetry(session, {
-        stopOwners: async () => {
-          if (telemetryContext) await stopTelemetryOwners(session, telemetryContext);
-        },
-        removeOwned,
-        stopProxies: () => {
-          proxyStopReserve = 0;
-          return stopTelemetryProxies(session, output, { budget });
-        },
-      });
-    } else {
-      if (launchAttempted && !report.exitConfirmed) {
-        if (!(await exists(receipt)))
-          throw new Error('Launch outcome has no ownership receipt; app retained');
-        await checked(
-          'cleanup-stop',
-          helper,
-          ['stop', receipt, environmentFile],
-          20_000,
-          automationEnvironment,
-        );
-        report.exitConfirmed = true;
-      }
-      await removeOwned();
-    }
-    if (staging) {
-      if (session) session.stagingRemovalAttempted = true;
-      await rm(staging, { recursive: true });
-    }
-    if (session) session.stagingRemoved = true;
-    report.cleanupConfirmed = true;
-  } catch (error) {
-    if (session) session.cleanupFailed = true;
-    report.cleanupError = error.message;
-    if (error.proxyCleanupError) report.proxyCleanupError = error.proxyCleanupError;
-    failure ||= error;
-  }
-  if (session) {
-    const attempts = session.owners.filter((owner) => owner.kind === 'telemetry');
-    report.exitConfirmed =
-      attempts.some((owner) => owner.launchConfirmed === true) &&
-      attempts.every((owner) => owner.exited === true);
-    report.releasedAppLaunchAttempted = attempts.length > 0;
-    report.releasedAppLaunchOutcomeUnknown = attempts.some(
-      (owner) => owner.launchConfirmed !== true,
-    );
-    report.releasedAppLaunched = attempts.some((owner) => owner.launchConfirmed === true)
-      ? true
-      : attempts.length
-        ? null
-        : false;
-  }
-
-  if (session) report.telemetryCleanup = telemetryCleanupFacts(session);
-  if (failure) report.error = failure.message;
-  else report.status = 'passed';
+  ({ failure } = await finalizeHostedLaunch({
+    session,
+    report,
+    failure,
+    telemetryContext,
+    output,
+    budget,
+    staging,
+    launchAttempted,
+    receipt,
+    helper,
+    environmentFile,
+    automationEnvironment,
+    checked,
+    removeOwned,
+    exists,
+    resetProxyReserve: () => {
+      proxyStopReserve = 0;
+    },
+  }));
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (failure) throw failure;
   console.log(

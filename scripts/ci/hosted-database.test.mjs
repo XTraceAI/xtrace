@@ -1,3 +1,4 @@
+import { updateControl } from './fixtures/hosted-update-controls.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -67,14 +68,30 @@ test('shared database wrapper uses one fixed isolated reader and propagates a mi
   await assert.rejects(verifyHostedDatabase('/source', '/owned', async () => 'not json'));
 });
 
-test('both runners invoke the same database acceptance only after confirmed app exit', async () => {
-  for (const name of ['hosted-first-launch.mjs', 'hosted-update.mjs']) {
-    const source = await readFile(new URL(name, import.meta.url), 'utf8');
-    assert.ok(
-      source.indexOf('report.exitConfirmed = true') < source.indexOf('await verifyHostedDatabase('),
+test('update database acceptance follows normal exit and failed exit prevents database reads', async () => {
+  const success = updateControl({ defaultDatabase: true });
+  await success.run();
+  const firstRead = success.calls.indexOf('database');
+  assert.ok(firstRead > success.calls.indexOf('earlier-absent'));
+  assert.ok(success.calls.lastIndexOf('database') > success.calls.indexOf('absent'));
+  assert.equal(success.report.database.mode, 'ro');
+  for (const failAt of ['earlier-quit', 'earlier-absent', 'quit', 'absent']) {
+    const control = updateControl({ failAt, defaultDatabase: true });
+    await assert.rejects(control.run(), new RegExp(failAt));
+    assert.equal(
+      control.calls.filter((name) => name === 'database').length,
+      ['quit', 'absent'].includes(failAt) ? 1 : 0,
     );
-    assert.doesNotMatch(source, /PRAGMA integrity_check|\/usr\/bin\/sqlite3/);
   }
+});
+
+// The first-launch caller remains guarded as a fixed hosted entrypoint.
+test('first-launch database acceptance retains confirmed-exit and isolated-reader wiring', async () => {
+  const source = await readFile(new URL('./hosted-first-launch.mjs', import.meta.url), 'utf8');
+  assert.ok(
+    source.indexOf('report.exitConfirmed = true') < source.indexOf('await verifyHostedDatabase('),
+  );
+  assert.doesNotMatch(source, /PRAGMA integrity_check|\/usr\/bin\/sqlite3/);
 });
 
 let available = true;

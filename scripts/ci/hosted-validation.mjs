@@ -1,3 +1,4 @@
+import { writeHostedSwift } from './hosted-swift.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -208,7 +209,7 @@ async function main() {
         'swiftc',
         '-module-cache-path',
         cache,
-        join(sourceDirectory, 'hosted-ax.swift'),
+        await writeHostedSwift(sourceDirectory, 'hosted-ax', join(staging, 'hosted-ax.swift')),
         '-o',
         driver,
       ],

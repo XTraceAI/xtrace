@@ -143,14 +143,19 @@ export async function qualifyTelemetryProxy(
   home,
   environmentOff = false,
   budget = { remaining: (ms) => ms },
+  {
+    spawnSync: runCurl = spawnSync,
+    telemetryProxyState: readState = telemetryProxyState,
+    guardProcessDetails: formatDetails = guardProcessDetails,
+  } = {},
 ) {
   validateTelemetryEnvironment(env, owned, home, proxy.port, environmentOff);
-  const before = await telemetryProxyState(proxy);
+  const before = await readState(proxy);
   let elapsedMs, timeoutMs;
   const run = (launchEnv) => {
     timeoutMs = budget.remaining(17000);
     const began = performance.now();
-    const result = spawnSync('/usr/bin/curl', telemetryCurlArguments, {
+    const result = runCurl('/usr/bin/curl', telemetryCurlArguments, {
       env: launchEnv,
       input: '{"probe":true}',
       encoding: 'utf8',
@@ -163,7 +168,7 @@ export async function qualifyTelemetryProxy(
   const failure = (message, label, result, configuredProxy) => {
     const error = new Error(message);
     try {
-      error.message += `; ${JSON.stringify({ configuredProxy, ...guardProcessDetails(label, timeoutMs, elapsedMs, result) })}`;
+      error.message += `; ${JSON.stringify({ configuredProxy, ...formatDetails(label, timeoutMs, elapsedMs, result) })}`;
     } catch {
       /* Diagnostic failure must not replace the guard error. */
     }
@@ -179,7 +184,7 @@ export async function qualifyTelemetryProxy(
     );
   const after = await pollTelemetry(
     async () => {
-      const state = await telemetryProxyState(proxy);
+      const state = await readState(proxy);
       return state.probe > before.probe ? state : null;
     },
     budget,
@@ -206,7 +211,7 @@ export async function qualifyTelemetryProxy(
       dead,
       deadEnv.HTTPS_PROXY,
     );
-  await telemetryProxyState(proxy);
+  await readState(proxy);
   return {
     connectRejected: true,
     liveCurlStatus: live.status,
@@ -228,17 +233,14 @@ export async function stopTelemetryProxy(proxy, maxMs = 8000) {
   };
 }
 
-export function prepareProbeSource(helper, template) {
-  const policy = helper.match(
-    /\/\/ BEGIN TELEMETRY ENVIRONMENT POLICY:[^\n]*\n([\s\S]*?)\/\/ END TELEMETRY ENVIRONMENT POLICY/,
-  );
+export function prepareProbeSource(policy, template) {
   if (
-    !policy ||
+    !policy.trim() ||
     !template.includes('// __TELEMETRY_ENVIRONMENT_POLICY__') ||
     !template.includes('__CURL_ARGUMENTS__')
   )
-    throw new Error('Fixed probe source markers are missing');
+    throw new Error('Fixed probe source inputs are missing');
   return template
-    .replace('// __TELEMETRY_ENVIRONMENT_POLICY__', policy[1])
+    .replace('// __TELEMETRY_ENVIRONMENT_POLICY__', () => policy)
     .replace('__CURL_ARGUMENTS__', JSON.stringify(telemetryCurlArguments));
 }
