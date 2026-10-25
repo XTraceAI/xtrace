@@ -180,8 +180,8 @@ mod assembled {
     /// A day's card lists exactly the agent time the report gives that day:
     /// for every preset and every day, the listed sessions plus the counted
     /// rest add up to the day's `agent_ms`, the first day of the range and a
-    /// session over midnight included; beyond the cap they are counted, the
-    /// most time first.
+    /// session over midnight included; every one is sent, the most time
+    /// first, and none is left for display: the box caps its own rows.
     #[test]
     fn a_days_sessions_add_up_to_its_agent_time_in_every_range() {
         let mut db = steady_user(21);
@@ -250,10 +250,9 @@ mod assembled {
                     day.date
                 );
                 assert_eq!(
-                    found.sessions.iter().map(|s| s.agent_ms).sum::<u64>() + found.more_ms,
+                    found.sessions.iter().map(|s| s.agent_ms).sum::<u64>(),
                     day.agent_ms
                 );
-                assert!(found.sessions.len() <= xtrace_desktop::dashboard::DAY_SESSION_LIMIT);
                 listed += found.sessions.len();
             }
         }
@@ -261,7 +260,9 @@ mod assembled {
         let busy =
             xtrace_desktop::dashboard::day_sessions(&metrics, 7, now, "2026-10-03", TimeZone::UTC)
                 .unwrap();
-        // The steady pair's eight hours each, then the busiest of the twelve.
+        // The steady pair's eight hours each, then the twelve, the busiest
+        // first, and the ten minutes of "midnight" before 00:00: all sent,
+        // none capped before grouping.
         let rows: Vec<_> = busy
             .sessions
             .iter()
@@ -278,11 +279,18 @@ mod assembled {
                 ("busy-09", 45),
                 ("busy-08", 40),
                 ("busy-07", 35),
+                ("busy-06", 30),
+                ("busy-05", 25),
+                ("busy-04", 20),
+                ("busy-03", 15),
+                ("busy-02", 10),
+                ("midnight", 10),
+                ("busy-01", 5),
             ]
         );
-        // busy-01 to busy-06 and the ten minutes of "midnight" before 00:00.
-        assert_eq!(busy.more_sessions, 7);
-        assert_eq!(busy.more_ms, (5 + 10 + 15 + 20 + 25 + 30 + 10) * 60_000);
+        // No session here has a parent, so no parent's context is read.
+        assert!(busy.referenced_parents.is_empty());
+        assert!(busy.sessions.iter().all(|s| s.parent.is_none()));
         assert_eq!(busy.sessions[2].host, "codex");
         // Each named session carries its latest activity, as Sessions shows
         // it: busy-12's last event, at 19:00.
@@ -329,6 +337,44 @@ mod assembled {
         }
     }
 
+    /// Every daily session carries its context, including sessions beyond
+    /// 1,000 and past each context batch, so the view can group before capping.
+    #[test]
+    fn a_days_card_reads_all_sessions_context_in_batches() {
+        use xtrace_desktop::dashboard::day_sessions;
+        let mut db = TempDb::empty().unwrap();
+        let total = 1_005;
+        for n in 0..total {
+            let start = ms("2026-10-03T06:00:00Z") + n as i64 * 1_000;
+            let ts = |at: i64| Timestamp::from_millisecond(at).unwrap().to_string();
+            seed(
+                db.store_mut(),
+                &format!("s-{n:04}"),
+                "claude",
+                Some("cli"),
+                &[
+                    assistant(&format!("s-{n}-a"), &ts(start), None),
+                    assistant(&format!("s-{n}-b"), &ts(start + 60_000), None),
+                ],
+            );
+        }
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let now = ms("2026-10-05T20:00:00Z");
+        let card = day_sessions(&metrics, 7, now, "2026-10-03", TimeZone::UTC).unwrap();
+        assert_eq!(card.sessions.len(), total);
+        assert_eq!(card.sessions[0].session_id, "s-0000");
+        assert_eq!(card.sessions.last().unwrap().session_id, "s-1004");
+        assert!(card.sessions.iter().all(|s| s.child_check.is_some()
+            && s.known_child == Some(false)
+            && s.last_activity_at_ms.is_some()));
+        assert!(card.referenced_parents.is_empty());
+        assert_eq!(card.agent_ms, total as u64 * 60_000);
+        assert_eq!(
+            card.sessions.iter().map(|s| s.agent_ms).sum::<u64>(),
+            card.agent_ms
+        );
+    }
+
     /// A day's card splits its days in the zone its report was read in, not
     /// the one the system has when the card opens: read in Los Angeles,
     /// opened after the Mac moved to Tokyo, every day still adds up to the
@@ -369,7 +415,7 @@ mod assembled {
                 day.date
             );
             assert_eq!(
-                card.sessions.iter().map(|s| s.agent_ms).sum::<u64>() + card.more_ms,
+                card.sessions.iter().map(|s| s.agent_ms).sum::<u64>(),
                 day.agent_ms
             );
             listed += card.sessions.len();
@@ -504,7 +550,7 @@ mod assembled {
                 .unwrap();
                 assert_eq!(card.agent_ms, day(&report, date), "{now} {date}");
                 assert_eq!(
-                    card.sessions.iter().map(|s| s.agent_ms).sum::<u64>() + card.more_ms,
+                    card.sessions.iter().map(|s| s.agent_ms).sum::<u64>(),
                     day(&report, date),
                     "{now} {date}"
                 );
@@ -1822,11 +1868,12 @@ mod assembled {
     }
 
     /// Lane context and lane costs are read inside the one dashboard
-    /// snapshot, by construction: both reads happen only in `lane_report`, and
-    /// `lane_report` is called only from inside `read_snapshot`'s closure. The
-    /// spans are read only by `lane_spans`, which `lane_report` calls; the
-    /// fixture span-detail export calls it too, for spans alone. The only
-    /// other context read is a day card's, inside its own snapshot.
+    /// snapshot, by construction: both reads happen only in `lane_report`
+    /// and the shared `named_context` it calls, and `lane_report` is called
+    /// only from inside `read_snapshot`'s closure. The spans are read only by
+    /// `lane_spans`, which `lane_report` calls; the fixture span-detail export
+    /// calls it too, for spans alone. A day card reads its sessions' context
+    /// through the same `named_context`, inside its own snapshot.
     #[test]
     fn dashboard_lane_reads_stay_inside_one_snapshot_by_construction() {
         let module = include_str!("../src/dashboard.rs");
@@ -1835,29 +1882,33 @@ mod assembled {
             after.split_once("\n}\n").expect("body").0
         };
         let body = body_of("fn lane_report(");
-        // Context is read three times: for the returned sessions, for the
-        // parents they link that have no span, and for the sub-sessions under
-        // them that have none; cost twice, for the returned sessions and for
-        // those sub-sessions. Every one of these reads is lane_report's, but
-        // for one context read in `day_sessions`, inside its own snapshot.
+        // Context is read for the returned sessions and the parents they link
+        // that have no span (one `named_context`, which reads both), and for
+        // the sub-sessions under them that have none; cost twice, for the
+        // returned sessions and for those sub-sessions.
+        let named = body_of("fn named_context(");
+        assert_eq!(named.matches("db.session_context(").count(), 1);
         let day = body_of("pub fn day_sessions(");
-        assert_eq!(day.matches("db.session_context(").count(), 1);
+        assert_eq!(day.matches("db.session_context(").count(), 0);
+        assert_eq!(day.matches("named_context(db, &ids)?").count(), 1);
         let (_, day_snapshot) = day.split_once(".read_snapshot(|db| {").expect("snapshot");
         assert!(
             day_snapshot
                 .split_once("})?")
                 .expect("snapshot end")
                 .0
-                .contains("db.session_context(")
+                .contains("named_context(db, &ids)?")
         );
+        assert_eq!(module.matches("named_context(db, &ids)?").count(), 2);
+        assert_eq!(body.matches("named_context(db, &ids)?").count(), 1);
         for (read, times) in [
-            ("db.session_context(", 3),
+            ("db.session_context(", 1),
             ("db.whole_session_costs(", 2),
             ("db.sub_sessions(", 1),
             ("lane_spans(db, lane_window)", 1),
         ] {
             assert_eq!(
-                module.matches(read).count() - day.matches(read).count(),
+                module.matches(read).count() - named.matches(read).count(),
                 times,
                 "{read} is read elsewhere"
             );

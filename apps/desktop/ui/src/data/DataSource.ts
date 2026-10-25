@@ -355,7 +355,7 @@ export interface DataSource {
   readonly spanDetails?: SpanDetailControls;
   /**
    * The sessions behind one day of a Dashboard report's agent time, each with
-   * its time that day, the most first, capped with the rest counted — read
+   * its time that day and listing context, the most time first — read
    * when that day's card opens. The request names the report's range, the
    * end of the window it was read over (`window.end_ms`), the zone it was
    * read in (`window.timezone`) and one of its days; the native side derives

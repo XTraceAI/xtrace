@@ -812,8 +812,7 @@
         "end_ms": 1788307200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -827,8 +826,7 @@
         "end_ms": 1788393600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -842,8 +840,7 @@
         "end_ms": 1788480000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -857,8 +854,7 @@
         "end_ms": 1788566400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -872,8 +868,7 @@
         "end_ms": 1788652800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -887,8 +882,7 @@
         "end_ms": 1788739200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -908,11 +902,13 @@
             "title": null,
             "automated_review": false,
             "agent_ms": 1380000,
-            "last_activity_at_ms": 1788783780000
+            "last_activity_at_ms": 1788783780000,
+            "parent": null,
+            "known_child": false,
+            "child_check": "checked"
           }
         ],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -926,8 +922,7 @@
         "end_ms": 1787702400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -941,8 +936,7 @@
         "end_ms": 1787788800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -956,8 +950,7 @@
         "end_ms": 1787875200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -971,8 +964,7 @@
         "end_ms": 1787961600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -986,8 +978,7 @@
         "end_ms": 1788048000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1001,8 +992,7 @@
         "end_ms": 1788134400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1016,8 +1006,7 @@
         "end_ms": 1788220800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1031,8 +1020,7 @@
         "end_ms": 1788307200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1046,8 +1034,7 @@
         "end_ms": 1788393600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1061,8 +1048,7 @@
         "end_ms": 1788480000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1076,8 +1062,7 @@
         "end_ms": 1788566400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1091,8 +1076,7 @@
         "end_ms": 1788652800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1106,8 +1090,7 @@
         "end_ms": 1788739200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1127,11 +1110,13 @@
             "title": null,
             "automated_review": false,
             "agent_ms": 1380000,
-            "last_activity_at_ms": 1788783780000
+            "last_activity_at_ms": 1788783780000,
+            "parent": null,
+            "known_child": false,
+            "child_check": "checked"
           }
         ],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1145,8 +1130,7 @@
         "end_ms": 1786320000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1160,8 +1144,7 @@
         "end_ms": 1786406400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1175,8 +1158,7 @@
         "end_ms": 1786492800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1190,8 +1172,7 @@
         "end_ms": 1786579200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1205,8 +1186,7 @@
         "end_ms": 1786665600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1220,8 +1200,7 @@
         "end_ms": 1786752000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1235,8 +1214,7 @@
         "end_ms": 1786838400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1250,8 +1228,7 @@
         "end_ms": 1786924800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1265,8 +1242,7 @@
         "end_ms": 1787011200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1280,8 +1256,7 @@
         "end_ms": 1787097600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1295,8 +1270,7 @@
         "end_ms": 1787184000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1310,8 +1284,7 @@
         "end_ms": 1787270400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1325,8 +1298,7 @@
         "end_ms": 1787356800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1340,8 +1312,7 @@
         "end_ms": 1787443200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1355,8 +1326,7 @@
         "end_ms": 1787529600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1370,8 +1340,7 @@
         "end_ms": 1787616000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1385,8 +1354,7 @@
         "end_ms": 1787702400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1400,8 +1368,7 @@
         "end_ms": 1787788800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1415,8 +1382,7 @@
         "end_ms": 1787875200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1430,8 +1396,7 @@
         "end_ms": 1787961600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1445,8 +1410,7 @@
         "end_ms": 1788048000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1460,8 +1424,7 @@
         "end_ms": 1788134400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1475,8 +1438,7 @@
         "end_ms": 1788220800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1490,8 +1452,7 @@
         "end_ms": 1788307200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1505,8 +1466,7 @@
         "end_ms": 1788393600000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1520,8 +1480,7 @@
         "end_ms": 1788480000000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1535,8 +1494,7 @@
         "end_ms": 1788566400000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1550,8 +1508,7 @@
         "end_ms": 1788652800000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1565,8 +1522,7 @@
         "end_ms": 1788739200000,
         "agent_ms": 0,
         "sessions": [],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     },
     {
@@ -1586,11 +1542,13 @@
             "title": null,
             "automated_review": false,
             "agent_ms": 1380000,
-            "last_activity_at_ms": 1788783780000
+            "last_activity_at_ms": 1788783780000,
+            "parent": null,
+            "known_child": false,
+            "child_check": "checked"
           }
         ],
-        "more_sessions": 0,
-        "more_ms": 0
+        "referenced_parents": []
       }
     }
   ],

@@ -715,22 +715,25 @@ it('human + agent: a sessions box says when its sessions are being read or could
   expect((await within(open).findByTestId('day-sessions-state')).textContent).toBe(
     'Reading sessions…',
   );
-  // Eight named, the most time first, and the rest counted with their time.
+  // Eight named, the most time first, and the three beyond the display cap
+  // counted with their time.
   answer({
     date: day.date,
     start_ms: day.start_ms,
     end_ms: day.end_ms,
     agent_ms: 10 * H,
-    sessions: Array.from({ length: 8 }, (_, n) => ({
+    sessions: Array.from({ length: 11 }, (_, n) => ({
       session_id: `s-${n}`,
       host: n === 0 ? 'codex' : 'claude',
       title: n === 0 ? 'Fix the sidebar' : null,
       automated_review: n === 1,
-      agent_ms: H,
+      agent_ms: n < 8 ? H : (40 * H) / 60,
       last_activity_at_ms: day.start_ms + 10 * H,
+      parent: null,
+      known_child: false,
+      child_check: 'checked',
     })),
-    more_sessions: 3,
-    more_ms: 2 * H,
+    referenced_parents: [],
   });
   const links = await within(open).findAllByTestId('day-session');
   expect(links.map((link) => link.querySelector('span')!.textContent)).toEqual([
@@ -753,6 +756,118 @@ it('human + agent: a sessions box says when its sessions are being read or could
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+it('human + agent: a sessions box lists sub-sessions as the Sessions section does: under their parent, collapsed, an absent parent named, and the rest counted', async () => {
+  const source = new FixtureDataSource(exported());
+  const day = paired().leverage.by_day.at(-1)!;
+  const M = 60_000;
+  const one = (
+    session_id: string,
+    minutes: number,
+    context: {
+      parent?: string;
+      known_child?: boolean;
+      child_check?: 'checking' | 'checked' | 'child';
+    } = {},
+  ) => ({
+    session_id,
+    host: 'codex',
+    title: session_id === 'p' ? 'Parent work' : null,
+    automated_review: false,
+    agent_ms: minutes * M,
+    last_activity_at_ms: day.start_ms + H,
+    parent: context.parent
+      ? {
+          session_id: context.parent,
+          host: 'codex',
+          title: context.parent === 'gone' ? 'Planning session' : null,
+          evidence: 'native_spawn' as const,
+        }
+      : null,
+    known_child: context.known_child ?? Boolean(context.parent),
+    child_check:
+      context.child_check ?? (context.parent ? ('child' as const) : ('checked' as const)),
+  });
+  const sessions = [
+    one('p', 30),
+    one('k1', 25, { parent: 'gone' }),
+    one('c1', 20, { parent: 'p' }),
+    one('u', 15, { known_child: true, child_check: 'child' }),
+    one('x', 10, { child_check: 'checking' }),
+    one('c2', 5, { parent: 'p' }),
+    one('w', 3, { parent: 'u' }),
+    one('k2', 2, { parent: 'gone' }),
+    ...Array.from({ length: 7 }, (_, n) => one(`o-${n + 1}`, 1)),
+  ];
+  vi.spyOn(source, 'daySessions').mockResolvedValue({
+    date: day.date,
+    start_ms: day.start_ms,
+    end_ms: day.end_ms,
+    agent_ms: sessions.reduce((sum, s) => sum + s.agent_ms, 0),
+    sessions,
+    referenced_parents: [
+      { session_id: 'gone', host: 'codex', known_child: false, child_check: 'checked' },
+    ],
+  });
+  await mountPaired(paired(), source);
+  hoverDate(screen.getAllByTestId('human-day').at(-1)!);
+  const box = await sessionsBox();
+  const links = await within(box).findAllByRole('link');
+  // Eight top-level rows: the parent's group, the absent parent's group and
+  // six ordinary sessions; collapsed groups show their time added up.
+  expect(links.map((link) => link.textContent)).toEqual([
+    'Parent workΣ 0 h 55 m',
+    'Sub-sessions of Planning sessionΣ 0 h 27 m',
+    ...Array.from({ length: 6 }, (_, n) => `Session o-${n + 1}0 h 1 m`),
+  ]);
+  expect(links[0]!.getAttribute('aria-label')).toBe(
+    'Open session Parent work, p, 30 minutes this day; 55 minutes this day with its 2 sub-sessions',
+  );
+  expect(links[1]!.getAttribute('href')).toBe('/sessions/gone?q=gone&host=codex&range=7d');
+  expect(links[1]!.getAttribute('aria-label')).toBe(
+    'Open parent session Planning session, gone, which had no agent time this day; its 2 sub-sessions: 27 minutes this day',
+  );
+  // The ninth row, and what is hidden, counted with their time.
+  expect(within(box).getByTestId('day-sessions-more').textContent).toBe(
+    'and 1 more session0 h 1 m',
+  );
+  const words = (id: string) => {
+    const line = within(box).getByTestId(id);
+    return [line.querySelector('[aria-hidden]')!.textContent, line.querySelector('b')!.textContent];
+  };
+  expect(words('day-sessions-checking')).toEqual(['1 hidden: check not finished', '0 h 10 m']);
+  expect(words('day-sessions-creator')).toEqual(['2 hidden: creator not shown', '0 h 18 m']);
+  // Opening the parent's group lists its sub-sessions under it, each with
+  // its own time; the parent's row then shows its own.
+  const toggle = within(box).getByRole('button', { name: '2 sub-sessions of Parent work' });
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  const open = within(box).getAllByRole('link');
+  expect(open.slice(0, 4).map((link) => link.textContent)).toEqual([
+    'Parent work0 h 30 m',
+    'Session c10 h 20 m',
+    'Session c20 h 5 m',
+    'Sub-sessions of Planning sessionΣ 0 h 27 m',
+  ]);
+  expect(open[1]!.getAttribute('aria-label')).toBe(
+    'Open session c1, sub-session of Parent work, 20 minutes this day',
+  );
+  expect(open[1]!.closest('li')!.style.getPropertyValue('--depth')).toBe('1');
+  // The box stays open, and the cap still counts the same rows.
+  expect(screen.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeTruthy();
+  expect(within(box).getByTestId('day-sessions-more').textContent).toBe(
+    'and 1 more session0 h 1 m',
+  );
+  // And the absent parent's group, by its own disclosure.
+  fireEvent.click(within(box).getByRole('button', { name: '2 sub-sessions of Planning session' }));
+  expect(
+    within(box)
+      .getAllByRole('link')
+      .slice(3, 6)
+      .map((link) => link.textContent),
+  ).toEqual(['Sub-sessions of Planning session', 'Session k10 h 25 m', 'Session k20 h 2 m']);
+});
+
 it('human + agent: a sessions box drops saved titles read before stored content was deleted', async () => {
   const source = new FixtureDataSource(exported());
   const day = paired().leverage.by_day.at(-1)!;
@@ -769,10 +884,12 @@ it('human + agent: a sessions box drops saved titles read before stored content 
         automated_review: false,
         agent_ms: H,
         last_activity_at_ms: day.start_ms + H,
+        parent: null,
+        known_child: false,
+        child_check: 'checked' as const,
       },
     ],
-    more_sessions: 0,
-    more_ms: 0,
+    referenced_parents: [],
   });
   let after: (value: ReturnType<typeof answer>) => void = () => {};
   const read = vi
@@ -809,10 +926,12 @@ it('human + agent: a session’s host title is read again when the session has l
         automated_review: false,
         agent_ms: H,
         last_activity_at_ms: lastActivity,
+        parent: null,
+        known_child: false,
+        child_check: 'checked' as const,
       },
     ],
-    more_sessions: 0,
-    more_ms: 0,
+    referenced_parents: [],
   });
   vi.spyOn(source, 'daySessions')
     .mockResolvedValueOnce(answer(day.start_ms + H))

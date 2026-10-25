@@ -235,7 +235,7 @@ fn fixture_mode_builds_isolated_database_and_generated_export_parity() {
                     .unwrap();
                 assert_eq!(sessions.agent_ms, day.agent_ms, "{}", day.date);
                 assert_eq!(
-                    sessions.sessions.iter().map(|s| s.agent_ms).sum::<u64>() + sessions.more_ms,
+                    sessions.sessions.iter().map(|s| s.agent_ms).sum::<u64>(),
                     day.agent_ms
                 );
                 xtrace_desktop::dto::FixtureDaySessions {

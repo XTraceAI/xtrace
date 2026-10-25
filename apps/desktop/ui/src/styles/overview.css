@@ -578,6 +578,11 @@
 .xt-day-sessions-positioner .xt-effort-tip {
   pointer-events: auto;
 }
+.xt-day-sessions-positioner .xt-effort-tip {
+  max-height: var(--available-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .xt-day-sessions-positioner .xt-effort-tip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -623,4 +628,26 @@
 .xt-effort-tip-session:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
+}
+/* A row of the list: a group's disclosure, as the lanes draw it, then the
+   session's link. A sub-session's row is indented under its parent's. */
+.xt-effort-tip-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-left: calc(var(--depth, 0) * 14px);
+}
+.xt-effort-tip-item > .xt-effort-tip-session {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.xt-effort-tip-item > .xt-lane-toggle {
+  height: 16px;
+  margin-right: 4px;
+}
+.xt-effort-tip-item > .xt-lane-toggle + .xt-effort-tip-session {
+  margin-left: 0;
+}
+.xt-effort-tip-group-words {
+  color: var(--meta);
 }

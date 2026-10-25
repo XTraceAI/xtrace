@@ -279,6 +279,42 @@ fn lane_spans(
     Ok((spans, total))
 }
 
+/// The stored context of the named sessions and, beside it, of each direct
+/// parent their context links that they do not name, read in this snapshot
+/// in batches each context read accepts. `ids` is sorted without repeats.
+///
+/// A parent's entry is only what a list needs to tell whether that parent is
+/// itself shown — its known-child bit, display check and its own resolved
+/// parent — and its own parent is not followed further. At most one parent
+/// per named session, so the second read is bounded by the first. The
+/// Dashboard's Sessions section and a day's sessions box both read their
+/// sessions' context here, so both lists judge a parent from the same facts.
+struct NamedContext {
+    named: Vec<xt_store::session_list::SessionContext>,
+    referenced: Vec<xt_store::session_list::SessionContext>,
+}
+
+fn named_context(db: &MetricsDb, ids: &[&str]) -> xt_metrics::Result<NamedContext> {
+    let read = |ids: &[&str]| -> xt_metrics::Result<Vec<_>> {
+        let mut rows = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(xt_store::session_list::MAX_CONTEXT) {
+            rows.extend(db.session_context(batch)?);
+        }
+        Ok(rows)
+    };
+    let named = read(ids)?;
+    let mut parents: Vec<&str> = named
+        .iter()
+        .filter_map(|row| row.parent.as_ref())
+        .map(|parent| parent.session_id.as_str())
+        .filter(|id| ids.binary_search(id).is_err())
+        .collect();
+    parents.sort_unstable();
+    parents.dedup();
+    let referenced = read(&parents)?;
+    Ok(NamedContext { named, referenced })
+}
+
 /// Read the lane spans, cap them for display, then read the context and the
 /// cost of exactly the sessions the capped list still names, and of every
 /// verified sub-session under them that it does not name.
@@ -301,24 +337,12 @@ fn lane_report(
     let mut ids: Vec<&str> = spans.iter().map(|span| span.session_id.as_str()).collect();
     ids.sort_unstable();
     ids.dedup();
-    let mut context = std::collections::BTreeMap::new();
-    for row in db.session_context(&ids)? {
-        context.insert(row.id.clone(), row);
-    }
-    // The direct parents the returned sessions' own context links that the
-    // spans do not name, read once more in this snapshot so a display can
-    // tell whether such a parent is itself a known child with no verified
-    // parent. At most one per returned session, so within the same bound;
-    // these rows' own parents are not followed further.
-    let mut referenced: Vec<&str> = context
-        .values()
-        .filter_map(|row| row.parent.as_ref())
-        .map(|parent| parent.session_id.as_str())
-        .filter(|id| ids.binary_search(id).is_err())
-        .collect();
-    referenced.sort_unstable();
-    referenced.dedup();
-    let referenced = db.session_context(&referenced)?;
+    // The returned sessions' context and that of the direct parents it links
+    // that the spans do not name, so a display can tell whether such a
+    // parent is itself a known child with no verified parent.
+    let NamedContext { named, referenced } = named_context(db, &ids)?;
+    let mut context: std::collections::BTreeMap<_, _> =
+        named.into_iter().map(|row| (row.id.clone(), row)).collect();
     let costs = db.whole_session_costs(&ids, catalog)?;
     // Every verified sub-session under the listed sessions that has no span
     // here, whenever it ran, bounded; those beyond the bound are counted on
@@ -1078,15 +1102,6 @@ pub fn tokens_by_host(
     })
 }
 
-/// The most sessions a day's card names; the rest are counted with their time.
-pub const DAY_SESSION_LIMIT: usize = 8;
-
-// The listed sessions' context is read in one bounded statement.
-const _: () = assert!(
-    DAY_SESSION_LIMIT <= xt_metrics::MAX_SESSIONS,
-    "DAY_SESSION_LIMIT must not exceed the sessions one context read accepts"
-);
-
 /// The whole local days a report's leverage, its human time and its
 /// day-by-day agent time cover: every local day the selected window touches,
 /// made whole (the span `human_hours` reports as its current period).
@@ -1122,9 +1137,12 @@ fn agent_events(whole: Window, selected: Window) -> xt_metrics::Result<Window> {
 /// is listed. `zone` is the report's own zone ([`report_zone`]), never the
 /// one the system has when the card opens.
 ///
-/// The [`DAY_SESSION_LIMIT`] sessions with the most time are named, with the
-/// saved title and reviewer mark the lanes name them by; the rest are counted
-/// with their time, so the card can say "and N more" and still add up.
+/// All sessions with time that day are sent, the most time first, with
+/// the saved title and reviewer mark the lanes name them by and the context
+/// the lanes' list rules read — each one's verified parent, known-child bit
+/// and display check, and a context-only entry for each direct parent that is
+/// not one of them — read by the same [`named_context`] the lanes use.
+/// Display limits apply only after the shared list rules group the sessions.
 pub fn day_sessions(
     db: &MetricsDb,
     days: u32,
@@ -1153,31 +1171,24 @@ pub fn day_sessions(
             let mut ids: Vec<&str> = found
                 .sessions
                 .iter()
-                .take(DAY_SESSION_LIMIT)
                 .map(|session| session.session_id.as_str())
                 .collect();
             ids.sort_unstable();
             ids.dedup();
-            let context = db.session_context(&ids)?;
+            let context = named_context(db, &ids)?;
             Ok(Some((found, context)))
         })?
         .ok_or(StateError::InvalidDayRequest)?;
-    let context: std::collections::BTreeMap<_, _> = context
+    let named: std::collections::BTreeMap<_, _> = context
+        .named
         .into_iter()
         .map(|row| ((row.id.clone(), row.host.clone()), row))
         .collect();
-    let more = found.sessions.iter().skip(DAY_SESSION_LIMIT);
-    let more_sessions = more.clone().count() as u64;
-    let more_ms = more
-        .map(|session| session.active_ms)
-        .try_fold(0_u64, u64::checked_add)
-        .ok_or(StateError::CountRange)?;
     let sessions = found
         .sessions
         .into_iter()
-        .take(DAY_SESSION_LIMIT)
         .map(|session| {
-            let row = context.get(&(session.session_id.clone(), session.host.clone()));
+            let row = named.get(&(session.session_id.clone(), session.host.clone()));
             DashboardDaySession {
                 title: row.and_then(|row| row.title.clone()),
                 automated_review: row.is_some_and(|row| row.automated_review),
@@ -1185,6 +1196,9 @@ pub fn day_sessions(
                 host: session.host,
                 agent_ms: session.active_ms,
                 last_activity_at_ms: row.and_then(|row| row.last_activity_at_ms),
+                parent: row.and_then(|row| row.parent.clone()).map(Into::into),
+                known_child: row.map(|row| row.known_child),
+                child_check: row.map(|row| row.check.into()),
             }
         })
         .collect();
@@ -1194,8 +1208,17 @@ pub fn day_sessions(
         end_ms: found.day.end_ms,
         agent_ms: found.day.active_ms,
         sessions,
-        more_sessions,
-        more_ms,
+        referenced_parents: context
+            .referenced
+            .into_iter()
+            .map(|row| SessionParentContext {
+                session_id: row.id,
+                host: row.host,
+                known_child: row.known_child,
+                parent: row.parent.map(Into::into),
+                child_check: Some(row.check.into()),
+            })
+            .collect(),
     };
     checked_value(&answer)?;
     Ok(answer)
