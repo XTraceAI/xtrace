@@ -11,7 +11,7 @@ import { MetricIcon, type MetricIconName } from '../../kit/metric-icons';
 import type { RuleId } from '../../kit/rules';
 import type { TimeRange } from '../../kit/TopBar';
 import { continuous, handsOffTime, leverageText } from '../metric-format';
-import { agentTime } from '../agent-duration';
+import { agentTime, decimalHours } from '../agent-duration';
 import { DashCard } from './DashCard';
 import { DayLine } from './DayLine';
 import { DefinitionInfo } from './DefinitionInfo';
@@ -91,10 +91,9 @@ export function OverviewCard({
           description={leverageSpanText(human.by_day)}
           sub={
             // The two sides the value divides, over the same whole local
-            // days, so they never read as the rolling range's agent hours,
-            // each written as all agent time is.
+            // days (named in its accessible description), in decimal hours.
             human.active_ms !== null
-              ? `${agentTime(report.leverage.agent_ms)} agent ÷ ${agentTime(human.active_ms)} human · whole days`
+              ? `${decimalHours(report.leverage.agent_ms)} agent ÷ ${decimalHours(human.active_ms)} human`
               : undefined
           }
         >

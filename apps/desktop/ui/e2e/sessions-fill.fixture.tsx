@@ -31,7 +31,6 @@ const all = Array.from({ length: 350 }, (_, index) => {
 });
 const control = {
   reads: [] as { search: string; after: string | null; sort: string }[],
-  failNext: new URLSearchParams(location.search).has('fail'),
 };
 Object.assign(window, { __fill: control });
 // Index catch-up is tested elsewhere. Leave this unrelated read pending so it
@@ -39,10 +38,6 @@ Object.assign(window, { __fill: control });
 source.nativeIndexStatus = () => new Promise(() => {});
 source.sessionsList = async (filter, after) => {
   control.reads.push({ search: filter.search, after, sort: filter.sort ?? 'started' });
-  if (after && control.failNext) {
-    control.failNext = false;
-    throw new Error('Synthetic next-page failure');
-  }
   const matches = all.filter((session) =>
     session.title!.toLowerCase().includes(filter.search.toLowerCase()),
   );

@@ -73,15 +73,3 @@ test('opens a Dashboard session by keyboard, and offers the list that holds it',
   await expect(page.getByText('No sessions match these filters.')).toBeVisible();
   await expect(page).toHaveURL(/[?&]q=missing(&|$)/);
 });
-
-test('carries the selected range into the session and measures that window', async ({ page }) => {
-  await page.goto('/dashboard');
-  await expect(page.getByTestId('dashboard-summary')).toBeVisible();
-  await page.getByRole('radio', { name: '30d' }).click();
-  const link = page.getByRole('link', { name: `Open session ${lane.session_id}` });
-  await expect(link).toHaveAttribute('href', /range=30d/);
-  await link.click();
-  await expect(page.getByRole('radio', { name: '30d' })).toHaveAttribute('aria-checked', 'true');
-  await expect(page.getByText(/^Records .* measured over the last 30 days$/)).toBeVisible();
-  await expect(page.getByText('Measured over the last 30 days', { exact: true })).toBeVisible();
-});

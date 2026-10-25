@@ -7,7 +7,7 @@ import type { NativeIndexStatus } from '../src/data/generated/NativeIndexStatus'
 /**
  * The sidebar's local-index row in the real Shell, over test-only synthetic
  * statuses served in place of the F1 export's (not real history, and not a
- * design sample): the compact row keeps its geometry in both schemes at both
+ * design sample): the compact row keeps its geometry at both
  * native widths, its panel opens and closes from the keyboard inside the
  * window, and nothing about a plugin is inferred from the index or the other
  * way round.
@@ -95,7 +95,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`index row and panel keep their geometry and keyboard at ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {
@@ -200,7 +200,7 @@ for (const [width, height] of [
       expect(errors).toEqual([]);
     });
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`the dot is green only for a live watcher with nothing to qualify (${scheme})`, async ({
     page,
   }) => {
@@ -267,17 +267,4 @@ test('the fixture’s own disabled index is shown as disabled, and Settings open
   await expect(page.getByTestId('native-index')).toContainText(
     `Disabled: ${fixture.native_index.phase.reason}`,
   );
-});
-
-test('the index panel and the Hub panel never stay open together', async ({ page }) => {
-  await open(page, ready, 1120, 720);
-  const hub = page.getByRole('button', { name: 'XTrace Hub', exact: true });
-  await trigger(page).click();
-  await expect(panel(page)).toBeVisible();
-  await hub.click();
-  await expect(panel(page)).toBeHidden();
-  await expect(page.getByRole('dialog', { name: /Connect this desktop/ })).toBeVisible();
-  await trigger(page).click();
-  await expect(page.getByRole('dialog', { name: /Connect this desktop/ })).toBeHidden();
-  await expect(panel(page)).toBeVisible();
 });

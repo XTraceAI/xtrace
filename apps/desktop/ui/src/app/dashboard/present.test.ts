@@ -2,7 +2,16 @@ import { expect, it } from 'vitest';
 import fixture from '../../../fixtures/F1.json';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import { delta, percent } from '../../kit/format';
-import { fromPoints, ruleId, tileDelta, usd, windowLabel, zoneLabel } from './present';
+import {
+  fromPoints,
+  outputShareRows,
+  ruleId,
+  shareText,
+  tileDelta,
+  usd,
+  windowLabel,
+  zoneLabel,
+} from './present';
 
 const report = (fixture as FixtureExport).dashboards[0];
 
@@ -36,4 +45,32 @@ it('falls back to a known rule definition and system zone labels', () => {
   expect(zoneLabel(local)).toBe('system time zone');
   expect(windowLabel(local)).toMatch(/2026/);
   expect(windowLabel({ ...report.window, timezone: 'Not/AZone' })).toMatch(/2026/);
+});
+
+it('names each output share row and gives its share of the rows, as every share is written', () => {
+  expect(
+    outputShareRows([
+      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 995 },
+      { of: { kind: 'unknown_model' }, output_tokens: 4 },
+      { of: { kind: 'model', model: 'synthetic-b' }, output_tokens: 1 },
+    ]),
+  ).toEqual([
+    { label: 'synthetic-a', value: '100%' },
+    { label: 'no model recorded', value: '<1%' },
+    { label: 'synthetic-b', value: '<1%' },
+  ]);
+  // A folded row is named by its count and shares the same sum.
+  expect(
+    outputShareRows([
+      { of: { kind: 'model', model: 'synthetic-a' }, output_tokens: 60 },
+      { of: { kind: 'other_models', models: 2 }, output_tokens: 40 },
+    ]),
+  ).toEqual([
+    { label: 'synthetic-a', value: '60%' },
+    { label: '2 other models', value: '40%' },
+  ]);
+  expect(outputShareRows([])).toEqual([]);
+  expect(shareText(1, 200)).toBe('1%');
+  expect(shareText(0, 10)).toBe('0%');
+  expect(shareText(1, 0)).toBe('—');
 });

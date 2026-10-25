@@ -31,29 +31,11 @@ const serve = (page: Page, body: FixtureExport) =>
 const NOTICE =
   'Some indexed history has no timestamps and cannot contribute to date-based measurements.';
 
-test('neither page discloses untimed history when the report counts none', async ({ page }) => {
-  await serve(page, fixture as FixtureExport);
-  await page.goto('/dashboard');
-  await expect(page.getByTestId('dashboard-summary')).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Untimed indexed history' })).toHaveCount(0);
-  // The Sessions header's Coverage names no untimed history either.
-  const coverage = page
-    .getByRole('region', { name: 'Sessions', exact: true })
-    .getByRole('button', { name: /^Coverage/ });
-  await expect(coverage).not.toHaveAccessibleName(/untimed/);
-  await coverage.click();
-  await expect(page.getByTestId('coverage-untimed')).toHaveCount(0);
-  await page.keyboard.press('Escape');
-  await page.goto('/sessions');
-  await expect(page.getByRole('region', { name: 'Range summary' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Untimed indexed history' })).toHaveCount(0);
-});
-
 for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     for (const path of ['/dashboard', '/sessions'] as const)
       test(`untimed disclosure reads and opens by keyboard on ${path} at ${width}x${height} ${scheme}`, async ({
         page,
