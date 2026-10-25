@@ -983,6 +983,85 @@ pub enum DashboardAutomaticText {
     },
 }
 
+/// The sessions behind one whole local day's agent time, as the Effort card's
+/// "human + agent" day card lists them: the same spans and the same day that
+/// give that day's `MetricLeverageDay::agent_ms`, split by session.
+///
+/// Every session is sent with the context a list needs to decide whether it
+/// shows it and under which session, read the way the Dashboard's Sessions
+/// section reads its own: its verified parent, known-child bit and display
+/// check, and beside them a context-only entry for each direct parent that is
+/// not one of the day's sessions. Which sessions the box shows, how it groups
+/// them and how many rows it lists are the shared list rules', applied by the
+/// view; nothing here is capped for display.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub struct DashboardDaySessions {
+    pub date: String,
+    #[ts(type = "number")]
+    pub start_ms: i64,
+    #[ts(type = "number")]
+    pub end_ms: i64,
+    /// The day's agent time: every sent session's `agent_ms` added up.
+    #[ts(type = "number")]
+    pub agent_ms: u64,
+    /// The sessions with agent time that day, the most first, then by
+    /// identifier and host. Display limits apply after grouping.
+    pub sessions: Vec<DashboardDaySession>,
+    /// The direct parents the sent sessions' context links that are not
+    /// among them, context only: nothing is measured for them, and their own
+    /// parents are not followed.
+    pub referenced_parents: Vec<crate::dto::SessionParentContext>,
+}
+
+/// One session's agent time on one day, with what names it as the lanes do
+/// and what the shared list rules read of it.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub struct DashboardDaySession {
+    pub session_id: String,
+    pub host: String,
+    /// The session's saved title, as the lanes and Sessions show it; `null`
+    /// when none is saved or no context row was found.
+    pub title: Option<String>,
+    /// Verified native Guardian header; a display hint, never a saved title.
+    pub automated_review: bool,
+    /// The part of the session's spans inside the day.
+    #[ts(type = "number")]
+    pub agent_ms: u64,
+    /// The session's latest activity, whenever it was: the same newest timed
+    /// own work the Sessions page shows (`last_activity_at_ms`), read with its
+    /// context. Not bounded by the day or the report, so it moves with every
+    /// new event of the session, on any day; the view reads the session's host
+    /// title again when it does. `null` when no timed work record or no
+    /// context was found for the session.
+    #[ts(type = "number | null")]
+    pub last_activity_at_ms: Option<i64>,
+    /// The session that verifiably created this one, as a lane's context
+    /// carries it ([`DashboardLaneSession::parent`]); `null` otherwise.
+    #[ts(optional = nullable)]
+    pub parent: Option<SessionParentLink>,
+    /// The stored known-child bit, as a lane's context carries it; `null`
+    /// when no context row was found.
+    #[ts(optional = nullable)]
+    pub known_child: Option<bool>,
+    /// What a list may show of the session; `null` when no context row was
+    /// found, which a list treats as still checking.
+    #[ts(optional = nullable)]
+    pub child_check: Option<crate::dto::SessionChildCheck>,
+}
+
+/// One day's sessions as a fixture carries them, for every day of every
+/// range's report, pinned to that report's window end.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub struct FixtureDaySessions {
+    pub window_days: u32,
+    #[ts(type = "number")]
+    pub window_end_ms: i64,
+    /// The report's `window.timezone`, as the request names it.
+    pub timezone: String,
+    pub date: String,
+    pub sessions: DashboardDaySessions,
+}
+
 /// One span's detail as a fixture carries it, for every span the fixture's
 /// Dashboard lanes return.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]

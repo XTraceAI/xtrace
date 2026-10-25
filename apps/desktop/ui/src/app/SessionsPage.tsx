@@ -36,9 +36,8 @@ import {
   laneRows,
   listedLanes,
   notListed,
-  type ShownContext,
   sessionKey,
-  type LaneParent,
+  unresolvedIn,
   type LaneRow,
   type ListedSession,
 } from './dashboard/lanes';
@@ -144,26 +143,6 @@ const toggled = (open: ReadonlySet<string>, key: string) => {
   if (!next.delete(key)) next.add(key);
   return next;
 };
-
-/** What a context read says about one session: its host, bit, check and parent. */
-interface ChildContext extends ShownContext {
-  parent?: SessionParentLink | null;
-}
-/**
- * A session left out, by exact host and identity, as the Dashboard decides it
- * ([`notListed`]): still being checked, or a known sub-session whose creator is
- * not verified. Nothing known about a session leaves it out too.
- */
-const unresolvedIn =
-  (find: (id: string, host: string) => ChildContext | undefined) =>
-  ({ session_id, host }: LaneParent) => {
-    const found = find(session_id, host);
-    return notListed(
-      found,
-      host,
-      verifiedParent({ id: session_id, parent: found?.parent }) !== null,
-    );
-  };
 
 /** Native start, as every instant in the app is written: day and time; the year in full. */
 const startedText = (ms: number) => clock(ms, { date: 'day' });

@@ -1,5 +1,7 @@
+import { Popover } from '@base-ui/react/popover';
 import { Tooltip } from '@base-ui/react/tooltip';
 import {
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -8,11 +10,14 @@ import {
   type KeyboardEvent,
 } from 'react';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
+import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import { UNMEASURED } from '../../kit/format';
 import { Icon } from '../../kit/icons';
+import type { TimeRange } from '../../kit/TopBar';
 import { useSurfaceTheme } from '../../theme/ThemeProvider';
 import { agentTime } from '../agent-duration';
 import { leverageText } from '../metric-format';
+import { DaySessions } from './DaySessions';
 import {
   QUARTERS,
   LINE_HEIGHT,
@@ -23,16 +28,11 @@ import {
   type AgentLine,
   type TimelineRow,
 } from './overview';
+import { timelineRowHeight } from './timeline-rows';
 import '../../styles/overview.css';
 
-/** The 7-day range's eight days fill the plot; longer ranges keep that row size and scroll. */
-export const VISIBLE_ROWS = 8;
-/** Below this a row's bar and its gap stop reading as separate rows. */
-const MIN_ROW_PX = 28;
 /** The totals columns whose widths follow their widest text. */
 const TOTAL_COLUMNS = ['you', 'agents', 'leverage'] as const;
-/** With the agents line: a taller track, so the line's height reads. */
-const MIN_PAIRED_ROW_PX = 34;
 const HOURS = ['00', '06', '12', '18', '24'];
 
 /**
@@ -50,13 +50,19 @@ const HOURS = ['00', '06', '12', '18', '24'];
  *
  * The timeline is one tab stop: one day row at a time (today at first). Up and
  * Down move to the day before or after, Home and End to the first and last;
- * a focused day opens its card, as hovering does.
+ * a focused day opens its card, as hovering does. In "human + agent" a day's
+ * date also opens a box of its sessions, each a link: hovering the date opens
+ * it, and Enter on the focused day moves focus into it; Escape returns to the
+ * day.
  */
 export function HumanTimeline({
   report,
+  range,
   withAgents = false,
 }: {
   report: DashboardMetrics;
+  /** The Dashboard's range, which a day card's session links carry. */
+  range: TimeRange;
   /**
    * The "human + agent" view: each day's agent time as a thin line across
    * its track, as high as the agents running on average in each wall-clock
@@ -72,7 +78,6 @@ export function HumanTimeline({
       withAgents ? agentLines(report.leverage.by_day, report.leverage.agents_scale_top) : null,
     [withAgents, report.leverage],
   );
-  const minRow = withAgents ? MIN_PAIRED_ROW_PX : MIN_ROW_PX;
   const root = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   // No total is capped: a busy day's agent hours or a tiny day's leverage
@@ -112,7 +117,22 @@ export function HumanTimeline({
   const [chosen, setChosen] = useState<string | null>(null);
   const found = rows.findIndex((row) => row.date === chosen);
   const current = found >= 0 ? found : rows.length - 1;
+  /**
+   * The one day whose sessions box is open, in "human + agent". Opening a
+   * day's box closes any other at once, without waiting for the pointer to
+   * move: a hover popup only notices the pointer has left when it moves.
+   */
+  const [sessionsDay, setSessionsDay] = useState<string | null>(null);
+  // A box whose day is no longer drawn (a refresh moved the range on, or the
+  // view left "human + agent") is closed, never reopened when that day comes
+  // back with no pointer or focus on it.
+  if (sessionsDay !== null && (!withAgents || !rows.some((row) => row.date === sessionsDay)))
+    setSessionsDay(null);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Keys pressed inside a day's sessions box (it is portalled, but its
+    // events still pass through here) are the box's own.
+    if (!(event.target instanceof HTMLElement) || !event.target.classList.contains('xt-human-row'))
+      return;
     const next = {
       ArrowUp: current - 1,
       ArrowDown: current + 1,
@@ -129,14 +149,13 @@ export function HumanTimeline({
   useLayoutEffect(() => {
     const element = body.current;
     if (!element) return;
-    const fit = () =>
-      setRowHeight(Math.max(minRow, Math.floor(element.clientHeight / VISIBLE_ROWS)));
+    const fit = () => setRowHeight(timelineRowHeight(element.clientHeight, withAgents));
     fit();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(fit);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [minRow]);
+  }, [withAgents]);
   // Open on today, the last row, for each new range; follow a change of row
   // height. Nothing here runs for a new report of the same range.
   useLayoutEffect(() => {
@@ -232,6 +251,12 @@ export function HumanTimeline({
               lower={index >= rows.length / 2}
               current={index === current}
               onFocus={() => setChosen(row.date)}
+              sessionsOpen={sessionsDay === row.date}
+              onSessions={(open) =>
+                setSessionsDay((day) => (open ? row.date : day === row.date ? null : day))
+              }
+              window={report.window}
+              range={range}
             />
           ))}
         </div>
@@ -288,6 +313,14 @@ const isAtBottom = (element: HTMLElement) =>
  * One day: a list item whose name lists every stretch, and whose card opens
  * on hover or focus. Only the current day is in the tab order; arrow keys
  * move between days. Each bar also names its own times.
+ *
+ * In "human + agent" the date also opens the day's sessions box, a list of
+ * links, on hover; the pointer can move from the date into it. Enter or
+ * Space on the focused day opens it with focus on its first session, and
+ * Escape closes it and returns focus to the day. A click on the date does
+ * nothing, so it never leaves a box pinned open. Only one of the day's two
+ * boxes shows at a time: the card waits until the sessions box has gone.
+ * Whether the box is open is the timeline's, which keeps one open at most.
  */
 function Row({
   row,
@@ -295,6 +328,10 @@ function Row({
   lower,
   current,
   onFocus,
+  sessionsOpen,
+  onSessions,
+  window,
+  range,
 }: {
   row: TimelineRow;
   /** The day's agents line in the "human + agent" view; `null` there when the report has none. */
@@ -302,11 +339,55 @@ function Row({
   lower: boolean;
   current: boolean;
   onFocus: () => void;
+  /** The day's sessions box is open: the timeline's one open box. */
+  sessionsOpen: boolean;
+  /** Ask to open or close the day's sessions box. */
+  onSessions: (open: boolean) => void;
+  /** The report's window, which names the day's sessions read. */
+  window: DashboardWindow;
+  /** The Dashboard's range, which the day's session links carry. */
+  range: TimeRange;
 }) {
   const theme = useSurfaceTheme();
   const paired = line !== undefined;
   /** The quarter under the pointer, and where along the track it is, in pixels. */
   const [pointer, setPointer] = useState<{ quarter: number; x: number } | null>(null);
+  /** The pointer is on the track: the hairline shows. */
+  const [onTrack, setOnTrack] = useState(false);
+  /** Hover or focus asks for the day's card. */
+  const [card, setCard] = useState(false);
+  /** The sessions box is open or still closing; the card waits until it has gone. */
+  const [sessionsShown, setSessionsShown] = useState(false);
+  const day = useRef<HTMLElement | null>(null);
+  const dayRef = useCallback((element: HTMLElement | null) => {
+    day.current = element;
+  }, []);
+  const popup = useRef<HTMLDivElement | null>(null);
+  /** Enter asked for focus on the first session, which may not be read yet. */
+  const entering = useRef(false);
+  const enter = (box: HTMLElement) => {
+    const link = box.querySelector<HTMLElement>('a[href]');
+    if (link) {
+      entering.current = false;
+      link.focus();
+    } else box.focus();
+  };
+  const popupRef = useCallback((element: HTMLDivElement | null) => {
+    popup.current = element;
+    if (element && entering.current) enter(element);
+  }, []);
+  // The sessions arrive after the box opened from the keyboard: focus moves
+  // from the box onto the first of them.
+  const listRef = useCallback((list: HTMLElement | null) => {
+    if (list && entering.current && document.activeElement === popup.current) enter(list);
+  }, []);
+  // Another day's box opening closes this one: focus inside it goes back to
+  // the day rather than being lost with the box.
+  useLayoutEffect(() => {
+    if (sessionsOpen) return;
+    entering.current = false;
+    if (popup.current?.contains(document.activeElement)) day.current?.focus();
+  }, [sessionsOpen]);
   const track = (
     <span
       className="xt-human-track"
@@ -318,10 +399,29 @@ function Row({
               if (box.width <= 0) return;
               const x = Math.max(0, Math.min(box.width - 1, event.clientX - box.left));
               setPointer({ quarter: Math.floor((x / box.width) * QUARTERS), x });
+              setOnTrack(true);
             }
           : undefined
       }
-      onPointerLeave={paired ? () => setPointer(null) : undefined}
+      onPointerLeave={
+        paired
+          ? (event) => {
+              setOnTrack(false);
+              // Onto the day's totals the card stays open and drops the
+              // quarter now. Off the day, or onto its date, the card closes
+              // and keeps it until it has gone: a card whose content changed
+              // as it closed would resize under the positioner's own size
+              // watcher (a ResizeObserver loop in WebKit).
+              const to = event.relatedTarget;
+              if (
+                to instanceof Element &&
+                event.currentTarget.parentElement?.contains(to) &&
+                !to.closest('.xt-human-day')
+              )
+                setPointer(null);
+            }
+          : undefined
+      }
     >
       {row.bars.map((bar, index) => (
         <span
@@ -367,7 +467,7 @@ function Row({
           <path d={line.path} vectorEffect="non-scaling-stroke" />
         </svg>
       )}
-      {pointer && (
+      {pointer && onTrack && (
         <span
           className="xt-human-hair"
           data-testid="agent-hairline"
@@ -378,11 +478,20 @@ function Row({
     </span>
   );
   const name = paired
-    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}`
+    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}; Enter opens the day’s sessions`
     : row.name;
-  return (
-    <Tooltip.Root disableHoverablePopup>
+  const sessionsName = `Sessions on ${row.label}`;
+  const dayCard = (
+    <Tooltip.Root
+      disableHoverablePopup
+      open={card && !sessionsShown}
+      onOpenChange={(open) => setCard(open)}
+      onOpenChangeComplete={(open) => {
+        if (!open) setPointer(null);
+      }}
+    >
       <Tooltip.Trigger
+        ref={dayRef}
         delay={0}
         closeOnClick={false}
         render={
@@ -390,6 +499,23 @@ function Row({
             role="listitem"
             tabIndex={current ? 0 : -1}
             onFocus={onFocus}
+            onKeyDown={
+              paired
+                ? (event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    entering.current = true;
+                    // An open box takes focus now; a closed (or closing) one
+                    // opens and takes it once shown.
+                    if (sessionsOpen && popup.current) enter(popup.current);
+                    else {
+                      setSessionsShown(true);
+                      onSessions(true);
+                    }
+                  }
+                : undefined
+            }
             aria-label={name}
             className="xt-human-row"
             data-testid="human-day"
@@ -397,9 +523,26 @@ function Row({
           />
         }
       >
-        <span className="xt-human-day" data-weekend={row.weekend || undefined}>
-          {row.label}
-        </span>
+        {paired ? (
+          <Popover.Trigger
+            nativeButton={false}
+            openOnHover
+            delay={0}
+            // Not a tab stop: the day is, and Enter on it opens this box.
+            tabIndex={-1}
+            aria-label={sessionsName}
+            // Focus that lands on the date (a click, or Shift+Tab out of the
+            // box) belongs to the day.
+            onFocus={() => day.current?.focus()}
+            render={<span className="xt-human-day" data-weekend={row.weekend || undefined} />}
+          >
+            {row.label}
+          </Popover.Trigger>
+        ) : (
+          <span className="xt-human-day" data-weekend={row.weekend || undefined}>
+            {row.label}
+          </span>
+        )}
         {track}
         <span
           className="xt-human-total"
@@ -488,5 +631,65 @@ function Row({
         </Tooltip.Positioner>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+  if (!paired) return dayCard;
+  return (
+    <Popover.Root
+      open={sessionsOpen}
+      onOpenChange={(open, details) => {
+        // A click (or tap) on the date neither opens, pins nor closes the
+        // box: a pinned box would stay open beside the next day's. Hover
+        // opens it, and Enter or Space on the day for the keyboard.
+        if (details.reason === 'trigger-press') {
+          details.cancel();
+          return;
+        }
+        if (open) setSessionsShown(true);
+        // Escape from inside the box hands focus back to the day.
+        else if (details.reason === 'escape-key' && popup.current?.contains(document.activeElement))
+          day.current?.focus();
+        onSessions(open);
+      }}
+      onOpenChangeComplete={(open) => {
+        // A box reopened before it had gone keeps its element: focus moves
+        // in here instead of when the element appears.
+        if (open && entering.current && popup.current) enter(popup.current);
+        if (!open) setSessionsShown(false);
+      }}
+    >
+      {dayCard}
+      <Popover.Portal data-theme={theme}>
+        {/* Beside the date, over the track, and never flipped back over the
+            dates: a box above or below its date would cover the next date
+            and keep the pointer moving down the dates from reaching it. It
+            grows away from the nearer end of the list and shifts only up or
+            down to fit. */}
+        <Popover.Positioner
+          className="xt-rule-positioner xt-day-sessions-positioner"
+          positionMethod="fixed"
+          side="inline-end"
+          align={lower ? 'end' : 'start'}
+          sideOffset={4}
+          collisionPadding={8}
+          collisionAvoidance={{ side: 'none', align: 'shift', fallbackAxisSide: 'none' }}
+        >
+          <Popover.Popup
+            ref={popupRef}
+            className="xt-rule-popover xt-effort-tip"
+            aria-label={sessionsName}
+            initialFocus={false}
+            finalFocus={false}
+          >
+            <DaySessions
+              window={window}
+              date={row.date}
+              label={row.label}
+              range={range}
+              listRef={listRef}
+            />
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

@@ -3,6 +3,7 @@ import fixture from '../fixtures/F1.json' with { type: 'json' };
 import { decimalHours } from '../src/app/agent-duration';
 import { leverageText } from '../src/app/metric-format';
 import { syntheticMergedPage, syntheticOverview } from '../src/app/dashboard/overview.synthetic';
+import { timelineRowHeight } from '../src/app/dashboard/timeline-rows';
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
 
 /**
@@ -67,6 +68,23 @@ const effortCard = (page: Page) =>
   page.locator('section.xt-dash-card').filter({
     has: page.getByRole('heading', { level: 2, name: 'Effort', exact: true }),
   });
+
+/**
+ * The "human + agent" timeline has sized its rows for this window by its own
+ * rule. It reads its height after layout and applies the row height on the
+ * next render, which headless Linux WebKit can deliver a frame or more after
+ * the page looks ready. Date positions read before then move afterwards.
+ */
+const rowsSized = (page: Page) =>
+  expect
+    .poll(async () => {
+      const { height, row } = await page.getByTestId('human-timeline-body').evaluate((body) => ({
+        height: body.clientHeight,
+        row: body.style.getPropertyValue('--row-h'),
+      }));
+      return row === `${timelineRowHeight(height, true)}px`;
+    })
+    .toBe(true);
 
 /** The timeline's geometry: rows, their height, the scroll position and the bars. */
 async function timeline(page: Page) {
@@ -529,4 +547,453 @@ for (const [width, height] of [
       );
     }
     expect(Math.abs(g.headlineRight - g.rows[0]!.rights.at(-1)!)).toBeLessThanOrEqual(1);
+  });
+
+test('in human + agent, hovering a date opens its sessions box, the rest of the row its card, one at a time, and the keyboard opens the box too', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page, 'light');
+  await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+  // F1's one session with agent time, on its last day, as the native read
+  // exported it.
+  const id = '00000000-0000-4000-8000-000000000001';
+  const href = `/sessions/${id}?q=${id}&host=claude&range=7d`;
+  const url = new RegExp(`${href.replace(/[?]/g, '\\?')}$`);
+  const days = page.getByTestId('human-day');
+  const today = days.last();
+  const shown = page.locator('.xt-effort-tip[data-open]');
+  const centre = async (locator: ReturnType<Page['locator']>, across = 0.5) => {
+    const box = (await locator.boundingBox())!;
+    return [box.x + box.width * across, box.y + box.height / 2] as const;
+  };
+  /** Where a just-opened box's link has settled: its positioner may still move it. */
+  const settled = async (locator: ReturnType<Page['locator']>) => {
+    let last = '';
+    await expect
+      .poll(async () => {
+        const now = JSON.stringify(await locator.boundingBox());
+        const same = now === last;
+        last = now;
+        return same;
+      })
+      .toBe(true);
+    return centre(locator);
+  };
+  // The track shows the day's card as before, without sessions.
+  await page.mouse.move(...(await centre(today.locator('.xt-human-track'), 0.3)));
+  await expect(shown).toHaveCount(1);
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(page.getByTestId('day-sessions-head')).toHaveCount(0);
+  // The date opens its sessions box instead, and the card closes.
+  const date = today.getByRole('button', { name: 'Sessions on Sep 7' });
+  await page.mouse.move(...(await centre(date)), { steps: 5 });
+  const box = page.getByRole('dialog', { name: 'Sessions on Sep 7' });
+  await expect(box.getByTestId('day-sessions-head')).toHaveText('Sessions on Sep 7');
+  await expect(shown).toHaveCount(1);
+  await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
+  // The date shows, quietly, that it opens something.
+  expect(
+    await date.evaluate((element) => [
+      getComputedStyle(element).cursor,
+      getComputedStyle(element).textDecorationLine,
+    ]),
+  ).toEqual(['pointer', 'underline']);
+  const link = box.getByRole('link', { name: `Open session ${id}, 23 minutes this day` });
+  await expect(link).toHaveText('Session 000000000 h 23 m');
+  await expect(link).toHaveAttribute('href', href);
+  // Into the box in small steps: it stays open, alone.
+  await page.mouse.move(...(await settled(link)), { steps: 15 });
+  await expect(link).toBeVisible();
+  await expect(shown).toHaveCount(1);
+  if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-day-sessions.png` });
+  // Back onto the track: the box closes and the day's card returns.
+  await page.mouse.move(...(await centre(today.locator('.xt-human-track'), 0.6)), { steps: 15 });
+  await expect(box).toBeHidden();
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(shown).toHaveCount(1);
+  // And the date again, into the box, to open the session.
+  await page.mouse.move(...(await centre(date)), { steps: 5 });
+  await expect(link).toBeVisible();
+  await page.mouse.move(...(await settled(link)), { steps: 15 });
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page).toHaveURL(url);
+  // From the keyboard: focus shows the day's card; Enter moves onto its first
+  // session, Escape returns to the day, arrows still move between days, and
+  // Enter on the session opens it.
+  await page.goBack();
+  await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+  await page.mouse.move(0, 0);
+  // Reached by Tab, as a keyboard user does: the card opens on visible focus.
+  await today.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(today).toBeFocused();
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(box).toBeHidden();
+  await page.keyboard.press('Enter');
+  await expect(link).toBeFocused();
+  await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
+  await expect(shown).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(today).toBeFocused();
+  await expect(box).toBeHidden();
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await page.keyboard.press('ArrowUp');
+  await expect(days.nth(-2)).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(today).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(url);
+  expect(errors).toEqual([]);
+});
+
+test('in human + agent, a click on a date neither pins nor toggles its sessions box: one box at a time, and moving off closes it', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page, 'light');
+  await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+  const days = page.getByTestId('human-day');
+  const centre = async (locator: ReturnType<Page['locator']>, across = 0.5) => {
+    const box = (await locator.boundingBox())!;
+    return [box.x + box.width * across, box.y + box.height / 2] as const;
+  };
+  const date = (day: string) => page.getByRole('button', { name: `Sessions on ${day}` });
+  const boxes = page.getByRole('dialog', { name: /^Sessions on / });
+  const shown = page.locator('.xt-effort-tip[data-open]');
+  await rowsSized(page);
+  // Hover Sep 6's date, then click it: its box stays open, as hovering keeps it.
+  await page.mouse.move(...(await centre(date('Sep 6'))), { steps: 5 });
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 6' })).toBeVisible();
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 6' })).toBeVisible();
+  // Hovering Sep 7's date then shows its box alone: the click pinned nothing.
+  await page.mouse.move(...(await centre(date('Sep 7'))), { steps: 5 });
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeVisible();
+  await expect(boxes).toHaveCount(1);
+  await expect(shown).toHaveCount(1);
+  // Click Sep 7's date, then move onto its track: the box closes and the
+  // day's card shows, alone.
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeVisible();
+  await page.mouse.move(...(await centre(days.last().locator('.xt-human-track'), 0.6)), {
+    steps: 15,
+  });
+  await expect(boxes).toHaveCount(0);
+  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(shown).toHaveCount(1);
+  // And a click on a date, then off the timeline: nothing stays open.
+  await page.mouse.move(...(await centre(date('Sep 7'))), { steps: 5 });
+  await expect(page.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeVisible();
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.mouse.move(0, 0, { steps: 5 });
+  await expect(boxes).toHaveCount(0);
+  await expect(shown).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+/**
+ * The synthetic report with Sep 6 of the 7-day range given test-only
+ * sessions (not real history): a parent with two verified sub-sessions, two
+ * sub-sessions of a parent with no agent time that day, a known sub-session
+ * whose creator is not verified, a session still being checked, and seven
+ * ordinary sessions, so the box's eight rows leave one out.
+ */
+const groupedDay = (() => {
+  const out = structuredClone(synthetic);
+  const entry = out.day_sessions.find(
+    (candidate) => candidate.window_days === 7 && candidate.date === '2026-09-06',
+  )!;
+  const minute = 60_000;
+  const id = (tag: string) => `01a0${tag}-0000-7000-8000-000000000000`;
+  const one = (
+    tag: string,
+    minutes: number,
+    parent: string | null = null,
+    check: 'checking' | 'checked' | 'child' = parent ? 'child' : 'checked',
+  ) => ({
+    session_id: id(tag),
+    host: 'codex',
+    title: tag === 'aaaa' ? 'A parent session with a saved title' : null,
+    automated_review: false,
+    agent_ms: minutes * minute,
+    last_activity_at_ms: entry.sessions.start_ms + 60 * minute,
+    parent: parent
+      ? {
+          session_id: id(parent),
+          host: 'codex',
+          title: parent === 'eeee' ? 'Planning session' : null,
+          evidence: 'native_spawn' as const,
+        }
+      : null,
+    known_child: check === 'child',
+    child_check: check,
+  });
+  const sessions = [
+    one('aaaa', 30),
+    one('ka01', 25, 'eeee'),
+    one('c101', 20, 'aaaa'),
+    one('uuuu', 15, null, 'child'),
+    one('xxxx', 10, null, 'checking'),
+    one('c202', 5, 'aaaa'),
+    one('kb02', 2, 'eeee'),
+    ...Array.from({ length: 7 }, (_, n) => one(`o${n}0${n}`, 1)),
+  ];
+  entry.sessions = {
+    ...entry.sessions,
+    agent_ms: sessions.reduce((sum, session) => sum + session.agent_ms, 0),
+    sessions,
+    referenced_parents: [
+      { session_id: id('eeee'), host: 'codex', known_child: false, child_check: 'checked' },
+    ],
+  };
+  return { data: out, parent: id('aaaa'), absent: id('eeee') };
+})();
+
+test('in human + agent, a day’s sessions box groups sub-sessions under their parent, opens a group by pointer and keyboard, and counts what it leaves out', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page, 'light', 1440, 900, groupedDay.data);
+  await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+  await rowsSized(page);
+  const centre = async (locator: ReturnType<Page['locator']>, across = 0.5) => {
+    const box = (await locator.boundingBox())!;
+    return [box.x + box.width * across, box.y + box.height / 2] as const;
+  };
+  const date = page.getByRole('button', { name: 'Sessions on Sep 6' });
+  await page.mouse.move(...(await centre(date)), { steps: 5 });
+  const box = page.getByRole('dialog', { name: 'Sessions on Sep 6' });
+  const links = box.getByRole('link');
+  await expect(links).toHaveText([
+    'A parent session with a saved titleΣ 0 h 55 m',
+    'Sub-sessions of Planning sessionΣ 0 h 27 m',
+    ...Array.from({ length: 6 }, (_, n) => `Session 01a0o${n}0${n}0 h 1 m`),
+  ]);
+  await expect(box.getByTestId('day-sessions-more')).toHaveText('and 1 more session0 h 1 m');
+  if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-day-groups.png` });
+  await expect(box.getByTestId('day-sessions-checking').locator('b')).toHaveText('0 h 10 m');
+  await expect(box.getByTestId('day-sessions-creator').locator('b')).toHaveText('0 h 15 m');
+  await expect(links.nth(1)).toHaveAttribute(
+    'href',
+    `/sessions/${groupedDay.absent}?q=${groupedDay.absent}&host=codex&range=7d`,
+  );
+  // Into the box onto the parent's disclosure, and a click opens its group:
+  // the box stays open, alone, with the sub-sessions under the parent.
+  const toggle = box.getByRole('button', {
+    name: '2 sub-sessions of A parent session with a saved title',
+  });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  let last = '';
+  await expect
+    .poll(async () => {
+      const now = JSON.stringify(await toggle.boundingBox());
+      const same = now === last;
+      last = now;
+      return same;
+    })
+    .toBe(true);
+  // Straight across into the box at the date's height, then along inside it,
+  // so the pointer never crosses another date on its way.
+  const [, dateY] = await centre(date);
+  const [toggleX, toggleY] = await centre(toggle);
+  await page.mouse.move(toggleX, dateY, { steps: 15 });
+  await page.mouse.move(toggleX, toggleY, { steps: 15 });
+  await expect(box).toBeVisible();
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('dialog', { name: /^Sessions on / })).toHaveCount(1);
+  await expect(links.nth(0)).toHaveText('A parent session with a saved title0 h 30 m');
+  await expect(links.nth(1)).toHaveText('Session 01a0c1010 h 20 m');
+  await expect(links.nth(2)).toHaveText('Session 01a0c2020 h 5 m');
+  if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-day-groups-open.png` });
+  // Every row inside the box, each sub-session indented under its parent as
+  // a lane's is.
+  const fit = await box.evaluate((popup) => {
+    const frame = popup.getBoundingClientRect();
+    const items = [...popup.querySelectorAll<HTMLElement>('li')].map((item) =>
+      item.getBoundingClientRect(),
+    );
+    // Where each row's first mark starts: the parent's disclosure, a
+    // sub-session's name.
+    const starts = [...popup.querySelectorAll<HTMLElement>('.xt-effort-tip-item')].map(
+      (item) => item.querySelector('.xt-lane-toggle, a > span')!.getBoundingClientRect().left,
+    );
+    return {
+      inside: items.every(
+        (item) => item.left >= frame.left - 0.5 && item.right <= frame.right + 0.5,
+      ),
+      inView: frame.top >= 0 && frame.bottom <= window.innerHeight,
+      parent: starts[0]!,
+      child: starts[1]!,
+    };
+  });
+  expect(fit.inside).toBe(true);
+  expect(fit.inView).toBe(true);
+  // Indented by the lanes' own step.
+  expect(fit.child - fit.parent).toBeCloseTo(14, 0);
+  // From the keyboard: Enter on the day lands on its first session; the
+  // disclosure before it is reached with Shift+Tab, and Space closes it.
+  await page.keyboard.press('Escape');
+  await expect(box).toBeHidden();
+  await page.mouse.move(0, 0);
+  const day = page.getByTestId('human-day').filter({ has: date });
+  await day.focus();
+  await page.keyboard.press('Enter');
+  await expect(links.first()).toBeFocused();
+  // Groups start collapsed each time the box opens.
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Shift+Tab');
+  await expect(toggle).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(links.nth(1)).toHaveText('Session 01a0c1010 h 20 m');
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Escape');
+  await expect(box).toBeHidden();
+  await expect(day).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('a large day group scrolls within the viewport and its last child is reachable by pointer and keyboard', async ({
+  page,
+  browserName,
+}) => {
+  const data = structuredClone(groupedDay.data);
+  const dayData = data.day_sessions.find(
+    (candidate) => candidate.window_days === 7 && candidate.date === '2026-09-06',
+  )!.sessions;
+  const parent = dayData.sessions[0]!;
+  const child = dayData.sessions[2]!;
+  const children = Array.from({ length: 60 }, (_, n) => ({
+    ...child,
+    session_id: `large-child-${n}`,
+    title: `Child ${n + 1}`,
+  }));
+  dayData.sessions = [parent, ...children];
+  dayData.agent_ms = dayData.sessions.reduce((sum, session) => sum + session.agent_ms, 0);
+  dayData.referenced_parents = [];
+  await open(page, 'light', 1120, 720, data);
+  await rowsSized(page);
+  const date = page.getByRole('button', { name: 'Sessions on Sep 6' });
+  const day = page.getByTestId('human-day').filter({ has: date });
+  const box = page.getByRole('dialog', { name: 'Sessions on Sep 6' });
+  await day.focus();
+  await page.keyboard.press('Enter');
+  const toggle = box.getByRole('button', {
+    name: '60 sub-sessions of A parent session with a saved title',
+  });
+  await expect(box.getByRole('link').first()).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(toggle).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const last = box.getByRole('link', { name: /^Open session Child 60,/ });
+  const bounds = await box.boundingBox();
+  expect(bounds!.y).toBeGreaterThanOrEqual(0);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(720);
+  // Wheel over the popup, then the final child's visible link can be used.
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+  await page.mouse.wheel(0, 2_000);
+  await expect
+    .poll(async () => {
+      const frame = (await box.boundingBox())!;
+      const link = (await last.boundingBox())!;
+      return link.y >= frame.y && link.y + link.height <= frame.y + frame.height;
+    })
+    .toBe(true);
+  if (shots) await page.screenshot({ path: `${shots}/dashboard-large-day-group-scrolled.png` });
+  await page.keyboard.press('Escape');
+  await expect(box).toBeHidden();
+  await expect(day).toBeFocused();
+  await page.mouse.move(0, 0);
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(box.getByRole('link').first()).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(toggle).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  // Tab to the parent, then through all 60 children. Focus scrolls the final
+  // row into view without clipping its inset focus outline.
+  const nextLink = browserName === 'webkit' && process.platform === 'darwin' ? 'Alt+Tab' : 'Tab';
+  for (let n = 0; n < 61; n += 1) await page.keyboard.press(nextLink);
+  await expect(last).toBeFocused();
+  const focus = await last.evaluate((link) => {
+    const frame = link.closest('[role="dialog"]')!.getBoundingClientRect();
+    const rect = link.getBoundingClientRect();
+    const style = getComputedStyle(link);
+    return {
+      inside:
+        rect.top >= frame.top &&
+        rect.bottom <= frame.bottom &&
+        rect.left >= frame.left &&
+        rect.right <= frame.right,
+      outline: style.outlineStyle,
+      offset: style.outlineOffset,
+    };
+  });
+  expect(focus.inside).toBe(true);
+  expect(focus.outline).toBe('solid');
+  expect(focus.offset).toBe('-1px');
+  if (shots) await page.screenshot({ path: `${shots}/dashboard-large-day-group-keyboard.png` });
+  await page.keyboard.press('Escape');
+  await expect(box).toBeHidden();
+  await expect(day).toBeFocused();
+});
+
+for (const [width, height] of [
+  [1440, 900],
+  [1120, 720],
+] as const)
+  test(`in human + agent, walking the pointer along the dates opens each date’s sessions box in turn, never covering the next date, ${width}x${height}`, async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await open(page, 'light', width, height);
+    await expect(page.getByTestId('human-timeline')).toHaveAttribute('data-variant', 'paired');
+    const boxes = page.getByRole('dialog', { name: /^Sessions on / });
+    await rowsSized(page);
+    // Every date in view, top to bottom, with its centre.
+    const dates = await page.getByTestId('human-timeline-body').evaluate((body) => {
+      const view = body.getBoundingClientRect();
+      return [...body.querySelectorAll<HTMLElement>('.xt-human-day')]
+        .map((date) => ({ label: date.textContent!, box: date.getBoundingClientRect() }))
+        .filter(({ box }) => box.top >= view.top && box.bottom <= view.bottom)
+        .map(({ label, box }) => ({
+          label,
+          x: box.left + box.width / 2,
+          y: box.top + box.height / 2,
+          top: view.top,
+          bottom: view.bottom,
+        }));
+    });
+    expect(dates.length).toBeGreaterThanOrEqual(5);
+    // Down the column from its top edge, then up from its bottom edge, in
+    // small steps: each date's box opens, alone, as the pointer reaches it.
+    for (const order of [dates, [...dates].reverse()]) {
+      await page.mouse.move(0, 0);
+      await expect(boxes).toHaveCount(0);
+      const start = order === dates ? order[0]!.top + 1 : order[0]!.bottom - 1;
+      await page.mouse.move(order[0]!.x, start);
+      for (const date of order) {
+        await page.mouse.move(date.x, date.y, { steps: 13 });
+        await expect(page.getByRole('dialog', { name: `Sessions on ${date.label}` })).toBeVisible();
+        await expect(boxes).toHaveCount(1);
+      }
+    }
+    expect(errors).toEqual([]);
   });
