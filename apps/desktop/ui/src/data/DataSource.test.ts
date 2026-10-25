@@ -222,6 +222,11 @@ it('reads account limits through one fixed native command with no range or accou
   vi.mocked(invoke).mockClear();
   expect(await source.refreshClaudeUsage()).toEqual(answer);
   expect(invoke).toHaveBeenCalledExactlyOnceWith('account_usage_refresh_claude');
+  // The sign-in click sends nothing but the command's name.
+  vi.mocked(invoke).mockClear();
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  await source.claudeSignIn!();
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('claude_sign_in');
 });
 
 it('keeps browser fixtures offline even when recorded token totals are large', async () => {
@@ -231,6 +236,8 @@ it('keeps browser fixtures offline even when recorded token totals are large', a
   expect(answer.codex.windows).toEqual([]);
   expect(answer.claude.state).toBe('unavailable');
   expect(await fixture.refreshClaudeUsage()).toEqual(answer);
+  // Browser fixtures cannot open Terminal.
+  expect((fixture as DataSource).claudeSignIn).toBeUndefined();
   expect(invoke).not.toHaveBeenCalled();
 });
 

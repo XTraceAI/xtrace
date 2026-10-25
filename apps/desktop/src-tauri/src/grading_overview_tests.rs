@@ -149,8 +149,27 @@ impl Seed {
         projects: &[ProjectEntry],
         skills: &[GradingSkillInfo],
     ) -> GradingOverviewLoaded {
+        self.overview_line(projects, skills, &[])
+    }
+
+    fn overview_line(
+        &self,
+        projects: &[ProjectEntry],
+        skills: &[GradingSkillInfo],
+        line: &[Waiting],
+    ) -> GradingOverviewLoaded {
         let read = self.store.grade_pairs(&pairs(projects, skills)).unwrap();
-        overview(projects.to_vec(), skills, &read).unwrap()
+        overview(projects.to_vec(), skills, &read, line).unwrap()
+    }
+}
+
+/// A grading waiting in line for `skill` on `path`.
+fn queued(run_id: &str, path: &str, skill: &str) -> Waiting {
+    Waiting {
+        run_id: run_id.into(),
+        project_path: path.into(),
+        skill_id: skill.into(),
+        skill_version: "0.5.1+xtrace.1".into(),
     }
 }
 
@@ -484,7 +503,81 @@ fn a_read_that_does_not_match_the_pairs_is_refused() {
     let seed = Seed::new();
     let projects = [project("atlas", &[])];
     let read = seed.store.grade_pairs(&[]).unwrap();
-    assert_eq!(overview(projects.to_vec(), &skills(), &read), None);
+    assert_eq!(overview(projects.to_vec(), &skills(), &read, &[]), None);
+}
+
+#[test]
+fn waiting_gradings_show_on_their_rows_count_on_their_skill_and_the_rest_are_named() {
+    let mut seed = Seed::new();
+    let projects = [
+        project("atlas", &[]),
+        project("beacon", &[]),
+        project("cedar", &[]),
+    ];
+    let refused = seed.run(&projects[2].path, 1, End::Failed("project_changed"));
+    let live = seed.run(&projects[0].path, 0, End::Running);
+    let id = |n: u32| format!("00000000-0000-4000-8000-0000000000{n:02x}");
+    let line = [
+        // Read before the runs: these two have started since, so the read
+        // shows them and the line does not.
+        queued(&live, &projects[0].path, SKILL),
+        queued(&refused, &projects[2].path, SKILL),
+        queued(&id(0xb1), "/work/gone", SKILL),
+        queued(&id(0xb2), &projects[1].path, SKILL),
+        queued(&id(0xb3), &projects[1].path, ADDED),
+        queued(&id(0xb4), &projects[1].path, "another-skill"),
+    ];
+    let got = seed.overview_line(&projects, &with_added(None), &line);
+    let doctor = &got.skills[0];
+    let rows: Vec<_> = doctor
+        .rows
+        .iter()
+        .map(|row| (row.running, row.waiting.clone()))
+        .collect();
+    let at = |run_id: String, ahead: u32| Some(GradingRowWaiting { run_id, ahead });
+    assert_eq!(
+        rows,
+        [(true, None), (false, at(id(0xb2), 1)), (false, None)],
+        "ahead counts the whole line, other skills and unlisted projects too"
+    );
+    assert!(matches!(
+        doctor.rows[2].attempt,
+        Some(GradingAttempt::Failed { .. })
+    ));
+    // Its entries on any project, the unlisted one too.
+    assert_eq!(doctor.waiting, 2);
+    let added = &got.skills[1];
+    assert_eq!(added.waiting, 1);
+    assert_eq!(added.rows[1].waiting, at(id(0xb3), 2));
+    assert_eq!(
+        got.waiting_elsewhere,
+        [
+            GradingWaitingElsewhere {
+                run_id: id(0xb1),
+                skill_id: SKILL.into(),
+                skill_name: Some("CLAUDE.md doctor".into()),
+                project_path: "/work/gone".into(),
+                project_name: None,
+                ahead: 0,
+            },
+            GradingWaitingElsewhere {
+                run_id: id(0xb4),
+                skill_id: "another-skill".into(),
+                skill_name: None,
+                project_path: projects[1].path.clone(),
+                project_name: Some("beacon".into()),
+                ahead: 3,
+            },
+        ]
+    );
+    // An empty line shows nothing waiting anywhere.
+    let none = seed.overview_with(&projects, &with_added(None));
+    assert!(none.waiting_elsewhere.is_empty());
+    assert!(
+        none.skills
+            .iter()
+            .all(|skill| skill.waiting == 0 && skill.rows.iter().all(|row| row.waiting.is_none()))
+    );
 }
 
 /// The answers the renderer's tests and acceptance pages read, one per
@@ -497,6 +590,7 @@ struct Export {
     partial: GradingOverview,
     running: GradingOverview,
     running_unlisted: GradingOverview,
+    waiting: GradingOverview,
     long_findings: GradingOverview,
     failed: GradingOverview,
     added: GradingOverview,
@@ -555,8 +649,9 @@ fn graded(seed: &mut Seed, projects: &[ProjectEntry]) {
 
 fn export() -> Export {
     let projects = listed();
-    let loaded =
-        |seed: &Seed, projects: &[ProjectEntry]| GradingOverview::Loaded(seed.overview(projects));
+    let loaded = |seed: &Seed, projects: &[ProjectEntry]| {
+        GradingOverview::Loaded(Box::new(seed.overview(projects)))
+    };
     let no_projects = loaded(&Seed::new(), &[]);
     let empty = loaded(&Seed::new(), &projects);
     let mut seed = Seed::new();
@@ -582,6 +677,27 @@ fn export() -> Export {
     graded(&mut running_unlisted, &projects);
     running_unlisted.run("/work/old-atlas", 40, End::Running);
     let running_unlisted = loaded(&running_unlisted, &projects);
+    // One run going and two gradings waiting after it, one of them on a
+    // project no longer in the list.
+    let mut waiting = Seed::new();
+    graded(&mut waiting, &projects);
+    waiting.run(&projects[3].path, 40, End::Running);
+    let waiting = GradingOverview::Loaded(Box::new(waiting.overview_line(
+        &projects,
+        &skills(),
+        &[
+            queued(
+                "00000000-0000-4000-8000-0000000000c1",
+                &projects[0].path,
+                SKILL,
+            ),
+            queued(
+                "00000000-0000-4000-8000-0000000000c2",
+                "/work/old-beacon",
+                SKILL,
+            ),
+        ],
+    )));
     // Findings whose titles run past two lines on a card.
     let mut long_findings = Seed::new();
     long_findings.run(
@@ -614,13 +730,14 @@ fn export() -> Export {
             insights: r#"[{"severity":"warning","title":"No run command"}]"#,
         },
     );
-    let added_problem = GradingOverview::Loaded(added.overview_with(
+    let added_problem = GradingOverview::Loaded(Box::new(added.overview_with(
         &projects,
         &with_added(Some(GradingSkillProblem::RubricInvalid {
             rubric: GradingRubricProblem::Total,
         })),
-    ));
-    let added = GradingOverview::Loaded(added.overview_with(&projects, &with_added(None)));
+    )));
+    let added =
+        GradingOverview::Loaded(Box::new(added.overview_with(&projects, &with_added(None))));
     // A rubric being made for an installed skill holds the one slot: the
     // service adds it to the stored answer.
     let mut making = seed.overview(&projects);
@@ -630,7 +747,7 @@ fn export() -> Export {
         name: "deploy".into(),
         started_at_ms: 1_784_000_000_000,
     }));
-    let making_rubric = GradingOverview::Loaded(making);
+    let making_rubric = GradingOverview::Loaded(Box::new(making));
     Export {
         no_projects,
         empty,
@@ -638,6 +755,7 @@ fn export() -> Export {
         partial,
         running,
         running_unlisted,
+        waiting,
         long_findings,
         failed,
         added,
@@ -685,6 +803,16 @@ fn the_synthetic_ui_export_is_what_the_rule_gives() {
     assert!(unlisted.skills[0].running);
     assert!(unlisted.skills[0].rows.iter().all(|row| !row.running));
     assert_eq!(unlisted.running.as_ref().unwrap().project_name, None);
+    let GradingOverview::Loaded(waiting) = &export.waiting else {
+        panic!("waiting is loaded");
+    };
+    let skill = &waiting.skills[0];
+    assert!(skill.running && skill.rows[3].running);
+    assert_eq!(skill.waiting, 2);
+    assert_eq!(skill.rows[0].waiting.as_ref().unwrap().ahead, 0);
+    assert_eq!(waiting.waiting_elsewhere.len(), 1);
+    assert_eq!(waiting.waiting_elsewhere[0].project_name, None);
+    assert_eq!(waiting.waiting_elsewhere[0].ahead, 1);
     let GradingOverview::Loaded(failed) = &export.failed else {
         panic!("failed is loaded");
     };

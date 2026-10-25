@@ -18,18 +18,25 @@
 //!   (with its stored reason).
 //! * **Running**: only the stored status `running` says a run is going;
 //!   progress events never decide it.
+//! * **Waiting**: the service's line of gradings waiting for the one slot,
+//!   read before the stored runs. An entry the read already has a run for
+//!   (the run going now, or a pair's newest run) started in between and is
+//!   not shown waiting. A pair's row names its entry and how many entries
+//!   are before it in the whole line; a skill counts its entries on any
+//!   project; an entry no row shows (its project is not listed, or its
+//!   skill is not on Scores) is listed on its own, so it can be cancelled.
 //!
 //! The renderer formats these fields and works nothing out again.
 use crate::{
-    grading::{exact_ms, stored_insights},
+    grading::{Waiting, exact_ms, stored_insights},
     grading_dto::{
         GradingAttempt, GradingFailure, GradingOverviewLoaded, GradingProjectRow,
-        GradingRunningNow, GradingSeverity, GradingShownScore, GradingSkillInfo,
-        GradingSkillOverview, GradingTopInsight,
+        GradingRowWaiting, GradingRunningNow, GradingSeverity, GradingShownScore, GradingSkillInfo,
+        GradingSkillOverview, GradingTopInsight, GradingWaitingElsewhere,
     },
     projects_dto::ProjectEntry,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use xt_store::grades::{GradePairs, GradeRow, GradeStatus};
 
 /// Most findings a skill lists.
@@ -51,18 +58,33 @@ pub fn pairs<'a>(
         .collect()
 }
 
-/// The Scores page's answer over a fresh project list, the built-in skills
-/// and the stored runs of exactly [`pairs`] (read in one snapshot). `None`
-/// when the read does not match the pairs or holds a time a renderer cannot
-/// read exactly.
+/// The Scores page's answer over a fresh project list, the skills, the
+/// line of waiting gradings (oldest first, read before the runs) and the
+/// stored runs of exactly [`pairs`] (read in one snapshot). `None` when the
+/// read does not match the pairs or holds a time a renderer cannot read
+/// exactly.
 pub fn overview(
     projects: Vec<ProjectEntry>,
     skills: &[GradingSkillInfo],
     read: &GradePairs,
+    line: &[Waiting],
 ) -> Option<GradingOverviewLoaded> {
     if read.pairs.len() != projects.len() * skills.len() {
         return None;
     }
+    let line = still_waiting(read, line);
+    let place = |project: &str, skill: &str| -> Option<Option<GradingRowWaiting>> {
+        let Some(ahead) = line
+            .iter()
+            .position(|entry| entry.project_path == project && entry.skill_id == skill)
+        else {
+            return Some(None);
+        };
+        Some(Some(GradingRowWaiting {
+            run_id: line[ahead].run_id.clone(),
+            ahead: u32::try_from(ahead).ok()?,
+        }))
+    };
     let mut runs = read.pairs.iter();
     let mut out = Vec::with_capacity(skills.len());
     for skill in skills {
@@ -93,6 +115,7 @@ pub fn overview(
                 name: project.name.clone(),
                 path: project.path.clone(),
                 running: matches!(attempt, Some(GradingAttempt::Running { .. })),
+                waiting: place(&project.path, &skill.id)?,
                 shown,
                 attempt,
             });
@@ -111,6 +134,12 @@ pub fn overview(
                 .running
                 .as_ref()
                 .is_some_and(|run| run.skill_id == skill.id),
+            waiting: u32::try_from(
+                line.iter()
+                    .filter(|entry| entry.skill_id == skill.id)
+                    .count(),
+            )
+            .ok()?,
             rows,
         });
     }
@@ -131,13 +160,59 @@ pub fn overview(
         }),
         None => None,
     };
+    let skill_name = |id: &str| {
+        skills
+            .iter()
+            .find(|skill| skill.id == id)
+            .map(|skill| skill.name.clone())
+    };
+    let project_name = |path: &str| {
+        projects
+            .iter()
+            .find(|project| project.path == path)
+            .map(|project| project.name.clone())
+    };
+    let mut waiting_elsewhere = Vec::new();
+    for (ahead, entry) in line.iter().enumerate() {
+        let (skill_name, project_name) = (
+            skill_name(&entry.skill_id),
+            project_name(&entry.project_path),
+        );
+        // Every listed project has a row on every skill's page.
+        if skill_name.is_some() && project_name.is_some() {
+            continue;
+        }
+        waiting_elsewhere.push(GradingWaitingElsewhere {
+            run_id: entry.run_id.clone(),
+            skill_id: entry.skill_id.clone(),
+            skill_name,
+            project_path: entry.project_path.clone(),
+            project_name,
+            ahead: u32::try_from(ahead).ok()?,
+        });
+    }
     Some(GradingOverviewLoaded {
         projects,
         skills: out,
         running,
         // The service's own: a rubric-making job is not stored.
         making_rubric: None,
+        waiting_elsewhere,
     })
+}
+
+/// The line without the entries the read already has a run for: they
+/// started after the line was read.
+fn still_waiting<'a>(read: &GradePairs, line: &'a [Waiting]) -> Vec<&'a Waiting> {
+    let started: HashSet<&str> = read
+        .running
+        .iter()
+        .chain(read.pairs.iter().filter_map(|pair| pair.newest.as_ref()))
+        .map(|run| run.run_id.as_str())
+        .collect();
+    line.iter()
+        .filter(|entry| !started.contains(entry.run_id.as_str()))
+        .collect()
 }
 
 /// The mean, rounded half up; none for no scores.

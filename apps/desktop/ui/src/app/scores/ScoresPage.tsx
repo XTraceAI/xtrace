@@ -6,6 +6,7 @@ import type { GradingRubricNow } from '../../data/generated/GradingRubricNow';
 import type { GradingRunningNow } from '../../data/generated/GradingRunningNow';
 import type { GradingSkillOverview } from '../../data/generated/GradingSkillOverview';
 import type { GradingTopInsight } from '../../data/generated/GradingTopInsight';
+import type { GradingWaitingElsewhere } from '../../data/generated/GradingWaitingElsewhere';
 import type { ProjectEntry } from '../../data/generated/ProjectEntry';
 import { StatePill } from '../../kit/Badge';
 import { Button } from '../../kit/Button';
@@ -20,9 +21,7 @@ import {
   attemptText,
   cancelText,
   elapsedText,
-  oneAtATime,
   removeText,
-  rubricOneAtATime,
   runningElsewhereText,
   scoreText,
   severity,
@@ -36,6 +35,8 @@ import {
   useGradingOverview,
   useGradingProgress,
   useRefreshOverview,
+  waitingElsewhereText,
+  waitingText,
   type Loaded,
 } from './scores';
 import '../../styles/scores.css';
@@ -83,6 +84,7 @@ export function ScoresPage() {
             {loaded.making_rubric && (
               <MakingRubric making={loaded.making_rubric} onCancel={cancel} />
             )}
+            <WaitingElsewhere waiting={loaded.waiting_elsewhere} onCancel={cancel} />
             <ul className="xt-scores-grid" role="list" aria-label="Grading skills">
               {loaded.skills.map((skill) => (
                 <SkillCard
@@ -113,20 +115,59 @@ function useLastLoaded<T>(value: T | undefined): T | undefined {
 /** Whether one of these rows is the run going now (the overview's own flag). */
 const shownOnARow = (rows: readonly GradingProjectRow[]) => rows.some((row) => row.running);
 
-/** Cancel a run, saying whether it was still going, then read again. */
+/**
+ * Cancel a run, or take a waiting one out of the line, saying whether it was
+ * still going (or waiting), then read again.
+ */
 function useCancel(setMessage: (text: string) => void) {
   const { source } = useData();
   const refresh = useRefreshOverview();
-  return async (runId: string) => {
+  return async (runId: string, waiting = false) => {
     if (!source.grading) return;
     try {
-      setMessage(cancelText(await source.grading.cancel(runId)));
+      setMessage(cancelText(await source.grading.cancel(runId), waiting));
     } catch {
-      setMessage(cancelText(false));
+      setMessage(cancelText(false, waiting));
     } finally {
       refresh();
     }
   };
+}
+
+/**
+ * The waiting gradings no row on the page shows (their project is no longer
+ * listed, or their skill is not on Scores), each with its own Cancel.
+ */
+function WaitingElsewhere({
+  waiting,
+  onCancel,
+}: {
+  waiting: readonly GradingWaitingElsewhere[];
+  onCancel: (runId: string, waiting?: boolean) => Promise<void>;
+}) {
+  return waiting.map((entry) => {
+    const text = waitingElsewhereText(entry);
+    return (
+      <div
+        key={entry.run_id}
+        className="xt-scores-notice xt-scores-running"
+        data-testid="waiting-elsewhere"
+      >
+        <div>
+          <p className="xt-scores-lead">{text.lead}</p>
+          <p className="xt-scores-detail">{text.detail}</p>
+        </div>
+        <Button
+          variant="outline"
+          height={28}
+          aria-label={`Cancel waiting grading ${entry.project_name ?? entry.project_path}`}
+          onClick={() => void onCancel(entry.run_id, true)}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
+  });
 }
 
 /**
@@ -186,7 +227,7 @@ function MakingRubric({
           {`A rubric for ${making.name} is being made`}
           {elapsed !== undefined && ` · ${elapsedText(elapsed)}`}
         </p>
-        <p className="xt-scores-detail">Nothing can be graded until it is done.</p>
+        <p className="xt-scores-detail">Gradings you start wait until it is done.</p>
       </div>
       <Button
         variant="outline"
@@ -270,6 +311,7 @@ function SkillCard({
         </span>
         <span className="xt-score-card-count">
           {none ? 'Not graded yet' : `${skill.graded} of ${plural(skill.total, 'project')} graded`}
+          {skill.waiting > 0 && ` · ${skill.waiting} waiting`}
         </span>
       </p>
       {skill.average !== null && <span className="sr-only">Average score {skill.average}</span>}
@@ -395,8 +437,9 @@ function YourProjects({
 
 /**
  * `/scores/:skillId`: one skill's score for each listed project, with Grade
- * and, on the running row, Cancel. One grading runs at a time: while one
- * runs, another row's Grade explains that instead of being disabled.
+ * and, on the running or waiting row, Cancel. One grading runs at a time: a
+ * Grade pressed while one runs (or a rubric is being made) waits in line and
+ * starts by itself; native decides which.
  */
 export function SkillScoresPage() {
   const { skillId = '' } = useParams();
@@ -452,16 +495,18 @@ function SkillDetail({
     // and the native answer says whether it can (`skill_unavailable`).
     // A start is being answered: say so, and start nothing more.
     if (starting.current) return setMessage(STARTING);
-    // Another run, or a rubric being made, is going: say so, and start nothing.
-    if (loaded.running) return setMessage(oneAtATime(loaded.running));
-    if (loaded.making_rubric) return setMessage(rubricOneAtATime(loaded.making_rubric));
+    // While another run or a rubric job is going, native puts it in line.
     if (!source.grading) return;
     starting.current = true;
     setPending(true);
     setMessage(null);
     try {
       const answer = await source.grading.start(row.path, skill.skill.id);
-      setMessage(answer.state === 'started' ? null : startText(answer, row.name));
+      setMessage(
+        answer.state === 'started' || answer.state === 'waiting'
+          ? null
+          : startText(answer, row.name),
+      );
     } catch {
       setMessage(START_FAILED);
     } finally {
@@ -532,6 +577,15 @@ function SkillDetail({
             >
               Cancel
             </Button>
+          ) : row.waiting ? (
+            <Button
+              variant="outline"
+              height={28}
+              aria-label={`Cancel waiting grading ${row.name}`}
+              onClick={() => row.waiting && void cancel(row.waiting.run_id, true)}
+            >
+              Cancel
+            </Button>
           ) : (
             <Button
               variant={row.shown ? 'outline' : 'primary'}
@@ -592,6 +646,7 @@ function SkillDetail({
         />
       )}
       {loaded.making_rubric && <MakingRubric making={loaded.making_rubric} onCancel={cancel} />}
+      <WaitingElsewhere waiting={loaded.waiting_elsewhere} onCancel={cancel} />
       <SectionCard
         title={skill.graded === 0 && skill.total > 0 ? 'Grade your first project' : 'Projects'}
         meta={`${skill.total} listed`}
@@ -669,13 +724,28 @@ function AddedFrom({
   );
 }
 
-/** A row's newer run, or that its shown score is partial, or nothing. */
+/**
+ * A row's place in line, or its newer run, or that its shown score is
+ * partial, or nothing.
+ */
 function RowState({ row, progress }: { row: GradingProjectRow; progress: Record<string, number> }) {
   const attempt = row.attempt;
   const elapsed = useElapsed(
     attempt?.state === 'running' ? attempt.started_at_ms : undefined,
     attempt ? progress[attempt.run_id] : undefined,
   );
+  if (row.waiting) {
+    const text = waitingText(row.waiting.ahead);
+    return (
+      <span
+        className="xt-scores-state"
+        data-state="waiting"
+        title={`${text}. It starts by itself when the gradings before it are done.`}
+      >
+        {text}
+      </span>
+    );
+  }
   if (attempt) {
     const running = attempt.state === 'running';
     const text = attemptText(attempt, running ? elapsed : undefined);

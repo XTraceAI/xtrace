@@ -121,6 +121,32 @@ it('coalesces repeated events within 500ms and invalidates only explicit hierarc
   expect(queries['metrics-other']).not.toHaveBeenCalled();
 });
 
+it('reads account usage again, and nothing else, when a watched Claude sign-in ends', async () => {
+  vi.useFakeTimers();
+  const source = new FixtureDataSource(exported);
+  const usage = vi.fn().mockResolvedValue(1);
+  const other = vi.fn().mockResolvedValue(1);
+  function Surfaces() {
+    useQuery({ queryKey: queryKeys.accountUsage, queryFn: usage, initialData: 0 });
+    useQuery({ queryKey: ['metrics', 'test-surface'], queryFn: other, initialData: 0 });
+    return null;
+  }
+  render(
+    <DataProvider source={source}>
+      <Surfaces />
+    </DataProvider>,
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    source.emit(events.claudeSignInEnded);
+    await vi.advanceTimersByTimeAsync(501);
+  });
+  expect(usage).toHaveBeenCalledOnce();
+  expect(other).not.toHaveBeenCalled();
+});
+
 it('refreshes range-keyed Dashboard queries after imports, enrichment and index status events', async () => {
   vi.useFakeTimers();
   const source = new FixtureDataSource(exported);

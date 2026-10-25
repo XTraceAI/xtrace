@@ -54,6 +54,7 @@ const states = [
   'partial',
   'running',
   'running_unlisted',
+  'waiting',
   'long_findings',
   'failed',
   'no_projects',
@@ -257,6 +258,18 @@ test('an added skill that cannot grade keeps its card and says why', async ({ pa
   await page.screenshot({ path: info.outputPath('added-skill-problem-page.png') });
 });
 
+test('a Grade pressed while one runs is sent for native to put in line', async ({ page }) => {
+  await page.goto(harness('running', '/scores/claude-md-doctor', 'waiting'));
+  await expect(page.getByRole('row').filter({ hasText: 'delta' })).toContainText('Grading now');
+  const again = page.getByRole('button', { name: 'Grade again atlas' });
+  await expect(again).toBeEnabled();
+  await again.click();
+  await expect
+    .poll(async () => (await calls(page)).starts)
+    .toEqual([['/work/atlas', 'claude-md-doctor']]);
+  await expect(page.locator('.xt-scores-message')).toHaveText('');
+});
+
 test('a finding’s title wraps to two lines at most, then ends in an ellipsis', async ({ page }) => {
   await page.goto(harness('long_findings'));
   const titles = page.locator('.xt-score-insight-title');
@@ -280,6 +293,45 @@ test('a finding’s title wraps to two lines at most, then ends in an ellipsis',
   // The longest title is cut after two lines; the whole of it is the tooltip.
   expect(drawn[0]).toEqual({ lines: 2, clipped: true, clamp: '2', tooltip: true });
   await assertFits(page);
+});
+
+test('a waiting row shows its place with Cancel, and a waiting grading no row shows is listed', async ({
+  page,
+}, info) => {
+  const errors = watchErrors(page);
+  await page.clock.setFixedTime(STARTED + 4 * 60_000 + 10_000);
+  await page.goto(harness('waiting'));
+  const card = page.locator('.xt-score-card');
+  await expect(card).toContainText('Grading · 0 h 4 m');
+  await expect(card.locator('.xt-score-card-count')).toHaveText(
+    '3 of 4 projects graded · 2 waiting',
+  );
+  const elsewhere = page.getByTestId('waiting-elsewhere');
+  await expect(elsewhere).toContainText(
+    '/work/old-beacon is waiting to be graded with CLAUDE.md doctor · 1 ahead',
+  );
+  await expect(elsewhere).toContainText('This project is no longer in your project list');
+  await assertFits(page);
+  await page.goto(harness('waiting', '/scores/claude-md-doctor'));
+  const atlas = page.getByRole('row').filter({ hasText: 'atlas' });
+  await expect(atlas).toContainText('Waiting · next in line');
+  await expect(atlas.getByRole('button', { name: /Grade/ })).toHaveCount(0);
+  // Cancel is reached by keyboard like any row action.
+  const cancel = atlas.getByRole('button', { name: 'Cancel waiting grading atlas' });
+  await cancel.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.xt-scores-message')).toHaveText('Cancelling the grading…');
+  await page
+    .getByTestId('waiting-elsewhere')
+    .getByRole('button', { name: 'Cancel waiting grading /work/old-beacon' })
+    .click();
+  await expect
+    .poll(async () => (await calls(page)).cancels)
+    .toEqual(['00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000c2']);
+  expect((await calls(page)).starts).toEqual([]);
+  await assertFits(page);
+  await page.screenshot({ path: info.outputPath('skill-waiting-cancelled.png') });
+  expect(errors).toEqual([]);
 });
 
 /** When the synthetic rubric job started (`picker.synthetic.json`). */
@@ -370,16 +422,19 @@ test('Make a rubric shows the job going with Cancel, then why it failed or the m
     await shoot(`maker-made-${scheme}`, 'Deploy');
   }
   // A job going holds the one slot: the Scores page names it with Cancel,
-  // and Grade explains instead of starting.
-  await page.goto(harness('making_rubric', '/scores/claude-md-doctor'));
+  // and a Grade press is sent for native to put in line.
+  await page.goto(harness('making_rubric', '/scores/claude-md-doctor', 'waiting'));
   await expect(page.getByTestId('making-rubric')).toContainText(
     'A rubric for deploy is being made',
   );
-  await page.getByRole('button', { name: 'Grade again atlas' }).click();
-  await expect(page.locator('.xt-scores-message')).toHaveText(
-    'Only one grading runs at a time, and making a rubric counts as one. A rubric for deploy is being made now; wait for it to finish or cancel it.',
+  await expect(page.getByTestId('making-rubric')).toContainText(
+    'Gradings you start wait until it is done.',
   );
-  expect((await calls(page)).starts).toEqual([]);
+  await page.getByRole('button', { name: 'Grade again atlas' }).click();
+  await expect
+    .poll(async () => (await calls(page)).starts)
+    .toEqual([['/work/atlas', 'claude-md-doctor']]);
+  await expect(page.locator('.xt-scores-message')).toHaveText('');
   await assertFits(page);
   await page.screenshot({ path: info.outputPath('maker-skill-page-busy.png') });
   expect(errors).toEqual([]);

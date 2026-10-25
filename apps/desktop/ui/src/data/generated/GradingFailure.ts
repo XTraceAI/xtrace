@@ -3,4 +3,4 @@
 /**
  * Why a run failed or was interrupted. Stored by its code.
  */
-export type GradingFailure = "app_closed" | "project_changed" | "project_unavailable" | "project_written" | "project_work_folder_uncheckable" | "skill_unavailable" | "skill_too_large" | "skill_link_refused" | "rubric_invalid" | "skill_changed" | "sandbox_unavailable" | "path_has_whitespace" | "staging_failed" | "setup_failed" | "spawn_failed" | "claude_too_old" | "claude_failed" | "timeout" | "unobservable" | "result_missing" | "result_invalid" | "archive_failed" | "internal_error" | "other";
+export type GradingFailure = "app_closed" | "project_changed" | "project_unavailable" | "project_written" | "project_work_folder_uncheckable" | "skill_unavailable" | "skill_too_large" | "skill_link_refused" | "rubric_invalid" | "skill_changed" | "sandbox_unavailable" | "path_has_whitespace" | "staging_failed" | "setup_failed" | "spawn_failed" | "claude_too_old" | "claude_failed" | "timeout" | "unobservable" | "result_missing" | "result_invalid" | "archive_failed" | "internal_error" | "claude_unavailable" | "other";

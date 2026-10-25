@@ -62,6 +62,8 @@ export interface SidebarProps {
   accountUsageFailed?: boolean;
   accountUsageRefreshing?: boolean;
   accountUsageRefreshEnabled?: boolean;
+  /** Opens Terminal to sign in to Claude Code, where the app can. */
+  onAccountSignIn?: () => Promise<void>;
   onRefreshAccountUsage?: () => void;
   surfaces?: SurfaceStatus[];
   /** The optional plugin receiver. A port is shown only when the caller knows one. */
@@ -107,6 +109,7 @@ export function Sidebar({
   accountUsageFailed = false,
   accountUsageRefreshing = false,
   accountUsageRefreshEnabled = true,
+  onAccountSignIn,
   onRefreshAccountUsage = () => {},
   surfaces = [],
   listener,
@@ -223,6 +226,7 @@ export function Sidebar({
           refreshing={accountUsageRefreshing}
           refreshEnabled={accountUsageRefreshEnabled}
           onRefresh={onRefreshAccountUsage}
+          onSignIn={onAccountSignIn}
         />
         <PopoverTrigger
           handle={hubHandle}
