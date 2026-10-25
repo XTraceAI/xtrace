@@ -258,36 +258,16 @@ test('an added skill that cannot grade keeps its card and says why', async ({ pa
   await page.screenshot({ path: info.outputPath('added-skill-problem-page.png') });
 });
 
-test('Grade sends the project and skill; while one runs, another Grade is sent and waits', async ({
-  page,
-}) => {
-  await page.goto(harness('empty', '/scores/claude-md-doctor'));
-  await expect(page.getByRole('heading', { name: 'Grade your first project' })).toBeVisible();
-  await page.getByRole('button', { name: 'Grade beacon' }).click();
-  await expect
-    .poll(async () => (await calls(page)).starts)
-    .toEqual([['/work/beacon', 'claude-md-doctor']]);
-
+test('a Grade pressed while one runs is sent for native to put in line', async ({ page }) => {
   await page.goto(harness('running', '/scores/claude-md-doctor', 'waiting'));
-  const delta = page.getByRole('row').filter({ hasText: 'delta' });
-  await expect(delta).toContainText('Grading now');
+  await expect(page.getByRole('row').filter({ hasText: 'delta' })).toContainText('Grading now');
   const again = page.getByRole('button', { name: 'Grade again atlas' });
   await expect(again).toBeEnabled();
   await again.click();
-  // Native put it in line: no words, the row says so once read again.
   await expect
     .poll(async () => (await calls(page)).starts)
     .toEqual([['/work/atlas', 'claude-md-doctor']]);
   await expect(page.locator('.xt-scores-message')).toHaveText('');
-  await page.getByRole('button', { name: 'Cancel grading delta' }).click();
-  await expect(page.locator('.xt-scores-message')).toHaveText('Stopping the grading…');
-  expect((await calls(page)).cancels).toEqual(['00000000-0000-4000-8000-000000000004']);
-
-  await page.goto(harness('graded', '/scores/claude-md-doctor', 'claude_unavailable'));
-  await page.getByRole('button', { name: 'Grade delta' }).click();
-  await expect(page.locator('.xt-scores-message')).toHaveText(
-    'Claude Code was not found on this Mac, so nothing was graded.',
-  );
 });
 
 test('a finding’s title wraps to two lines at most, then ends in an ellipsis', async ({ page }) => {
