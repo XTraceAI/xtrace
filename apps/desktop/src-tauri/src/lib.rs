@@ -633,8 +633,10 @@ async fn grading_runs<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::Gradi
 }
 
 /// Grade one listed project with one grading skill. The path must be exactly
-/// a project a fresh project list names; one run at a time. Returns once the
-/// run's `running` row is saved; the run continues on its own thread.
+/// a project a fresh project list names; one run at a time, and a request
+/// made while the slot is held waits in line (`waiting`). Returns once the
+/// run's `running` row is saved, or once it is in line; the run continues on
+/// its own thread.
 #[tauri::command]
 async fn grading_start<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -647,8 +649,9 @@ async fn grading_start<R: tauri::Runtime>(
     .await
 }
 
-/// Ask the grading run or rubric-making job `run_id` to stop. False when it
-/// is not the one going.
+/// Ask the grading run or rubric-making job `run_id` to stop, or take the
+/// waiting grading `run_id` out of the line. False when it is neither going
+/// nor waiting.
 #[tauri::command]
 fn grading_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>, run_id: String) -> bool {
     app.try_state::<grading::GradingService>()

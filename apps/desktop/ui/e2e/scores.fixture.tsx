@@ -25,7 +25,7 @@ import '../src/index.css';
  * installed skills and `?path=` the address. Nothing runs: every start,
  * cancel, add, remove and rubric making is recorded on `window.__grading`
  * for the spec to count. Starts are answered as `?start=` says (started by
- * default). An add is answered as `?add=` says (added by default); an
+ * default; `waiting` puts it in line with its own run ID). An add is answered as `?add=` says (added by default); an
  * answered add moves the installed skills to `added` and the overview to
  * `added`, as the app would after storing it. A Make a rubric press is
  * answered as `?make=` says (started by default); a started one moves the
@@ -66,9 +66,9 @@ const controls: GradingControls = {
   start: async (projectPath, skillId) => {
     calls.starts.push([projectPath, skillId]);
     const state = params.get('start') ?? 'started';
-    return state === 'started'
-      ? { state, run_id: '00000000-0000-4000-8000-0000000000ff' }
-      : ({ state } as Awaited<ReturnType<GradingControls['start']>>);
+    if (state === 'started') return { state, run_id: '00000000-0000-4000-8000-0000000000ff' };
+    if (state === 'waiting') return { state, run_id: '00000000-0000-4000-8000-0000000000fd' };
+    return { state } as Awaited<ReturnType<GradingControls['start']>>;
   },
   cancel: async (runId) => {
     calls.cancels.push(runId);

@@ -5,7 +5,7 @@
 //!   the user added from the skills they installed ([`GradingService::installed`]
 //!   lists those, [`GradingService::add_skill`] adds one,
 //!   [`GradingService::remove_skill`] takes one off Scores, never while it
-//!   is grading). An added skill is found again each time it is read or run
+//!   is grading or waiting to grade). An added skill is found again each time it is read or run
 //!   ([`installed::locate`]: a plugin's skill in the plugin's current
 //!   install) and opened from there; when its folder, plugin or rubric has
 //!   gone or is no longer valid, it keeps its card and stored grades and
@@ -44,12 +44,22 @@
 //!   it. `grading://rubric-progress` reports
 //!   a job's elapsed time; `grading://changed` follows its start, a saved
 //!   rubric, and its end.
-//! * **One at a time.** A run or a rubric-making job holds the service's
-//!   single slot from the moment it is accepted until it is finished; a
-//!   second request answers `busy`.
-//!   After [`GradingService::shutdown`] nothing starts. The slot's lock is
-//!   only ever held briefly and never while the database is waited for, so
-//!   Cancel (a synchronous command) never waits on storage.
+//! * **One at a time, then in line.** A run or a rubric-making job holds the
+//!   service's single slot from the moment it is accepted until it is
+//!   finished. A grading requested while the slot is held waits in line, in
+//!   memory only and oldest first ([`GradingStart::Waiting`], nothing saved),
+//!   unless that project is already being graded or waiting with that skill
+//!   ([`GradingStart::AlreadyGoing`]); a rubric-making job still needs a free
+//!   slot and otherwise answers `busy`. When the slot is released the oldest
+//!   waiting grading takes it in the same step (so the slot never looks free
+//!   while gradings wait), is checked again as a start is (its skill opens,
+//!   its project is still listed, Claude Code is found) and launches; one
+//!   that fails its check is saved failed with why, and the next one gets its
+//!   turn. Cancel takes a waiting grading out of the line; no row is ever
+//!   written for it. After [`GradingService::shutdown`] nothing starts and
+//!   the line is dropped. The slot's lock is only ever held briefly and never
+//!   while the database is waited for, so Cancel (a synchronous command)
+//!   never waits on storage.
 //! * **Only a listed project.** The folder must be one a fresh project list
 //!   read names, given as exactly its resolved path (no link, `..` or
 //!   trailing slash: the path must equal what the file system resolves it
@@ -98,7 +108,7 @@ use crate::{
     state::StateError,
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     path::{Path, PathBuf},
     sync::{
@@ -322,7 +332,58 @@ struct Active {
     /// The skill a run grades with: an added skill is not removed meanwhile.
     /// None for a rubric-making job.
     skill_id: Option<String>,
+    /// The project a run grades. None for a rubric-making job.
+    project_path: Option<String>,
     cancel: CancelFlag,
+}
+
+/// A grading waiting in line for the slot, in memory only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Waiting {
+    /// Assigned when it is queued; its row gets this ID when it starts.
+    pub run_id: String,
+    pub project_path: String,
+    pub skill_id: String,
+    /// The skill's version when it was queued: stored only with a failed
+    /// row when its check at its turn fails (a launched run stores the
+    /// version read then).
+    pub skill_version: String,
+}
+
+/// The one slot and the line waiting for it. While anything waits, the
+/// slot is held.
+#[derive(Default)]
+struct Slot {
+    active: Option<Active>,
+    /// The active grading while its turn is checked and its row is not yet
+    /// saved. Kept visible as waiting until storage can show it.
+    preparing: Option<Waiting>,
+    /// Oldest first.
+    waiting: VecDeque<Waiting>,
+}
+
+impl Slot {
+    /// Whether a run of `skill_id` is going or waiting.
+    fn has_skill(&self, skill_id: &str) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.skill_id.as_deref() == Some(skill_id))
+            || self
+                .waiting
+                .iter()
+                .any(|waiting| waiting.skill_id == skill_id)
+    }
+
+    /// Whether `project_path` is being graded with `skill_id` or waits to be.
+    fn has_pair(&self, project_path: &str, skill_id: &str) -> bool {
+        self.active.as_ref().is_some_and(|active| {
+            active.skill_id.as_deref() == Some(skill_id)
+                && active.project_path.as_deref() == Some(project_path)
+        }) || self
+            .waiting
+            .iter()
+            .any(|waiting| waiting.skill_id == skill_id && waiting.project_path == project_path)
+    }
 }
 
 /// The rubric-making jobs, in memory only.
@@ -380,20 +441,20 @@ struct Inner {
     progress: PublishProgress,
     rubric_progress: PublishRubricProgress,
     /// The rubric-making jobs. Held only briefly, never across a database
-    /// call; taken after `active` when both are held.
+    /// call; taken after `slot` when both are held.
     jobs: Mutex<RubricJobs>,
     /// The kept refusals, read from their file at first use (`None` until
     /// then) and written back after each change. Held across that small
-    /// file's read and write only, never with `active` or `jobs`.
+    /// file's read and write only, never with `slot` or `jobs`.
     refusals: Mutex<Option<Vec<Refusal>>>,
-    /// The one run that may be going; `None` while idle. Held only briefly:
-    /// never across a database call, so [`GradingService::cancel`] never
-    /// waits on storage.
-    active: Mutex<Option<Active>>,
+    /// The one run that may be going (`None` while idle) and the gradings
+    /// waiting for it. Held only briefly: never across a database call, so
+    /// [`GradingService::cancel`] never waits on storage.
+    slot: Mutex<Slot>,
     /// Held by a removal across its check of the slot and its delete, and
     /// by a start of an added skill across its re-check of the stored skill
-    /// and its claim of the slot: a skill is never removed while it grades,
-    /// and a removed skill never starts.
+    /// and its claim of the slot or its place in line: a skill is never
+    /// removed while it grades or waits, and a removed skill never starts.
     membership: Mutex<()>,
     idle: Condvar,
     stopped: AtomicBool,
@@ -472,7 +533,7 @@ impl GradingService {
                 rubric_progress,
                 jobs: Mutex::new(RubricJobs::default()),
                 refusals: Mutex::new(None),
-                active: Mutex::new(None),
+                slot: Mutex::new(Slot::default()),
                 membership: Mutex::new(()),
                 idle: Condvar::new(),
                 stopped: AtomicBool::new(false),
@@ -604,8 +665,9 @@ impl GradingService {
 
     /// Take the added skill `skill_id` off Scores. Its stored grades and its
     /// files stay. Built-in skills cannot be removed, and neither can a
-    /// skill while it grades (the slot is held meanwhile, so no run of it
-    /// starts either). `grading://changed` follows a removal.
+    /// skill while it grades or waits to grade (`membership` is held
+    /// meanwhile, so no run of it starts or joins the line either).
+    /// `grading://changed` follows a removal.
     pub fn remove_skill(&self, skill_id: &str) -> GradingSkillRemove {
         let inner = &self.inner;
         if inner.config.is_none() {
@@ -617,10 +679,7 @@ impl GradingService {
         // No start of this skill claims the slot meanwhile (see `membership`);
         // the slot itself is only looked at.
         let _membership = lock(&inner.membership);
-        if lock(&inner.active)
-            .as_ref()
-            .is_some_and(|active| active.skill_id.as_deref() == Some(skill_id))
-        {
+        if lock(&inner.slot).has_skill(skill_id) {
             return GradingSkillRemove::Running;
         }
         let removed = store_call(&*inner.store, |store| store.added_skill_remove(skill_id));
@@ -649,8 +708,9 @@ impl GradingService {
     }
 
     /// The Scores page's answer ([`crate::grading_overview::overview`]) over
-    /// a fresh project list read, the bundled skills and the stored runs,
-    /// read in one snapshot. Reading this starts nothing.
+    /// a fresh project list read, the bundled skills, the line of waiting
+    /// gradings and the stored runs, read in one snapshot. Reading this
+    /// starts nothing.
     pub fn overview(&self) -> GradingOverview {
         let Some(config) = &self.inner.config else {
             return GradingOverview::NotConfigured;
@@ -662,21 +722,33 @@ impl GradingService {
             return GradingOverview::Failed;
         };
         let pairs = crate::grading_overview::pairs(&list.projects, &skills);
+        // Read before the stored runs: an entry that starts in between is
+        // then in the read, and the rule shows it there only.
+        let line: Vec<Waiting> = {
+            let slot = lock(&self.inner.slot);
+            slot.preparing
+                .iter()
+                .chain(slot.waiting.iter())
+                .cloned()
+                .collect()
+        };
         let Ok(read) = store_call(&*self.inner.store, |store| store.grade_pairs(&pairs)) else {
             return GradingOverview::Failed;
         };
-        let Some(mut loaded) = crate::grading_overview::overview(list.projects, &skills, &read)
+        let Some(mut loaded) =
+            crate::grading_overview::overview(list.projects, &skills, &read, &line)
         else {
             return GradingOverview::Failed;
         };
         loaded.making_rubric = lock(&self.inner.jobs).running.clone().map(Box::new);
-        GradingOverview::Loaded(loaded)
+        GradingOverview::Loaded(Box::new(loaded))
     }
 
     /// Make a rubric for the installed skill at `location`: exactly one the
     /// "Add a skill" rule ([`crate::grading_picker::picker`]), re-run over a
     /// fresh discovery, offers a rubric action for. The job runs on its own
-    /// thread in the one slot; this returns once it has started.
+    /// thread in the one slot, which must be free (no grading going or
+    /// waiting); this returns once it has started.
     /// `grading://changed` follows the start, a saved rubric and the end.
     pub fn make_rubric(&self, location: &str) -> GradingRubricMake {
         let inner = &self.inner;
@@ -725,17 +797,19 @@ impl GradingService {
         let cancel = CancelFlag::new();
         let started_at_ms = inner.now();
         {
-            let mut active = lock(&inner.active);
-            if active.is_some() {
+            let mut slot = lock(&inner.slot);
+            // Gradings wait only while the slot is held, so this covers them.
+            if slot.active.is_some() {
                 return GradingRubricMake::Busy;
             }
             // Checked again under the slot, as a start of a run is.
             if inner.stopped.load(Ordering::SeqCst) {
                 return GradingRubricMake::Stopped;
             }
-            *active = Some(Active {
+            slot.active = Some(Active {
                 run_id: job_id.clone(),
                 skill_id: None,
+                project_path: None,
                 cancel: cancel.clone(),
             });
             lock(&inner.jobs).running = Some(GradingRubricNow {
@@ -778,27 +852,42 @@ impl GradingService {
         GradingRubricMake::Started { job_id }
     }
 
-    /// The ID of the run going now, if any.
+    /// The ID of the run (or rubric-making job) holding the slot now, if any.
     pub fn active_run(&self) -> Option<String> {
-        lock(&self.inner.active)
+        lock(&self.inner.slot)
+            .active
             .as_ref()
             .map(|active| active.run_id.clone())
     }
 
-    /// Ask the run `run_id` to stop. False when it is not the run going now.
+    /// Ask the run or job `run_id` to stop, or take the waiting grading
+    /// `run_id` out of the line (nothing is saved for it; `grading://changed`
+    /// follows). False when it is neither going nor waiting.
     pub fn cancel(&self, run_id: &str) -> bool {
-        match lock(&self.inner.active).as_ref() {
-            Some(active) if active.run_id == run_id => {
+        let dropped = {
+            let mut slot = lock(&self.inner.slot);
+            if let Some(active) = slot.active.as_ref()
+                && active.run_id == run_id
+            {
                 active.cancel.cancel();
-                true
+                return true;
             }
-            _ => false,
+            let before = slot.waiting.len();
+            slot.waiting.retain(|waiting| waiting.run_id != run_id);
+            slot.waiting.len() != before
+        };
+        if dropped {
+            (self.inner.changed)();
         }
+        dropped
     }
 
     /// Start grading `project_path` with the built-in or added skill
-    /// `skill_id`. The run continues on its own thread; this returns once
-    /// its `running` row is committed.
+    /// `skill_id`. With the slot free the run continues on its own thread
+    /// and this returns once its `running` row is committed. While a run or
+    /// a rubric-making job holds the slot, the request joins the line and
+    /// this returns at once, with nothing saved; it starts by itself when its
+    /// turn comes ([`release`]).
     pub fn start(&self, project_path: &str, skill_id: &str) -> GradingStart {
         let inner = &self.inner;
         let Some(config) = &inner.config else {
@@ -835,12 +924,13 @@ impl GradingService {
             return GradingStart::Failed;
         };
         let cancel = CancelFlag::new();
-        {
+        let queued = {
             // An added skill removed since it was read above is not run: a
             // removal holds `membership` across its delete, so this read,
-            // made while holding it until the slot is claimed, sees it. The
-            // slot's own lock is not held while storage is read. A built-in
-            // skill cannot be removed and waits on no removal.
+            // made while holding it until the slot is claimed or the line
+            // joined, sees it. The slot's own lock is not held while storage
+            // is read. A built-in skill cannot be removed and waits on no
+            // removal.
             let _membership = (kind == SkillKind::Added).then(|| lock(&inner.membership));
             if kind == SkillKind::Added {
                 match store_call(&*inner.store, |store| store.added_skills()) {
@@ -849,65 +939,62 @@ impl GradingService {
                     Err(_) => return GradingStart::Failed,
                 }
             }
-            let mut active = lock(&inner.active);
-            if active.is_some() {
-                return GradingStart::Busy;
-            }
+            let mut slot = lock(&inner.slot);
             // Checked again under the slot: shutdown sets the flag and then
-            // takes this lock, so it either sees this run or refuses it.
+            // takes this lock, so it either sees this run (going or waiting)
+            // or refuses it.
             if inner.stopped.load(Ordering::SeqCst) {
                 return GradingStart::Stopped;
             }
-            *active = Some(Active {
-                run_id: run_id.clone(),
-                skill_id: Some(skill_id.to_owned()),
-                cancel: cancel.clone(),
-            });
-        }
-        let started_at_ms = inner.now();
-        let saved = store_call(&*inner.store, |store| {
-            store.grade_insert_running(&NewGradeRun {
-                run_id: &run_id,
-                project_path,
-                skill_id,
-                skill_version: &skill.version(),
-                started_at_ms,
-            })
-        });
-        if saved.is_err() {
-            release(inner);
-            return GradingStart::Failed;
-        }
-        (inner.changed)();
-        let job = Job {
-            run_id: run_id.clone(),
-            project_path: project_path.to_owned(),
-            project,
-            skill,
-            kind,
-            claude,
-            environment,
-            cancel,
+            if slot.has_pair(project_path, skill_id) {
+                return GradingStart::AlreadyGoing;
+            }
+            if slot.active.is_some() {
+                slot.waiting.push_back(Waiting {
+                    run_id: run_id.clone(),
+                    project_path: project_path.to_owned(),
+                    skill_id: skill_id.to_owned(),
+                    skill_version: skill.version(),
+                });
+                true
+            } else {
+                slot.active = Some(Active {
+                    run_id: run_id.clone(),
+                    skill_id: Some(skill_id.to_owned()),
+                    project_path: Some(project_path.to_owned()),
+                    cancel: cancel.clone(),
+                });
+                false
+            }
         };
-        let worker = Arc::clone(inner);
-        let spawned = std::thread::Builder::new()
-            .name("grading-run".into())
-            .spawn(move || work(&worker, job));
-        if spawned.is_err() {
-            finish(
-                inner,
-                &run_id,
-                &Outcome::Failed(GradingFailure::InternalError),
-            );
+        if queued {
+            (inner.changed)();
+            return GradingStart::Waiting { run_id };
+        }
+        let launched = launch(
+            inner,
+            Job {
+                run_id: run_id.clone(),
+                project_path: project_path.to_owned(),
+                project,
+                skill,
+                kind,
+                claude,
+                environment,
+                cancel,
+            },
+        );
+        if launched.is_err() {
             release(inner);
             return GradingStart::Failed;
         }
         GradingStart::Started { run_id }
     }
 
-    /// Refuse every later run, cancel the one going and wait, within the
-    /// bound, until it is saved and its staging folder removed. False when
-    /// the wait ran out (the next start then marks the row interrupted).
+    /// Refuse every later run, drop the waiting ones (nothing ran for them
+    /// and none has a row), cancel the one going and wait, within the bound,
+    /// until it is saved and its staging folder removed. False when the wait
+    /// ran out (the next start then marks the row interrupted).
     pub fn shutdown(&self) -> bool {
         shutdown(&self.inner)
     }
@@ -1007,8 +1094,10 @@ impl Inner {
 
 fn shutdown(inner: &Inner) -> bool {
     inner.stopped.store(true, Ordering::SeqCst);
-    let mut active = lock(&inner.active);
-    if let Some(active) = active.as_ref() {
+    let mut slot = lock(&inner.slot);
+    slot.waiting.clear();
+    slot.preparing = None;
+    if let Some(active) = slot.active.as_ref() {
         active.cancel.cancel();
     }
     let bound = inner
@@ -1016,23 +1105,209 @@ fn shutdown(inner: &Inner) -> bool {
         .as_ref()
         .map_or(Duration::ZERO, |config| config.shutdown_bound);
     let deadline = Instant::now() + bound;
-    while active.is_some() {
+    while slot.active.is_some() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return false;
         }
-        active = inner
+        slot = inner
             .idle
-            .wait_timeout(active, remaining)
+            .wait_timeout(slot, remaining)
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .0;
     }
     true
 }
 
-fn release(inner: &Inner) {
-    lock(&inner.active).take();
-    inner.idle.notify_all();
+/// Free the slot after a run or a rubric-making job, or hand it to the
+/// oldest waiting grading in the same step, so the slot is never free while
+/// gradings wait and a removal keeps seeing that one's skill as going. Its
+/// turn ([`turn`]) is taken outside the lock; when it does not launch, the
+/// slot passes to the next one, in this loop. After shutdown nothing is
+/// handed on.
+fn release(inner: &Arc<Inner>) {
+    loop {
+        let (next, dropped) = {
+            let mut slot = lock(&inner.slot);
+            let dropped = slot.preparing.take().is_some();
+            slot.active = None;
+            if inner.stopped.load(Ordering::SeqCst) {
+                slot.waiting.clear();
+            }
+            let next = slot.waiting.pop_front().map(|waiting| {
+                slot.preparing = Some(waiting.clone());
+                let cancel = CancelFlag::new();
+                slot.active = Some(Active {
+                    run_id: waiting.run_id.clone(),
+                    skill_id: Some(waiting.skill_id.clone()),
+                    project_path: Some(waiting.project_path.clone()),
+                    cancel: cancel.clone(),
+                });
+                (waiting, cancel)
+            });
+            (next, dropped)
+        };
+        if dropped {
+            (inner.changed)();
+        }
+        let Some((waiting, cancel)) = next else {
+            inner.idle.notify_all();
+            return;
+        };
+        if turn(inner, waiting, cancel) {
+            return;
+        }
+    }
+}
+
+/// A waiting grading's turn, with the slot already its own: checked again
+/// as a start is ([`check_turn`]), then launched with the run ID it was
+/// given in line. True when it launched (the slot is its run's now). One
+/// cancelled during its check writes nothing; one whose check fails is
+/// saved as a failed run with why ([`refused_turn`]); either way the slot is still
+/// held and the caller passes it on.
+fn turn(inner: &Arc<Inner>, waiting: Waiting, cancel: CancelFlag) -> bool {
+    let Some(config) = &inner.config else {
+        return false;
+    };
+    // Cancelled since it left the line (by Cancel, or by shutdown): it only
+    // leaves the page.
+    if cancel.is_cancelled() {
+        return false;
+    }
+    let checked = check_turn(inner, config, &waiting);
+    // Cancel and shutdown also win when the check failed while they ran.
+    if cancel.is_cancelled() {
+        return false;
+    }
+    let (skill, kind, project, claude, environment) = match checked {
+        Ok(checked) => checked,
+        Err(failure) => {
+            refused_turn(inner, &waiting, failure);
+            return false;
+        }
+    };
+    launch(
+        inner,
+        Job {
+            run_id: waiting.run_id,
+            project_path: waiting.project_path,
+            project,
+            skill,
+            kind,
+            claude,
+            environment,
+            cancel,
+        },
+    )
+    .is_ok()
+}
+
+/// What a waiting grading's turn launches with.
+type Checked = (
+    GradingSkill,
+    SkillKind,
+    PathBuf,
+    PathBuf,
+    Vec<(OsString, OsString)>,
+);
+
+/// A waiting grading checked again at its turn, as [`GradingService::start`]
+/// checks: its skill opens (an added one is still stored: a removal refuses
+/// while it waits), its project is still listed, and Claude Code is found.
+/// The failure says which check did not pass.
+fn check_turn(
+    inner: &Inner,
+    config: &GradingConfig,
+    waiting: &Waiting,
+) -> Result<Checked, GradingFailure> {
+    let skill_id = waiting.skill_id.as_str();
+    let (skill, kind) = if BUILTIN.contains(&skill_id) {
+        let skill = open_bundled(config, skill_id).ok_or(GradingFailure::SkillUnavailable)?;
+        (skill, SkillKind::BuiltIn)
+    } else {
+        let added = store_call(&*inner.store, |store| store.added_skills())
+            .map_err(|_| GradingFailure::InternalError)?;
+        let added = added
+            .iter()
+            .find(|added| added.skill_id == skill_id)
+            .ok_or(GradingFailure::SkillUnavailable)?;
+        let skill = open_added(config, added).map_err(|_| GradingFailure::SkillUnavailable)?;
+        (skill, SkillKind::Added)
+    };
+    let project = listed_project(&config.projects, &waiting.project_path)
+        .ok_or(GradingFailure::ProjectChanged)?;
+    let environment = config.environment.read();
+    let claude =
+        runner::find_claude(&environment).map_err(|_| GradingFailure::ClaudeUnavailable)?;
+    Ok((skill, kind, project, claude, environment))
+}
+
+/// A waiting grading that failed its check at its turn: saved as a run
+/// that started and failed at once, so its row says why. Nothing is saved
+/// when its row cannot be.
+fn refused_turn(inner: &Inner, waiting: &Waiting, failure: GradingFailure) {
+    let saved = store_call(&*inner.store, |store| {
+        store.grade_insert_running(&NewGradeRun {
+            run_id: &waiting.run_id,
+            project_path: &waiting.project_path,
+            skill_id: &waiting.skill_id,
+            skill_version: &waiting.skill_version,
+            started_at_ms: inner.now(),
+        })
+    });
+    if saved.is_ok() {
+        finish(inner, &waiting.run_id, &Outcome::Failed(failure));
+    } else {
+        // It left the line all the same.
+        (inner.changed)();
+    }
+}
+
+/// Save a checked run's `running` row and start its thread, whose end
+/// releases the slot. Shared by a start with the slot free and a waiting
+/// grading's turn. On an error the slot is still held (the caller releases
+/// it); a row already saved is finished failed (`internal_error`) first.
+fn launch(inner: &Arc<Inner>, job: Job) -> Result<(), ()> {
+    let saved = store_call(&*inner.store, |store| {
+        store.grade_insert_running(&NewGradeRun {
+            run_id: &job.run_id,
+            project_path: &job.project_path,
+            skill_id: job.skill.id(),
+            skill_version: &job.skill.version(),
+            started_at_ms: inner.now(),
+        })
+    });
+    if saved.is_err() {
+        return Err(());
+    }
+    // Clear only this transition before spawning: a fast worker can hand
+    // the slot to the next grading before this function returns.
+    {
+        let mut slot = lock(&inner.slot);
+        if slot
+            .preparing
+            .as_ref()
+            .is_some_and(|entry| entry.run_id == job.run_id)
+        {
+            slot.preparing = None;
+        }
+    }
+    (inner.changed)();
+    let run_id = job.run_id.clone();
+    let worker = Arc::clone(inner);
+    let spawned = std::thread::Builder::new()
+        .name("grading-run".into())
+        .spawn(move || work(&worker, job));
+    if spawned.is_err() {
+        finish(
+            inner,
+            &run_id,
+            &Outcome::Failed(GradingFailure::InternalError),
+        );
+        return Err(());
+    }
+    Ok(())
 }
 
 fn open_bundled(config: &GradingConfig, id: &str) -> Option<GradingSkill> {
@@ -1242,7 +1517,7 @@ enum Outcome {
 /// Releases the slot however the run's thread ends; a run that did not get
 /// saved (a panic) is saved as failed first.
 struct Release<'a> {
-    inner: &'a Inner,
+    inner: &'a Arc<Inner>,
     run_id: &'a str,
     saved: bool,
 }
@@ -1260,7 +1535,7 @@ impl Drop for Release<'_> {
     }
 }
 
-fn work(inner: &Inner, job: Job) {
+fn work(inner: &Arc<Inner>, job: Job) {
     let mut guard = Release {
         inner,
         run_id: &job.run_id,
@@ -1471,7 +1746,7 @@ struct RubricJob {
 /// remembered (a job that got none, a panic, as an internal error), the
 /// slot is released and the change published.
 struct JobRelease<'a> {
-    inner: &'a Inner,
+    inner: &'a Arc<Inner>,
     job: &'a RubricJob,
     outcome: Option<GradingRubricJob>,
     /// The skill's fingerprint when the job started, kept with a refusal.
@@ -1517,7 +1792,7 @@ fn kept_refusals<T>(
 /// the job's start, kept across restarts), free the slot, then publish the
 /// change.
 fn end_job(
-    inner: &Inner,
+    inner: &Arc<Inner>,
     job_id: &str,
     location: &str,
     outcome: GradingRubricJob,
@@ -1538,7 +1813,7 @@ fn end_job(
     (inner.changed)();
 }
 
-fn make_work(inner: &Inner, job: RubricJob) {
+fn make_work(inner: &Arc<Inner>, job: RubricJob) {
     let mut guard = JobRelease {
         inner,
         job: &job,
@@ -1659,12 +1934,12 @@ fn make_job(inner: &Inner, config: &GradingConfig, job: &RubricJob) -> GradingRu
     // Checked again under the slot, which a cancel takes to set its flag: a
     // job cancelled by now saves nothing, and none is cancelled while it
     // saves.
-    let active = lock(&inner.active);
+    let slot = lock(&inner.slot);
     if job.cancel.is_cancelled() {
         return cancelled();
     }
     let saved = save_made(config, job, &folder, &bytes);
-    drop(active);
+    drop(slot);
     match saved {
         Ok(kept_by_xtrace) => {
             (inner.changed)();

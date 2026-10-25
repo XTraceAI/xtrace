@@ -14,6 +14,7 @@ export type Scenario =
   | 'partial'
   | 'running'
   | 'running_unlisted'
+  | 'waiting'
   | 'long_findings'
   | 'failed'
   | 'added'

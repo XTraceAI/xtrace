@@ -32,6 +32,11 @@ top_insights: Array<GradingTopInsight>,
  */
 running: boolean, 
 /**
+ * How many gradings with this skill are waiting in line, on any
+ * project.
+ */
+waiting: number, 
+/**
  * One per listed project, in the project list's order.
  */
 rows: Array<GradingProjectRow>, };
