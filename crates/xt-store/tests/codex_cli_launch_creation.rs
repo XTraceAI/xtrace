@@ -4,6 +4,9 @@
 //! the tables hold the new kind only with a Codex child; and a schema 19
 //! index upgrades with every relation, fact, owner and launch row unchanged.
 
+#[path = "support/migration_history.rs"]
+mod migration_history;
+
 use rusqlite::Connection;
 use serde_json::json;
 use tempfile::TempDir;
@@ -390,27 +393,6 @@ fn the_tables_hold_the_new_kind_only_with_a_codex_child() {
 /// the rebuilt tables keep their indexes and immutability triggers.
 #[test]
 fn a_schema_19_index_upgrades_with_every_row_unchanged() {
-    const MIGRATIONS: [&str; 19] = [
-        include_str!("../migrations/0001_canonical.sql"),
-        include_str!("../migrations/0002_ingest.sql"),
-        include_str!("../migrations/0003_native_checkpoints.sql"),
-        include_str!("../migrations/0004_native_record_copies.sql"),
-        include_str!("../migrations/0005_human_classification_replay.sql"),
-        include_str!("../migrations/0006_structural_tool_kinds.sql"),
-        include_str!("../migrations/0007_native_pr_witnesses.sql"),
-        include_str!("../migrations/0008_pr_refresh_status.sql"),
-        include_str!("../migrations/0009_repeat_group_keys.sql"),
-        include_str!("../migrations/0010_confirmed_automated_inputs.sql"),
-        include_str!("../migrations/0011_session_creation_relations.sql"),
-        include_str!("../migrations/0012_guardian_turn_inputs.sql"),
-        include_str!("../migrations/0013_injected_context_inputs.sql"),
-        include_str!("../migrations/0014_human_input_estimate.sql"),
-        include_str!("../migrations/0015_claude_launch_creations.sql"),
-        include_str!("../migrations/0016_task_notification_inputs.sql"),
-        include_str!("../migrations/0017_record_previews.sql"),
-        include_str!("../migrations/0018_session_child_facts.sql"),
-        include_str!("../migrations/0019_claude_launch_binding_witnesses.sql"),
-    ];
     const VIEWS: [&str; 6] = [
         xt_store::views::RECORD_METADATA,
         xt_store::views::HUMAN_INPUTS,
@@ -433,20 +415,12 @@ fn a_schema_19_index_upgrades_with_every_row_unchanged() {
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
-            )
-            .unwrap();
-        for (index, sql) in MIGRATIONS.iter().enumerate() {
-            connection.execute_batch(sql).unwrap();
-            connection
-                .execute(
-                    "INSERT INTO schema_version VALUES (?1,'2026-10-04T00:00:00Z')",
-                    [index as i64 + 1],
-                )
-                .unwrap();
-        }
+        migration_history::apply_migrations(
+            &connection,
+            &migration_history::migrations()[..19],
+            "2026-10-04T00:00:00Z",
+            |_, _| {},
+        );
         // Today's views name the table migration 21 adds; a stand-in lets
         // them read this older index until the upgrade below replaces it.
         connection
@@ -582,7 +556,10 @@ fn a_schema_19_index_upgrades_with_every_row_unchanged() {
         .unwrap();
     for _ in 0..2 {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 27);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         assert_eq!(dump(), before);
         let parents = shown(&store);
         assert!(parents.contains(&(codex(SPAWNED), codex(PARENT), ParentEvidence::NativeSpawn)));

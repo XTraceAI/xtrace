@@ -34,7 +34,7 @@ description: string, source: GradingSkillSource, rubric: GradingInstalledRubric,
  */
 rubric_kept_by_xtrace: boolean, scores: GradingInstalledScores, 
 /**
- * Where the Add a skill dialog shows it.
+ * Where the Add a grading skill dialog shows it.
  */
 group: GradingInstalledGroup, 
 /**

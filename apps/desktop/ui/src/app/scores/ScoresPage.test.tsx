@@ -11,6 +11,7 @@ import type { GradingStart } from '../../data/generated/GradingStart';
 import { events } from '../../data/ipc-names';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
+import { detailsFor, detailsScenario } from './details.synthetic';
 import { linkKeep, linkLookup } from './link.synthetic';
 import { pickerScenario, type PickerScenario } from './picker.synthetic';
 import {
@@ -78,6 +79,8 @@ function sourceWith(
     linkCancel: vi.fn<GradingControls['linkCancel']>(async () => false),
     linkKeep: vi.fn<GradingControls['linkKeep']>(async () => linkKeep('kept_several')),
     linkDiscard: vi.fn<GradingControls['linkDiscard']>(async () => true),
+    runDetails: vi.fn<GradingControls['runDetails']>(async (runId) => detailsFor(runId)),
+    openReport: vi.fn<GradingControls['openReport']>(async () => ({ state: 'opened' })),
   };
   Object.defineProperty(source, 'grading', { value: controls });
   return { source, controls };
@@ -201,14 +204,14 @@ it('lists every project and the apps it was found in, with Close focused first',
 });
 
 /**
- * The Add a skill dialog's status line for its installed skills ("Add from a
+ * The Add a grading skill dialog's status line for its installed skills ("Add from a
  * link" has its own).
  */
 const listStatus = (dialog: HTMLElement) =>
   within(dialog)
     .getAllByRole('status')
     .find((status) => !status.closest('.xt-score-link'))!;
-/** The Add a skill dialog's group titled `title`, by its heading. */
+/** The Add a grading skill dialog's group titled `title`, by its heading. */
 const group = (dialog: HTMLElement, title: string) =>
   within(dialog)
     .getByRole('heading', { level: 3, name: new RegExp(`^${title}`) })
@@ -220,20 +223,20 @@ const rowNames = (section: HTMLElement) =>
 const fold = (dialog: HTMLElement, title: string) =>
   within(group(dialog, title)).getByRole('button', { name: new RegExp(`^${title}`) });
 
-it('ends the skill cards with Add a skill: three steps, Ready to add, Your skills, then two folded groups', async () => {
+it('ends the skill cards with Add a grading skill: three steps, Ready to add, Your skills, then two folded groups', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
   await waitFor(() => card('CLAUDE.md doctor'));
   const cards = within(within(page()).getByRole('list', { name: 'Grading skills' }))
     .getAllByRole('listitem')
     .filter((item) => item.parentElement?.classList.contains('xt-scores-grid'));
-  const trigger = within(page()).getByRole('button', { name: 'Add a skill' });
+  const trigger = within(page()).getByRole('button', { name: 'Add a grading skill' });
   // It is the last card, after every skill's card.
   expect(cards.length).toBe(2);
   expect(cards.at(-1)!.contains(trigger)).toBe(true);
   expect(trigger.tabIndex).toBe(0);
   fireEvent.click(trigger);
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const close = within(dialog).getByRole('button', { name: 'Close' });
   await waitFor(() => expect(document.activeElement).toBe(close));
   await waitFor(() => expect(within(dialog).getByRole('region', { name: 'Installed skills' })));
@@ -325,8 +328,8 @@ it('ends the skill cards with Add a skill: three steps, Ready to add, Your skill
 it('says how to get a skill ready while none is, and lists a home like a real one', async () => {
   const { source } = sourceWith('graded', undefined, 'yours');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   await within(dialog).findByRole('region', { name: 'Installed skills' });
   const ready = group(dialog, 'Ready to add');
   expect(within(ready).getByRole('heading').textContent).toBe('Ready to add0');
@@ -352,8 +355,8 @@ it('says how to get a skill ready while none is, and lists a home like a real on
   // Closing and opening the dialog folds it again.
   fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  fireEvent.click(screen.getByRole('button', { name: 'Add a skill' }));
-  const again = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(screen.getByRole('button', { name: 'Add a grading skill' }));
+  const again = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   await within(again).findByRole('region', { name: 'Installed skills' });
   expect(fold(again, 'Can’t be scored').getAttribute('aria-expanded')).toBe('false');
 });
@@ -361,8 +364,8 @@ it('says how to get a skill ready while none is, and lists a home like a real on
 it('searches folded groups too: a folded group shows how many of its skills match', async () => {
   const { source } = sourceWith('graded', undefined, 'yours');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const search = await within(dialog).findByRole('searchbox', { name: 'Search installed skills' });
   fireEvent.change(search, { target: { value: 'framer' } });
   expect(fold(dialog, 'Can’t be scored').textContent).toBe('›Can’t be scored1 of 2');
@@ -388,8 +391,8 @@ it('searches folded groups too: a folded group shows how many of its skills matc
 it('filters the installed skills by the search text and says how many match', async () => {
   const { source } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const search = await within(dialog).findByRole('searchbox', { name: 'Search installed skills' });
   fireEvent.change(search, { target: { value: 'LINT' } });
   expect(within(group(dialog, 'Ready to add')).getByRole('heading').textContent).toBe(
@@ -405,8 +408,8 @@ it('filters the installed skills by the search text and says how many match', as
 it('adds a ready skill by its location only, stays open and shows it on Scores', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   controls.installed.mockResolvedValue(pickerScenario('added'));
   controls.overview.mockResolvedValue(scenario('added'));
   fireEvent.click(await within(dialog).findByRole('button', { name: 'Add README check' }));
@@ -418,7 +421,7 @@ it('adds a ready skill by its location only, stays open and shows it on Scores',
   );
   // The dialog stays open; the row moves to Already on Scores, which says so,
   // and the card is behind it.
-  expect(screen.getByRole('dialog', { name: 'Add a skill' })).toBe(dialog);
+  expect(screen.getByRole('dialog', { name: 'Add a grading skill' })).toBe(dialog);
   await waitFor(() =>
     expect(within(dialog).queryByRole('button', { name: 'Add README check' })).toBeNull(),
   );
@@ -444,8 +447,8 @@ it('adds a ready skill by its location only, stays open and shows it on Scores',
 it('keeps Add busy until the list read after it shows the skill on Scores', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const button = await within(dialog).findByRole('button', { name: 'Add README check' });
   // The read after the answer is held until the test lets it finish.
   let finish: () => void = () => {};
@@ -491,8 +494,8 @@ it('keeps Add busy until the list read after it shows the skill on Scores', asyn
 it('clears Add once a read after a refused add shows the row unchanged', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   controls.addSkill.mockResolvedValueOnce({ state: 'failed' });
   fireEvent.click(await within(dialog).findByRole('button', { name: 'Add README check' }));
   await waitFor(() =>
@@ -505,12 +508,12 @@ it('clears Add once a read after a refused add shows the row unchanged', async (
   );
 });
 
-it('starts each opening of Add a skill with an empty search', async () => {
+it('starts each opening of Add a grading skill with an empty search', async () => {
   const { source } = sourceWith('graded');
   await mount('/scores', source);
-  const trigger = await screen.findByRole('button', { name: 'Add a skill' });
+  const trigger = await screen.findByRole('button', { name: 'Add a grading skill' });
   fireEvent.click(trigger);
-  let dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  let dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   fireEvent.change(
     await within(dialog).findByRole('searchbox', { name: 'Search installed skills' }),
     { target: { value: 'lint' } },
@@ -519,7 +522,7 @@ it('starts each opening of Add a skill with an empty search', async () => {
   fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   fireEvent.click(trigger);
-  dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const search = await within(dialog).findByRole<HTMLInputElement>('searchbox', {
     name: 'Search installed skills',
   });
@@ -530,8 +533,8 @@ it('starts each opening of Add a skill with an empty search', async () => {
 it('says why plugin skills are not all listed when the plugin list cannot be used', async () => {
   const { source } = sourceWith('graded', undefined, 'plugins_unread');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   expect(
     await within(dialog).findByText(
       /Plugin skills are not all listed: Claude Code’s installed_plugins\.json is a link\./,
@@ -557,8 +560,8 @@ it('says when installed skills are not read here or could not be read', async ()
   ] as const) {
     const { source } = sourceWith('graded', undefined, picker);
     await mount('/scores', source);
-    fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
     expect(await within(dialog).findByText(text)).toBeTruthy();
     cleanup();
   }
@@ -657,18 +660,18 @@ it('removes an added skill from Scores by its id and goes back; a built-in one h
   await waitFor(() => expect(document.querySelectorAll('.xt-score-card').length).toBe(1));
 });
 
-it('shows Add a skill before anything is graded, but not on a skill page or in fixture mode', async () => {
+it('shows Add a grading skill before anything is graded, but not on a skill page or in fixture mode', async () => {
   const { source } = sourceWith('empty');
   await mount('/scores', source);
   await waitFor(() => card('CLAUDE.md doctor'));
-  expect(within(page()).getByRole('button', { name: 'Add a skill' })).toBeTruthy();
+  expect(within(page()).getByRole('button', { name: 'Add a grading skill' })).toBeTruthy();
   fireEvent.click(within(page()).getByRole('link', { name: 'CLAUDE.md doctor' }));
   expect(await screen.findByRole('heading', { name: 'Grade your first project' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Add a skill' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add a grading skill' })).toBeNull();
   cleanup();
   await mount('/scores');
   expect(await screen.findByText('Scores are not available here')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Add a skill' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add a grading skill' })).toBeNull();
 });
 
 it('lists each project’s score, when it was graded and its state', async () => {
@@ -678,7 +681,7 @@ it('lists each project’s score, when it was graded and its state', async () =>
   const [atlas, beacon, cedar, delta] = rows();
   expect(atlas!.textContent).toContain('75');
   expect(atlas!.textContent).toContain('Last try failed: it ran past its time limit');
-  expect(within(atlas!).getByRole('button').textContent).toBe('Grade again');
+  expect(within(atlas!).getByRole('button', { name: /^Grade/ }).textContent).toBe('Grade again');
   expect(beacon!.textContent).toContain('90');
   expect(cedar!.textContent).toContain('61');
   expect(cedar!.textContent).toContain('Partial result');
@@ -686,6 +689,204 @@ it('lists each project’s score, when it was graded and its state', async () =>
   expect(delta!.textContent).toContain('Last try stopped: XTrace closed during the grading');
   expect(within(delta!).getByRole('button').textContent).toBe('Grade');
   expect(page().querySelector('.xt-scores-average .xt-score-big')?.textContent).toBe('75');
+});
+
+/** The details dialog a shown score opened. */
+const detailsDialog = () => screen.findByRole('dialog', { name: /· CLAUDE\.md doctor$/ });
+
+it('opens a shown score’s details by its run ID: every finding most severe first, criteria and the report', async () => {
+  const { source, controls } = sourceWith('graded');
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  // Only a graded project's score opens details.
+  expect(within(rows()[3]!).queryByRole('button', { name: /details for/ })).toBeNull();
+  const trigger = screen.getByRole('button', { name: '75, details for atlas' });
+  fireEvent.click(trigger);
+  const dialog = await detailsDialog();
+  expect(dialog.getAttribute('aria-labelledby')).toBeTruthy();
+  expect(within(dialog).getByRole('heading', { level: 2 }).textContent).toBe(
+    'atlas · CLAUDE.md doctor',
+  );
+  expect(controls.runDetails).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001');
+  await within(dialog).findByText('Complete');
+  expect(within(dialog).getByText('Score 75')).toBeTruthy();
+  expect(within(dialog).getByText('/work/atlas')).toBeTruthy();
+  const answer = detailsScenario('full');
+  if (answer.state !== 'loaded' || answer.content.state !== 'kept')
+    throw new Error('the full answer is loaded and kept');
+  const full = answer.content;
+  if (full.findings.state !== 'listed') throw new Error('the full answer lists its findings');
+  const listed = full.findings.findings;
+  expect(within(dialog).getByText(full.summary)).toBeTruthy();
+  // All five findings, in the native order, each with its explanation and fix.
+  const findings = within(
+    within(dialog).getByRole('region', { name: /Findings/ }) as HTMLElement,
+  ).getAllByRole('listitem');
+  expect(
+    findings.map((item) => item.querySelector('.xt-score-finding-title')?.textContent),
+  ).toEqual(listed.map((finding) => finding.title));
+  expect(findings.map((item) => within(item).getByRole('img').getAttribute('aria-label'))).toEqual([
+    'Critical',
+    'Critical',
+    'Warning',
+    'Note',
+    'Pass',
+  ]);
+  expect(findings[0]!.textContent).toContain(listed[0]!.detail!);
+  expect(findings[0]!.textContent).toContain(`Fix ${listed[0]!.fix!}`);
+  // A finding without an explanation or fix shows only its title.
+  expect(findings[3]!.querySelector('.xt-score-finding-detail')).toBeNull();
+  expect(findings[3]!.querySelector('.xt-score-finding-fix')).toBeNull();
+  const criteria = within(
+    within(dialog).getByRole('region', { name: 'Points by criterion' }) as HTMLElement,
+  ).getAllByRole('listitem');
+  expect(criteria.map((item) => item.textContent)).toEqual([
+    'Instructions reach the agent15 / 30',
+    'Instructions are accurate35 / 40',
+    'Instructions are short and clear25 / 30',
+  ]);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+  await waitFor(() =>
+    expect(controls.openReport).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001'),
+  );
+  expect(within(dialog).getByRole('status').textContent).toBe('');
+  // An answer that opened nothing says why; a failed request says so.
+  controls.openReport.mockResolvedValueOnce({
+    state: 'unavailable',
+    reason: 'folder_not_kept',
+  });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+  await waitFor(() =>
+    expect(within(dialog).getByRole('status').textContent).toBe(
+      'Only the newest grades keep their full report, and this one’s was removed.',
+    ),
+  );
+  controls.openReport.mockRejectedValueOnce(new Error('ipc'));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+  await waitFor(() =>
+    expect(within(dialog).getByRole('status').textContent).toBe(
+      'The report could not be opened. Try again.',
+    ),
+  );
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(controls.start).not.toHaveBeenCalled();
+});
+
+it('says why a grade shows no criteria or report: before rubrics, a pruned folder, deleted content', async () => {
+  const { source, controls } = sourceWith('graded');
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  // beacon: a grade from before rubrics; its report is kept.
+  fireEvent.click(screen.getByRole('button', { name: '90, details for beacon' }));
+  let dialog = await detailsDialog();
+  await within(dialog).findByText(
+    'This grade has no points per criterion: it was made before skills had rubrics.',
+  );
+  expect(within(dialog).getByRole('button', { name: 'Open full report' })).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // cedar: a partial grade whose folder was pruned; its findings stay.
+  fireEvent.click(screen.getByRole('button', { name: '61, details for cedar' }));
+  dialog = await detailsDialog();
+  await within(dialog).findByText(
+    'Partial: the skill skipped a step, so this score may miss something',
+  );
+  expect(
+    within(dialog).getByText(
+      'Only the newest grades keep their saved files, and this one’s were removed, so its points per criterion are gone.',
+    ),
+  ).toBeTruthy();
+  expect(
+    within(dialog).getByText(
+      'Only the newest grades keep their full report, and this one’s was removed.',
+    ),
+  ).toBeTruthy();
+  expect(within(dialog).queryByRole('button', { name: 'Open full report' })).toBeNull();
+  expect(dialog.querySelectorAll('.xt-score-finding')).toHaveLength(2);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // After Delete stored content: the score alone, said once.
+  controls.runDetails.mockResolvedValueOnce(detailsScenario('content_deleted'));
+  fireEvent.click(screen.getByRole('button', { name: '75, details for atlas' }));
+  dialog = await detailsDialog();
+  await within(dialog).findByText(
+    'Stored content was deleted. The score stays; its summary, findings, points and full report are gone.',
+  );
+  expect(within(dialog).getByText('Score 75')).toBeTruthy();
+  expect(within(dialog).queryByRole('heading', { name: /Findings|Summary|Points/ })).toBeNull();
+  expect(within(dialog).queryByRole('button', { name: 'Open full report' })).toBeNull();
+  expect(controls.openReport).not.toHaveBeenCalled();
+});
+
+it('says when a grade’s details could not be read and reads them again on request', async () => {
+  const { source, controls } = sourceWith('graded');
+  controls.runDetails.mockResolvedValueOnce({ state: 'failed' });
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  fireEvent.click(screen.getByRole('button', { name: '75, details for atlas' }));
+  const dialog = await detailsDialog();
+  await within(dialog).findByText('The details could not be read. Try again.');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }));
+  await within(dialog).findByText('Complete');
+  expect(controls.runDetails).toHaveBeenCalledTimes(2);
+  // A run no longer stored says so, with nothing to try again.
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  controls.runDetails.mockResolvedValue({ state: 'not_found' });
+  fireEvent.click(screen.getByRole('button', { name: '90, details for beacon' }));
+  const gone = await detailsDialog();
+  await within(gone).findByText(
+    'This grading is no longer stored. Grade the project again to see its details.',
+  );
+  expect(within(gone).queryByRole('button', { name: 'Try again' })).toBeNull();
+});
+
+it('says stored findings that could not be read, never that a grade has none', async () => {
+  const { source, controls } = sourceWith('graded');
+  controls.runDetails.mockResolvedValueOnce(detailsScenario('findings_unreadable'));
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  fireEvent.click(screen.getByRole('button', { name: '90, details for beacon' }));
+  const dialog = await detailsDialog();
+  await within(dialog).findByText('This grade’s stored findings could not be read.');
+  expect(within(dialog).queryByText('This grade has no findings.')).toBeNull();
+  expect(dialog.querySelector('.xt-score-details-count')).toBeNull();
+  // The rest of the grade shows as usual.
+  expect(within(dialog).getByText('Short, accurate instructions.')).toBeTruthy();
+  expect(within(dialog).getByRole('button', { name: 'Open full report' })).toBeTruthy();
+});
+
+it('reopens a grade’s details on a fresh read after Delete stored content, never the old text', async () => {
+  const { source, controls } = sourceWith('graded');
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  const trigger = screen.getByRole('button', { name: '75, details for atlas' });
+  fireEvent.click(trigger);
+  let dialog = await detailsDialog();
+  const summary = 'The instructions are mostly accurate';
+  await within(dialog).findByText(new RegExp(summary));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  act(() => source.emit(events.contentPurged));
+  // The next read is held, so nothing but a fresh answer can fill the dialog.
+  let answer: (value: Awaited<ReturnType<GradingControls['runDetails']>>) => void = () => {};
+  controls.runDetails.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+  );
+  fireEvent.click(trigger);
+  dialog = await detailsDialog();
+  await waitFor(() => expect(controls.runDetails).toHaveBeenCalledTimes(2));
+  expect(within(dialog).queryByText(new RegExp(summary))).toBeNull();
+  expect(dialog.querySelector('.xt-score-finding')).toBeNull();
+  act(() => answer(detailsScenario('content_deleted')));
+  await within(dialog).findByText(
+    'Stored content was deleted. The score stays; its summary, findings, points and full report are gone.',
+  );
+  expect(within(dialog).queryByText(new RegExp(summary))).toBeNull();
 });
 
 it('starts a grading with only the project path and skill ID, and says why one did not start or wait', async () => {
@@ -905,6 +1106,44 @@ it('shows a waiting row’s place in line with its own Cancel, and a waiting gra
   expect(controls.start).not.toHaveBeenCalled();
 });
 
+it('keeps the shown grade’s details and report separate from a waiting or running replacement’s Cancel', async () => {
+  for (const replacement of ['waiting', 'running'] as const) {
+    const overview = scenario('waiting');
+    if (overview.state !== 'loaded') throw new Error('the waiting overview is loaded');
+    const atlas = overview.skills[0]!.rows[0]!;
+    const shownId = atlas.shown!.run_id;
+    const replacementId = atlas.waiting!.run_id;
+    if (replacement === 'running') {
+      atlas.waiting = null;
+      atlas.attempt = {
+        state: 'running',
+        run_id: replacementId,
+        started_at_ms: STARTED,
+      };
+    }
+    const { source, controls } = sourceWith(async () => overview);
+    await mount('/scores/claude-md-doctor', source);
+    const trigger = await screen.findByRole('button', { name: '75, details for atlas' });
+    fireEvent.click(trigger);
+    const dialog = await detailsDialog();
+    await within(dialog).findByText('Complete');
+    expect(controls.runDetails).toHaveBeenLastCalledWith(shownId);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+    await waitFor(() => expect(controls.openReport).toHaveBeenLastCalledWith(shownId));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: replacement === 'waiting' ? 'Cancel waiting grading atlas' : 'Cancel grading atlas',
+      }),
+    );
+    await waitFor(() => expect(controls.cancel).toHaveBeenLastCalledWith(replacementId));
+    expect(replacementId).not.toBe(shownId);
+    expect(controls.start).not.toHaveBeenCalled();
+    cleanup();
+  }
+});
+
 it('says why a waiting grading failed when Claude Code was gone at its turn', () => {
   expect(
     attemptText(
@@ -972,8 +1211,8 @@ const installedRow = (dialog: HTMLElement, name: string) =>
 
 async function openDialog(source: FixtureDataSource) {
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   await within(dialog).findByRole('region', { name: 'Installed skills' });
   return dialog;
 }
@@ -1216,7 +1455,7 @@ it('focuses the status line when a skill tried again is not shown afterwards', a
 /** The documents plugin's pdf skill (`picker.synthetic.json`). */
 const PDF = 'plugin:documents@official/pdf';
 
-/** "Add from a link" in the open Add a skill dialog. */
+/** "Add from a link" in the open Add a grading skill dialog. */
 const linkBox = (dialog: HTMLElement) =>
   within(dialog).getByRole('region', { name: 'Add from a link' });
 /** The made-up look-up's ID (`link.synthetic.json`). */

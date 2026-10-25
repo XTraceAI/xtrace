@@ -141,53 +141,21 @@ it('parses only the answers on screen, and never an unchanged one twice', () => 
   expect(parses.count).toBe(short + 3);
 });
 
-/**
- * Performance evidence on a large synthetic session. jsdom is slower than WebKit and lays
- * nothing out, so these are relative numbers: the same records, once with the agent's text
- * formatted and once with every record literal (as `system`, which is never formatted).
- * Printed for the report; the assertions hold the structural bounds rather than a wall clock.
- */
-it('renders a 1,500-record synthetic session within its structural bounds', () => {
-  const records = syntheticSession(1_500);
-  const { short, long } = assistantTexts(records);
-  const literal = records.map((record) => ({ ...record, role: 'system' as const }));
-
-  const time = (input: readonly TranscriptRecord[]) => {
-    const start = performance.now();
-    const view = render(<SessionTranscript records={input} />);
-    const elapsed = performance.now() - start;
-    const region = screen.getByRole('region', { name: 'Session transcript' });
-    const nodes = region.querySelectorAll('*').length;
-    const characters = region.textContent?.length ?? 0;
-    const start2 = performance.now();
-    act(() => {
-      view.rerender(<SessionTranscript records={input} reveal={{ token: 1, blockId: 'x' }} />);
-    });
-    const rerender = performance.now() - start2;
-    view.unmount();
-    return { elapsed, rerender, nodes, characters };
-  };
-
-  // Warm the module graph so the first measurement is not paying for imports.
-  time(syntheticSession(20));
-  parses.count = 0;
-  const plain = time(literal);
-  expect(parses.count).toBe(0);
-  const formatted = time(records);
-  expect(parses.count).toBe(short);
-
-  console.info(
-    `[transcript-markdown perf] records=${records.length} formatted-answers=${short} clamped-unparsed=${long}\n` +
-      `  literal:   mount ${plain.elapsed.toFixed(0)} ms, re-render ${plain.rerender.toFixed(0)} ms, ${plain.nodes} nodes, ${plain.characters} chars\n` +
-      `  markdown:  mount ${formatted.elapsed.toFixed(0)} ms, re-render ${formatted.rerender.toFixed(0)} ms, ${formatted.nodes} nodes, ${formatted.characters} chars`,
+it('formats short answers while clamped payloads and user prompts stay literal', () => {
+  const records = syntheticSession(6);
+  render(<SessionTranscript records={records} />);
+  expect(parses.count).toBe(2);
+  expect(screen.getByRole('heading', { name: 'Step 3' })).toBeTruthy();
+  expect(screen.getAllByRole('table')).toHaveLength(2);
+  expect(screen.getByRole('region', { name: 'Session transcript' }).textContent).toContain(
+    'notes (./notes-3.md)',
   );
-
-  // The clamped answers cost a literal preview each and nothing else: no formatted subtree.
-  // The DOM grows by the formatting of the short answers only — a bounded factor per answer,
-  // not the size of the hidden payloads.
-  expect(formatted.nodes).toBeLessThan(plain.nodes + short * 40);
-  // Formatting drops syntax characters; it never adds the hidden remainder of a long answer.
-  expect(formatted.characters).toBeLessThanOrEqual(plain.characters);
-  // Two mounts and re-renders of 1,500 records take about two seconds alone, and more beside the
-  // folder’s other suites. The limit is for a hang, not a speed claim — this test asserts none.
-}, 30_000);
+  expect(screen.queryByRole('link')).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'Long report 1' })).toBeNull();
+  expect(screen.queryByText('item 60 of report 1 with', { exact: false })).toBeNull();
+  expect(screen.getByText('Please check **fixture** 0.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Show the rest of this block' }));
+  expect(parses.count).toBe(3);
+  expect(screen.getByRole('heading', { name: 'Long report 1' })).toBeTruthy();
+  expect(screen.getByText('item 60 of report 1 with', { exact: false })).toBeTruthy();
+});

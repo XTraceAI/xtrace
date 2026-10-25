@@ -1,4 +1,4 @@
-//! The "Add a skill" dialog's rule over hand-built discoveries: groups,
+//! The "Add a grading skill" dialog's rule over hand-built discoveries: groups,
 //! order, counts, what is already on Scores and id clashes.
 use super::*;
 use crate::grading_dto::{

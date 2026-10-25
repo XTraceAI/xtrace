@@ -167,6 +167,9 @@ const MIGRATIONS: &[Migration] = &[
     ),
 ];
 
+/// Newest schema supported by the embedded migration chain.
+pub const LATEST_SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version as u32;
+
 /// Which file applied each version. Created inside the history transaction, so
 /// a refused open leaves no trace. `name` only explains a refusal; `sha256`
 /// alone decides whether a recorded version matches this build's.

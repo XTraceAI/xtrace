@@ -5,6 +5,9 @@ export function createQueryClient() {
     defaultOptions: { queries: { staleTime: 1000, refetchOnWindowFocus: false, retry: false } },
   });
 }
+/** The prefix of every run's details (`queryKeys.gradingRunDetails`). */
+export const gradingRunDetailsPrefix = ['grading', 'run-details'] as const;
+
 export const queryKeys = {
   accountUsage: ['account-usage'],
   dashboard: (windowDays: number) => ['metrics', 'dashboard', windowDays] as const,
@@ -49,7 +52,7 @@ export const queryKeys = {
   /** The grading skills: built in, then added; a change re-reads them. */
   gradingSkills: ['grading', 'skills'],
   /**
-   * The installed skills for the Add a skill dialog. Under `grading`, so an
+   * The installed skills for the Add a grading skill dialog. Under `grading`, so an
    * added or removed skill re-reads which rows are on Scores.
    */
   gradingInstalled: ['grading', 'installed'],
@@ -58,6 +61,13 @@ export const queryKeys = {
    * change and a content purge re-read it; it reads the project list fresh.
    */
   gradingOverview: ['grading', 'overview'],
+  /**
+   * One run's details. Under `grading`, so `grading://changed` re-reads them
+   * while their dialog is open: a run's status change, and a prune that
+   * removed a run's kept folder. A content purge drops every cached answer
+   * (`discardStoredWords`), so a closed dialog never reopens on deleted text.
+   */
+  gradingRunDetails: (runId: string) => [...gradingRunDetailsPrefix, runId] as const,
   /** The recent grading runs; every committed status change re-reads them. */
   gradingRuns: ['grading', 'runs'],
   /** The automatic pull-request check's status; its own event re-reads it. */
@@ -81,4 +91,20 @@ export const queryKeys = {
    */
   spanDetail: (purges: number, sessionId: string, startMs: number, endMs: number) =>
     ['metrics', 'span-detail', purges, sessionId, startMs, endMs] as const,
+  /**
+   * One day's sessions in one Dashboard report: its range, its window's end
+   * and the day. Under `metrics`, so committed data re-reads it; otherwise it
+   * is kept, so opening the same day of the same report again reads nothing.
+   * Every new report has a new window end, and so a new key; the key also
+   * names the zone the report was read in, as the request does. `purges` is
+   * the content-purge epoch the read began in, as for a span's detail: the
+   * list carries saved titles, which "Delete stored content" removes.
+   */
+  daySessions: (
+    purges: number,
+    windowDays: number,
+    windowEndMs: number,
+    timezone: string,
+    date: string,
+  ) => ['metrics', 'day-sessions', purges, windowDays, windowEndMs, timezone, date] as const,
 } as const;

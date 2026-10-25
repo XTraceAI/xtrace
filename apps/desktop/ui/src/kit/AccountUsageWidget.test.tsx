@@ -676,10 +676,12 @@ describe('how the forecast works', () => {
     renderWidget();
     fireEvent.click(info());
     await waitFor(() => expectForecastNote(forecastNote()));
+    vi.useFakeTimers();
     expect(info().getAttribute('aria-expanded')).toBe('true');
     fireEvent.mouseEnter(info());
     fireEvent.mouseLeave(info());
-    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
     expectForecastNote(forecastNote());
     fireEvent.click(info());
     await waitFor(() => expect(forecastNote()).toBeNull());
@@ -690,9 +692,11 @@ describe('how the forecast works', () => {
     fireEvent.mouseEnter(info());
     fireEvent.mouseMove(info());
     await waitFor(() => expectForecastNote(forecastNote()));
+    vi.useFakeTimers();
     fireEvent.click(info());
     fireEvent.mouseLeave(info());
-    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
     expectForecastNote(forecastNote());
     fireEvent.keyDown(document.body, { key: 'Escape' });
     await waitFor(() => expect(forecastNote()).toBeNull());
@@ -703,8 +707,10 @@ describe('how the forecast works', () => {
     fireEvent.focus(info());
     await waitFor(() => expectForecastNote(forecastNote()));
     // Enter on a focused button arrives as a click.
+    vi.useFakeTimers();
     fireEvent.click(info());
-    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
     expectForecastNote(forecastNote());
     expect(info().getAttribute('aria-expanded')).toBe('true');
     fireEvent.click(info());
@@ -717,10 +723,12 @@ describe('how the forecast works', () => {
     info().focus();
     fireEvent.focus(info());
     await waitFor(() => expectForecastNote(forecastNote()));
+    vi.useFakeTimers();
     fireEvent.mouseEnter(info());
     fireEvent.mouseMove(info());
     fireEvent.mouseLeave(info());
-    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
     expectForecastNote(forecastNote());
   });
 

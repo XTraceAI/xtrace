@@ -16,18 +16,13 @@ import { AppRoutes } from './AppRoutes';
 import { LiveUpdatesNotice } from './LiveUpdatesNotice';
 import { Shell } from './Shell';
 import { useNativeIndexStatus } from './useAppInfo';
-import type { LocalIndexStatus } from '../kit/Sidebar';
-import { sidebarIndexStatus } from './sidebar-index-status';
 
 // JSON imports widen literal unions; the export is the generated shape.
 const exported = fixture as FixtureExport;
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
-// The real presenter, counted: the Shell calls it once for each of its renders.
-vi.mock('./sidebar-index-status', async (original) => {
-  const actual = await original<typeof import('./sidebar-index-status')>();
-  return { ...actual, sidebarIndexStatus: vi.fn(actual.sidebarIndexStatus) };
-});
+const statusWatches: MutationObserver[] = [];
 afterEach(() => {
+  statusWatches.splice(0).forEach((watch) => watch.disconnect());
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -150,7 +145,7 @@ it('describes the local index, not the off receiver, from one read with no repor
   const { source } = nativeSource(async () => updating);
   mount('/prs', source);
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   expect(screen.queryByText(/plugin · /)).toBeNull();
   const panel = await openPanel();
   // An off receiver is its own line: it neither stops indexing nor means
@@ -209,9 +204,7 @@ it('does not read again when routes without a status reader remount', async () =
   // Leaderboard are disabled "soon" rows the sidebar cannot open).
   for (const name of ['Sessions', 'Pull requests', 'Sessions']) {
     fireEvent.click(screen.getByRole('button', { name }));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    });
+    await act(async () => {});
   }
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(1);
   expect(source.subscribe).toHaveBeenCalledTimes(Object.values(events).length);
@@ -235,7 +228,7 @@ it('follows the status event through the shared query, with one read per change'
   });
   vi.useRealTimers();
   await waitFor(() => expect(trigger().textContent).toBe('index · degraded'));
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Updates interrupted');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
   expect(source.dashboard).not.toHaveBeenCalled();
   const panel = await openPanel();
@@ -245,15 +238,14 @@ it('follows the status event through the shared query, with one read per change'
   ).toBeTruthy();
 });
 
-it('does not re-render the Shell for scan progress the sidebar does not show', async () => {
+it('keeps the same visible status for scan progress the sidebar does not show', async () => {
   let status = scanning;
   const { source, send } = nativeSource(async () => status);
   mount('/prs', source);
   await waitFor(() => expect(trigger().textContent).toBe('index · scanning'));
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
-  const renders = vi.mocked(sidebarIndexStatus).mock.calls.length;
+  await act(async () => {});
+  const shown = observeStatus();
+  const originalTrigger = trigger();
   vi.useFakeTimers();
   status = { ...scanning, files_scanned: 250, reconciles: 4 };
   await act(async () => {
@@ -262,12 +254,11 @@ it('does not re-render the Shell for scan progress the sidebar does not show', a
   });
   vi.useRealTimers();
   await waitFor(() => expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2));
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await act(async () => {});
   // Progress refreshed the status alone; the facts shown did not change, so
-  // the Shell, and every page under it, was not rendered again.
-  expect(vi.mocked(sidebarIndexStatus).mock.calls.length).toBe(renders);
+  // the status control and its accessible label stay unchanged.
+  expect(trigger()).toBe(originalTrigger);
+  expect(shown()).toEqual([]);
   expect(trigger().textContent).toBe('index · scanning');
   expect(source.tokensByHost).toHaveBeenCalledTimes(1);
 });
@@ -286,7 +277,6 @@ it('shows a cached status as last known while reconnecting fails, and as current
   // hears the index, so the row is not green and says it is last known.
   await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Up to date');
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   expect(await screen.findByText('Live updates are still unavailable.')).toBeTruthy();
   expect(trigger().textContent).toBe('index · live?');
@@ -299,7 +289,7 @@ it('shows a cached status as last known while reconnecting fails, and as current
   reachable = true;
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   // The reconnect's own catch-up read, and nothing from the sidebar.
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(reads + 1);
 });
@@ -341,16 +331,40 @@ const heard = () =>
     expect(screen.queryByText(/Live updates are|Reconnecting live updates/)).toBeNull(),
   );
 /** Lets pending promise continuations and React's scheduled renders run. */
-const idle = () =>
-  act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 25));
+const idle = () => act(async () => {});
+/** Records changes to the accessible status, including a transient old label. */
+function observeStatus() {
+  const labels: string[] = [];
+  const remember = (label: string | null) => {
+    if (label?.startsWith('Local index:')) labels.push(label);
+  };
+  const collect = (records: MutationRecord[]) => {
+    for (const record of records) {
+      remember(record.oldValue);
+      if (record.target instanceof Element) remember(record.target.getAttribute('aria-label'));
+      for (const added of record.addedNodes) {
+        if (!(added instanceof Element)) continue;
+        remember(added.getAttribute('aria-label'));
+        added
+          .querySelectorAll('[aria-label^="Local index:"]')
+          .forEach((node) => remember(node.getAttribute('aria-label')));
+      }
+    }
+  };
+  const watch = new MutationObserver(collect);
+  watch.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['aria-label'],
+    attributeOldValue: true,
   });
-/** What every Shell render since `from` told the sidebar to show. */
-const shownSince = (from: number) =>
-  vi
-    .mocked(sidebarIndexStatus)
-    .mock.results.slice(from)
-    .map((result) => result.value as LocalIndexStatus);
+  statusWatches.push(watch);
+  return () => {
+    collect(watch.takeRecords());
+    return labels;
+  };
+}
 
 it('keeps a cached status last known after the listeners reconnect, until the catch-up read succeeds', async () => {
   const reads = heldReads();
@@ -363,7 +377,7 @@ it('keeps a cached status last known after the listeners reconnect, until the ca
   await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   hold = true;
   listeners.reachable = true;
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   // Every listener has registered and the notice is gone, while the read that
   // catches the status up is still out.
@@ -372,9 +386,8 @@ it('keeps a cached status last known after the listeners reconnect, until the ca
   await idle();
   expect(trigger().textContent).toBe('index · live?');
   expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Up to date');
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
-  // No render in between drew the cached “ready, live” as current.
-  expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
+  // No visible update in between described the cached status as current.
+  expect(shown()).not.toContain('Local index: Up to date');
   const panel = await openPanel();
   expect(within(panel).getByText(/is being read again/)).toBeTruthy();
   fireEvent.keyDown(panel, { key: 'Escape' });
@@ -395,15 +408,15 @@ it('stays last known when the catch-up read fails, and recovers on the next read
   await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   hold = true;
   listeners.reachable = true;
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await act(async () => reads.waiting[0].reject(new Error('backend-specific detail')));
   await idle();
   expect(trigger().textContent).toBe('index · live?');
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
-  expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Up to date');
+  expect(shown()).not.toContain('Local index: Up to date');
   // Nothing is read again on its own: no retry, poll or second catch-up.
   await idle();
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
@@ -418,7 +431,7 @@ it('stays last known when the catch-up read fails, and recovers on the next read
   expect(trigger().textContent).toBe('index · live?');
   await act(async () => reads.waiting[1].resolve(updating));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(3);
 });
 
@@ -431,7 +444,7 @@ it('does not let a status read that began before the reconnect certify the statu
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   expect(trigger().textContent).toBe('index · checking');
   listeners.reachable = true;
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   // Its answer lands after the listeners registered, but was asked for before:
@@ -440,13 +453,13 @@ it('does not let a status read that began before the reconnect certify the statu
   await waitFor(() => expect(reads.waiting).toHaveLength(2));
   await idle();
   expect(trigger().textContent).toBe('index · live?');
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-attention');
-  expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Last known: Up to date');
+  expect(shown()).not.toContain('Local index: Up to date');
   // The one follow-up read the runtime already owes began after them. Its
   // answer is identical, and still makes the status current.
   await act(async () => reads.waiting[1].resolve(updating));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   await idle();
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
 });
@@ -467,7 +480,7 @@ it('holds a cached status last known while a read from before the reconnect is s
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   listeners.reachable = true;
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   await idle();
@@ -477,7 +490,7 @@ it('holds a cached status last known while a read from before the reconnect is s
   await idle();
   // The old read's changed answer is shown, still as last known.
   expect(trigger().textContent).toBe('index · degraded?');
-  expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
+  expect(shown()).not.toContain('Local index: Up to date');
   await act(async () => reads.waiting[1].resolve(updating));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(3);
@@ -491,7 +504,7 @@ it('never marks an ordinary status event’s read as last known while it is out'
   mount('/prs', source);
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   hold = true;
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   vi.useFakeTimers();
   await act(async () => {
     send(events.nativeIndexStatus, degraded);
@@ -500,13 +513,13 @@ it('never marks an ordinary status event’s read as last known while it is out'
   vi.useRealTimers();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await idle();
-  // The event's read is out: the row neither flickers to “?” nor re-renders.
+  // The event's read is out: the accessible status stays current.
   expect(trigger().textContent).toBe('index · live');
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
-  expect(shownSince(from)).toEqual([]);
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
+  expect(shown()).toEqual([]);
   await act(async () => reads.waiting[0].resolve(degraded));
   await waitFor(() => expect(trigger().textContent).toBe('index · degraded'));
-  expect(shownSince(from).filter((shown) => shown.label.endsWith('?'))).toEqual([]);
+  expect(shown().filter((label) => label.includes('Last known:'))).toEqual([]);
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
 });
 
@@ -529,7 +542,7 @@ it('makes the status current on an identical catch-up answer', async () => {
   // different object. It still says the status is current as of this read.
   await act(async () => reads.waiting[0].resolve(structuredClone(updating)));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
 });
 
@@ -601,7 +614,7 @@ it('ignores a manual cache write and a cancelled read while recovering', async (
   await waitFor(() => expect(trigger().textContent).toBe('index · live?'));
   hold = true;
   listeners.reachable = true;
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
@@ -624,7 +637,7 @@ it('ignores a manual cache write and a cancelled read while recovering', async (
   await act(async () => reads.waiting[0].resolve(updating));
   await idle();
   expect(trigger().textContent).toBe('index · degraded?');
-  expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
+  expect(shown()).not.toContain('Local index: Up to date');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
   // Only a read that began since the listeners registered, and was accepted, does.
   vi.useFakeTimers();
@@ -649,7 +662,7 @@ it('finds a cached status current when the Shell remounts, with nothing read and
   noShell();
   fireEvent.click(screen.getByRole('link', { name: 'enter' }));
   expect(trigger().textContent).toBe('index · live');
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   await idle();
   expect(trigger().textContent).toBe('index · live');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(1);
@@ -679,7 +692,7 @@ it('finds the status current when the catch-up read was accepted while the Shell
   // will ever be announced to it. What it needs is on the cached result.
   fireEvent.click(screen.getByRole('link', { name: 'enter' }));
   expect(trigger().textContent).toBe('index · live');
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   await idle();
   expect(trigger().textContent).toBe('index · live');
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
@@ -700,11 +713,11 @@ it('remounts as last known while the catch-up read is still out, and current onc
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   fireEvent.click(screen.getByRole('link', { name: 'enter' }));
   await idle();
   expect(trigger().textContent).toBe('index · live?');
-  expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
+  expect(shown()).not.toContain('Local index: Up to date');
   await act(async () => reads.waiting[0].resolve(structuredClone(updating)));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(2);
@@ -752,7 +765,7 @@ it('starts again with a replaced source: the old runtime’s late answer and epo
   const after = nativeSource(async () => updating);
   view.rerender(tree(after.source));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
-  expect(trigger().querySelector('i')?.className).toBe('xt-status-live');
+  expect(trigger().getAttribute('aria-label')).toBe('Local index: Up to date');
   // The old runtime's read answers now, into a cache nobody shows.
   await act(async () => old.waiting[0].resolve(degraded));
   await idle();
@@ -776,13 +789,13 @@ it('gives a replacing source its own epoch: a current status before it certifies
   // Its own reconnect is caught up by its own read, and by nothing earlier.
   hold = true;
   second.listeners.reachable = true;
-  const from = vi.mocked(sidebarIndexStatus).mock.results.length;
+  const shown = observeStatus();
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
   await heard();
   await waitFor(() => expect(reads.waiting).toHaveLength(1));
   await idle();
   expect(trigger().textContent).toBe('index · live?');
-  expect(shownSince(from).filter((shown) => shown.tone === 'live')).toEqual([]);
+  expect(shown()).not.toContain('Local index: Up to date');
   await act(async () => reads.waiting[0].resolve(structuredClone(updating)));
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
   expect(second.source.nativeIndexStatus).toHaveBeenCalledTimes(2);

@@ -315,7 +315,10 @@ fn migration_9_leaves_older_rows_unknown_and_asks_for_no_replay() {
 
     for _ in 0..2 {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 27);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         // Migration 9 asks for nothing to be read again: the records, the
         // session and the cursors are exactly as they were.
         assert_eq!(

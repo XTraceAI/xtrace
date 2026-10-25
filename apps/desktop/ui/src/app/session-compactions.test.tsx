@@ -266,7 +266,7 @@ it.each(['focus', 'visibility', 'both'] as const)(
       window.dispatchEvent(new Event('focus'));
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await act(async () => {});
     expect(data.compactions.read.mock.calls.length).toBe(before + 1);
     Reflect.deleteProperty(document, 'visibilityState');
   },
@@ -570,7 +570,7 @@ it.each(['transport', 'replaced'] as const)(
     const retry = await call(['fork']);
     if (failure === 'transport') await act(async () => retry.reject(new Error('refused')));
     else await reply(retry, { fork: { state: 'unknown', reason: 'replaced' } });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await act(async () => {});
     expect(dashboard.result.current('fork')).toEqual(whole);
     expect(sessions.result.current('fork')).toEqual(whole);
   },

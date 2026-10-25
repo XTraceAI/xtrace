@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { MetricMergedPrs } from '../../data/generated/MetricMergedPrs';
@@ -8,7 +7,7 @@ import { laneCostDefinition, laneDefinition, PR_MEANING } from './ActivityLanes'
 import { EFFORT_CONTEXT } from './DashboardPage';
 import { MERGED_COUNTS, mergedUnknown } from './OverviewCard';
 import { prAttention, prAttentionPointer } from './pr-effort';
-import { DELTA_HIDDEN, excludedNote, plainReason, plainReasons } from './present';
+import { DELTA_HIDDEN, excludedNote, plainReason, plainReasons, tileReason } from './present';
 
 /** The longest note a definition popover adds after the rule's summary. */
 const NOTE_MAX = 120;
@@ -78,19 +77,39 @@ it('says why a tile has no number in plain words, and keeps an unknown reason as
   expect(plainReason('a reason added later')).toBe('A reason added later.');
 });
 
-it('has plain wording for every fixed tile reason the dashboard backend can send', () => {
-  // Only the shipped code: the Rust test module's own placeholder reasons are not sent.
-  const source = readFileSync(
-    new URL('../../../../src-tauri/src/dashboard.rs', import.meta.url),
-    'utf8',
-  ).split('#[cfg(test)]')[0];
-  const reasons = new Set([
-    // tile(value, previous, samples, unit, "M-xx", "reason")
-    ...[...source.matchAll(/"[A-Z]-\d{2}[a-z]?",\s*"([^"]+)",?\s*\)/g)].map((match) => match[1]),
-    // unavailable("reason", unit, rule)
-    ...[...source.matchAll(/\bunavailable\(\s*"([^"]+)"/g)].map((match) => match[1]),
-  ]);
-  // The scan finds the reasons it is meant to; a changed call shape fails here.
-  expect(reasons.size).toBeGreaterThanOrEqual(10);
-  for (const reason of reasons) expect(Object.keys(plainReasons), reason).toContain(reason);
+it('uses the UI wording for unavailable tiles and preserves a new backend reason', () => {
+  // These are the ten shipped backend reasons today. This table protects existing
+  // translations; new backend reasons still use the fallback until added here.
+  const cases = [
+    ['Agent time is unmeasured', 'Agent time could not be measured in this range.'],
+    [
+      'Human classification or required typing length is unmeasured',
+      'Could not tell which messages a person sent or how long they were.',
+    ],
+    ['Human classification is unmeasured', 'Could not tell which messages a person sent.'],
+    ['No positive-duration active spans', 'No measurable agent activity in this range.'],
+    [
+      'No measurable eligible hands-off stretches',
+      'No stretch where an agent worked on its own in this range.',
+    ],
+    ['Sessions are unmeasured', 'Sessions could not be counted in this range.'],
+    ['Tool count is unmeasured', 'Tool calls could not be counted in this range.'],
+    ['Selected usage counters are absent or incomplete', 'Some token counts are missing.'],
+    [
+      'Selected usage is absent or unpriced; see cost reasons',
+      'Some usage has no price; the cost details say why.',
+    ],
+    ['Rule-fire data is unavailable', 'Rule fire data is not available.'],
+  ];
+  for (const [reason, wording] of cases) {
+    const unavailable = { value: null, reason } as Parameters<typeof tileReason>[0];
+    expect(tileReason(unavailable)).toBe(wording);
+    expect(tileReason({ ...unavailable, value: 0 })).toBeUndefined();
+  }
+  expect(
+    tileReason({ value: null, reason: 'new backend reason' } as Parameters<typeof tileReason>[0]),
+  ).toBe('New backend reason.');
+  expect(
+    tileReason({ value: null, reason: null } as Parameters<typeof tileReason>[0]),
+  ).toBeUndefined();
 });

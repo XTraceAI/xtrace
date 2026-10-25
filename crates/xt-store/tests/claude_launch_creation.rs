@@ -5,6 +5,9 @@
 //! one, the existing Human-input rule applies to the new child only, and a
 //! schema 14 index upgrades with every relation it held unchanged.
 
+#[path = "support/migration_history.rs"]
+mod migration_history;
+
 use rusqlite::Connection;
 use serde_json::json;
 use tempfile::TempDir;
@@ -513,22 +516,6 @@ fn the_same_creation_anchor_replays_an_accepted_relation_exactly() {
 /// upgrades to 15 with every row unchanged, still immutable and still read.
 #[test]
 fn a_schema_14_index_upgrades_with_every_relation_unchanged() {
-    const MIGRATIONS: [&str; 14] = [
-        include_str!("../migrations/0001_canonical.sql"),
-        include_str!("../migrations/0002_ingest.sql"),
-        include_str!("../migrations/0003_native_checkpoints.sql"),
-        include_str!("../migrations/0004_native_record_copies.sql"),
-        include_str!("../migrations/0005_human_classification_replay.sql"),
-        include_str!("../migrations/0006_structural_tool_kinds.sql"),
-        include_str!("../migrations/0007_native_pr_witnesses.sql"),
-        include_str!("../migrations/0008_pr_refresh_status.sql"),
-        include_str!("../migrations/0009_repeat_group_keys.sql"),
-        include_str!("../migrations/0010_confirmed_automated_inputs.sql"),
-        include_str!("../migrations/0011_session_creation_relations.sql"),
-        include_str!("../migrations/0012_guardian_turn_inputs.sql"),
-        include_str!("../migrations/0013_injected_context_inputs.sql"),
-        include_str!("../migrations/0014_human_input_estimate.sql"),
-    ];
     const VIEWS: [&str; 6] = [
         xt_store::views::RECORD_METADATA,
         xt_store::views::HUMAN_INPUTS,
@@ -545,18 +532,12 @@ fn a_schema_14_index_upgrades_with_every_relation_unchanged() {
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .unwrap();
-        connection
-            .execute_batch("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
-            .unwrap();
-        for (index, sql) in MIGRATIONS.iter().enumerate() {
-            connection.execute_batch(sql).unwrap();
-            connection
-                .execute(
-                    "INSERT INTO schema_version VALUES (?1,'2026-09-29T00:00:00Z')",
-                    [index as i64 + 1],
-                )
-                .unwrap();
-        }
+        migration_history::apply_migrations(
+            &connection,
+            &migration_history::migrations()[..14],
+            "2026-09-29T00:00:00Z",
+            |_, _| {},
+        );
         // Today's views name the tables migrations 16 and 21 add; stand-ins
         // let them read this older index until the upgrade below replaces them.
         connection
@@ -644,7 +625,10 @@ fn a_schema_14_index_upgrades_with_every_relation_unchanged() {
         .unwrap();
     for _ in 0..2 {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 27);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         assert_eq!(dump(), before);
         let parents: Vec<(String, String, ParentEvidence)> = shown(&store);
         assert!(parents.contains(&(

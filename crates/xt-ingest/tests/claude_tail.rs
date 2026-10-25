@@ -1991,7 +1991,10 @@ fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classif
     );
     tailer.stop();
     let store = home.store();
-    assert_eq!(store.schema_version().unwrap(), 27);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        xt_store::LATEST_SCHEMA_VERSION
+    );
     assert_eq!(classified(&store), expected);
     assert_metadata_only(&store, A);
     let rows = store.records(A).unwrap();

@@ -1,11 +1,15 @@
+import { finalizeHostedLaunch, runTelemetryPhase } from './hosted-telemetry-run.mjs';
+import { reservedCommand } from './hosted-command.mjs';
+import { hostedSwift, swiftPolicy, writeHostedSwift } from './hosted-swift.mjs';
+import { compilerControls } from './hosted-compiler-controls.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { guardProcessDetails, guardFailureMetadata } from './hosted-guard-diagnostics.mjs';
+
 import { executionBudget, firstLaunchEnvironment, release, sha256 } from './hosted-release.mjs';
 import {
   telemetryEnvironment,
@@ -35,52 +39,7 @@ import {
 } from './hosted-telemetry-proxy.mjs';
 import { telemetryOwnedPaths, requireTelemetryHost, telemetryBudget } from './hosted-telemetry.mjs';
 
-// BEGIN COMPILER DIAGNOSTICS: local assertions and owned temporary cleanup.
-function recordCompiler(owner, label, timeout, elapsed, result) {
-  owner.hasResult = true;
-  owner.retain ||= Boolean(result.error || result.signal || result.status === null);
-  let message = 'Compiler result diagnostics unavailable';
-  try {
-    message = JSON.stringify(guardProcessDetails(label, timeout, elapsed, result));
-    console.log(message);
-  } catch {
-    /* Logging cannot change the status assertion. */
-  }
-  assert.equal(result.status, 0, message);
-}
-function diagnoseCompiler(owner, deadline) {
-  if (!owner.hasResult || owner.metadataCollected) return;
-  owner.metadataCollected = true;
-  try {
-    const metadata = guardFailureMetadata('swift', deadline);
-    owner.retain ||= metadata.uncertainCompletion;
-    console.log(JSON.stringify({ compilerMetadata: metadata }));
-  } catch {
-    owner.retain = true;
-    try {
-      console.log('Compiler metadata unavailable; descendant cleanup unconfirmed');
-    } catch {
-      /* Keep the primary error. */
-    }
-  }
-}
-async function cleanupCompiler(directory, owner) {
-  if (owner.retain) {
-    try {
-      console.log(
-        JSON.stringify({
-          temporaryProofRetained: true,
-          directory: basename(directory),
-          compilerDescendants: 'unconfirmed',
-          runnerTeardownVerified: false,
-        }),
-      );
-    } catch {
-      /* Keep the primary error. */
-    }
-  } else await rm(directory, { recursive: true, force: true });
-}
-// END COMPILER DIAGNOSTICS
+const { recordCompiler, diagnoseCompiler, cleanupCompiler } = compilerControls();
 
 const owned = '/owned/staging.noindex';
 const home = '/Users/runner';
@@ -261,29 +220,26 @@ test('each phase reports what it established, never a bare "observed"', () => {
 });
 
 test('notice phase presses Open Dashboard and needs the corner card before the blocked attempt', async () => {
-  const runner = await readFile(new URL('./hosted-telemetry-run.mjs', import.meta.url), 'utf8');
-  const notice = runner.split("if (phase === 'notice') {")[1].split('} else {')[0];
-  const order = [
-    "ui('telemetry-notice')",
-    'phaseReport.beforeDashboard = await telemetryProxyState(proxy)',
-    'requireNoTelemetryAttempt(',
-    "ui('telemetry-dashboard-notice')",
-    'attempt()',
-    "ui('telemetry-turn-off')",
-  ];
-  let prior = -1;
-  for (const needle of order) {
-    const at = notice.indexOf(needle);
-    assert.ok(at > prior, needle);
-    prior = at;
+  for (const phase of ['notice', 'saved-on', 'environment-off']) {
+    const calls = [];
+    await runTelemetryPhase(
+      phase,
+      async (mode) => calls.push(mode),
+      async () => calls.push('attempt'),
+      async () => ({ telemetry: 0 }),
+      {},
+      {},
+    );
+    assert.deepEqual(
+      calls,
+      phase === 'notice'
+        ? ['telemetry-notice', 'telemetry-dashboard-notice', 'attempt', 'telemetry-turn-off']
+        : phase === 'saved-on'
+          ? ['attempt', 'telemetry-settings-on', 'telemetry-settings-disable']
+          : ['telemetry-environment-off'],
+    );
   }
-  assert.equal((notice.match(/attempt\(\)/g) || []).length, 1);
-  assert.doesNotMatch(runner, /ui\('telemetry-dashboard'\)/);
-  // saved-on still waits for its startup attempt; saved-off and environment-off never do.
-  const later = runner.split("if (phase === 'notice') {")[1].split('} else {')[1];
-  assert.match(later, /if \(phase === 'saved-on'\) await attempt\(\);/);
-  assert.equal((later.match(/attempt\(\)/g) || []).length, 1);
-  const driver = await readFile(new URL('./hosted-ax.swift', import.meta.url), 'utf8');
+  const driver = await hostedSwift('hosted-ax');
   assert.match(driver, /"telemetry-dashboard-notice"/);
   assert.doesNotMatch(driver, /"telemetry-dashboard"[,\]]/);
   assert.doesNotMatch(driver, /Telemetry UI phase \\\(mode\) observed/);
@@ -342,30 +298,30 @@ test(
       const owned = join(root, 'checks.noindex');
       await mkdir(owned);
       const cache = join(owned, 'cache');
-      const launcher = await readFile(new URL('./hosted-launch.swift', import.meta.url), 'utf8');
-      const driver = await readFile(new URL('./hosted-ax.swift', import.meta.url), 'utf8');
-      const block = (text, name) =>
-        text
-          .split(`// BEGIN ${name}:`)[1]
-          .split('\n')
-          .slice(1)
-          .join('\n')
-          .split(`// END ${name}`)[0];
-      const envPolicy = block(launcher, 'TELEMETRY ENVIRONMENT POLICY');
+
+      const envPolicy = await swiftPolicy('TELEMETRY ENVIRONMENT POLICY');
       const probe = prepareProbeSource(
-        launcher,
+        envPolicy,
         await readFile(new URL('./hosted-telemetry-probe.swift', import.meta.url), 'utf8'),
       );
       const probePath = join(owned, 'probe.swift');
       await writeFile(probePath, probe);
       for (const [path, timeout, label] of [
         [
-          fileURLToPath(new URL('./hosted-launch.swift', import.meta.url)),
+          await writeHostedSwift(
+            fileURLToPath(new URL('.', import.meta.url)),
+            'hosted-launch',
+            join(owned, 'hosted-launch.swift'),
+          ),
           60000,
           'telemetry-launcher-typecheck',
         ],
         [
-          fileURLToPath(new URL('./hosted-ax.swift', import.meta.url)),
+          await writeHostedSwift(
+            fileURLToPath(new URL('.', import.meta.url)),
+            'hosted-ax',
+            join(owned, 'hosted-ax.swift'),
+          ),
           30000,
           'telemetry-ax-typecheck',
         ],
@@ -379,10 +335,7 @@ test(
         );
         recordCompiler(compiler, label, timeout, performance.now() - began, result);
       }
-      const receipt = launcher.slice(
-        launcher.indexOf('struct Receipt:'),
-        launcher.indexOf('// BEGIN TRANSITION POLICY'),
-      );
+      const receipt = await swiftPolicy('RECEIPT');
       const controls = await readFile(
         new URL('./fixtures/hosted-telemetry-controls.swift', import.meta.url),
         'utf8',
@@ -390,10 +343,10 @@ test(
       const source =
         'import AppKit\nimport ApplicationServices\nimport Darwin\n' +
         receipt +
-        block(launcher, 'LAUNCH CONTEXT POLICY') +
+        (await swiftPolicy('LAUNCH CONTEXT POLICY')) +
         envPolicy +
-        block(driver, 'UPDATE UI POLICY') +
-        block(driver, 'TELEMETRY UI POLICY') +
+        (await swiftPolicy('UPDATE UI POLICY')) +
+        (await swiftPolicy('TELEMETRY UI POLICY')) +
         controls;
       const path = join(owned, 'main.swift'),
         binary = join(owned, 'controls');
@@ -793,20 +746,8 @@ test('caller preserves proxy cleanup time and multiple stops share one remaining
   let clock = 0;
   const budget = executionBudget(() => clock, { workMs: 18000, cleanupMs: 180000 });
   budget.beginCleanup();
-  const caller = await readFile(new URL('./hosted-first-launch.mjs', import.meta.url), 'utf8');
-  const body = caller
-    .split('  const run = (command, args, timeout = 30_000, env = systemEnvironment) => {')[1]
-    .split('\n  };')[0];
-  const invoke = new Function(
-    'budget',
-    'proxyStopReserve',
-    'spawnSync',
-    'command',
-    'args',
-    'timeout',
-    'env',
-    body,
-  );
+  const invoke = (budget, reserve, spawn, ...args) =>
+    reservedCommand(budget, () => reserve, {}, spawn)(...args);
   clock = 180000 - 16050;
   let timeout;
   invoke(
@@ -851,20 +792,30 @@ test('caller preserves proxy cleanup time and multiple stops share one remaining
   await assert.rejects(stopTelemetryProxy({ child: {} }, 0), /No bounded/);
 });
 
+test('finalization uses its real cleanup defaults with only owned temporary staging', async () => {
+  const staging = await mkdtemp(join(tmpdir(), 'telemetry-default-cleanup-'));
+  const session = telemetrySession();
+  session.stagingOwned = true;
+  const calls = [];
+  const result = await finalizeHostedLaunch({
+    session,
+    staging,
+    removeOwned: async () => {
+      calls.push('remove-owned');
+      session.appAndProfilesRemoved = true;
+    },
+    resetProxyReserve: () => calls.push('release-reserve'),
+  });
+  assert.deepEqual(calls, ['remove-owned', 'release-reserve']);
+  assert.equal(result.report.cleanupConfirmed, true);
+  assert.equal(result.report.status, 'passed');
+  assert.equal(result.report.releasedAppLaunched, false);
+  assert.equal(result.report.telemetryCleanup.stagingState, 'removed');
+  await assert.rejects(readFile(staging), { code: 'ENOENT' });
+});
+
 test('actual final caller distinguishes attempted/confirmed launch and uncertain staging removal', async () => {
-  const source = await readFile(new URL('./hosted-first-launch.mjs', import.meta.url), 'utf8');
-  const start = source.lastIndexOf('  try {\n    if (session) {\n      await cleanupTelemetry');
-  const end = source.indexOf("  await writeFile(join(output, 'report.json')", start);
-  assert.ok(start > 0 && end > start);
-  const actual = new (Object.getPrototypeOf(async function () {}).constructor)(
-    'input',
-    `
-    const {session,cleanupTelemetry,telemetryCleanupFacts,stopTelemetryOwners,stopTelemetryProxies,removeOwned,rm,staging}=input;
-    const report={status:'failed',releasedAppLaunched:false};let failure=input.failure;
-    const telemetryContext={},output='/owned/output',budget={};let proxyStopReserve=0;
-    ${source.slice(start, end)}
-    return {report,failure};`,
-  );
+  const actual = (input) => finalizeHostedLaunch({ ...input, telemetryContext: {} });
   const root = await mkdtemp(join(tmpdir(), 'telemetry-report-'));
   try {
     for (const [name, receipt, workError] of [
@@ -972,18 +923,7 @@ test('actual final caller distinguishes attempted/confirmed launch and uncertain
 });
 
 test('actual caller product exit needs a confirmed launch and every product attempt absent', async () => {
-  const source = await readFile(new URL('./hosted-first-launch.mjs', import.meta.url), 'utf8');
-  const start = source.lastIndexOf('  try {\n    if (session) {\n      await cleanupTelemetry');
-  const end = source.indexOf("  await writeFile(join(output, 'report.json')", start);
-  const actual = new (Object.getPrototypeOf(async function () {}).constructor)(
-    'input',
-    `
-    const {session,cleanupTelemetry,telemetryCleanupFacts,stopTelemetryOwners,stopTelemetryProxies,removeOwned,rm}=input;
-    const report={status:'failed',releasedAppLaunched:false};let failure=input.failure;
-    const telemetryContext={},output='/owned/output',budget={},staging='/owned/staging';let proxyStopReserve=0;
-    ${source.slice(start, end)}
-    return {report,failure};`,
-  );
+  const actual = (input) => finalizeHostedLaunch({ ...input, telemetryContext: {} });
   const product = (confirmed, exited) => ({
     kind: 'telemetry',
     launchConfirmed: confirmed,
@@ -1007,6 +947,7 @@ test('actual caller product exit needs a confirmed launch and every product atte
     session.stagingOwned = true;
     session.owners = owners;
     const result = await actual({
+      staging: '/owned/staging',
       session,
       cleanupTelemetry,
       telemetryCleanupFacts,
@@ -1053,20 +994,7 @@ test('actual caller product exit needs a confirmed launch and every product atte
 });
 
 test('actual saved-off branch checks and retains its proxy snapshot before enabling', async () => {
-  const source = await readFile(new URL('./hosted-telemetry-run.mjs', import.meta.url), 'utf8');
-  const start = source.indexOf("    if (phase === 'notice') {");
-  const end = source.indexOf('    await stopOwner(owner,', start);
-  assert.ok(start > 0 && end > start);
-  const actual = new (Object.getPrototypeOf(async function () {}).constructor)(
-    'phase',
-    'ui',
-    'attempt',
-    'telemetryProxyState',
-    'proxy',
-    'phaseReport',
-    'requireNoTelemetryAttempt',
-    source.slice(start, end),
-  );
+  const actual = runTelemetryPhase;
   for (const [name, count, error] of [
     ['zero', 0, null],
     ['positive', 1, null],
@@ -1090,7 +1018,6 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
       },
       proxy,
       report,
-      requireNoTelemetryAttempt,
     );
     if (name === 'zero') await run;
     else
@@ -1129,7 +1056,6 @@ test('actual saved-off branch checks and retains its proxy snapshot before enabl
       },
       proxy,
       report,
-      requireNoTelemetryAttempt,
     );
     if (name === 'quiet') await run;
     else

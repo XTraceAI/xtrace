@@ -785,6 +785,44 @@ it('titles each listed link from the current PR state: before, one, failed and a
   expect(shell.sessions[0].rows[0].pr_links.map((link) => link.title)).toEqual([null, null, null]);
 });
 
+it('invokes the native day sessions command with the report’s range, end, zone and day', async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  const [entry] = shell.day_sessions;
+  vi.mocked(invoke).mockResolvedValue(entry!.sessions);
+  const source = await nativeSource();
+  expect(
+    await source.daySessions!(7, 1_788_825_600_000, 'America/Los_Angeles', '2026-09-07'),
+  ).toEqual(entry!.sessions);
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('metrics_day_sessions', {
+    windowDays: 7,
+    windowEndMs: 1_788_825_600_000,
+    timezone: 'America/Los_Angeles',
+    date: '2026-09-07',
+  });
+});
+
+it('answers a day’s sessions from the export only for the exact report, zone and day', async () => {
+  const fixture = new FixtureDataSource(structuredClone(shell));
+  for (const report of shell.dashboards) {
+    const { days, end_ms, timezone } = report.window;
+    for (const day of report.leverage.by_day) {
+      const answer = await fixture.daySessions(days, end_ms, timezone, day.date);
+      expect(answer.agent_ms).toBe(day.agent_ms);
+      expect(answer.date).toBe(day.date);
+    }
+  }
+  const { days, end_ms } = shell.dashboards[0]!.window;
+  const date = shell.dashboards[0]!.leverage.by_day[0]!.date;
+  for (const [range, end, zone, day] of [
+    [days, end_ms, 'Asia/Tokyo', date],
+    [days, end_ms + 1, 'UTC', date],
+    [days, end_ms, 'UTC', '1999-01-01'],
+  ] as const)
+    await expect(fixture.daySessions(range, end, zone, day)).rejects.toThrow(
+      'no sessions for this day',
+    );
+});
+
 it('invokes the native PRs report and drilldown commands with exactly the request', async () => {
   vi.mocked(isTauri).mockReturnValue(true);
   const [page] = shell.pr_analytics;
@@ -973,6 +1011,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     [commands.gradingStart]: { state: 'busy' },
     [commands.gradingCancel]: true,
     [commands.gradingRubricMake]: { state: 'busy' },
+    [commands.gradingRunDetails]: { state: 'not_found' },
+    [commands.gradingReportOpen]: { state: 'opened' },
   };
   vi.mocked(invoke).mockImplementation(async (cmd: string) => answers[cmd]);
   expect(await source.grading?.skills()).toEqual({ state: 'not_configured' });
@@ -981,6 +1021,9 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
   expect(await source.grading?.start('/code/app', 'claude-md-doctor')).toEqual({ state: 'busy' });
   expect(await source.grading?.cancel('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(true);
   expect(await source.grading?.makeRubric('plugin:tools@market/lint')).toEqual({ state: 'busy' });
+  const run = '00000000-0000-4000-8000-000000000001';
+  expect(await source.grading?.runDetails(run)).toEqual({ state: 'not_found' });
+  expect(await source.grading?.openReport(run)).toEqual({ state: 'opened' });
   expect(vi.mocked(invoke).mock.calls).toEqual([
     [commands.gradingSkills],
     [commands.gradingOverview],
@@ -988,6 +1031,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     [commands.gradingStart, { projectPath: '/code/app', skillId: 'claude-md-doctor' }],
     [commands.gradingCancel, { runId: '0f8fad5b-d9cb-469f-a165-70867728950e' }],
     [commands.gradingRubricMake, { location: 'plugin:tools@market/lint' }],
+    [commands.gradingRunDetails, { runId: run }],
+    [commands.gradingReportOpen, { runId: run }],
   ]);
   expect([
     commands.gradingSkills,
@@ -996,6 +1041,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     commands.gradingStart,
     commands.gradingCancel,
     commands.gradingRubricMake,
+    commands.gradingRunDetails,
+    commands.gradingReportOpen,
   ]).toEqual([
     'grading_skills',
     'grading_overview',
@@ -1003,6 +1050,8 @@ it('invokes the grading commands with only a project path, a skill ID or a run I
     'grading_start',
     'grading_cancel',
     'grading_rubric_make',
+    'grading_run_details',
+    'grading_report_open',
   ]);
 });
 
@@ -1065,6 +1114,9 @@ it('answers grading from a fixture exactly as fixture mode does and never runs a
   });
   expect(await fixture.grading?.cancel('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(false);
   expect(await fixture.grading?.makeRubric('/skills/x')).toEqual({ state: 'not_configured' });
+  const run = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  expect(await fixture.grading?.runDetails(run)).toEqual({ state: 'not_configured' });
+  expect(await fixture.grading?.openReport(run)).toEqual({ state: 'not_configured' });
   expect(invoke).not.toHaveBeenCalled();
 });
 

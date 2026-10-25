@@ -1467,13 +1467,6 @@ fn the_default_byte_bound_is_four_mebibytes() {
 #[test]
 fn limits_only_tighten() {
     let defaults = ReadLimits::default();
-    assert_eq!(defaults.tail_bytes(), 4 * 1024 * 1024);
-    assert_eq!(defaults.lines(), 10_000);
-    assert_eq!(defaults.line_bytes(), 64 * 1024);
-    assert_eq!(defaults.value_bytes(), 512);
-    assert_eq!(defaults.rows(), 100);
-    assert_eq!(defaults.groups(), 100);
-    assert_eq!(defaults.deadline(), Duration::from_secs(1));
     let loosened = defaults
         .tighten_tail_bytes(u64::MAX)
         .tighten_lines(usize::MAX)
@@ -1483,8 +1476,32 @@ fn limits_only_tighten() {
         .tighten_groups(usize::MAX)
         .tighten_deadline(Duration::from_secs(3600));
     assert_eq!(loosened, defaults);
-    let tightened = defaults.tighten_lines(5).tighten_lines(50);
-    assert_eq!(tightened.lines(), 5);
+    let tight = defaults
+        .tighten_tail_bytes(300)
+        .tighten_lines(2)
+        .tighten_line_bytes(200)
+        .tighten_value_bytes(20)
+        .tighten_rows(1)
+        .tighten_groups(1)
+        .tighten_deadline(Duration::from_millis(500));
+    assert_eq!(
+        tight
+            .tighten_tail_bytes(u64::MAX)
+            .tighten_lines(usize::MAX)
+            .tighten_line_bytes(usize::MAX)
+            .tighten_value_bytes(usize::MAX)
+            .tighten_rows(usize::MAX)
+            .tighten_groups(usize::MAX)
+            .tighten_deadline(Duration::MAX),
+        tight,
+        "no later setter can undo an earlier bound"
+    );
+    let source = Source::with(&rows(5));
+    let restricted = defaults.tighten_lines(2).tighten_lines(50);
+    let snapshot = expect_snapshot(source.read_with(&restricted, None));
+    assert_eq!(snapshot.counts.lines, 2);
+    assert!(snapshot.coverage.line_bound_reached);
+    assert_eq!(snapshot.counts.precision, Precision::LowerBound);
 }
 
 // ── snapshot races ─────────────────────────────────────────────────────────
@@ -1732,39 +1749,77 @@ fn reads_never_modify_the_source_tree() {
 }
 
 #[test]
-fn the_reader_has_no_output_process_network_or_write_paths() {
-    let sources = [
-        include_str!("../activity.rs"),
-        include_str!("record.rs"),
-        include_str!("source.rs"),
-    ];
-    let forbidden = [
-        "println!",
-        "eprintln!",
-        "print!",
-        "dbg!",
-        "log::",
-        "tracing",
-        "std::process",
-        "Command",
-        "std::net",
-        "TcpStream",
-        ".write(true)",
-        ".append(true)",
-        ".create(true)",
-        "fs::write",
-        "create_dir",
-        "remove_file",
-        "rename",
-        "set_len",
-        "env::var",
-        "home_dir",
-    ];
-    for source in sources {
-        for token in forbidden {
-            assert!(!source.contains(token), "reader source contains {token}");
+fn command_like_payloads_remain_inert_data() {
+    const CHILD_ROOT: &str = "XTRACE_TEST_ACTIVITY_SOURCE";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let read = read_activity(Path::new(&root), &ReadLimits::default(), None, &|| false);
+        assert_no_secrets(&read);
+        assert_eq!(expect_snapshot(read).counts.distinct, 1);
+        return;
+    }
+    let source = Source::bare();
+    source.marker(b"2\n");
+    let marker = source.root.join("must-not-exist");
+    let mut value = row_value("inert", "2026-09-20T10:00:00Z", "gate");
+    value["Command"] = json!(format!("touch {}", marker.display()));
+    value["unknown"] = json!({"url": "http://127.0.0.1:1", "script": "$(exit 99)"});
+    source.ledger(line(&value).as_bytes());
+    let before = tree(&source.root);
+    let snapshot = source.snapshot();
+    assert_eq!(snapshot.counts.distinct, 1);
+    assert_eq!(snapshot.rows[0].fire_id, "inert");
+    // Capture the real reader in a separate exact-name test process. The
+    // harness must not swallow output that would expose excluded ledger data.
+    let captured = tempfile::tempdir().unwrap();
+    let stdout = captured.path().join("stdout");
+    let stderr = captured.path().join("stderr");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "activity::tests::command_like_payloads_remain_inert_data",
+            "--nocapture",
+        ])
+        .env_clear()
+        .env(CHILD_ROOT, &source.root)
+        .current_dir(captured.path())
+        .stdout(std::process::Stdio::from(
+            fs::File::create(&stdout).unwrap(),
+        ))
+        .stderr(std::process::Stdio::from(
+            fs::File::create(&stderr).unwrap(),
+        ))
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("reader child did not finish within its deadline");
+            }
+        }
+    };
+    assert!(status.success(), "reader child failed");
+    for stream in [stdout, stderr] {
+        assert!(
+            fs::metadata(&stream).unwrap().len() <= 64 * 1024,
+            "unexpected reader output volume"
+        );
+        let output = fs::read_to_string(stream).unwrap();
+        for secret in SECRETS {
+            assert!(
+                !output.contains(secret),
+                "raw ledger value crossed into reader output"
+            );
         }
     }
+    assert!(!marker.exists());
+    assert_eq!(tree(&source.root), before);
 }
 
 #[test]

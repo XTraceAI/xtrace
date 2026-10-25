@@ -1,5 +1,5 @@
 #[cfg(all(debug_assertions, feature = "fixtures"))]
-use xtrace_desktop::dto::{FixtureExport, FixtureSessionStretches};
+use xtrace_desktop::dto::FixtureSessionStretches;
 use xtrace_desktop::state::{AppState, StartupOptions, StateError};
 
 /// Fixture startup never indexes live data: the shell export carries the
@@ -26,7 +26,10 @@ fn fixture_mode_data_dir_override_wins_and_live_store_persists() {
     )
     .unwrap();
     assert_eq!(state.app_info().data_dir, path.to_str().unwrap());
-    assert_eq!(state.app_info().schema_version, 27);
+    assert_eq!(
+        state.app_info().schema_version,
+        xt_store::LATEST_SCHEMA_VERSION
+    );
     assert_eq!(state.app_info().fixture, None);
     assert!(!state.app_info().listening);
     assert!(!state.app_info().had_indexed_history_at_startup);
@@ -101,7 +104,7 @@ fn assert_links_follow(state: &AppState, list: &xtrace_desktop::dto::PrList) {
 
 #[cfg(all(debug_assertions, feature = "fixtures"))]
 #[test]
-fn fixture_mode_builds_isolated_database_and_generated_export_parity() {
+fn fixture_mode_is_isolated_and_native_commands_match_fixture_fields() {
     let root = tempfile::TempDir::new().unwrap();
     let build = || {
         AppState::build(
@@ -122,14 +125,18 @@ fn fixture_mode_builds_isolated_database_and_generated_export_parity() {
     let mut app_info = first.app_info();
     assert_eq!(app_info.fixture.as_deref(), Some("F1"));
     assert_eq!(app_info.version, env!("CARGO_PKG_VERSION"));
-    // Keep the checked-in fixture's data unchanged across app releases.
-    app_info.version =
-        serde_json::from_str::<serde_json::Value>(include_str!("../../ui/fixtures/F1.json"))
-            .unwrap()["app_info"]["version"]
-            .as_str()
-            .unwrap()
-            .to_owned();
     app_info.data_dir = "fixture://F1".into();
+    let exported: serde_json::Value =
+        serde_json::from_str(include_str!("../../ui/fixtures/F1.json")).unwrap();
+    let mut expected_app_info = exported["app_info"].clone();
+    expected_app_info["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+    assert_eq!(serde_json::to_value(&app_info).unwrap(), expected_app_info);
+    // The xtask integration test owns the complete generated export and exact
+    // bytes. Here each native command owns its correspondence to a fixture field.
+    let assert_field = |field: &str, json: String| {
+        let actual: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(actual, exported[field], "native command field {field}");
+    };
     // The exported pull-request reports are what this native fixture state
     // produces through the ordinary refresh command, with the fixture's own
     // pinned instant: no GitHub CLI is resolved, nothing is launched.
@@ -218,6 +225,65 @@ fn fixture_mode_builds_isolated_database_and_generated_export_parity() {
         ));
     }
 
+    // Every day's sessions for every range, through the command the day card
+    // calls, pinned to that range's report; each adds up to the report's own
+    // agent time for the day.
+    let day_sessions: Vec<_> = dashboards
+        .iter()
+        .flat_map(|report| {
+            report.leverage.by_day.iter().map(|day| {
+                let sessions = first
+                    .day_sessions(
+                        report.window.days,
+                        report.window.end_ms,
+                        &report.window.timezone,
+                        &day.date,
+                    )
+                    .unwrap();
+                assert_eq!(sessions.agent_ms, day.agent_ms, "{}", day.date);
+                assert_eq!(
+                    sessions.sessions.iter().map(|s| s.agent_ms).sum::<u64>(),
+                    day.agent_ms
+                );
+                xtrace_desktop::dto::FixtureDaySessions {
+                    window_days: report.window.days,
+                    window_end_ms: report.window.end_ms,
+                    timezone: report.window.timezone.clone(),
+                    date: day.date.clone(),
+                    sessions,
+                }
+            })
+        })
+        .collect();
+    assert!(
+        day_sessions
+            .iter()
+            .any(|day| !day.sessions.sessions.is_empty()),
+        "F1 has a day with agent time"
+    );
+    // A day no report could have shown, or a zone that cannot be found, is
+    // refused.
+    let report = &dashboards[0];
+    let first_day = report.leverage.by_day[0].date.as_str();
+    for (days, end, zone, date) in [
+        (5, report.window.end_ms, "UTC", first_day),
+        (7, report.window.end_ms, "UTC", "2026-9-1"),
+        (7, report.window.end_ms, "UTC", "not a day"),
+        (7, report.window.end_ms, "UTC", "1999-01-01"),
+        (7, 1_i64 << 53, "UTC", first_day),
+        (7, report.window.end_ms, "Mars/Olympus_Mons", first_day),
+        (7, report.window.end_ms, "system-local", first_day),
+        (7, report.window.end_ms, "", first_day),
+    ] {
+        assert!(
+            matches!(
+                first.day_sessions(days, end, zone, date),
+                Err(StateError::InvalidDayRequest | StateError::InvalidMetricWindow)
+            ),
+            "{days} {end} {zone} {date}"
+        );
+    }
+
     // The PRs page report, per range and confidence mode, before any refresh:
     // the same command the page calls.
     let analytics = |state: &AppState| -> Vec<_> {
@@ -294,7 +360,7 @@ fn fixture_mode_builds_isolated_database_and_generated_export_parity() {
         .map(|row| row.pull_request.clone())
         .collect();
     sorted.sort_unstable_by_key(|reference| reference.id);
-    let pr_effort_states = (1_usize..(1 << sorted.len()))
+    let pr_effort_states: Vec<_> = (1_usize..(1 << sorted.len()))
         .map(|mask| {
             let refreshed: Vec<_> = sorted
                 .iter()
@@ -330,41 +396,40 @@ fn fixture_mode_builds_isolated_database_and_generated_export_parity() {
             }
         })
         .collect();
-    let export = FixtureExport {
-        app_info,
-        db_counts: first.db_counts().unwrap(),
-        native_index: expected_native_index(),
-        sessions_summaries,
-        sessions,
-        session_stretches,
-        span_details,
-        dashboards,
-        pull_requests,
-        pr_refresh,
-        pull_requests_refreshed,
-        pr_effort_states,
-        pr_analytics,
-        pr_sessions,
-        today: first.today().unwrap(),
-        // Built as fixture startup builds it: from the state's native home,
-        // which fixture mode never has.
-        rule_activity: {
-            assert_eq!(first.native_home(), None);
-            xtrace_desktop::rule_activity::RuleActivityService::new(first.native_home())
-                .read("fixture")
-        },
-        projects: xtrace_desktop::projects::ProjectsService::new(first.native_home()).list(),
-        grading_skills: xtrace_desktop::grading::GradingService::not_configured().skills(),
-        grading_runs: xtrace_desktop::grading::GradingService::not_configured().runs(),
-        grading_overview: xtrace_desktop::grading::GradingService::not_configured().overview(),
-    };
-    // Compare the exact generated bytes: serde_json's default float parser is
-    // not round-trip exact, so parsed values can differ in the last bit.
-    assert_eq!(
-        serde_json::to_string_pretty(&export).unwrap() + "\n",
-        include_str!("../../ui/fixtures/F1.json")
+    macro_rules! native_field {
+        ($name:literal, $value:expr) => {
+            assert_field($name, serde_json::to_string(&$value).unwrap());
+        };
+    }
+    native_field!("db_counts", first.db_counts().unwrap());
+    native_field!("native_index", expected_native_index());
+    native_field!("sessions_summaries", sessions_summaries);
+    native_field!("sessions", sessions);
+    native_field!("session_stretches", session_stretches);
+    native_field!("span_details", span_details);
+    native_field!("day_sessions", day_sessions);
+    native_field!("dashboards", dashboards);
+    native_field!("pull_requests", pull_requests);
+    native_field!("pr_refresh", pr_refresh);
+    native_field!("pull_requests_refreshed", pull_requests_refreshed);
+    native_field!("pr_effort_states", pr_effort_states);
+    native_field!("pr_analytics", pr_analytics);
+    native_field!("pr_sessions", pr_sessions);
+    native_field!("today", first.today().unwrap());
+    assert_eq!(first.native_home(), None);
+    native_field!(
+        "rule_activity",
+        xtrace_desktop::rule_activity::RuleActivityService::new(first.native_home())
+            .read("fixture")
     );
-    let exported = serde_json::to_value(export).unwrap();
+    native_field!(
+        "projects",
+        xtrace_desktop::projects::ProjectsService::new(first.native_home()).list()
+    );
+    let grading = xtrace_desktop::grading::GradingService::not_configured();
+    native_field!("grading_skills", grading.skills());
+    native_field!("grading_runs", grading.runs());
+    native_field!("grading_overview", grading.overview());
     assert_eq!(
         exported["db_counts"],
         serde_json::json!({"sessions":1,"records":25,"usage":15})

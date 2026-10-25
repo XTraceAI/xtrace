@@ -61,6 +61,8 @@ struct World {
     state: Arc<AppState>,
     listed: Arc<Mutex<Vec<String>>>,
     seen: Arc<Mutex<Seen>>,
+    /// Every file handed to the system to open; nothing is really opened.
+    opened: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 fn python3() -> PathBuf {
@@ -140,6 +142,7 @@ impl World {
             ready,
             state,
             seen: Arc::new(Mutex::new(Seen::default())),
+            opened: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -196,6 +199,13 @@ impl World {
             progress_every: Duration::from_millis(100),
             shutdown_bound: SHUTDOWN_BOUND,
             clock: Arc::new(now_ms),
+            open_file: {
+                let opened = Arc::clone(&self.opened);
+                Arc::new(move |path: &Path| {
+                    lock(&opened).push(path.to_path_buf());
+                    true
+                })
+            },
             before_staging: None,
             before_save: None,
         }
@@ -985,6 +995,10 @@ fn only_the_newest_succeeded_runs_keep_their_folders() {
     );
     assert!(world.grades.join("not-a-run").is_dir());
     assert_eq!(world.rows(), 3, "rows stay");
+    // Each run publishes its start and its finish; a prune that removed a
+    // folder publishes once more (the first run's removed the stray folder,
+    // the third's the first run's), one that removed nothing does not.
+    assert_eq!(lock(&world.seen).changed, 2 + 1 + 2 + 2 + 1);
 }
 
 #[test]
@@ -1011,6 +1025,93 @@ fn a_content_purge_clears_results_and_removes_every_kept_folder() {
     let failed: Result<(), ()> = service.purge_with_folders(|| Err(()));
     assert!(failed.is_err());
     assert!(world.grades.join(&run_id).is_dir());
+}
+
+#[test]
+fn a_kept_run_shows_its_details_and_opens_only_its_own_report() {
+    let world = World::new(WRITE_GOOD);
+    let service = world.service();
+    let run_id = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.settle(&service, &run_id);
+    let GradingRunDetails::Loaded(details) = service.run_details(&run_id) else {
+        panic!("details not loaded");
+    };
+    assert_eq!((details.score, details.complete), (75, true));
+    let crate::grading_dto::GradingRunContent::Kept(kept) = &details.content else {
+        panic!("content kept");
+    };
+    assert_eq!(kept.summary, "One dead reference.");
+    let crate::grading_dto::GradingRunFindings::Listed { findings } = &kept.findings else {
+        panic!("findings listed");
+    };
+    assert_eq!(findings.len(), 2);
+    assert_eq!(
+        kept.criteria,
+        crate::grading_dto::GradingRunCriteria::Reported {
+            criteria: vec![crate::grading_dto::GradingCriterionScore {
+                name: "Health of the memory files".into(),
+                max: 100,
+                awarded: 75,
+            }]
+        }
+    );
+    assert_eq!(kept.report, crate::grading_dto::GradingRunReport::Kept);
+    assert_eq!(service.open_report(&run_id), GradingReportOpen::Opened);
+    assert_eq!(
+        *lock(&world.opened),
+        [std::fs::canonicalize(world.grades.join(&run_id).join("report.html")).unwrap()]
+    );
+    // An ID no run has, a path, and a run that did not succeed open nothing.
+    for unknown in [
+        "11111111-2222-4333-8444-555555555555",
+        "../report.html",
+        world
+            .grades
+            .join(&run_id)
+            .join("report.html")
+            .to_str()
+            .unwrap(),
+    ] {
+        assert_eq!(service.run_details(unknown), GradingRunDetails::NotFound);
+        assert_eq!(service.open_report(unknown), GradingReportOpen::NotFound);
+    }
+    let failed = World::new("sys.exit(3)");
+    let failed_service = failed.service();
+    let failed_id = started(failed_service.start(failed.project_path(), "claude-md-doctor"));
+    failed.settle(&failed_service, &failed_id);
+    assert_eq!(
+        failed_service.run_details(&failed_id),
+        GradingRunDetails::NotFound
+    );
+    assert_eq!(
+        failed_service.open_report(&failed_id),
+        GradingReportOpen::NotFound
+    );
+    assert!(lock(&failed.opened).is_empty());
+    // A system that cannot open it is a failure, not an opened report.
+    let mut config = world.config();
+    config.open_file = Arc::new(|_: &Path| false);
+    assert_eq!(
+        world.service_with(config).open_report(&run_id),
+        GradingReportOpen::Failed
+    );
+    // Deleting stored content leaves the score alone and opens nothing.
+    service
+        .purge_with_folders(|| world.state.purge_stored_content(|| ()))
+        .unwrap();
+    let GradingRunDetails::Loaded(details) = service.run_details(&run_id) else {
+        panic!("details not loaded after a purge");
+    };
+    assert_eq!(details.score, 75);
+    assert_eq!(
+        details.content,
+        crate::grading_dto::GradingRunContent::Deleted
+    );
+    assert_eq!(
+        service.open_report(&run_id),
+        GradingReportOpen::ContentDeleted
+    );
+    assert_eq!(lock(&world.opened).len(), 1);
 }
 
 #[test]
@@ -1178,6 +1279,9 @@ fn fixture_mode_answers_not_configured_and_runs_nothing() {
     assert_eq!(service.skills(), GradingSkills::NotConfigured);
     assert_eq!(service.overview(), GradingOverview::NotConfigured);
     assert_eq!(service.runs(), GradingRuns::NotConfigured);
+    let run = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    assert_eq!(service.run_details(run), GradingRunDetails::NotConfigured);
+    assert_eq!(service.open_report(run), GradingReportOpen::NotConfigured);
     assert_eq!(
         service.start("/anywhere", "claude-md-doctor"),
         GradingStart::NotConfigured
@@ -2476,38 +2580,13 @@ fn the_rubric_making_run_has_the_gradings_command_line_over_its_own_folders() {
     );
     assert_eq!(making[0]["cwd"], target);
     assert_eq!(making[0]["out"], out);
-    let settings: serde_json::Value = serde_json::from_str(&argv[10]).unwrap();
+    // The runner test owns the command's exact flags and sandbox settings.
+    // This layer proves rubric-making passes its own folders to that command.
     assert_eq!(
-        settings["sandbox"]["filesystem"],
-        serde_json::json!({"denyWrite": [target], "allowWrite": [out]})
-    );
-    assert_eq!(
-        settings["sandbox"]["network"]["allowedDomains"],
-        serde_json::json!([])
-    );
-    assert_eq!(settings["sandbox"]["failIfUnavailable"], true);
-    assert_eq!(settings["disableAllHooks"], true);
-    assert_eq!(
-        argv[3..],
-        [
-            "--tools",
-            "Read,Write,Edit,Bash,Glob,Grep",
-            "--permission-mode",
-            "dontAsk",
-            "--setting-sources",
-            "",
-            "--settings",
-            argv[10].as_str(),
-            "--strict-mcp-config",
-            "--no-session-persistence",
-            "--allowedTools",
-            &format!("Edit(/{out}/**)"),
-            "--disallowedTools",
-            &format!("Edit(/{target}/**)"),
-            "--add-dir",
-            out,
-            helper,
-        ]
+        argv.iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>(),
+        xt_judge::runner::command_line(&world.claude, argv[2].clone(), target, out, helper),
     );
     let prompt = &argv[2];
     assert!(prompt.starts_with(&format!(

@@ -1,3 +1,4 @@
+import { afterRendering } from './rendering';
 import { expect, test, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
@@ -323,14 +324,6 @@ const readableShare = (page: Page) =>
   });
 const shownCount = (page: Page) =>
   page.evaluate(() => (window as { telemetryShown?: number }).telemetryShown ?? 0);
-/** Two frames and a pause: time for any visibility callback to have run. */
-const settleFrames = (page: Page) =>
-  page.evaluate(
-    () =>
-      new Promise((done) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 300))),
-      ),
-  );
 
 for (const [width, height] of [
   [1440, 900],
@@ -344,7 +337,7 @@ for (const [width, height] of [
     await page.goto('/e2e/telemetry-notice.html?notice=1&route=/first-launch');
     await expect(page.getByTestId('telemetry-disclosure')).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
-    await settleFrames(page);
+    await afterRendering(page);
     // On load the bar covers the notice's top half or more: not yet shown.
     const first = await readableShare(page);
     expect(first.aboveBar).toBeLessThan(0.5);
@@ -360,7 +353,7 @@ for (const [width, height] of [
       const target = (bar.top + innerHeight) / 2 - card.height / 2;
       outlet.scrollTop += card.top - target;
     });
-    await settleFrames(page);
+    await afterRendering(page);
     const straddle = await readableShare(page);
     expect(straddle.inWindow).toBeGreaterThanOrEqual(0.5);
     expect(straddle.aboveBar).toBeLessThan(0.5);
@@ -370,7 +363,7 @@ for (const [width, height] of [
       const outlet = document.querySelector('.xt-shell-outlet')!;
       outlet.scrollTop = outlet.scrollHeight;
     });
-    await settleFrames(page);
+    await afterRendering(page);
     expect((await readableShare(page)).aboveBar).toBeGreaterThanOrEqual(0.5);
     await expect.poll(() => shownCount(page)).toBe(1);
   });

@@ -17,6 +17,7 @@ import type { ContentPurge } from './generated/ContentPurge';
 import type { TodaySummary } from './generated/TodaySummary';
 import type { SessionTitles } from './generated/SessionTitles';
 import type { SessionCompactions } from './generated/SessionCompactions';
+import type { DashboardDaySessions } from './generated/DashboardDaySessions';
 import type { DashboardSpanDetail } from './generated/DashboardSpanDetail';
 import type { RuleActivityResult } from './generated/RuleActivityResult';
 import type { ProjectList } from './generated/ProjectList';
@@ -30,6 +31,8 @@ import type { GradingSkillRemove } from './generated/GradingSkillRemove';
 import type { GradingRubricMake } from './generated/GradingRubricMake';
 import type { GradingLinkLookup } from './generated/GradingLinkLookup';
 import type { GradingLinkKeep } from './generated/GradingLinkKeep';
+import type { GradingRunDetails } from './generated/GradingRunDetails';
+import type { GradingReportOpen } from './generated/GradingReportOpen';
 import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
@@ -243,6 +246,17 @@ export interface GradingControls {
   linkKeep(lookupId: string, paths: string[]): Promise<GradingLinkKeep>;
   /** Drops a preview and its downloaded files. */
   linkDiscard(lookupId: string): Promise<boolean>;
+  /**
+   * The run behind a shown score: its summary, every finding most severe
+   * first, its rubric criteria with their points and whether its full
+   * report can be opened, decided natively. Reading starts nothing.
+   */
+  runDetails(runId: string): Promise<GradingRunDetails>;
+  /**
+   * Opens a run's kept HTML report with this Mac's default app for HTML.
+   * Sends only the run's ID; native names the file.
+   */
+  openReport(runId: string): Promise<GradingReportOpen>;
 }
 /**
  * The automatic pull-request check. The native side runs it by itself on
@@ -357,6 +371,22 @@ export interface DataSource {
   subscribe(event: DataEvent, listener: (payload?: unknown) => void): Promise<Unsubscribe>;
   /** Present natively and in a fixture, which answers as its export read. */
   readonly spanDetails?: SpanDetailControls;
+  /**
+   * The sessions behind one day of a Dashboard report's agent time, each with
+   * its time that day and listing context, the most time first — read
+   * when that day's card opens. The request names the report's range, the
+   * end of the window it was read over (`window.end_ms`), the zone it was
+   * read in (`window.timezone`) and one of its days; the native side derives
+   * the day itself in that zone, so the list adds up to that day's agent time
+   * in the report even if the system zone has changed since. Metadata only.
+   * Present natively and in a fixture, which answers as its export read.
+   */
+  daySessions?(
+    windowDays: number,
+    windowEndMs: number,
+    timezone: string,
+    date: string,
+  ): Promise<DashboardDaySessions>;
   /** Present only natively, where the app checks pull requests on its own. */
   readonly prAutoCheck?: PrAutoCheckControls;
   /** Present only where a writable app database owns the policy. */

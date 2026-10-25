@@ -165,7 +165,7 @@ impl From<RubricError> for GradingRubricProblem {
     }
 }
 
-/// The skills the user installed, for the "Add a skill" dialog, decided
+/// The skills the user installed, for the "Add a grading skill" dialog, decided
 /// once by [`crate::grading_picker::picker`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -264,7 +264,7 @@ pub struct GradingInstalledSkill {
     /// rather than the skill folder's own `xtrace-rubric.md`.
     pub rubric_kept_by_xtrace: bool,
     pub scores: GradingInstalledScores,
-    /// Where the Add a skill dialog shows it.
+    /// Where the Add a grading skill dialog shows it.
     pub group: GradingInstalledGroup,
     /// What "Make a rubric" can do for it: make one when it has none, make
     /// it again when its rubric has a problem; none when it is ready, or
@@ -279,7 +279,7 @@ pub struct GradingInstalledSkill {
     pub rubric_job: Option<GradingRubricJob>,
 }
 
-/// Which group of the Add a skill dialog shows an installed skill, decided
+/// Which group of the Add a grading skill dialog shows an installed skill, decided
 /// once by [`crate::grading_picker::picker`].
 /// Ordered as the dialog lists the groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, TS)]
@@ -415,7 +415,7 @@ pub struct GradingRubricNow {
     pub job_id: String,
     /// The installed skill's location.
     pub location: String,
-    /// Its name as the Add a skill dialog listed it.
+    /// Its name as the Add a grading skill dialog listed it.
     pub name: String,
     #[ts(type = "number")]
     pub started_at_ms: i64,
@@ -992,6 +992,133 @@ pub enum GradingProgressState {
     Finished,
 }
 
+/// The details of one succeeded run (the run behind a shown score), decided
+/// once by [`crate::grading_details`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingRunDetails {
+    Loaded(GradingRunDetailsLoaded),
+    /// No succeeded run has that ID.
+    NotFound,
+    /// Fixture mode: no run is stored and no grade folder is read.
+    NotConfigured,
+    /// The stored run could not be read.
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct GradingRunDetailsLoaded {
+    pub run_id: String,
+    pub score: u8,
+    /// When the run finished.
+    #[ts(type = "number")]
+    pub graded_at_ms: i64,
+    /// False when the skill skipped a stage; the score still counts.
+    pub complete: bool,
+    /// The run's summary, findings, criteria and report, or that "Delete
+    /// stored content" removed them (the score stays).
+    pub content: GradingRunContent,
+}
+
+/// What a run keeps besides its score.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingRunContent {
+    /// "Delete stored content" removed the summary, findings, criteria and
+    /// report.
+    Deleted,
+    Kept(GradingRunKept),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct GradingRunKept {
+    pub summary: String,
+    /// Every finding the run stored, most severe first (critical, warning,
+    /// info, then pass), each weight in the run's own order.
+    pub findings: GradingRunFindings,
+    /// The points each rubric criterion was awarded, or why they are not
+    /// shown.
+    pub criteria: GradingRunCriteria,
+    /// Whether "Open full report" can open the run's report, or why not.
+    pub report: GradingRunReport,
+}
+
+/// A run's stored findings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingRunFindings {
+    Listed {
+        findings: Vec<GradingInsight>,
+    },
+    /// The stored findings could not be read.
+    Unreadable,
+}
+
+/// A run's rubric criteria with their points.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingRunCriteria {
+    /// In the rubric's order; `max` adds up to 100 and `awarded` to the score.
+    Reported {
+        criteria: Vec<GradingCriterionScore>,
+    },
+    Unavailable {
+        reason: GradingRunGap,
+    },
+}
+
+/// The points one rubric criterion was awarded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct GradingCriterionScore {
+    pub name: String,
+    pub max: u8,
+    pub awarded: u8,
+}
+
+/// A run's full HTML report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingRunReport {
+    /// Kept in the run's grade folder; it can be opened.
+    Kept,
+    Unavailable {
+        reason: GradingRunGap,
+    },
+}
+
+/// Why a kept run's criteria or report are not shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum GradingRunGap {
+    /// Only the newest succeeded runs keep their grade folder
+    /// ([`crate::grading::KEEP_FOLDERS`]); this run's was removed.
+    FolderNotKept,
+    /// The run did not write it: a result from before rubrics has no
+    /// criteria, and a skill may write no report.
+    NotReported,
+    /// The run's grade folder could not be read, or what it holds does not
+    /// match the stored run.
+    Unreadable,
+}
+
+/// What `grading_report_open` did. Only `opened` opened anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GradingReportOpen {
+    /// Handed to macOS to open in the default app for HTML files.
+    Opened,
+    /// No succeeded run has that ID.
+    NotFound,
+    /// "Delete stored content" removed the run's report.
+    ContentDeleted,
+    /// The run's report cannot be opened, for this reason.
+    Unavailable { reason: GradingRunGap },
+    /// Fixture mode never opens anything.
+    NotConfigured,
+    /// macOS could not open it.
+    Failed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,11 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_sandbox_and_a_bad_rubric_have_their_own_reasons() {
-        assert_eq!(
-            GradingFailure::of(&GradeError::SandboxUnavailable),
-            Some(GradingFailure::SandboxUnavailable)
-        );
+    fn unsupported_versions_and_invalid_rubrics_have_their_own_reasons() {
         assert_eq!(
             GradingFailure::of(&GradeError::ClaudeTooOld),
             Some(GradingFailure::ClaudeTooOld)

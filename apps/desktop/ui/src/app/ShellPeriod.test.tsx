@@ -107,7 +107,7 @@ function mount(data: DataSource, path = '/dashboard') {
   };
 }
 const loaded = () => screen.findByTestId('dashboard-summary');
-const settle = () => act(async () => void (await new Promise((done) => setTimeout(done, 30))));
+const settle = () => act(async () => {});
 const periodText = () => screen.queryByTestId('report-period')?.textContent;
 const expectedPeriod = (current: DashboardMetrics) =>
   `${windowLabel(current.window)}, time zone ${current.window.timezone}`;

@@ -489,9 +489,7 @@ it('refreshes a selection, updates the Dashboard after a commit, and replays a r
     ),
   );
   expect(within(dialog()).getByText(/Checked · unchanged/)).toBeTruthy();
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await act(async () => {});
   expect(dashboard.mock.calls.length).toBe(settled);
 });
 

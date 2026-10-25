@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useSyncExternalStore } from 'react';
+import { gradingRunDetailsPrefix } from './query-client';
 
 /**
  * How many committed content purges this QueryClient has heard of. Kept in
@@ -11,20 +12,25 @@ const purgeKey = ['content-purges'] as const;
 
 /** The prefix of every lane span's detail. */
 const spanDetails = ['metrics', 'span-detail'] as const;
+/** The prefix of every day card's sessions, which carry saved titles. */
+const daySessions = ['metrics', 'day-sessions'] as const;
 
 export const purgeEpoch = (client: QueryClient) => client.getQueryData<number>(purgeKey) ?? 0;
 
 /**
- * A committed "Delete stored content": span details read before it may hold
- * words that are now deleted, and metric reads no longer wait for the purge,
- * so a read that began before it can answer after. Every span detail is keyed
- * by the epoch it began in; raising the epoch stops those reads and drops
- * their answers, cached or still to come, and the next open reads again.
+ * A committed "Delete stored content": span details may hold deleted words,
+ * and a day card's sessions may hold saved titles. Both are keyed by the
+ * epoch they began in; raising it stops those reads and drops their answers,
+ * cached or still to come, so the next open reads again. A grade's details
+ * hold its summary and findings: every cached one is dropped too, so a closed
+ * details dialog reopens on a fresh read.
  */
 export function discardStoredWords(client: QueryClient) {
   client.setQueryData<number>(purgeKey, purgeEpoch(client) + 1);
-  void client.cancelQueries({ queryKey: spanDetails });
-  client.removeQueries({ queryKey: spanDetails });
+  for (const queryKey of [spanDetails, daySessions, gradingRunDetailsPrefix]) {
+    void client.cancelQueries({ queryKey });
+    client.removeQueries({ queryKey });
+  }
 }
 
 /** The current purge epoch, re-rendering when a purge raises it. */

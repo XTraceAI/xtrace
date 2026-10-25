@@ -737,7 +737,10 @@ fn a_v6_index_replays_unchanged_transcripts_once_and_links_their_witnesses() {
     )];
     for pass in 0..2 {
         let mut store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 27);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         let report = run(&mut store, &home);
         assert!(report.complete(), "pass {pass}: {report:?}");
         if pass == 0 {

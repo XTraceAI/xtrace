@@ -129,7 +129,10 @@ fn migration_8_adds_nullable_status_columns_and_preserves_rows() {
     let before = snapshot(&path);
     for _ in 0..2 {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 27);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         let (pull_requests, links) = snapshot(&path);
         assert_eq!(links, before.1);
         assert_eq!(pull_requests.len(), before.0.len());
@@ -152,7 +155,9 @@ fn migration_8_adds_nullable_status_columns_and_preserves_rows() {
     }
     assert_eq!(
         rows(&path, "SELECT count(*) FROM schema_version"),
-        vec![vec![SqlValue::Integer(27)]]
+        vec![vec![SqlValue::Integer(i64::from(
+            xt_store::LATEST_SCHEMA_VERSION
+        ))]]
     );
     // The closed vocabulary and status shape are enforced by the schema too.
     for statement in [

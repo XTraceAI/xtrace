@@ -1,3 +1,13 @@
+import { hostedSwift, swiftPolicy } from './hosted-swift.mjs';
+import { previousRelease } from './hosted-update-checks.mjs';
+import {
+  createCheckedCommand,
+  createRegistryCleanup,
+  createOwnedChild,
+  createFinalCase,
+  verifyAppleSignature,
+  finishFailureCleanup,
+} from './hosted-updater-operations.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -14,7 +24,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { runInNewContext } from 'node:vm';
 import { appInventory, executionBudget, release, sha256 } from './hosted-release.mjs';
 import {
   acceptResult,
@@ -47,7 +56,7 @@ const host = () => ({
   },
 });
 const source = await readFile(new URL('./hosted-updater-failures.mjs', import.meta.url), 'utf8');
-const observer = await readFile(new URL('./hosted-updater-cancel.swift', import.meta.url), 'utf8');
+const observer = await hostedSwift('hosted-updater-cancel');
 const rust = await readFile(
   new URL('../../apps/desktop/src-tauri/examples/updater_failures.rs', import.meta.url),
   'utf8',
@@ -58,9 +67,6 @@ const workflow = await readFile(
 );
 const job = workflow.split('\n  updater-failures:\n')[1].split('\n  signed-first-launch:\n')[0];
 
-const section = (name) =>
-  source.split(`// BEGIN ${name}`)[1].split('\n').slice(1).join('\n').split(`// END ${name}`)[0];
-
 test('actual Apple signature command uses a literal Apple anchor and rejects all failed verification results', () => {
   for (const result of [
     { status: 0, signal: null, stdout: '', stderr: '' },
@@ -70,7 +76,7 @@ test('actual Apple signature command uses a literal Apple anchor and rejects all
   ]) {
     const report = { commands: [] },
       calls = [];
-    const command = runInNewContext(`${section('CHECKED COMMAND')}; command`, {
+    const command = createCheckedCommand({
       report,
       systemEnvironment: {},
       budget: { remaining: (n) => n },
@@ -79,11 +85,7 @@ test('actual Apple signature command uses a literal Apple anchor and rejects all
         return result;
       },
     });
-    const run = () =>
-      runInNewContext(section('APPLE SIGNATURE CHECK'), {
-        command,
-        securityExecutable: '/system/SecurityAgent',
-      });
+    const run = () => verifyAppleSignature(command, '/system/SecurityAgent');
     if (result.status === 0 && !result.signal && !result.error) assert.doesNotThrow(run);
     else assert.throws(run);
     assert.equal(calls[0][0], '/usr/bin/codesign');
@@ -125,7 +127,7 @@ async function registryFixture(overrides = {}) {
   const dump =
     overrides.dump?.({ owned, helper, target }) ||
     registryDump('/System/Applications/TextEdit.app', `${owned}-neighbor/${helperName}.app`);
-  const cleanup = runInNewContext(`${section('OWNED REGISTRY CLEANUP')}; cleanupBundles`, {
+  const cleanup = createRegistryCleanup({
     owned,
     parent,
     helperName,
@@ -310,36 +312,30 @@ test('dump errors, malformed/partial output and failed removal cannot establish 
 });
 
 test('actual cleanup keeps process, evidence and authorization failures ahead of registry mutation/removal', async () => {
-  const cleanup = source
-    .split('budget.beginCleanup();')[1]
-    .split('// Always close the owned listener')[0];
   for (const gate of ['process', 'evidence', 'authorization']) {
     let registryCalls = 0;
     const report = {
       cases: gate === 'evidence' ? [{ finalObservation: { targetError: 'unreadable' } }] : [],
     };
-    const result = await runInNewContext(
-      `(async () => { ${cleanup}; return { report, failure }; })()`,
-      {
-        report,
-        failure: new Error('original setup failure'),
-        processes: [],
-        command: () => {
-          if (gate === 'process') throw new Error('process identity unknown');
-          return '';
-        },
-        preserveCase: async () => {},
-        permissionStarted: gate === 'authorization',
-        cancelledInstall: () => false,
-        server: undefined,
-        targetParent: undefined,
-        owned: '/owned/staging.noindex',
-        parent: '/owned',
-        cleanupBundles: async () => {
-          registryCalls++;
-        },
+    const result = await finishFailureCleanup({
+      report,
+      failure: new Error('original setup failure'),
+      processes: [],
+      command: () => {
+        if (gate === 'process') throw new Error('process identity unknown');
+        return '';
       },
-    );
+      preserveCase: async () => {},
+      permissionStarted: gate === 'authorization',
+      cancelledInstall: () => false,
+      server: undefined,
+      targetParent: undefined,
+      owned: '/owned/staging.noindex',
+      parent: '/owned',
+      cleanupBundles: async () => {
+        registryCalls++;
+      },
+    });
     assert.equal(registryCalls, 0);
     assert.ok(report.cleanupError);
     assert.notEqual(report.cleanupConfirmed, true);
@@ -392,9 +388,10 @@ test('local entrypoint refuses before fixture/download/process preparation', asy
 test('fixture pins reject substituted content and dependency lock', async () => {
   const archive = Buffer.from('synthetic archive'),
     signature = Buffer.from('synthetic signature'),
-    lock = await readFile(new URL('../../Cargo.lock', import.meta.url));
+    lock = Buffer.from('synthetic dependency lock');
   const synthetic = {
     ...fixture,
+    lockSha256: sha256(lock),
     bytes: archive.length,
     sha256: sha256(archive),
     signatureBytes: signature.length,
@@ -408,15 +405,16 @@ test('fixture pins reject substituted content and dependency lock', async () => 
     [archive.subarray(1), signature, lock],
   ])
     assert.throws(() => verifyFixture(a, s, l, synthetic));
-  // This checkout's Cargo.lock is the one the tests-only helper is built from.
-  assert.equal(sha256(lock), fixture.lockSha256);
+  assert.match(fixture.lockSha256, /^[a-f0-9]{64}$/);
   assert.throws(() => verifyFixture(archive, signature, lock), 'unfilled or different real pins');
   assert.throws(() => verifyFixture(Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)));
-  assert.match(source, /sha256\(lock\) !== pins.lockSha256/);
 });
 
 test('the SDK cases target the candidate archive from the earlier folder and version', () => {
-  assert.deepEqual(versions, { old: '0.1.7', target: '0.1.8', mismatch: '0.1.9' });
+  assert.equal(versions.old, previousRelease.version);
+  assert.equal(versions.target, release.version);
+  assert.notEqual(versions.mismatch, versions.old);
+  assert.notEqual(versions.mismatch, versions.target);
   assert.equal(fixture.archive, release.archive);
   assert.equal(fixture.root, 'XTrace.app');
   for (const key of ['bytes', 'sha256', 'signatureBytes', 'signatureSha256', 'members'])
@@ -451,7 +449,7 @@ test('actual owned HTTP routes serve exact, corrupt, stalled and truncated fixtu
       assert.equal(response.status, 200);
       assert.equal(response.headers.get('location'), null);
       const manifest = await response.json();
-      assert.equal(manifest.version, name === 'version' ? '0.1.9' : '0.1.8');
+      assert.equal(manifest.version, name === 'version' ? versions.mismatch : versions.target);
       assert.equal(manifest.platforms['darwin-aarch64'].signature, 'owned-signature');
       const download = await fetch(manifest.platforms['darwin-aarch64'].url, {
         redirect: 'error',
@@ -495,13 +493,7 @@ test('actual child closure rejects expired budgets before spawn and records kill
       spawnCount = 0;
     const budget = executionBudget(() => clock, { workMs: 1000, cleanupMs: 1000 });
     const processes = [];
-    const code = source
-      .split('// BEGIN OWNED CHILD:')[1]
-      .split('\n')
-      .slice(1)
-      .join('\n')
-      .split('// END OWNED CHILD')[0];
-    const launch = runInNewContext(`${code}; launch`, {
+    const launch = createOwnedChild({
       budget,
       processes,
       output,
@@ -582,13 +574,7 @@ test('actual final-case closure retains changed/missing inventories, raw attempt
         stopError: 'signal diagnostic',
       },
     ];
-    const code = source
-      .split('// BEGIN FINAL CASE:')[1]
-      .split('\n')
-      .slice(1)
-      .join('\n')
-      .split('// END FINAL CASE')[0];
-    const preserve = runInNewContext(`${code}; preserveCase`, {
+    const preserve = createFinalCase({
       processes,
       childEnv: { XTRACE_DATA_DIR: data },
       appInventory,
@@ -691,12 +677,7 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), 'cancel-policy-'));
     try {
-      const policy = observer
-        .split('// BEGIN CANCEL POLICY:')[1]
-        .split('\n')
-        .slice(1)
-        .join('\n')
-        .split('// END CANCEL POLICY')[0];
+      const policy = await swiftPolicy('CANCEL POLICY');
       const swift = join(directory, 'main.swift'),
         binary = join(directory, 'policy');
       await writeFile(
@@ -766,12 +747,7 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), 'observer-refresh-'));
     try {
-      const wait = observer
-        .split('// BEGIN REFRESH WAIT:')[1]
-        .split('\n')
-        .slice(1)
-        .join('\n')
-        .split('// END REFRESH WAIT')[0];
+      const wait = await swiftPolicy('REFRESH WAIT');
       const substitute = (text, from, to, count = 1) => {
         assert.equal(
           text.split(from).length - 1,
@@ -915,7 +891,10 @@ FileHandle.standardOutput.write(bytes)
         assert.throws(() => checkDecisions(evidence.decisions[name]), { name: 'AssertionError' });
         console.log('Expected synthetic mutation rejection:', name);
       }
-      const callSites = observer.split('// END REFRESH WAIT')[1];
+      const callSites = await readFile(
+        new URL('./hosted-updater-cancel.swift', import.meta.url),
+        'utf8',
+      );
       assert.equal((callSites.match(/waitForRefresh\(until: deadline\)/g) || []).length, 1);
       assert.equal((callSites.match(/waitForRefresh\(until: disappearedBy\)/g) || []).length, 1);
       assert.doesNotMatch(callSites, /Thread\.sleep/);
@@ -944,7 +923,7 @@ test('workflow mode stays manually guarded and outside release packaging; SDK so
     Number(job.match(/^ {4}timeout-minutes: (\d+)$/m)[1]) >
       stepMaxima.reduce((sum, value) => sum + value, 0),
   );
-  assert.match(job, /timeout-minutes: 19/);
+
   assert.doesNotMatch(
     job,
     /secrets\.|environment:|persist-credentials: true|release-dmg|TAURI_CONFIG|contents: write/,

@@ -11,37 +11,9 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use xt_store::{Error, Store};
 
-/// One migration file: its version, its name without `.sql`, and its SQL.
-struct File {
-    version: i64,
-    name: String,
-    sql: String,
-}
-
-/// Every migration file, in the order they apply.
-fn migrations() -> Vec<File> {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
-    let mut paths: Vec<_> = std::fs::read_dir(directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "sql"))
-        .collect();
-    paths.sort();
-    let migrations: Vec<_> = paths
-        .iter()
-        .map(|path| {
-            let name = path.file_stem().unwrap().to_str().unwrap().to_owned();
-            File {
-                version: name.split('_').next().unwrap().parse().unwrap(),
-                name,
-                sql: std::fs::read_to_string(path).unwrap(),
-            }
-        })
-        .collect();
-    let versions: Vec<_> = migrations.iter().map(|file| file.version).collect();
-    assert_eq!(versions, (1..=versions.len() as i64).collect::<Vec<_>>());
-    migrations
-}
+#[path = "support/migration_history.rs"]
+mod migration_history;
+use migration_history::{File, apply_migrations, migrations};
 
 fn fingerprint(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.replace("\r\n", "\n")))
@@ -51,30 +23,21 @@ fn fingerprint(sql: &str) -> String {
 /// applied one transaction each, and one session stored before the second.
 /// Builds from before fingerprints kept only `schema_version`.
 fn index_written_by(path: &std::path::Path, migrations: &[File], version: i64) {
-    let mut sql = Connection::open(path).unwrap();
-    sql.execute_batch(
-        "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
-    )
-    .unwrap();
-    for file in &migrations[..version as usize] {
-        let transaction = sql.transaction().unwrap();
-        transaction.execute_batch(&file.sql).unwrap();
-        transaction
-            .execute(
-                "INSERT INTO schema_version(version, applied_at) VALUES (?1, 'older-build')",
-                [file.version],
-            )
-            .unwrap();
-        if file.version == 1 {
-            transaction
-                .execute_batch(
+    let sql = Connection::open(path).unwrap();
+    apply_migrations(
+        &sql,
+        &migrations[..version as usize],
+        "older-build",
+        |sql, version| {
+            if version == 1 {
+                sql.execute_batch(
                     "INSERT INTO sessions(session_id, host, source)
-                     VALUES ('synthetic-older-session', 'claude', 'transcript')",
+                 VALUES ('synthetic-older-session', 'claude', 'transcript')",
                 )
                 .unwrap();
-        }
-        transaction.commit().unwrap();
-    }
+            }
+        },
+    );
 }
 
 /// Apply `file` as `version` the way an older build that numbered it so did.

@@ -294,9 +294,6 @@ it('reports a scan in progress by transcripts read, never as a percentage, and f
   expect(document.body.textContent).not.toMatch(/%|of \d+ files|\d+ \/ \d+/);
   status = { ...ready };
   await act(async () => emit());
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 600));
-  });
   expect(await screen.findByText('Ready')).toBeTruthy();
   expect(screen.getByTestId('welcome-files').textContent).toBe('212');
 });

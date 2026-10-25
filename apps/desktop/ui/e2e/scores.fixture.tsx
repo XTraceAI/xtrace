@@ -4,6 +4,11 @@ import { MemoryRouter } from 'react-router';
 import fixture from '../fixtures/F1.json';
 import { AppRoutes } from '../src/app/AppRoutes';
 import {
+  detailsFor,
+  detailsScenario,
+  type DetailsScenario,
+} from '../src/app/scores/details.synthetic';
+import {
   linkKeep,
   linkLookup,
   type LinkKeepScenario,
@@ -34,7 +39,9 @@ import '../src/index.css';
  * answered as `?link=` says (`several` by default, `one`, an error state, or
  * `wait` to stay unanswered until cancelled) and a Keep as `?keep=` says
  * (`kept_several` by default, `kept_one`, `changed`, or another state); each
- * is recorded too.
+ * is recorded too. A run's details are the synthetic answer for that run
+ * (`details.synthetic.json`), or the one `?details=` names; Open full report
+ * is answered as `?report=` says (`opened` by default) and recorded.
  */
 const params = new URLSearchParams(location.search);
 let name = (params.get('scenario') ?? 'graded') as Scenario;
@@ -52,6 +59,8 @@ const calls = {
   linkCancels: 0,
   keeps: [] as [string, string[]][],
   discards: [] as string[],
+  details: [] as string[],
+  reports: [] as string[],
 };
 let waiting: (() => void) | null = null;
 Object.assign(window, { __grading: calls });
@@ -130,6 +139,18 @@ const controls: GradingControls = {
   linkDiscard: async (lookupId) => {
     calls.discards.push(lookupId);
     return true;
+  },
+  runDetails: async (runId) => {
+    calls.details.push(runId);
+    const named = params.get('details') as DetailsScenario | null;
+    return named ? detailsScenario(named) : detailsFor(runId);
+  },
+  openReport: async (runId) => {
+    calls.reports.push(runId);
+    const state = params.get('report') ?? 'opened';
+    if (state === 'opened') return { state };
+    if (state === 'unavailable') return { state, reason: 'folder_not_kept' };
+    return { state } as Awaited<ReturnType<GradingControls['openReport']>>;
   },
 };
 const source = new FixtureDataSource(fixture as FixtureExport);
