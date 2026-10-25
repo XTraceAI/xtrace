@@ -5,6 +5,8 @@ import type { GradingSkillRemove } from './generated/GradingSkillRemove';
 import type { GradingRubricMake } from './generated/GradingRubricMake';
 import type { GradingLinkLookup } from './generated/GradingLinkLookup';
 import type { GradingLinkKeep } from './generated/GradingLinkKeep';
+import type { GradingRunDetails } from './generated/GradingRunDetails';
+import type { GradingReportOpen } from './generated/GradingReportOpen';
 import type { SessionPage } from './generated/SessionPage';
 import type { SessionRow } from './generated/SessionRow';
 import type { SessionSourceStatus } from './generated/SessionSourceStatus';
@@ -111,6 +113,9 @@ export class FixtureDataSource implements DataSource {
     linkCancel: async () => false,
     linkKeep: async (): Promise<GradingLinkKeep> => ({ state: 'not_configured' }),
     linkDiscard: async () => false,
+    /** No run is stored and no grade folder is read or opened. */
+    runDetails: async (): Promise<GradingRunDetails> => ({ state: 'not_configured' }),
+    openReport: async (): Promise<GradingReportOpen> => ({ state: 'not_configured' }),
   };
   private report(windowDays: number) {
     const report = this.fixture.dashboards.find((entry) => entry.window.days === windowDays);

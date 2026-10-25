@@ -33,7 +33,7 @@ import {
 } from './scores';
 
 /**
- * The last card on Scores: it opens "Add a skill": "Add from a link" at the
+ * The last card on Scores: it opens "Add a grading skill": "Add from a link" at the
  * top (`AddFromLink`), then the skills installed on this Mac under three
  * steps: Ready to add, Your skills, then two groups
  * folded at the bottom (Can't be scored, Already on Scores). Which group a
@@ -67,7 +67,7 @@ export function AddSkillCard() {
         <span className="xt-score-add-plus" aria-hidden="true">
           +
         </span>
-        <span className="xt-score-add-label">Add a skill</span>
+        <span className="xt-score-add-label">Add a grading skill</span>
       </button>
       <AddSkillDialog open={open} onOpenChange={setOpen} returnFocusRef={trigger} />
     </li>
@@ -103,7 +103,7 @@ function AddSkillDialog({
     >
       {/* Close comes first, so opening by keyboard lands on it. */}
       <header className="xt-scores-modal-header">
-        <h2 id={title}>Add a skill</h2>
+        <h2 id={title}>Add a grading skill</h2>
         <ModalClose className="xt-button" data-variant="outline" style={{ height: 28 }}>
           Close
         </ModalClose>

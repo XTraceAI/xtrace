@@ -36,6 +36,8 @@ export const commands = {
   gradingLinkCancel: 'grading_link_cancel',
   gradingLinkKeep: 'grading_link_keep',
   gradingLinkDiscard: 'grading_link_discard',
+  gradingRunDetails: 'grading_run_details',
+  gradingReportOpen: 'grading_report_open',
   pullRequests: 'prs_list',
   pullRequestAnalytics: 'prs_analytics',
   pullRequestSessions: 'prs_sessions',

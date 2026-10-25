@@ -2,7 +2,7 @@
 import type { GradingInstalledLoaded } from "./GradingInstalledLoaded";
 
 /**
- * The skills the user installed, for the "Add a skill" dialog, decided
+ * The skills the user installed, for the "Add a grading skill" dialog, decided
  * once by [`crate::grading_picker::picker`].
  */
 export type GradingInstalledSkills = { "state": "loaded" } & GradingInstalledLoaded | { "state": "not_configured" } | { "state": "failed" };

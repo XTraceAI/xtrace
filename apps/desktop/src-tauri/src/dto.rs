@@ -326,6 +326,8 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     GradingRubricProgress::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     GradingLinkLookup::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     GradingLinkKeep::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingRunDetails::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    GradingReportOpen::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     crate::privacy::ContentRetention::export_all(
         &ts_rs::Config::new().with_out_dir(directory.as_ref()),
     )?;

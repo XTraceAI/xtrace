@@ -20,6 +20,7 @@ pub mod dto;
 mod earlier_install;
 pub mod gh_cli;
 pub mod grading;
+mod grading_details;
 mod grading_dto;
 mod grading_link_dto;
 pub mod grading_overview;
@@ -536,7 +537,7 @@ async fn grading_overview<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::G
     .await
 }
 
-/// The skills installed under the native home, for the "Add a skill"
+/// The skills installed under the native home, for the "Add a grading skill"
 /// dialog: each one's rubric status and whether it can be added, decided
 /// natively. Reading this starts and writes nothing. Fixture mode answers
 /// `not_configured`.
@@ -591,7 +592,7 @@ async fn grading_skill_remove<R: tauri::Runtime>(
     .await
 }
 
-/// Look a public GitHub link up for the Add a skill dialog: GitHub's API
+/// Look a public GitHub link up for the Add a grading skill dialog: GitHub's API
 /// names the commit, its archive is downloaded and unpacked within bounds
 /// into a private staging folder, and the skills it holds are answered with
 /// whether each can be kept. The only network use of the dialog, started
@@ -651,6 +652,40 @@ async fn grading_link_discard<R: tauri::Runtime>(
     })
     .await
     .unwrap_or(false)
+}
+
+/// The details of the run behind a shown score: its summary, every finding
+/// most severe first, its rubric criteria with their points and whether its
+/// full report can be opened, decided natively. Reading this starts and
+/// writes nothing. Fixture mode answers `not_configured`.
+#[tauri::command]
+async fn grading_run_details<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    run_id: String,
+) -> dto::GradingRunDetails {
+    on_grading_worker(app, dto::GradingRunDetails::Failed, move |service| {
+        service.run_details(&run_id)
+    })
+    .await
+}
+
+/// Open a succeeded run's kept HTML report with macOS's default app for
+/// HTML. The renderer names only the run; the file is the one the run's
+/// checked grade folder names. Only the main window may ask. Fixture mode
+/// answers `not_configured`.
+#[tauri::command]
+async fn grading_report_open<R: tauri::Runtime>(
+    webview_window: tauri::WebviewWindow<R>,
+    run_id: String,
+) -> dto::GradingReportOpen {
+    if webview_window.label() != tray::MAIN_LABEL {
+        return dto::GradingReportOpen::Failed;
+    }
+    let app = webview_window.app_handle().clone();
+    on_grading_worker(app, dto::GradingReportOpen::Failed, move |service| {
+        service.open_report(&run_id)
+    })
+    .await
 }
 
 /// The recent grading runs, newest first. Reading this starts nothing.
@@ -1225,7 +1260,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(projects::ProjectsService::new(state.native_home()));
     // Grading runs a built-in or added skill on a listed project, on
     // request only, and lists the skills installed under the same native
-    // home when the Add a skill dialog asks. Fixture startup has no native
+    // home when the Add a grading skill dialog asks. Fixture startup has no native
     // home and no bundled skill: its service answers `not_configured`,
     // never runs anything and never reads a home folder.
     let grading = match (state.fixture_now_ms(), state.native_home()) {
@@ -1250,7 +1285,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => grading::GradingService::not_configured(),
     };
-    // "Add from a link" looks public GitHub links up for the Add a skill
+    // "Add from a link" looks public GitHub links up for the Add a grading skill
     // dialog, only when its Look up is pressed, and keeps chosen skills in
     // the same native home's `~/.agents/skills`. Fixture startup's service
     // answers `not_configured` and never uses the network.
@@ -1483,6 +1518,8 @@ pub fn run() {
             grading_skill_add,
             grading_skill_remove,
             grading_rubric_make,
+            grading_run_details,
+            grading_report_open,
             grading_link_lookup,
             grading_link_cancel,
             grading_link_keep,
@@ -2607,7 +2644,7 @@ mod tests {
         }
     }
 
-    /// The nine grading commands through Tauri's own IPC dispatch, and the
+    /// The eleven grading commands through Tauri's own IPC dispatch, and the
     /// three grading events through its emitter. Fixture startup's service is
     /// not configured; without a managed service every command fails closed.
     #[test]
@@ -2641,7 +2678,9 @@ mod tests {
                 grading_installed_skills,
                 grading_skill_add,
                 grading_skill_remove,
-                grading_rubric_make
+                grading_rubric_make,
+                grading_run_details,
+                grading_report_open
             ]);
             let builder = match service {
                 Some(service) => builder.manage(service),
@@ -2660,6 +2699,7 @@ mod tests {
 
         let add = serde_json::json!({"location": "plugin:tools@market/lint"});
         let remove = serde_json::json!({"skillId": "x"});
+        let run = serde_json::json!({"runId": "0f8fad5b-d9cb-469f-a165-70867728950e"});
         let app = build(Some(grading::GradingService::not_configured()));
         for (cmd, body) in [
             ("grading_skills", serde_json::json!({})),
@@ -2670,6 +2710,8 @@ mod tests {
             ("grading_skill_add", add.clone()),
             ("grading_skill_remove", remove.clone()),
             ("grading_rubric_make", add.clone()),
+            ("grading_run_details", run.clone()),
+            ("grading_report_open", run.clone()),
         ] {
             assert_eq!(invoke(&app, cmd, body), Ok(not_configured.clone()), "{cmd}");
         }
@@ -2688,6 +2730,8 @@ mod tests {
             ("grading_skill_add", add.clone()),
             ("grading_skill_remove", remove),
             ("grading_rubric_make", add),
+            ("grading_run_details", run.clone()),
+            ("grading_report_open", run),
         ] {
             assert_eq!(invoke(&app, cmd, body), Ok(failed.clone()), "{cmd}");
         }

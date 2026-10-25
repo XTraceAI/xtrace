@@ -41,6 +41,8 @@ import type { GradingSkillRemove } from './generated/GradingSkillRemove';
 import type { GradingRubricMake } from './generated/GradingRubricMake';
 import type { GradingLinkLookup } from './generated/GradingLinkLookup';
 import type { GradingLinkKeep } from './generated/GradingLinkKeep';
+import type { GradingRunDetails } from './generated/GradingRunDetails';
+import type { GradingReportOpen } from './generated/GradingReportOpen';
 import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
@@ -151,6 +153,8 @@ export class TauriDataSource implements DataSource {
     linkKeep: (lookupId: string, paths: string[]) =>
       invoke<GradingLinkKeep>(commands.gradingLinkKeep, { lookupId, paths }),
     linkDiscard: (lookupId: string) => invoke<boolean>(commands.gradingLinkDiscard, { lookupId }),
+    runDetails: (runId: string) => invoke<GradingRunDetails>(commands.gradingRunDetails, { runId }),
+    openReport: (runId: string) => invoke<GradingReportOpen>(commands.gradingReportOpen, { runId }),
   };
   readonly typingSpeed = {
     read: () => invoke<number>(commands.typingSpeed),
