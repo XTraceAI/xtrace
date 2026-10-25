@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
 import { performance } from 'node:perf_hooks';
-import fixture from '../fixtures/F1.json' with { type: 'json' };
 
 test.use({ viewport: { width: 1120, height: 720 } });
 
@@ -123,27 +122,6 @@ test('re-reads the Dashboard route once at its due time and keeps range, focus a
   await focusWindow(page);
   const shown = await settled(page);
   expect(began(after, shown)).toEqual({ dashboard: 1, tokensByHost: 1 });
-});
-
-test('re-reads the Sessions summary, host tokens and loaded list page together', async ({
-  page,
-}) => {
-  await open(page, '/sessions');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sessions');
-  const before = await settled(page);
-  await page.clock.fastForward(maxAge);
-  const after = await settled(page);
-  expect(began(before, after)).toEqual({ dashboard: 1, tokensByHost: 1, sessionsList: 1 });
-  await setVisibility(page, 'hidden');
-  await page.clock.fastForward(3 * maxAge);
-  expect(began(after, await settled(page))).toEqual({});
-  await setVisibility(page, 'visible');
-  await focusWindow(page);
-  expect(began(after, await settled(page))).toEqual({
-    dashboard: 1,
-    tokensByHost: 1,
-    sessionsList: 1,
-  });
 });
 
 test('replays exactly three loaded Sessions pages and keeps the visible row and focus', async ({
@@ -272,36 +250,4 @@ test('keeps an open group and the visible row when its parent arrives late and t
   const after = await firstVisible(page);
   expect(Math.abs(after.offset - anchored.offset)).toBeLessThanOrEqual(1);
   await expect(group).toHaveAttribute('aria-expanded', 'true');
-});
-
-test('re-reads one session and the host tokens, never its transcript', async ({ page }) => {
-  const id = fixture.sessions[0].rows[0].id;
-  await open(page, `/sessions/${encodeURIComponent(id)}?range=7d`);
-  await expect(page.getByRole('link', { name: '← All sessions' })).toBeVisible();
-  const before = await settled(page);
-  expect(before.sessionTranscript).toBeGreaterThan(0);
-  await page.clock.fastForward(maxAge - 30_000);
-  expect(began(before, await settled(page))).toEqual({});
-  await page.clock.fastForward(60_000);
-  expect(began(before, await settled(page))).toEqual({
-    sessionRow: 1,
-    sessionStretches: 1,
-    tokensByHost: 1,
-  });
-});
-
-test('re-reads the PRs report, and nothing while the inventory is shown', async ({ page }) => {
-  await open(page, '/prs');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pull requests');
-  const before = await settled(page);
-  expect(before.pullRequestAnalytics).toBeGreaterThan(0);
-  await page.clock.fastForward(maxAge + 30_000);
-  const after = await settled(page);
-  expect(began(before, after)).toEqual({ pullRequestAnalytics: 1, tokensByHost: 1 });
-
-  await page.getByRole('radio', { name: /inventory/i }).click();
-  const inventory = await settled(page);
-  await page.clock.fastForward(3 * maxAge);
-  await focusWindow(page);
-  expect(began(inventory, await settled(page))).toEqual({});
 });

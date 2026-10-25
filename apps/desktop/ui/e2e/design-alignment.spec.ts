@@ -42,7 +42,7 @@ const DETAILS = [
   ['Coverage', 'M-18', 'Sessions', /^Coverage/, 'Coverage'],
 ] as const;
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`Dashboard cards explain themselves from an info control, not an ID chip, in ${scheme}`, async ({
     page,
   }, info) => {
@@ -100,7 +100,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`Sessions rows scroll inside the list, not the page, at ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {

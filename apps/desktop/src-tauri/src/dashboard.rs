@@ -1451,6 +1451,7 @@ mod tests {
             model: Option<String>,
             output_tokens: Option<u64>,
             unknown_reason: Option<&'static str>,
+            output_shares: Vec<()>,
         }
         let renamed = Renamed {
             host: "claude".into(),
@@ -1465,10 +1466,52 @@ mod tests {
             model: None,
             output_tokens: None,
             unknown_reason: Some("no_measured_output"),
+            output_shares: Vec::new(),
         };
         assert_eq!(
             convert::<MetricFavorite>(&exact).unwrap().unknown_reason,
             Some(MetricFavoriteUnknown::NoMeasuredOutput)
+        );
+        // Every kind of output row crosses from the metrics shape unchanged.
+        let shares = xt_metrics::FavoriteModel {
+            model: None,
+            output_tokens: None,
+            unknown_reason: Some(xt_metrics::FavoriteUnknown::UnknownModelOutput),
+            output_shares: vec![
+                xt_metrics::OutputShare {
+                    of: xt_metrics::OutputShareOf::Model {
+                        model: "synthetic-model".into(),
+                    },
+                    output_tokens: 30,
+                },
+                xt_metrics::OutputShare {
+                    of: xt_metrics::OutputShareOf::UnknownModel,
+                    output_tokens: 10,
+                },
+                xt_metrics::OutputShare {
+                    of: xt_metrics::OutputShareOf::OtherModels { models: 2 },
+                    output_tokens: 5,
+                },
+            ],
+        };
+        assert_eq!(
+            convert::<MetricFavorite>(&shares).unwrap().output_shares,
+            [
+                MetricOutputShare {
+                    of: MetricOutputShareOf::Model {
+                        model: "synthetic-model".into(),
+                    },
+                    output_tokens: 30,
+                },
+                MetricOutputShare {
+                    of: MetricOutputShareOf::UnknownModel,
+                    output_tokens: 10,
+                },
+                MetricOutputShare {
+                    of: MetricOutputShareOf::OtherModels { models: 2 },
+                    output_tokens: 5,
+                },
+            ]
         );
         assert!(validate_window(15).is_err());
         assert!(

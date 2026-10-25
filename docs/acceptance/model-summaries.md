@@ -30,8 +30,13 @@ winner skips turn attribution entirely. This is a conservative direct fold, not
 an enumeration of possible missing histories.
 
 `favorite_comparison(window)` returns current and previous categories in one
-read-only snapshot, using the equal-elapsed `Window::previous()`. It does not
-calculate a percentage for a model name. `favorite_iso_week(anchor_ms, zone)`
+read-only snapshot, using the equal-elapsed `Window::previous()`. Its
+favorite is categorical: no percentage decides or compares it. Each period also
+carries `output_shares`, the output tokens of every model that wrote measured
+output in that window, largest first, with unknown-model output as its own row;
+from ten named models on, those after the eighth (`SHARE_MODEL_ROWS`) are summed
+into one row that counts them. The Dashboard lists each row's share of their
+sum under the favorite's definition. `favorite_iso_week(anchor_ms, zone)`
 uses a complete Monday-to-Monday local ISO week with an explicit anchor and zone.
 Calendar arithmetic handles DST and year boundaries; this weekly lookup is
 separate from equal-elapsed comparisons. Existing caller transactions are reused.

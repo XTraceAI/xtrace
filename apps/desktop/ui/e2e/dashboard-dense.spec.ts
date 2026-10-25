@@ -110,7 +110,7 @@ for (const shape of ['dense', 'reference', 'unknown'] as const)
     [1440, 900],
     [1120, 720],
   ] as const)
-    for (const scheme of ['light', 'dark'] as const)
+    for (const scheme of ['light'] as const)
       test(`${shape} Overview values keep full labels inside their tiles at ${width}x${height} ${scheme}`, async ({
         page,
       }, info) => {

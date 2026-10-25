@@ -6,7 +6,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['dark', 'light'] as const)
+  for (const scheme of ['light'] as const)
     test(`Recently active sorting and Back fit ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {

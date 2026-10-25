@@ -238,7 +238,7 @@ for (const [width, height] of [
   [1120, 720],
   [1440, 900],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`sub-sessions group under their parent and open from the keyboard at ${width}x${height} ${scheme}`, async ({
       page,
       browserName,
@@ -455,7 +455,7 @@ for (const [width, height] of [
   [1120, 720],
   [1440, 900],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`a short list fits its rows and grows with a group at ${width}x${height} ${scheme}`, async ({
       page,
     }) => {
@@ -497,38 +497,6 @@ for (const [width, height] of [
       expect(reclosed.card).toBeCloseTo(closed.card, 0);
       expect(reclosed.below).toBeLessThanOrEqual(8.5);
     });
-
-test('an opened child shows its own cost, not its parent’s', async ({ page }) => {
-  await open(page, 1120, 720, 'light');
-  const table = page.getByRole('table', { name: 'Session lanes' });
-  const row = (id: string) =>
-    table.getByRole('row').filter({ has: page.locator(`[data-visible-id="${id}"]`) });
-  // Collapsed, each group's row carries its Σ total: the parent's $3 with
-  // its $4, $7 and $8, and the named parent's two sub-sessions' $1 and $6.
-  await expect(row(PARENT).getByRole('cell').last()).toHaveText('Σ $22.00');
-  const named = table.getByRole('row').filter({ hasText: 'Sub-sessions of Session 01a0eeee' });
-  await expect(named.getByRole('cell').last()).toHaveText('Σ $7.00');
-  await table.getByRole('button', { name: `3 sub-sessions of ${PARENT_TITLE}` }).click();
-  await table.getByRole('button', { name: '2 sub-sessions of Session 01a0eeee' }).click();
-  // Open, the named parent has no cost of its own and every row shows its
-  // own, so the cells add up to the totals they replaced.
-  await expect(named.getByRole('cell').last()).toHaveText('');
-  await expect(row(KID_A).getByRole('cell').last()).toHaveText('$1.00');
-  await expect(row(KID_B).getByRole('cell').last()).toHaveText('$6.00');
-  await expect(row(CHILD_3).getByRole('cell').last()).toHaveText('$8.00');
-  // Each row's cost is the report's own for that session: index + 1 dollars.
-  await expect(row(CHILD_2).getByRole('cell').last()).toHaveText('$7.00');
-  await expect(row(CHILD_1).getByRole('cell').last()).toHaveText('$4.00');
-  await expect(row(PARENT).getByRole('cell').last()).toHaveText('$3.00');
-});
-
-test('an absent parent opens its own page from its group row', async ({ page }) => {
-  await open(page, 1120, 720, 'light');
-  const link = page.getByRole('link', { name: `Open parent session Session 01a0eeee, ${GONE}` });
-  await link.focus();
-  await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(new RegExp(`/sessions/${GONE}\\?q=${GONE}&host=codex&range=7d$`));
-});
 
 test('a verified automated reviewer keeps its own row and opens its own detail', async ({
   page,

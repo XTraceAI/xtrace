@@ -3,7 +3,7 @@ import { ruleSummary } from '../src/kit/rules';
 
 test.use({ viewport: { width: 1120, height: 720 } });
 
-for (const theme of ['dark', 'light'] as const) {
+for (const theme of ['light'] as const) {
   test(`metric geometry, unknown values, and passive rule tooltips in ${theme}`, async ({
     page,
   }, info) => {

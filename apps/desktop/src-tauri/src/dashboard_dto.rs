@@ -494,6 +494,30 @@ pub struct MetricFavorite {
     #[ts(type = "number | null")]
     pub output_tokens: Option<u64>,
     pub unknown_reason: Option<MetricFavoriteUnknown>,
+    /// Every model that wrote measured output in the period, largest first.
+    pub output_shares: Vec<MetricOutputShare>,
+}
+
+/// One row of a period's measured output; its share is of the rows' sum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct MetricOutputShare {
+    pub of: MetricOutputShareOf,
+    #[ts(type = "number")]
+    pub output_tokens: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MetricOutputShareOf {
+    Model {
+        model: String,
+    },
+    UnknownModel,
+    /// Named models folded into one row, and how many.
+    OtherModels {
+        #[ts(type = "number")]
+        models: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]

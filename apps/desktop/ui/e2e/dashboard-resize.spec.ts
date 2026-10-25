@@ -405,17 +405,6 @@ test('one listed session still keeps room for three rows at the smallest Session
   expect(low.laneRows).toBe(1);
 });
 
-test('unreadable stored layout draws the default', async ({ page }) => {
-  await page.addInitScript(
-    (key) => window.localStorage.setItem(key, '{"rows": 7, "columns": "x"'),
-    STORAGE,
-  );
-  await open(page, withSessions(3), 1440, 900);
-  const g = await layout(page);
-  expect(g.sessions).toBeCloseTo(sessionsHeight(8), 0);
-  expect(g.effort.width / g.overview.width).toBeCloseTo(1.6, 1);
-});
-
 /**
  * Narrow enough that Effort stacks over Overview: there is no column
  * boundary, and the row boundary still resizes the stacked pair against

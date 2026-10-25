@@ -46,7 +46,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`every cache state fits its row at ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {

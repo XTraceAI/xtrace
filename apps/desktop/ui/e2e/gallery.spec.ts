@@ -135,7 +135,18 @@ test(
     await page.getByRole('button', { name: 'modal/open', exact: true }).click();
     await expect(dark.getByRole('dialog')).toBeVisible();
     await expect(light.getByRole('dialog')).toBeVisible();
+    // Each frame's dialog moves focus to its textbox on the animation frame after it
+    // opens, and whichever frame does so last holds focus. Let both frames draw twice,
+    // so neither can take focus back after the dark textbox is focused for Escape.
+    for (const frame of [dark, light])
+      await frame
+        .locator('body')
+        .evaluate(
+          () =>
+            new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+        );
     await dark.getByRole('dialog').getByRole('textbox').focus();
+    await expect(dark.getByRole('dialog').getByRole('textbox')).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(dark.getByRole('dialog')).not.toBeVisible();
     await expect(light.getByRole('dialog')).toBeVisible();

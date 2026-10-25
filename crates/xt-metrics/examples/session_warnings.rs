@@ -216,7 +216,7 @@ fn reason_name(missing: &Missing) -> String {
         Missing::OutcomeUnknown { .. } => "tool outcome unknown".into(),
         Missing::UnmatchedResults { .. } => "result names an unknown call".into(),
         Missing::FailedCallKey { reason, .. } => format!("failed call key: {reason:?}"),
-        Missing::CirclingUnmeasured => "M-20 has no stretches for it".into(),
+        Missing::StretchesUnmeasured => "M-20 has no stretches for it".into(),
         Missing::RepeatsUnknown { reason, .. } => format!("M-20 repeats unknown: {reason:?}"),
     }
 }

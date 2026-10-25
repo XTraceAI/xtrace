@@ -4,10 +4,11 @@
 use jiff::{Timestamp, tz::TimeZone};
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use xt_fixtures::TempDb;
 use xt_metrics::{
     CheckState, MetricsDb, Missing, RepeatThresholds, SessionRepeats, SessionWarnings, WarningKind,
-    Window,
+    WholeSessionWarnings, Window,
 };
 use xt_store::{
     CanonicalRecord, SessionMeta, SessionSource, batch::IngestBatch, retention::RetentionMode,
@@ -189,9 +190,9 @@ fn every_rule_fires_from_kept_content() {
                 "you wrote \"still not\" after a reply (12:01)"
             ),
             (
-                WarningKind::Circling,
+                WarningKind::RepeatedCalls,
                 uuids(&["h3", "a6", "a7"]),
-                "went in circles: 5 repeated calls in 4 active minutes, most often the same Read call (6 times) (from 12:02)"
+                "5 repeated calls in 4 active minutes, most often the same Read call (6 times) (from 12:02)"
             ),
             (
                 WarningKind::RepeatedPrompt,
@@ -247,12 +248,12 @@ fn outcomes_are_read_without_kept_content_and_a_preview_is_read() {
             WarningKind::RepeatedFailure,
             WarningKind::Interruption,
             WarningKind::Correction,
-            WarningKind::Circling
+            WarningKind::RepeatedCalls
         ]
     );
     assert_eq!(found.checks.repeated_failure, CheckState::Complete);
     assert_eq!(found.checks.interruption, CheckState::Complete);
-    assert_eq!(found.checks.circling, CheckState::Complete);
+    assert_eq!(found.checks.repeated_calls, CheckState::Complete);
     assert_eq!(
         found.checks.correction,
         CheckState::Incomplete {
@@ -550,4 +551,383 @@ fn a_cut_preview_never_reads_as_the_whole_message() {
         }
     );
     assert_eq!((found.person_messages, found.person_messages_read), (3, 0));
+}
+
+fn whole(db: &TempDb, ids: &[&str]) -> std::collections::BTreeMap<String, WholeSessionWarnings> {
+    MetricsDb::open(db.path())
+        .unwrap()
+        .whole_session_warnings(ids, RepeatThresholds::default(), &TimeZone::UTC)
+        .unwrap()
+}
+
+fn read(answer: &WholeSessionWarnings) -> &SessionWarnings {
+    match answer {
+        WholeSessionWarnings::Read { warnings, .. } => warnings,
+        other => panic!("not read: {other:?}"),
+    }
+}
+
+#[test]
+fn a_whole_session_read_is_the_window_read_over_the_session_s_own_history() {
+    let mut db = TempDb::empty().unwrap();
+    seed(&mut db, SESSION, "claude", &conversation(), true);
+    // A second session on the same surface weeks earlier, and an untimed
+    // one, so the request mixes every answer.
+    let earlier = |minute: u32| format!("2026-08-01T09:{minute:02}:00Z");
+    seed(
+        &mut db,
+        "older",
+        "claude",
+        &[
+            says("o1", &earlier(0), "please rename the module"),
+            reply("o2", &earlier(1)),
+            says("o3", &earlier(2), "no, the other module"),
+            reply("o4", &earlier(3)),
+        ],
+        true,
+    );
+    let answers = whole(&db, &[SESSION, "older", SESSION, "nobody"]);
+    assert_eq!(
+        answers.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["nobody", "older", SESSION]
+    );
+    assert_eq!(answers["nobody"], WholeSessionWarnings::Missing);
+    // The same answer the window read gives over a window that holds all of
+    // the session, and it carries the session's own clock times.
+    assert_eq!(read(&answers[SESSION]), &warnings(&db, SESSION));
+    assert_eq!(
+        answers[SESSION],
+        WholeSessionWarnings::Read {
+            warnings: warnings(&db, SESSION),
+            untimed_records: 0
+        }
+    );
+    // The older session's correction is found although it is outside the
+    // seven days the window read covers, where it is not even listed.
+    let older = read(&answers["older"]);
+    assert_eq!(older.warnings.len(), 1);
+    assert_eq!(older.warnings[0].kind, WarningKind::Correction);
+    assert_eq!(
+        older.warnings[0].reason,
+        "you wrote \"no\" after a reply (09:02)"
+    );
+    assert!(
+        MetricsDb::open(db.path())
+            .unwrap()
+            .session_warnings(window(), RepeatThresholds::default(), &TimeZone::UTC)
+            .unwrap()
+            .iter()
+            .all(|s| s.session_id != "older")
+    );
+    // Asked alone, a session gets the same answer as among others.
+    assert_eq!(whole(&db, &["older"])["older"], answers["older"]);
+    assert_eq!(whole(&db, &[SESSION])[SESSION], answers[SESSION]);
+}
+
+#[test]
+fn a_session_with_no_timed_record_is_said_to_be_untimed() {
+    let mut db = TempDb::empty().unwrap();
+    let mut untimed = says("u1", &at(0, 0), "please do the thing");
+    untimed.timestamp = None;
+    seed(&mut db, "untimed", "claude", &[untimed], true);
+    let mut late = says("u2", &at(0, 0), "and this one");
+    late.timestamp = None;
+    seed(
+        &mut db,
+        "partly",
+        "claude",
+        &[says("p1", &at(0, 0), "please do the thing"), late],
+        true,
+    );
+    let answers = whole(&db, &["untimed", "partly"]);
+    assert_eq!(
+        answers["untimed"],
+        WholeSessionWarnings::Untimed { untimed_records: 1 }
+    );
+    let WholeSessionWarnings::Read {
+        untimed_records, ..
+    } = answers["partly"]
+    else {
+        panic!("read");
+    };
+    assert_eq!(untimed_records, 1);
+}
+
+#[test]
+fn starting_and_messaging_agents_are_not_repeated_calls() {
+    let mut db = TempDb::empty().unwrap();
+    let task = json!({"description": "review", "prompt": "review the diff"});
+    let message = json!({"to": "reviewer", "message": "status?"});
+    seed(
+        &mut db,
+        SESSION,
+        "claude",
+        &[
+            says("h1", &at(0, 0), "run the reviewers please"),
+            calls(
+                "a1",
+                &at(0, 30),
+                &[
+                    ("t1", "Agent", task.clone()),
+                    ("t2", "Agent", task.clone()),
+                    ("t3", "Agent", task.clone()),
+                    ("t4", "SendMessage", message.clone()),
+                    ("t5", "SendMessage", message.clone()),
+                    ("t6", "SendMessage", message.clone()),
+                    ("t7", "Agent", task),
+                    ("t8", "SendMessage", message),
+                ],
+            ),
+            reply("a2", &at(5, 0)),
+        ],
+        true,
+    );
+    let answers = whole(&db, &[SESSION]);
+    let found = read(&answers[SESSION]);
+    assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+    assert_eq!(found.checks.repeated_calls, CheckState::Complete);
+    // M-20, the Dashboard's number, still counts them.
+    let SessionRepeats::Measured { stretches, .. } = MetricsDb::open(db.path())
+        .unwrap()
+        .session_repeats(window(), SESSION, RepeatThresholds::default())
+        .unwrap()
+    else {
+        panic!("measured");
+    };
+    assert_eq!(stretches.len(), 1);
+    assert_eq!(stretches[0].circling, Some(true));
+}
+
+#[test]
+fn every_warning_of_a_session_has_its_own_identity() {
+    let mut db = TempDb::empty().unwrap();
+    let declined =
+        "The user doesn't want to proceed with this tool use. The tool use was rejected.";
+    let edit = |path: &str| json!({"file_path": path});
+    let result_blocks = |uuid: &str, time: &str, results: &[(&str, bool, &str)]| {
+        let content: Vec<Value> = results
+            .iter()
+            .map(|(call, failed, text)| {
+                json!({"type":"tool_result","tool_use_id":call,"is_error":failed,"content":text})
+            })
+            .collect();
+        record(json!({"uuid":uuid,"type":"user","timestamp":time,
+            "message":{"role":"user","content":content}}))
+    };
+    seed(
+        &mut db,
+        SESSION,
+        "claude",
+        &[
+            says("h1", &at(0, 0), "edit both files please"),
+            // Two calls in one record, both declined in one result record:
+            // two interruptions on the same record.
+            calls(
+                "a1",
+                &at(0, 1),
+                &[("t1", "Edit", edit("/a.rs")), ("t2", "Edit", edit("/b.rs"))],
+            ),
+            result_blocks(
+                "r1",
+                &at(0, 2),
+                &[("t1", true, declined), ("t2", true, declined)],
+            ),
+            // Two different commands failing together, twice: two repeated
+            // failures whose first result is the same record.
+            calls(
+                "a2",
+                &at(0, 3),
+                &[
+                    ("t3", "Bash", json!({"command": "make"})),
+                    ("t4", "Bash", json!({"command": "make test"})),
+                ],
+            ),
+            result_blocks(
+                "r2",
+                &at(0, 4),
+                &[("t3", true, "failed"), ("t4", true, "failed")],
+            ),
+            calls(
+                "a3",
+                &at(0, 5),
+                &[
+                    ("t5", "Bash", json!({"command": "make"})),
+                    ("t6", "Bash", json!({"command": "make test"})),
+                ],
+            ),
+            result_blocks(
+                "r3",
+                &at(0, 6),
+                &[("t5", true, "failed"), ("t6", true, "failed")],
+            ),
+            reply("a4", &at(0, 7)),
+        ],
+        true,
+    );
+    let answers = whole(&db, &[SESSION]);
+    let found = read(&answers[SESSION]);
+    let kinds: Vec<_> = found.warnings.iter().map(|w| w.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            WarningKind::Interruption,
+            WarningKind::Interruption,
+            WarningKind::RepeatedFailure,
+            WarningKind::RepeatedFailure
+        ]
+    );
+    let ids: Vec<_> = found.warnings.iter().map(|w| w.id()).collect();
+    assert_eq!(
+        ids.iter().collect::<BTreeSet<_>>().len(),
+        ids.len(),
+        "{ids:?}"
+    );
+    assert_eq!(ids[0], "interruption:r1#0");
+    assert_eq!(ids[1], "interruption:r1#1");
+    assert!(ids[2].starts_with("repeated_failure:r2#"), "{ids:?}");
+    // Read again, the identities are the same.
+    let again: Vec<_> = read(&whole(&db, &[SESSION])[SESSION])
+        .warnings
+        .iter()
+        .map(|w| w.id())
+        .collect();
+    assert_eq!(again, ids);
+}
+
+#[test]
+fn a_window_lists_only_its_own_warnings_of_whole_session_answers() {
+    let mut db = TempDb::empty().unwrap();
+    // One session across two weeks: a correction on Aug 30, outside the
+    // window, and the conversation's warnings on Sep 7, inside it.
+    let mut rows = vec![
+        says("e1", "2026-08-30T09:00:00Z", "please rename the module"),
+        reply("e2", "2026-08-30T09:01:00Z"),
+        says("e3", "2026-08-30T09:02:00Z", "no, the other module"),
+        reply("e4", "2026-08-30T09:03:00Z"),
+    ];
+    rows.extend(conversation());
+    seed(&mut db, SESSION, "claude", &rows, true);
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let inside = metrics
+        .warnings_in_window(window(), RepeatThresholds::default(), &TimeZone::UTC)
+        .unwrap();
+    let whole = whole(&db, &[SESSION]);
+    let all = &read(&whole[SESSION]).warnings;
+    assert_eq!(all[0].record_uuids, uuids(&["e3"]));
+    assert_eq!(inside.len(), 1);
+    assert_eq!(inside[0].session_id, SESSION);
+    // The same warnings, the one before the window left out.
+    assert_eq!(&inside[0].warnings[..], &all[1..]);
+    // The session's last timed record, the version its title is read for.
+    assert_eq!(inside[0].last_ms, ms("2026-09-07T12:11:30Z"));
+}
+
+#[test]
+fn a_batch_and_a_window_read_give_each_session_the_answer_it_gets_alone() {
+    let mut db = TempDb::empty().unwrap();
+    seed(&mut db, SESSION, "claude", &conversation(), true);
+    // A session that lives for five weeks, so every group's whole windows
+    // reach back to it.
+    seed(
+        &mut db,
+        "long",
+        "claude",
+        &[
+            says("l1", "2026-08-01T09:00:00Z", "please rename the module"),
+            reply("l2", "2026-08-01T09:01:00Z"),
+            says("l3", "2026-08-01T09:02:00Z", "no, the other module"),
+            reply("l4", "2026-08-01T09:03:00Z"),
+            says("l5", "2026-09-07T12:30:00Z", "and now the tests"),
+            reply("l6", "2026-09-07T12:31:00Z"),
+        ],
+        true,
+    );
+    // Sessions on the same surface whose records all state one instant,
+    // inside the conversation's window: there the surface's clock is judged
+    // unhealthy, so the conversation's repeated calls cannot be measured,
+    // in a batch exactly as alone.
+    for index in 0..4 {
+        let rows: Vec<_> = (0..6)
+            .map(|n| says(&format!("d{index}-{n}"), &at(0, 30), "the same instant"))
+            .collect();
+        seed(
+            &mut db,
+            &format!("degenerate-{index}"),
+            "claude",
+            &rows,
+            true,
+        );
+    }
+    // Enough short sessions over August that the identifiers are looked up in
+    // more than one group.
+    let mut ids = vec![
+        SESSION.to_owned(),
+        "long".to_owned(),
+        "degenerate-0".to_owned(),
+        "degenerate-1".to_owned(),
+        "degenerate-2".to_owned(),
+        "degenerate-3".to_owned(),
+    ];
+    for index in 0..200 {
+        let id = format!("m{index:03}");
+        let time = |minute: u32| format!("2026-08-{:02}T10:{minute:02}:00Z", 2 + index % 27);
+        seed(
+            &mut db,
+            &id,
+            "claude",
+            &[
+                says(&format!("{id}-1"), &time(0), "please fix the parser"),
+                reply(&format!("{id}-2"), &time(1)),
+                says(&format!("{id}-3"), &time(2), "no, the other parser"),
+                reply(&format!("{id}-4"), &time(3)),
+            ],
+            true,
+        );
+        ids.push(id);
+    }
+    ids.sort();
+    let alone = |id: &str| whole(&db, &[id]).remove(id).unwrap();
+    // The surface's health did decide something here.
+    assert!(
+        matches!(
+            read(&alone(SESSION)).checks.repeated_calls,
+            CheckState::Incomplete { .. }
+        ),
+        "{:?}",
+        read(&alone(SESSION)).checks.repeated_calls
+    );
+    // A batch of the most a request may name, with the long-lived session.
+    let mut named: Vec<&str> = ids.iter().map(String::as_str).rev().take(199).collect();
+    named.push("long");
+    assert_eq!(named.len(), 200);
+    assert!(named.contains(&"long") && named.contains(&SESSION));
+    let batch = whole(&db, &named);
+    for id in &named {
+        assert_eq!(batch[*id], alone(id), "{id}");
+    }
+    // A window over everyone: one load for 206 sessions, each answer the
+    // session's own, only the warnings inside kept.
+    let wide = Window::new(ms("2026-08-01T00:00:00Z"), ms("2026-09-08T00:00:00Z")).unwrap();
+    let inside = MetricsDb::open(db.path())
+        .unwrap()
+        .warnings_in_window(wide, RepeatThresholds::default(), &TimeZone::UTC)
+        .unwrap();
+    let mut expected = Vec::new();
+    for id in &ids {
+        let kept: Vec<_> = read(&alone(id))
+            .warnings
+            .iter()
+            .filter(|w| w.at_ms >= wide.start_ms() && w.at_ms < wide.end_ms())
+            .cloned()
+            .collect();
+        if !kept.is_empty() {
+            expected.push((id.clone(), kept));
+        }
+    }
+    assert!(expected.len() > 200, "{}", expected.len());
+    let inside: Vec<_> = inside
+        .into_iter()
+        .map(|found| (found.session_id, found.warnings))
+        .collect();
+    assert_eq!(inside, expected);
 }

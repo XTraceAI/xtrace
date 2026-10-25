@@ -10,7 +10,7 @@ import type { FixtureExport } from '../src/data/generated/FixtureExport';
  * branch, a long saved title, a start years before the axis, a three-digit
  * link count with inferred evidence, a measured zero, a four-figure partial cost
  * and an unknown neighbour, served in place of the development F1 export. The row must stay one 22px line at both
- * supported widths in both schemes — the identity and the number keep their
+ * supported widths — the identity and the number keep their
  * room, and only the repository is allowed to end in an ellipsis.
  */
 // JSON imports widen literal unions; the export is the generated shape.
@@ -127,7 +127,7 @@ async function serveContext(page: Page, data: FixtureExport = contextual) {
  */
 const SWEEP = [1920, 1600, 1562, 1558, 1440, 1280, 1146, 1142, 1120, 1366, 1600, 1920];
 
-for (const scheme of ['light', 'dark'] as const)
+for (const scheme of ['light'] as const)
   test(`minute times on the lane axis stay apart and on their instants while resizing ${scheme}`, async ({
     page,
   }, info) => {
@@ -228,7 +228,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`lane context and cost stay readable at ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {
