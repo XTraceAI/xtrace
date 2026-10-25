@@ -916,6 +916,7 @@ test('a large day group scrolls within the viewport and its last child is reacha
     .toBe(true);
   if (shots) await page.screenshot({ path: `${shots}/dashboard-large-day-group-scrolled.png` });
   await page.keyboard.press('Escape');
+  await expect(box).toBeHidden();
   await expect(day).toBeFocused();
   await page.mouse.move(0, 0);
   await page.keyboard.press('Enter');
