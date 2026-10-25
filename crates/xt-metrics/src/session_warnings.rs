@@ -1267,6 +1267,270 @@ impl MetricsDb {
         }
         Ok((answers, spans))
     }
+
+    /// The warnings that fall inside `window` of every session with a timed
+    /// record inside it, each session read over its whole history as
+    /// [`MetricsDb::whole_session_warnings`] reads it, so a warning shown for
+    /// a range is the same warning every other view shows for that session.
+    /// Sessions without such a warning are left out; the rest are ordered by
+    /// identifier, each with its warnings earliest first. One snapshot and one
+    /// event load, however many sessions are active.
+    pub fn warnings_in_window(
+        &self,
+        window: Window,
+        thresholds: RepeatThresholds,
+        zone: &TimeZone,
+    ) -> Result<Vec<WindowSessionWarnings>> {
+        self.read_snapshot(|db| {
+            let mut ids = Vec::<String>::new();
+            let mut statement = db.connection.prepare(ACTIVE_QUERY)?;
+            let mut rows = statement.query([window.start_ms(), window.candidate_end_ms()?])?;
+            while let Some(row) = rows.next()? {
+                ids.push(row.get(0)?);
+            }
+            drop(rows);
+            drop(statement);
+            let mut named: Vec<&str> = ids.iter().map(String::as_str).collect();
+            named.sort_unstable();
+            named.dedup();
+            let mut found = Vec::new();
+            let (answers, spans) = db.whole_in_snapshot(&named, thresholds, zone)?;
+            for (id, answer) in answers {
+                let WholeSessionWarnings::Read { warnings, .. } = answer else {
+                    continue;
+                };
+                let inside: Vec<_> = warnings
+                    .warnings
+                    .into_iter()
+                    .filter(|w| w.at_ms >= window.start_ms() && w.at_ms < window.end_ms())
+                    .collect();
+                if !inside.is_empty() {
+                    found.push(WindowSessionWarnings {
+                        last_ms: spans.get(&id).map_or(0, |(_, last)| *last),
+                        session_id: id,
+                        warnings: inside,
+                    });
+                }
+            }
+            Ok(found)
+        })
+    }
+
+    fn warning_evidence(
+        &self,
+        window: Window,
+        session_id: &str,
+        repeats: SessionRepeats,
+        stored: &mut Option<StoredCalls>,
+    ) -> Result<Evidence> {
+        struct Row {
+            instant: InstantKey,
+            record: EvidenceRecord,
+            parent: Option<String>,
+            partial: bool,
+            /// May carry a tool result: stated so, or unknown.
+            carrier: bool,
+        }
+        let start = InstantKey::from_millisecond(window.start_ms());
+        let end = InstantKey::from_millisecond(window.end_ms());
+        let mut rows = Vec::new();
+        let mut statement = self.connection.prepare(RECORD_QUERY)?;
+        let mut result = statement.query(rusqlite::params![
+            session_id,
+            window.start_ms(),
+            window.candidate_end_ms()?,
+            ToolSentKind::CodexTurnAborted.as_str(),
+        ])?;
+        while let Some(row) = result.next()? {
+            let raw: String = row.get(1)?;
+            let instant = timestamp::parse(&raw)
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?
+                .0;
+            if instant < start || instant >= end {
+                continue;
+            }
+            let agent = row.get::<_, String>(3)? == "assistant";
+            let turn_aborted: bool = row.get(10)?;
+            rows.push(Row {
+                instant,
+                record: EvidenceRecord {
+                    uuid: row.get(0)?,
+                    at_ms: row.get(2)?,
+                    agent,
+                    sidechain: row.get(4)?,
+                    person: if agent { Some(false) } else { row.get(5)? },
+                    words: None,
+                    interrupted: if agent {
+                        Some(false)
+                    } else if turn_aborted {
+                        Some(true)
+                    } else {
+                        row.get(7)?
+                    },
+                },
+                parent: row.get(9)?,
+                partial: row.get(6)?,
+                carrier: !agent && row.get::<_, Option<bool>>(8)? != Some(false),
+            });
+        }
+        drop(result);
+        drop(statement);
+        rows.sort_by(|a, b| {
+            a.instant
+                .cmp(&b.instant)
+                .then_with(|| a.record.uuid.cmp(&b.record.uuid))
+        });
+        let mut rows = source_order(
+            rows,
+            |row| &row.instant,
+            |row| &row.record.uuid,
+            |row| row.parent.as_deref(),
+        );
+
+        // A person's words, read the one way every reader reads them.
+        for row in &mut rows {
+            if row.record.person == Some(true) && !row.record.sidechain {
+                row.record.words = Some(span_detail::person_text(
+                    &self.connection,
+                    &row.record.uuid,
+                    row.partial,
+                )?);
+            }
+        }
+
+        // Saved result facts, per result record, read into outcomes here by
+        // the store's one rule; and the calls they name.
+        let mut saved = BTreeMap::<String, Vec<(i64, Option<String>, Outcome)>>::new();
+        let mut statement = self.connection.prepare(RESULT_QUERY)?;
+        let mut result = statement.query([session_id])?;
+        while let Some(row) = result.next()? {
+            let wording = Wording::parse(&row.get::<_, String>(4)?);
+            let version: i64 = row.get(5)?;
+            let contested: bool = row.get(6)?;
+            let host: Host = row.get(7)?;
+            let ended = match wording {
+                Some(wording) if !contested && version <= tool_result::FACT_VERSION => {
+                    tool_result::outcome(row.get(2)?, row.get(3)?, wording, host)
+                }
+                _ => Outcome::Unknown,
+            };
+            saved
+                .entry(row.get(0)?)
+                .or_default()
+                .push((row.get(8)?, row.get(1)?, ended));
+        }
+        drop(result);
+        drop(statement);
+        // A record's results in their block order.
+        for results in saved.values_mut() {
+            results.sort_by_key(|(block, ..)| *block);
+        }
+        let mut calls = BTreeMap::<String, Vec<(String, u64)>>::new();
+        let mut statement = self.connection.prepare(CALL_QUERY)?;
+        let mut result = statement.query([session_id])?;
+        while let Some(row) = result.next()? {
+            let index: i64 = row.get(1)?;
+            calls.entry(row.get(2)?).or_default().push((
+                row.get(0)?,
+                u64::try_from(index)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, index))?,
+            ));
+        }
+        drop(result);
+        drop(statement);
+
+        let mut evidence = Evidence {
+            session_id: session_id.to_owned(),
+            records: Vec::new(),
+            outcomes: Vec::new(),
+            tool_results: 0,
+            tool_results_known: 0,
+            outcome_not_saved: 0,
+            outcome_unknown: 0,
+            repeats,
+            tool_only_calls: BTreeSet::new(),
+        };
+        for row in rows
+            .iter()
+            .filter(|row| !row.record.sidechain && row.carrier)
+        {
+            let Some(results) = saved.get(&row.record.uuid) else {
+                evidence.outcome_not_saved += 1;
+                continue;
+            };
+            for (block, call_id, ended) in results {
+                evidence.tool_results += 1;
+                match ended {
+                    Outcome::Unknown => {
+                        evidence.outcome_unknown += 1;
+                        continue;
+                    }
+                    // Neither a failure nor the person's decision.
+                    Outcome::Ok | Outcome::PermissionDenied => {
+                        evidence.tool_results_known += 1;
+                        continue;
+                    }
+                    Outcome::Failed | Outcome::Declined | Outcome::Interrupted => {
+                        evidence.tool_results_known += 1;
+                    }
+                }
+                // The call this result answers: exactly one saved call with
+                // its identifier, and that call's stored grouping evidence.
+                let stored = self.stored_calls_once(stored, session_id)?;
+                let call = match call_id.as_deref().and_then(|id| calls.get(id)) {
+                    Some(found) if found.len() == 1 => {
+                        let (uuid, index) = &found[0];
+                        stored
+                            .get(uuid)
+                            .and_then(|calls| calls.iter().find(|c| c.block_index == *index))
+                    }
+                    _ => None,
+                };
+                evidence.outcomes.push(ToolOutcome {
+                    result_uuid: row.record.uuid.clone(),
+                    result_block: *block,
+                    at_ms: row.record.at_ms,
+                    ended: *ended,
+                    call: call.map(|c| CallFacts {
+                        name: c.name.clone(),
+                        key: c.comparable_key().cloned(),
+                        tool_only: c.names_no_argument(),
+                    }),
+                });
+            }
+        }
+        // Whether each circling stretch's most repeated call names the tool
+        // only, for its reason's wording.
+        if let SessionRepeats::Measured { stretches, .. } = &evidence.repeats {
+            for stretch in stretches.iter().filter(|s| s.circling == Some(true)) {
+                let RepeatDensity::Measured {
+                    worst: Some(group), ..
+                } = &stretch.repeats
+                else {
+                    continue;
+                };
+                let block = &group.representative;
+                let tool_only = self
+                    .stored_calls_once(stored, session_id)?
+                    .get(&block.record_uuid)
+                    .and_then(|calls| calls.iter().find(|c| c.block_index == block.block_index))
+                    .is_some_and(|call| call.names_no_argument());
+                if tool_only {
+                    evidence
+                        .tool_only_calls
+                        .insert((block.record_uuid.clone(), block.block_index));
+                }
+            }
+        }
+        evidence.records = rows.into_iter().map(|row| row.record).collect();
+        Ok(evidence)
+    }
 }
 
 #[cfg(test)]
