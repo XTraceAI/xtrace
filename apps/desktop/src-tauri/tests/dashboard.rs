@@ -1,3 +1,7 @@
+#[cfg(all(debug_assertions, feature = "fixtures"))]
+#[path = "support/read_snapshot.rs"]
+mod read_snapshot;
+
 use jiff::Timestamp;
 use serde_json::json;
 use xt_store::{CanonicalRecord, SessionMeta, SessionSource, Store};
@@ -1453,52 +1457,75 @@ mod assembled {
         assert_eq!(week.lane_sessions, month.lane_sessions);
     }
 
-    /// Lane context and lane costs are read inside the one dashboard
-    /// snapshot, by construction: both reads happen only in `lane_report`, and
-    /// `lane_report` is called only from inside `read_snapshot`'s closure. The
-    /// spans are read only by `lane_spans`, which `lane_report` calls; the
-    /// fixture span-detail export calls it too, for spans alone.
     #[test]
-    fn dashboard_lane_reads_stay_inside_one_snapshot_by_construction() {
-        let module = include_str!("../src/dashboard.rs");
-        let body_of = |name: &str| {
-            let (_, after) = module.split_once(name).expect(name);
-            after.split_once("\n}\n").expect("body").0
+    fn dashboard_keeps_all_fields_in_one_snapshot_while_a_writer_commits() {
+        let mut db = TempDb::empty().unwrap();
+        let human = |id: &str, timestamp: &str| {
+            serde_json::from_value(json!({"uuid": id, "type": "user", "timestamp": timestamp,
+                "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+            }))
+            .unwrap()
         };
-        let body = body_of("fn lane_report(");
-        // Context is read three times: for the returned sessions, for the
-        // parents they link that have no span, and for the sub-sessions under
-        // them that have none; cost twice, for the returned sessions and for
-        // those sub-sessions. Every one of these reads is lane_report's.
-        for (read, times) in [
-            ("db.session_context(", 3),
-            ("db.whole_session_costs(", 2),
-            ("db.sub_sessions(", 1),
-            ("lane_spans(db, lane_window)", 1),
-        ] {
-            assert_eq!(
-                module.matches(read).count(),
-                times,
-                "{read} is read elsewhere"
-            );
-            assert_eq!(
-                body.matches(read).count(),
-                times,
-                "{read} is not read by lane_report"
-            );
-        }
-        let read = "db.active_spans(lane_window)";
-        assert_eq!(module.matches(read).count(), 1, "{read} is read elsewhere");
-        assert!(body_of("fn lane_spans(").contains(read));
-        let (_, assembled) = module.split_once("pub fn assemble(").expect("assemble");
-        let (snapshot, _) = assembled
-            .split_once("    })?;")
-            .expect("assemble read snapshot");
-        let (_, closure) = snapshot
-            .split_once("db.read_snapshot(|db| {")
-            .expect("one snapshot");
-        assert!(closure.contains("lane_report(db, lane_window, catalog)?"));
-        assert_eq!(module.matches("lane_report(").count(), 2);
+        let response = |id: &str, timestamp: &str| {
+            serde_json::from_value(json!({"uuid": id, "type": "assistant", "timestamp": timestamp,
+                "requestId": id,
+                "message": {"id": id, "role": "assistant", "model": "test-claude", "content": [],
+                    "usage": {"input_tokens": 1000, "output_tokens": 7, "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0, "service_tier": "standard"}}
+            })).unwrap()
+        };
+        seed(
+            db.store_mut(),
+            "snapshot",
+            "claude",
+            Some("cli"),
+            &[
+                human("human-first", "2026-09-07T09:00:00Z"),
+                human("human-last", "2026-09-07T09:20:00Z"),
+                response("first", "2026-09-07T10:00:00Z"),
+                response("last", "2026-09-07T10:10:00Z"),
+            ],
+        );
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let read = |metrics: &MetricsDb| {
+            assemble(
+                metrics,
+                7,
+                now(),
+                TimeZone::UTC,
+                MetricClock::Fixture,
+                &catalog(),
+                TypingRate::default(),
+                BreakLength::default(),
+            )
+            .unwrap()
+        };
+        let before = read(&metrics);
+        let write = crate::read_snapshot::change_after_first_read(&metrics, db.path(),
+            "BEGIN IMMEDIATE;
+             UPDATE usage SET output_tokens=output_tokens+1000;
+             UPDATE sessions SET cwd='/after', git_branch='after', title='After' WHERE session_id='snapshot';
+             UPDATE records SET ts_ms=ts_ms+60000, ts='2026-09-07T10:11:00Z' WHERE uuid='last';
+             UPDATE records SET is_human=NULL WHERE uuid='human-last';
+             COMMIT;"
+        );
+        let during = read(&metrics);
+        write.assert_committed();
+        assert_eq!(
+            during, before,
+            "every field uses the app's original snapshot"
+        );
+        let after = read(&metrics);
+        assert_ne!(after.lanes, before.lanes, "lane spans changed");
+        assert_ne!(
+            after.lane_sessions[0].repo, before.lane_sessions[0].repo,
+            "lane context changed"
+        );
+        assert_ne!(
+            after.lane_sessions[0].cost, before.lane_sessions[0].cost,
+            "lane costs changed"
+        );
+        assert_ne!(after.cost, before.cost, "report costs changed");
     }
 }
 

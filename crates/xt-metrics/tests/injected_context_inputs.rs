@@ -477,7 +477,10 @@ fn a_schema_12_index_upgrades_with_its_621_and_8_confirmations_and_metrics_uncha
 
     for _ in 0..2 {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 26);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         assert!(store.injected_context_proofs(GUARDIAN).unwrap().is_empty());
         drop(store);
         assert!(

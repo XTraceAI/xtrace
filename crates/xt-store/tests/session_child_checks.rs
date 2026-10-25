@@ -465,7 +465,10 @@ fn a_schema_21_index_upgrades_with_every_session_unchecked_and_its_rows_kept() {
     };
     let before = counts(&sql(&directory));
     let store = Store::open(path(&directory)).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 26);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        xt_store::LATEST_SCHEMA_VERSION
+    );
     assert_eq!(counts(&sql(&directory)), before);
     let rows: i64 = sql(&directory)
         .query_row(

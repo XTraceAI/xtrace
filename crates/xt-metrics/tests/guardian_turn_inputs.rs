@@ -293,7 +293,10 @@ fn a_schema_11_index_upgrades_with_its_eight_confirmations_and_metrics_unchanged
 
     for _ in 0..2 {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 26);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         assert!(
             store
                 .guardian_turn_confirmations(GUARDIAN)

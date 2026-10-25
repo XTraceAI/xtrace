@@ -495,6 +495,8 @@ fn eviction_causes_only_a_future_miss() {
         .tempdir_in("/private/tmp")
         .unwrap();
     let mut reader = Reader::default();
+    let first = claude(home.path(), &id(1), &[boundary(&id(1), 501)]);
+    let last = claude(home.path(), &id(270), &[boundary(&id(270), 770)]);
     for n in 1..=270 {
         let native = id(n);
         let t = claude(home.path(), &native, &[boundary(&native, n + 500)]);
@@ -503,6 +505,28 @@ fn eviction_causes_only_a_future_miss() {
             vec![Outcome::Count { count: 1 }]
         );
     }
+    let scans = reader.scans;
+    let read = |reader: &mut Reader, target: &Target| {
+        reader.read(
+            home.path(),
+            std::slice::from_ref(target),
+            &CancelToken::new(),
+        )
+    };
+    assert_eq!(read(&mut reader, &last), vec![Outcome::Count { count: 1 }]);
+    assert_eq!(reader.scans, scans, "the newest entry is still cached");
+    assert_eq!(read(&mut reader, &first), vec![Outcome::Count { count: 1 }]);
+    assert_eq!(
+        reader.scans,
+        scans + 1,
+        "the oldest entry was evicted and rescanned"
+    );
+    assert_eq!(read(&mut reader, &first), vec![Outcome::Count { count: 1 }]);
+    assert_eq!(
+        reader.scans,
+        scans + 1,
+        "the rescanned result is cached again"
+    );
 }
 fn rollout(home: &Path, native: &str, suffix: &str, rows: &[Value]) -> PathBuf {
     let path = home.join(".codex/sessions/2026/09/30").join(format!(

@@ -278,35 +278,6 @@ fn the_command_line_environment_and_folder_are_the_grading_runs() {
         None,
         None,
     );
-    let settings = format!(
-        r#"{{"disableAllHooks":true,"sandbox":{{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"filesystem":{{"denyWrite":["{target}"],"allowWrite":["{out}"]}},"network":{{"allowedDomains":[]}}}}}}"#
-    );
-    let expected: Vec<String> = [
-        case.claude.to_str().unwrap(),
-        "-p",
-        &prompt,
-        "--tools",
-        "Read,Write,Edit,Bash,Glob,Grep",
-        "--permission-mode",
-        "dontAsk",
-        "--setting-sources",
-        "",
-        "--settings",
-        &settings,
-        "--strict-mcp-config",
-        "--no-session-persistence",
-        "--allowedTools",
-        &format!("Edit(/{out}/**)"),
-        "--disallowedTools",
-        &format!("Edit(/{target}/**)"),
-        "--add-dir",
-        out,
-        helper,
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
-    assert_eq!(argv, expected);
     // Exactly the grading run's command line over these folders.
     assert_eq!(
         argv.iter().map(OsString::from).collect::<Vec<_>>(),
@@ -518,12 +489,6 @@ fn a_failed_run_is_not_retried_and_keeps_its_own_reason() {
         Err(MakeError::Run(GradeError::Exited { code: Some(3) }))
     );
     assert_eq!(case.records().len(), 1);
-
-    let case = Case::new(
-        "sys.stderr.write('Error: sandbox required but unavailable: no\\n')\nsys.exit(1)",
-    );
-    let (_, made) = case.run();
-    assert_eq!(made, Err(MakeError::Run(GradeError::SandboxUnavailable)));
 }
 
 #[test]

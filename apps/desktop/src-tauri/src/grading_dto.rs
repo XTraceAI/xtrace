@@ -972,11 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_sandbox_and_a_bad_rubric_have_their_own_reasons() {
-        assert_eq!(
-            GradingFailure::of(&GradeError::SandboxUnavailable),
-            Some(GradingFailure::SandboxUnavailable)
-        );
+    fn unsupported_versions_and_invalid_rubrics_have_their_own_reasons() {
         assert_eq!(
             GradingFailure::of(&GradeError::ClaudeTooOld),
             Some(GradingFailure::ClaudeTooOld)

@@ -108,6 +108,7 @@ pub mod ingest;
 pub mod injected;
 pub mod measurement;
 mod migrations;
+pub use migrations::LATEST_SCHEMA_VERSION;
 pub mod model;
 pub mod pr_link;
 mod read;
