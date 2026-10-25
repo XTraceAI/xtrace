@@ -1,3 +1,4 @@
+import { afterSplitSettles } from './rendering';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
 import type { DashboardLane } from '../src/data/generated/DashboardLane';
@@ -572,6 +573,7 @@ test('each boundary shows a faint grip before it is hovered', async ({ page }) =
 });
 
 test('measuring a boundary keeps every list where it was scrolled', async ({ page }) => {
+  await page.clock.install();
   await open(page, withSessions(14), 1120, 720);
   const lanes = page.getByRole('region', { name: 'Session lanes scroll area' });
   await lanes.evaluate((node) => (node.scrollTop = node.scrollHeight));
@@ -581,6 +583,6 @@ test('measuring a boundary keeps every list where it was scrolled', async ({ pag
   await rowsHandle(page).focus();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowUp');
-  await page.waitForTimeout(300);
+  await afterSplitSettles(page);
   expect(await lanes.evaluate((node) => node.scrollTop)).toBeCloseTo(scrolled, 0);
 });

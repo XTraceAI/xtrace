@@ -1,3 +1,4 @@
+import { afterRendering } from './rendering';
 import { expect, test, type Page } from '@playwright/test';
 
 const reads = (page: Page) =>
@@ -32,7 +33,7 @@ test('fills collapsed groups, stops at the viewport, and loads more after resizi
   await page.locator('.xt-table-scroll').evaluate((scroll) => {
     scroll.scrollTop = scroll.scrollHeight;
   });
-  await page.waitForTimeout(150);
+  await afterRendering(page);
   expect(await reads(page)).toEqual(first);
   await page.setViewportSize({ width: 1440, height: 1200 });
   await expect.poll(() => gap(page)).toBeLessThanOrEqual(1);
@@ -70,7 +71,7 @@ test('counts expanded details and refills when they collapse in a narrow table',
   // The larger viewport still fits because the open details occupy the new space.
   await page.setViewportSize({ width: 900, height: 720 + Math.floor(details) });
   await expect.poll(() => gap(page)).toBeLessThanOrEqual(1);
-  await page.waitForTimeout(150);
+  await afterRendering(page);
   expect(await reads(page)).toEqual(before);
   await page.getByRole('button', { name: 'Collapse main', exact: true }).click();
   await expect.poll(async () => (await reads(page)).length).toBeGreaterThan(before.length);

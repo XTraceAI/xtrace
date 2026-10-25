@@ -315,9 +315,7 @@ it('keeps a running read when rows are only added, then reads the added rows', a
       { id: 'b', version: 1 },
     ],
   });
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await act(async () => {});
   expect(reads).toHaveLength(1);
   expect(cancelled).toEqual([]);
   await answer(reads[0], { a: 'Title A' });
@@ -359,9 +357,7 @@ it('keeps identities when a title read fails, and does not retry it', async () =
   await waitFor(() => expect(reads).toHaveLength(1));
   await act(async () => reads[0].reject(new Error('transcript read was refused')));
   expect(sessionLinks()).toEqual(['Session failing']);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await act(async () => {});
   expect(reads).toHaveLength(1);
 });
 
