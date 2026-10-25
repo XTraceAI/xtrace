@@ -5,27 +5,33 @@ Native validation runs locally before merging and on a hosted macOS 14 runner
 only when explicitly preparing a downloadable release. Public disclosure review
 remains manual. These workflows do not publish releases or change repository rules.
 
-| Job        | Required hosted coverage                                                                        |
-| ---------- | ----------------------------------------------------------------------------------------------- |
-| `policy`   | Reviewed source-commit DCO and substantive contribution descriptions.                           |
-| `ui`       | Two browser entries, each with types, lint, formatting, unit tests and its full browser suites. |
-| `security` | CI/supply-chain/publication regressions and source-history/diff scanning.                       |
-| `ci-ok`    | Requires all three jobs to succeed; rejects missing, skipped, cancelled or failed results.      |
+| Job         | Required hosted coverage                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| `policy`    | Reviewed source-commit DCO and substantive contribution descriptions.                     |
+| `check`     | Types, lint, formatting and unit tests, run once.                                         |
+| `ui`        | The full main WebKit browser suite, split across four machines.                           |
+| `ui-extras` | WebKit gallery smoke and production-exclusion checks, run once.                           |
+| `security`  | CI/supply-chain/publication regressions and source-history/diff scanning.                 |
+| `ci-ok`     | Requires all five jobs to succeed; rejects missing, skipped, cancelled or failed results. |
 
 `ci-ok` certifies these hosted checks only. It does not certify native tests,
 dependency notices, local evidence or disclosure approval. Maintainers review
 those results separately before merging. Browser tests install their Linux system
 dependencies even with cached binaries and do not certify native WKWebView behavior.
 
-The `ui` job has separate WebKit and Chromium entries, with at most two entries
-running together. Each entry runs `pnpm check`, then selects its browser in the
-main browser suite, gallery smoke suite and production-exclusion checks. A failed
-entry does not cancel the other; `ci-ok` still requires the combined `ui` result
-to succeed. Each entry has a 30-minute job ceiling for the expanded suite,
-including setup and unit checks. This changes no individual test/assertion
-limit, retry count or Playwright worker setting. CI prints browser failures as
-they finish; the HTML reporter remains enabled. Successful hosted runs of both
-entries are required before claiming the full browser gate passed.
+The `check` job runs `pnpm check` once. The `ui` job runs four WebKit shards,
+with individual tests eligible for separate shards through Playwright's
+`fullyParallel` setting. A failed shard does not cancel the others; `ci-ok`
+requires the combined `ui` result to succeed. A separate `ui-extras` job runs
+gallery smoke and production checks once and is independently required by
+`ci-ok`. Chromium remains available locally but is omitted from routine CI,
+because XTrace ships only for macOS.
+
+Each check or browser job has a 20-minute ceiling including setup. Individual
+test limits, retries and worker settings are unchanged. CI prints browser
+failures as they finish; the HTML reporter remains enabled. Successful hosted
+runs of all four shards and `ui-extras` are required before claiming the full
+browser gate passed.
 
 The full 96-story gallery sweep runs locally before merging gallery, shared UI,
 theme, font or brand-asset changes. Record its source SHA and results in the PR;
