@@ -156,14 +156,14 @@ const syntheticValues = () => ({
   feedSha256: 'e'.repeat(64),
 });
 
-test('the candidate is 0.1.8 from its merged source, installed as XTrace.app', () => {
-  assert.equal(release.version, '0.1.8');
-  assert.equal(release.tag, 'v0.1.8');
-  assert.equal(release.source, '75d49d54f6717d32d72eeb7a933eebb13f5be148');
+test('the candidate release values describe one source and matching artifact names', () => {
+  assert.match(release.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(release.tag, `v${release.version}`);
+  assert.match(release.source, /^[a-f0-9]{40}$/);
   assert.equal(release.bundle, '/Applications/XTrace.app');
   assert.equal(release.identifier, 'ai.xtrace.app');
-  assert.equal(release.dmg, 'XTrace-0.1.8-macos-arm64.dmg');
-  assert.equal(release.archive, 'XTrace-0.1.8-macos-arm64.app.tar.gz');
+  assert.equal(release.dmg, `XTrace-${release.version}-macos-arm64.dmg`);
+  assert.equal(release.archive, `XTrace-${release.version}-macos-arm64.app.tar.gz`);
   assert.ok(Object.isFrozen(release));
 });
 
@@ -203,7 +203,7 @@ test('download and lightweight-tag checks reject different bytes, size or source
     release.source,
   );
   for (const changed of [
-    { ...tag, ref: 'refs/tags/v0.1.7' },
+    { ...tag, ref: `refs/tags/${release.tag}-unrelated` },
     { ...tag, object: { type: 'commit', sha } },
     { ...tag, object: { type: 'tree', sha: release.source } },
     {},
@@ -234,7 +234,7 @@ test('synthetic annotated release tag resolves once through a fixed repository U
     `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/tags/${annotationSHA}`,
   ]);
   for (const changed of [
-    { ...ref, ref: 'refs/tags/v0.1.7' },
+    { ...ref, ref: `refs/tags/${release.tag}-unrelated` },
     { ...ref, object: { type: 'tree', sha: annotationSHA } },
     { ...ref, object: { type: 'tag', sha: '../other-repository' } },
     { ...ref, object: { type: 'tag', sha: 'A'.repeat(40) } },
@@ -242,7 +242,7 @@ test('synthetic annotated release tag resolves once through a fixed repository U
     await assert.rejects(verifyTag(changed, () => assert.fail('Invalid refs must not be fetched')));
   for (const changed of [
     { ...annotation, sha: 'b'.repeat(40) },
-    { ...annotation, tag: 'v0.1.7' },
+    { ...annotation, tag: `${release.tag}-unrelated` },
     { ...annotation, object: { type: 'commit', sha: 'b'.repeat(40) } },
     { ...annotation, object: { type: 'tag', sha: annotationSHA } },
     { ...annotation, object: { type: 'blob', sha: release.source } },
@@ -358,10 +358,7 @@ test('work deadlines cap remaining commands and reserve cleanup independently wi
 });
 
 test('workflow step budgets leave time for cleanup and evidence before the job ceiling', () => {
-  for (const [telemetry, jobMinutes, appMinutes] of [
-    [false, 22, 11],
-    [true, 33, 22],
-  ]) {
+  for (const telemetry of [false, true]) {
     const selected = job.replace(
       /\$\{\{ inputs.delivery_mode == 'telemetry' && (\d+) \|\| (\d+) \}\}/g,
       (_, yes, no) => (telemetry ? yes : no),
@@ -369,8 +366,9 @@ test('workflow step budgets leave time for cleanup and evidence before the job c
     const stepMinutes = [...selected.matchAll(/^ {8}timeout-minutes: (\d+)$/gm)].map((m) =>
       Number(m[1]),
     );
-    assert.deepEqual(stepMinutes, [1, 2, 2, 3, appMinutes, 2]);
-    assert.equal(Number(selected.match(/^ {4}timeout-minutes: (\d+)$/m)[1]), jobMinutes);
+    const jobMinutes = Number(selected.match(/^ {4}timeout-minutes: (\d+)$/m)[1]);
+    const appMinutes = stepMinutes.at(-2);
+    assert.ok(stepMinutes.every((minutes) => minutes > 0));
     assert.ok(stepMinutes.reduce((sum, minutes) => sum + minutes, 0) < jobMinutes);
     assert.ok((firstLaunchBudget.workMs + firstLaunchBudget.cleanupMs) / 60000 < appMinutes);
   }

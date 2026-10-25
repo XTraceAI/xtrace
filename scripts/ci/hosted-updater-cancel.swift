@@ -101,40 +101,12 @@ func capture() -> [Capture]? {
     }
     return result
 }
-// BEGIN CANCEL POLICY: also compiled with synthetic rows, without AppKit or AX.
-func cancelIndex(_ rows: [[String: String]], _ helperName: String) -> Int? {
-    // Hosted macOS 14 SecurityAgent reports its password prompt as an
-    // "Untitled" AXStandardWindow (run 39521672625), not an AXDialog.
-    guard rows.first?["AXRole"] == "AXWindow",
-          ["AXDialog", "AXStandardWindow"].contains(rows.first?["AXSubrole"] ?? "") else { return nil }
-    let pattern = #"(?<![A-Za-z0-9_-])"# + NSRegularExpression.escapedPattern(for: helperName) + #"(?![A-Za-z0-9_-])"#
-    guard rows.contains(where: { row in
-        row["AXRole"] == "AXStaticText" &&
-        (row["AXValue"] ?? "").range(of: pattern, options: .regularExpression) != nil
-    }) else { return nil }
-    let controls = rows.indices.filter {
-        rows[$0]["AXRole"] == "AXButton" &&
-        rows[$0]["AXTitle"] == "Cancel" && rows[$0]["enabled"] == "true"
-    }
-    return controls.count == 1 ? controls[0] : nil
-}
-// END CANCEL POLICY
+// __hosted-updater-cancel-cancel-policy.swift__
 func cancelControl(_ captured: Capture) -> AXUIElement? {
     guard let index = cancelIndex(captured.nodes.map(\.row), helperName) else { return nil }
     return captured.nodes[index].element
 }
-// BEGIN REFRESH WAIT: Foundation-only controls exercise this exact wait.
-func waitForRefresh(until deadline: Date) {
-    let sliceEnd = min(deadline, Date().addingTimeInterval(0.1))
-    guard sliceEnd.timeIntervalSinceNow > 0 else { return }
-    // The default mode belongs to the common set. NSWorkspace app-list changes
-    // require a main-run-loop turn; .common is not itself a runnable mode.
-    _ = RunLoop.main.run(mode: .default, before: sliceEnd)
-    // An empty run loop can return immediately. Keep the polling slice bounded
-    // without spinning or moving the caller's absolute deadline.
-    if sliceEnd.timeIntervalSinceNow > 0 { Thread.sleep(until: sliceEnd) }
-}
-// END REFRESH WAIT
+// __hosted-updater-cancel-refresh-wait.swift__
 guard let baseline = capture() else { finish("Cannot establish SecurityAgent baseline") }
 evidence["baseline"] = baseline.map(\.json)
 guard baseline.isEmpty else { finish("Pre-existing authorization window; no action taken") }

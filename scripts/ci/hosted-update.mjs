@@ -1,6 +1,12 @@
+import {
+  runUpdateLifecycle,
+  cleanupUpdate,
+  prepareUpdateInstall,
+} from './hosted-update-lifecycle.mjs';
+import { writeHostedSwift } from './hosted-swift.mjs';
 import { spawnSync } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireFreshBaseline } from './hosted-validation.mjs';
@@ -11,24 +17,15 @@ import {
   firstLaunchBaselinePaths,
   firstLaunchEnvironment,
   requireReleaseValues,
-  verifyAppInventory,
-  verifyHostedDatabase,
   executionBudget,
 } from './hosted-release.mjs';
 import {
   previousRelease,
   updateBudget,
-  productionFeed,
   sentinel,
   requireUpdateHost,
-  requireBundleStep,
   requireAppIdentity,
   requireSameDatabase,
-  updaterLeftovers,
-  verifyPreviousDownload,
-  verifyPreviousInventory,
-  verifyProductionFeed,
-  stopUpdateProcesses,
 } from './hosted-update-checks.mjs';
 
 const systemEnvironment = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8' };
@@ -207,7 +204,7 @@ async function main() {
           'swiftc',
           '-module-cache-path',
           join(owned, 'compiler-cache'),
-          join(source, `${name}.swift`),
+          await writeHostedSwift(source, name, join(owned, `${name}.swift`)),
           '-o',
           binary,
         ],
@@ -243,45 +240,8 @@ async function main() {
         ],
         95_000,
       );
-    await fetch('production-feed', productionFeed, feedPath, 65_536);
-    report.productionFeed = verifyProductionFeed(await readFile(feedPath));
-    await writeFile(join(output, 'production-feed.json'), await readFile(feedPath));
-    const archive = join(owned, previousRelease.archive);
-    await fetch(
-      'old-download',
-      `https://github.com/XTraceAI/xtrace-desktop/releases/download/${previousRelease.tag}/${previousRelease.archive}`,
-      archive,
-      previousRelease.bytes,
-    );
-    verifyPreviousDownload(await readFile(archive));
-    report.downloadVerified = true;
-    report.quarantine = {
-      downloadMethod: 'anonymous curl; metadata unchanged by harness',
-      archive: await quarantineAt(archive, 'old-archive'),
-      browserDownloadTested: false,
-      securityPromptsAutomaticallyApproved: false,
-    };
-    // Only the exact reviewed hash above can reach extraction. Its 79-member
-    // regular-file/directory map was checked before this pin was committed.
-    await checked('old-extract', '/usr/bin/tar', ['-xzf', archive, '-C', owned], 60_000);
-    const extracted = join(owned, basename(earlierBundle));
-    report.extractedInventory = await verifyPreviousInventory(extracted);
-    if ((await exists(earlierBundle)) || (await exists(renamedBundle)))
-      throw new Error('Installation path appeared after baseline');
-    installed = true;
-    await checked('install', '/usr/bin/ditto', [extracted, earlierBundle], 60_000);
-    report.installedInventory = await verifyPreviousInventory(earlierBundle);
-    requireBundleStep('installed', await readdir('/Applications'));
-    await appIdentity(earlierBundle, previousRelease.version, 'old-plist');
-    await validateSignature(earlierBundle, 'old-app');
-    report.quarantine.installedBeforeLaunch = await quarantineAt(
-      earlierBundle,
-      'installed-before-launch',
-    );
     const sentinelPath = join(env.XTRACE_DATA_DIR, 'update-sentinel.txt');
     const databasePath = join(env.XTRACE_DATA_DIR, 'xtrace.db');
-    await writeFile(sentinelPath, sentinel, { flag: 'wx' });
-    if (await exists(databasePath)) throw new Error('Synthetic database must start absent');
     const databaseIdentity = async () => {
       const { ino, dev, birthtimeMs } = await lstat(databasePath);
       return { ino, dev, birthtimeMs };
@@ -294,24 +254,6 @@ async function main() {
         if (await exists(join(homedir(), 'Library/Application Support', id, 'xtrace.db')))
           throw new Error('App wrote a database outside the owned data directory');
     };
-    launchAttempted = true;
-    await checked(
-      'launch-services',
-      helper,
-      ['earlier-launch', receipt, environmentFile],
-      55_000,
-      automationEnvironment,
-    );
-    const ownership = JSON.parse(await readFile(receipt, 'utf8'));
-    report.releasedAppLaunched = true;
-    report.pid = ownership.pid;
-    await checked(
-      'process-environment',
-      helper,
-      ['earlier-inspect', receipt, environmentFile],
-      10_000,
-      automationEnvironment,
-    );
     const observe = async (mode, pid, bundle, timeout, reason) => {
       const result = run(
         driver,
@@ -330,249 +272,72 @@ async function main() {
         throw new Error(`${mode} returned no required UI evidence`);
       await writeFile(join(output, `${mode}.json`), `${JSON.stringify(evidence, null, 2)}\n`);
     };
-    await observe(
-      'update-ready',
-      ownership.pid,
-      earlierBundle,
-      185_000,
-      `Observed usable ${previousRelease.version} Dashboard and target ${release.version} ready`,
-    );
-    // The earlier version made the database while showing Welcome. Every later
-    // step must find this same file.
-    report.databaseIdentity = await databaseIdentity();
-    // Ready means verified download, not installation. Prove old bytes remain
-    // immediately before asking the shipped UI to install and restart itself.
-    report.beforePressInventory = await verifyPreviousInventory(earlierBundle);
-    await checked(
-      'arm-update',
+    await runUpdateLifecycle({
+      report,
+      checked,
       helper,
-      ['earlier-arm-update', receipt, environmentFile],
-      10_000,
+      receipt,
+      environmentFile,
       automationEnvironment,
-    );
-    pressAttempted = true; // AX success/timeout can race process exit; cleanup must resolve both.
-    await observe(
-      'update-press',
-      ownership.pid,
-      earlierBundle,
-      15_000,
-      `Pressed real Restart to update once for target ${release.version}`,
-    );
-    report.restartPressed = true;
-    await checked(
-      'adopt-update',
-      helper,
-      ['earlier-adopt-update', receipt, environmentFile],
-      60_000,
-      automationEnvironment,
-    );
-    const successor = JSON.parse(await readFile(successorReceipt, 'utf8'));
-    report.originalExitConfirmed = true;
-    report.successorPid = successor.pid;
-    await checked(
-      'successor-environment',
-      helper,
-      ['earlier-inspect', successorReceipt, environmentFile],
-      10_000,
-      automationEnvironment,
-    );
-    await observe(
-      'updated-dashboard',
-      successor.pid,
-      earlierBundle,
-      95_000,
-      `Observed usable native ${release.version} Dashboard after restart and retained completed Welcome`,
-    );
-    // (a) After the restart: still the earlier folder, now holding the
-    // candidate's exact files, relaunched as a distinct process, data kept.
-    report.restarted = {
-      applications: requireBundleStep('restarted', await readdir('/Applications')),
-      inventory: await verifyAppInventory(earlierBundle),
-    };
-    await appIdentity(earlierBundle, release.version, 'updated-plist');
-    await validateSignature(earlierBundle, 'updated-app');
-    await dataKept('After restart');
-    report.restarted.dataKept = true;
-    // A normal quit (the Quit Apple event, never forced) runs the app's own
-    // exit path, which renames the earlier folder.
-    await checked(
-      'quit-updated',
-      helper,
-      ['earlier-quit', successorReceipt, environmentFile],
-      25_000,
-      automationEnvironment,
-    );
-    await checked(
-      'all-exited',
-      helper,
-      ['earlier-absent', receipt, environmentFile],
-      10_000,
-      automationEnvironment,
-    );
-    report.exitConfirmed = true;
-    report.normalQuit = true;
-    // (b) After the quit: only the candidate's folder name, identical files,
-    // a valid signature, ticket and Gatekeeper assessment, data kept.
-    report.renamed = {
-      applications: requireBundleStep('quit', await readdir('/Applications')),
-      inventory: await verifyAppInventory(renamedBundle),
-    };
-    if (JSON.stringify(report.renamed.inventory) !== JSON.stringify(report.restarted.inventory))
-      throw new Error('Renamed app contents differ from the updated app');
-    await appIdentity(renamedBundle, release.version, 'renamed-plist');
-    await validateSignature(renamedBundle, 'renamed-app');
-    report.quarantine.renamedAfterQuit = await quarantineAt(renamedBundle, 'renamed-after-quit');
-    await dataKept('After quit');
-    report.databaseAfterUpdate = await verifyHostedDatabase(source, env.XTRACE_DATA_DIR, checked);
-    report.renamed.dataKept = true;
-    // Reopen the renamed folder as a person would: Dashboard, no Welcome.
-    reopenAttempted = true;
-    await checked(
-      'reopen',
-      helper,
-      ['launch', reopenReceipt, environmentFile],
-      55_000,
-      automationEnvironment,
-    );
-    const reopened = JSON.parse(await readFile(reopenReceipt, 'utf8'));
-    report.reopenedPid = reopened.pid;
-    await checked(
-      'reopen-environment',
-      helper,
-      ['inspect', reopenReceipt, environmentFile],
-      10_000,
-      automationEnvironment,
-    );
-    await observe(
-      'reopened-dashboard',
-      reopened.pid,
-      renamedBundle,
-      95_000,
-      `Observed usable native ${release.version} Dashboard after reopening the renamed app without Welcome`,
-    );
-    await checked(
-      'quit-reopened',
-      helper,
-      ['quit', reopenReceipt, environmentFile],
-      25_000,
-      automationEnvironment,
-    );
-    await checked(
-      'reopened-exited',
-      helper,
-      ['absent', reopenReceipt, environmentFile],
-      10_000,
-      automationEnvironment,
-    );
-    report.reopenExitConfirmed = true;
-    report.reopened = {
-      applications: requireBundleStep('reopened', await readdir('/Applications')),
-      inventory: await verifyAppInventory(renamedBundle),
-    };
-    report.quarantine.installedAfterExit = await quarantineAt(
-      renamedBundle,
-      'installed-after-exit',
-    );
-    await dataKept('After reopening');
-    report.sentinelRetained = true;
-    report.database = await verifyHostedDatabase(source, env.XTRACE_DATA_DIR, checked);
-    report.nativeDatabaseVerified = true;
-    // (c) No copy the updater set aside or extracted is left behind.
-    const leftovers = [
-      ...updaterLeftovers(await readdir(env.TMPDIR)).map((name) => join(env.TMPDIR, name)),
-      ...updaterLeftovers(await readdir(tmpdir())).map((name) => join(tmpdir(), name)),
-    ];
-    if (leftovers.length) throw new Error(`Updater copies were left: ${leftovers.join(', ')}`);
-    report.noLeftoverCopies = { applications: true, temporaryFolders: [env.TMPDIR, tmpdir()] };
+      successorReceipt,
+      reopenReceipt,
+      env,
+      databaseIdentity,
+      dataKept,
+      source,
+      observe,
+      prepare: async () => {
+        await prepareUpdateInstall({
+          report,
+          owned,
+          output,
+          feedPath,
+          fetch,
+          checked,
+          exists,
+          markInstalled: () => {
+            installed = true;
+          },
+          appIdentity,
+          validateSignature,
+          quarantineAt,
+        });
+        await writeFile(sentinelPath, sentinel, { flag: 'wx' });
+        if (await exists(databasePath)) throw new Error('Synthetic database must start absent');
+      },
+      markAttempt: (kind) => {
+        if (kind === 'launch') launchAttempted = true;
+        else if (kind === 'press') pressAttempted = true;
+        else if (kind === 'reopen') reopenAttempted = true;
+      },
+      appIdentity,
+      validateSignature,
+      quarantineAt,
+    });
   } catch (error) {
     if (error.message.startsWith('Production feed prerequisite unmet:'))
       report.status = 'prerequisite-unmet';
     failure = error;
   }
   budget.beginCleanup();
-  try {
-    if (launchAttempted && !report.exitConfirmed) {
-      if (!(await exists(receipt)))
-        throw new Error('Launch outcome has no ownership receipt; app retained');
-      await stopUpdateProcesses(
-        { pressAttempted, successorExists: await exists(successorReceipt) },
-        {
-          adopt: () =>
-            checked(
-              'cleanup-adopt',
-              helper,
-              ['earlier-adopt-update', receipt, environmentFile],
-              60_000,
-              automationEnvironment,
-            ),
-          stopOriginal: () =>
-            checked(
-              'cleanup-stop-original',
-              helper,
-              ['earlier-stop', receipt, environmentFile],
-              20_000,
-              automationEnvironment,
-            ),
-          stopSuccessor: () =>
-            checked(
-              'cleanup-stop-successor',
-              helper,
-              ['earlier-stop', successorReceipt, environmentFile],
-              20_000,
-              automationEnvironment,
-            ),
-          confirmAbsent: () =>
-            checked(
-              'cleanup-all-exited',
-              helper,
-              ['earlier-absent', receipt, environmentFile],
-              10_000,
-              automationEnvironment,
-            ),
-        },
-      );
-      report.exitConfirmed = true;
-    }
-    if (reopenAttempted && !report.reopenExitConfirmed) {
-      if (!(await exists(reopenReceipt)))
-        throw new Error('Reopen outcome has no ownership receipt; app retained');
-      await checked(
-        'cleanup-stop-reopened',
-        helper,
-        ['stop', reopenReceipt, environmentFile],
-        20_000,
-        automationEnvironment,
-      );
-      await checked(
-        'cleanup-reopened-exited',
-        helper,
-        ['absent', reopenReceipt, environmentFile],
-        10_000,
-        automationEnvironment,
-      );
-      report.reopenExitConfirmed = true;
-    }
-    // Baseline proved neither folder existed, so whichever exists now is this
-    // run's: the installed earlier folder or the app's own rename of it.
-    if (installed)
-      for (const [name, bundle] of [
-        ['unregister-earlier', earlierBundle],
-        ['unregister-renamed', renamedBundle],
-      ]) {
-        if (!(await exists(bundle))) continue;
-        await checked(
-          name,
-          '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
-          ['-u', bundle],
-        );
-        await rm(bundle, { recursive: true });
-      }
-    if (staging) await rm(staging, { recursive: true });
-    report.cleanupConfirmed = true;
-  } catch (error) {
-    report.cleanupError = error.message;
-    failure ||= error;
-  }
+  failure = await cleanupUpdate({
+    report,
+    launchAttempted,
+    pressAttempted,
+    reopenAttempted,
+    receipt,
+    successorReceipt,
+    reopenReceipt,
+    helper,
+    environmentFile,
+    automationEnvironment,
+    checked,
+    installed,
+    staging,
+    failure,
+    exists,
+    rm,
+  });
 
   if (failure) report.error = failure.message;
   else report.status = 'passed';
