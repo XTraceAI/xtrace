@@ -19,11 +19,13 @@
         "total": 0,
         "top_insights": [],
         "running": false,
+        "waiting": 0,
         "rows": []
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "empty": {
     "state": "loaded",
@@ -78,40 +80,46 @@
         "total": 4,
         "top_insights": [],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
             "path": "/work/atlas",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
             "path": "/work/beacon",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
             "path": "/work/cedar",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "graded": {
     "state": "loaded",
@@ -182,6 +190,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -193,7 +202,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -205,7 +215,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
@@ -217,20 +228,23 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "partial": {
     "state": "loaded",
@@ -291,6 +305,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -302,34 +317,39 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
             "path": "/work/beacon",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
             "path": "/work/cedar",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "running": {
     "state": "loaded",
@@ -400,6 +420,7 @@
           }
         ],
         "running": true,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -411,7 +432,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -423,7 +445,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
@@ -435,7 +458,8 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
@@ -446,7 +470,8 @@
               "run_id": "00000000-0000-4000-8000-000000000004",
               "started_at_ms": 1791193200000
             },
-            "running": true
+            "running": true,
+            "waiting": null
           }
         ]
       }
@@ -459,7 +484,8 @@
       "project_name": "delta",
       "started_at_ms": 1791193200000
     },
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "running_unlisted": {
     "state": "loaded",
@@ -530,6 +556,7 @@
           }
         ],
         "running": true,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -541,7 +568,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -553,7 +581,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
@@ -565,14 +594,16 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
@@ -585,7 +616,156 @@
       "project_name": null,
       "started_at_ms": 1791193200000
     },
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
+  },
+  "waiting": {
+    "state": "loaded",
+    "projects": [
+      {
+        "name": "atlas",
+        "path": "/work/atlas",
+        "sources": [
+          "claude_code",
+          "claude_app"
+        ]
+      },
+      {
+        "name": "beacon",
+        "path": "/work/beacon",
+        "sources": [
+          "codex_app",
+          "codex_cli"
+        ]
+      },
+      {
+        "name": "cedar",
+        "path": "/work/cedar",
+        "sources": [
+          "cursor"
+        ]
+      },
+      {
+        "name": "delta",
+        "path": "/work/delta",
+        "sources": [
+          "claude_code",
+          "codex_cli",
+          "cursor"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "skill": {
+          "id": "claude-md-doctor",
+          "name": "CLAUDE.md doctor",
+          "version": "0.5.1+xtrace.1",
+          "description": "Checks how well this project's CLAUDE.md and AGENTS.md guide coding agents.",
+          "origin": {
+            "kind": "built_in"
+          },
+          "problem": null
+        },
+        "average": 75,
+        "graded": 3,
+        "total": 4,
+        "top_insights": [
+          {
+            "severity": "critical",
+            "title": "AGENTS.md is not loaded",
+            "projects": 1
+          },
+          {
+            "severity": "warning",
+            "title": "CLAUDE.md is longer than 200 lines",
+            "projects": 3
+          },
+          {
+            "severity": "warning",
+            "title": "Two rules disagree",
+            "projects": 1
+          }
+        ],
+        "running": true,
+        "waiting": 2,
+        "rows": [
+          {
+            "name": "atlas",
+            "path": "/work/atlas",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "score": 75,
+              "graded_at_ms": 1791190860000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false,
+            "waiting": {
+              "run_id": "00000000-0000-4000-8000-0000000000c1",
+              "ahead": 0
+            }
+          },
+          {
+            "name": "beacon",
+            "path": "/work/beacon",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "score": 90,
+              "graded_at_ms": 1791191460000,
+              "partial": false
+            },
+            "attempt": null,
+            "running": false,
+            "waiting": null
+          },
+          {
+            "name": "cedar",
+            "path": "/work/cedar",
+            "shown": {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "score": 61,
+              "graded_at_ms": 1791192060000,
+              "partial": true
+            },
+            "attempt": null,
+            "running": false,
+            "waiting": null
+          },
+          {
+            "name": "delta",
+            "path": "/work/delta",
+            "shown": null,
+            "attempt": {
+              "state": "running",
+              "run_id": "00000000-0000-4000-8000-000000000004",
+              "started_at_ms": 1791193200000
+            },
+            "running": true,
+            "waiting": null
+          }
+        ]
+      }
+    ],
+    "running": {
+      "run_id": "00000000-0000-4000-8000-000000000004",
+      "skill_id": "claude-md-doctor",
+      "skill_name": "CLAUDE.md doctor",
+      "project_path": "/work/delta",
+      "project_name": "delta",
+      "started_at_ms": 1791193200000
+    },
+    "making_rubric": null,
+    "waiting_elsewhere": [
+      {
+        "run_id": "00000000-0000-4000-8000-0000000000c2",
+        "skill_id": "claude-md-doctor",
+        "skill_name": "CLAUDE.md doctor",
+        "project_path": "/work/old-beacon",
+        "project_name": null,
+        "ahead": 1
+      }
+    ]
   },
   "long_findings": {
     "state": "loaded",
@@ -651,6 +831,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -662,34 +843,39 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
             "path": "/work/beacon",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
             "path": "/work/cedar",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "failed": {
     "state": "loaded",
@@ -760,6 +946,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -776,7 +963,8 @@
               "finished_at_ms": 1791192660000,
               "reason": "timeout"
             },
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -788,7 +976,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
@@ -800,7 +989,8 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
@@ -812,13 +1002,15 @@
               "finished_at_ms": 1791192960000,
               "reason": "app_closed"
             },
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "added": {
     "state": "loaded",
@@ -889,6 +1081,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -900,7 +1093,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -912,7 +1106,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
@@ -924,14 +1119,16 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       },
@@ -959,6 +1156,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -970,7 +1168,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -982,27 +1181,31 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
             "path": "/work/cedar",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "added_problem": {
     "state": "loaded",
@@ -1073,6 +1276,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -1084,7 +1288,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -1096,7 +1301,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
@@ -1108,14 +1314,16 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       },
@@ -1146,6 +1354,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -1157,7 +1366,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -1169,27 +1379,31 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
             "path": "/work/cedar",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
     ],
     "running": null,
-    "making_rubric": null
+    "making_rubric": null,
+    "waiting_elsewhere": []
   },
   "making_rubric": {
     "state": "loaded",
@@ -1260,6 +1474,7 @@
           }
         ],
         "running": false,
+        "waiting": 0,
         "rows": [
           {
             "name": "atlas",
@@ -1271,7 +1486,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "beacon",
@@ -1283,7 +1499,8 @@
               "partial": false
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "cedar",
@@ -1295,14 +1512,16 @@
               "partial": true
             },
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           },
           {
             "name": "delta",
             "path": "/work/delta",
             "shown": null,
             "attempt": null,
-            "running": false
+            "running": false,
+            "waiting": null
           }
         ]
       }
@@ -1313,7 +1532,8 @@
       "location": "/home/you/.claude/skills/deploy",
       "name": "deploy",
       "started_at_ms": 1784000000000
-    }
+    },
+    "waiting_elsewhere": []
   },
   "not_configured": {
     "state": "not_configured"

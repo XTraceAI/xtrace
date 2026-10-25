@@ -386,7 +386,8 @@ pub enum GradingRubricFailure {
 pub enum GradingRubricMake {
     /// The job has begun; it is the installed skill's `rubric_job` now.
     Started { job_id: String },
-    /// A grading or another rubric job is going; one runs at a time.
+    /// A grading or another rubric job holds the one slot (gradings may be
+    /// waiting after it); one runs at a time.
     Busy,
     /// No installed skill is at that location now.
     NotFound,
@@ -407,8 +408,8 @@ pub enum GradingRubricMake {
     Failed,
 }
 
-/// The rubric-making job going now, named for a screen that explains why a
-/// grading cannot start.
+/// The rubric-making job going now, named for a screen that explains why
+/// gradings wait.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct GradingRubricNow {
     pub job_id: String,
@@ -508,20 +509,28 @@ pub enum GradingSkillRemove {
     BuiltIn,
     /// No added skill has that id.
     NotFound,
-    /// That skill is grading a project now; it stays until the run ends.
+    /// That skill is grading a project now or waiting to grade one; it
+    /// stays until that run ends or is cancelled.
     Running,
     NotConfigured,
     Failed,
 }
 
-/// What `grading_start` did. Only `started` started anything.
+/// What `grading_start` did. Only `started` started anything now; `waiting`
+/// starts by itself later.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum GradingStart {
     /// The run's `running` row is saved and the run has begun.
     Started { run_id: String },
-    /// Another run is going; one runs at a time.
-    Busy,
+    /// A grading or a rubric-making job holds the one slot: the request
+    /// waits in line, in memory only, and starts by itself with this run ID
+    /// once every request before it is done. Nothing is saved until then;
+    /// Cancel with this ID takes it out of the line.
+    Waiting { run_id: String },
+    /// This project is being graded with this skill now, or is already
+    /// waiting to be.
+    AlreadyGoing,
     /// The folder is not a project in a fresh project list, or its path is
     /// not exactly that folder's resolved path (a link, `..`, a trailing
     /// slash).
@@ -678,13 +687,16 @@ pub enum GradingFailure {
     ArchiveFailed,
     /// The app failed while it handled the run.
     InternalError,
+    /// No Claude Code executable was found when a waiting grading's turn
+    /// came.
+    ClaudeUnavailable,
     /// A code this build does not know.
     Other,
 }
 
 impl GradingFailure {
     /// Every reason, for tests.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::AppClosed,
         Self::ProjectChanged,
         Self::ProjectUnavailable,
@@ -708,6 +720,7 @@ impl GradingFailure {
         Self::ResultInvalid,
         Self::ArchiveFailed,
         Self::InternalError,
+        Self::ClaudeUnavailable,
         Self::Other,
     ];
 
@@ -737,6 +750,7 @@ impl GradingFailure {
             Self::ResultInvalid => "result_invalid",
             Self::ArchiveFailed => "archive_failed",
             Self::InternalError => "internal_error",
+            Self::ClaudeUnavailable => "claude_unavailable",
             Self::Other => "other",
         }
     }
@@ -800,7 +814,7 @@ impl GradingFailure {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum GradingOverview {
-    Loaded(GradingOverviewLoaded),
+    Loaded(Box<GradingOverviewLoaded>),
     /// Fixture mode: no skill is bundled and no project list is read.
     NotConfigured,
     /// A bundled skill, the added skills, the project list or the stored
@@ -820,9 +834,13 @@ pub struct GradingOverviewLoaded {
     /// Only the stored status says a run is going, never a progress event.
     pub running: Option<GradingRunningNow>,
     /// The rubric-making job going now, if any. It holds the same one slot
-    /// as a grading, so nothing can be graded meanwhile. Boxed: the answer
-    /// stays small while no job runs.
+    /// as a grading, so gradings started meanwhile wait in line until it is
+    /// done. Boxed: the answer stays small while no job runs.
     pub making_rubric: Option<Box<GradingRubricNow>>,
+    /// The waiting gradings no row shows (their project is no longer listed,
+    /// or their skill is not on Scores), oldest first, so each can still be
+    /// cancelled.
+    pub waiting_elsewhere: Vec<GradingWaitingElsewhere>,
 }
 
 /// One skill over the listed projects.
@@ -843,6 +861,9 @@ pub struct GradingSkillOverview {
     pub top_insights: Vec<GradingTopInsight>,
     /// Whether the run going now is this skill's.
     pub running: bool,
+    /// How many gradings with this skill are waiting in line, on any
+    /// project.
+    pub waiting: u32,
     /// One per listed project, in the project list's order.
     pub rows: Vec<GradingProjectRow>,
 }
@@ -871,6 +892,33 @@ pub struct GradingProjectRow {
     pub attempt: Option<GradingAttempt>,
     /// Whether this project's run is the one going now.
     pub running: bool,
+    /// This project's grading with this skill waiting in line, if any.
+    pub waiting: Option<GradingRowWaiting>,
+}
+
+/// A grading waiting in line for the one slot: it starts by itself when
+/// every entry before it is done.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct GradingRowWaiting {
+    /// The ID it starts with, and the one Cancel takes it out of the line by.
+    pub run_id: String,
+    /// How many waiting gradings are before it in the whole line.
+    pub ahead: u32,
+}
+
+/// A waiting grading no row shows, named for a screen that lists it with
+/// its own Cancel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct GradingWaitingElsewhere {
+    pub run_id: String,
+    pub skill_id: String,
+    /// The skill's name when it is on Scores.
+    pub skill_name: Option<String>,
+    pub project_path: String,
+    /// The project's name when it is still listed.
+    pub project_name: Option<String>,
+    /// How many waiting gradings are before it in the whole line.
+    pub ahead: u32,
 }
 
 /// The score a project shows for a skill.
@@ -913,8 +961,7 @@ pub enum GradingAttempt {
     },
 }
 
-/// The run going now, named for a screen that explains why another run
-/// cannot start.
+/// The run going now, named for a screen that shows it where no row does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct GradingRunningNow {
     pub run_id: String,
