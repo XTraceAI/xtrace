@@ -2580,38 +2580,13 @@ fn the_rubric_making_run_has_the_gradings_command_line_over_its_own_folders() {
     );
     assert_eq!(making[0]["cwd"], target);
     assert_eq!(making[0]["out"], out);
-    let settings: serde_json::Value = serde_json::from_str(&argv[10]).unwrap();
+    // The runner test owns the command's exact flags and sandbox settings.
+    // This layer proves rubric-making passes its own folders to that command.
     assert_eq!(
-        settings["sandbox"]["filesystem"],
-        serde_json::json!({"denyWrite": [target], "allowWrite": [out]})
-    );
-    assert_eq!(
-        settings["sandbox"]["network"]["allowedDomains"],
-        serde_json::json!([])
-    );
-    assert_eq!(settings["sandbox"]["failIfUnavailable"], true);
-    assert_eq!(settings["disableAllHooks"], true);
-    assert_eq!(
-        argv[3..],
-        [
-            "--tools",
-            "Read,Write,Edit,Bash,Glob,Grep",
-            "--permission-mode",
-            "dontAsk",
-            "--setting-sources",
-            "",
-            "--settings",
-            argv[10].as_str(),
-            "--strict-mcp-config",
-            "--no-session-persistence",
-            "--allowedTools",
-            &format!("Edit(/{out}/**)"),
-            "--disallowedTools",
-            &format!("Edit(/{target}/**)"),
-            "--add-dir",
-            out,
-            helper,
-        ]
+        argv.iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>(),
+        xt_judge::runner::command_line(&world.claude, argv[2].clone(), target, out, helper),
     );
     let prompt = &argv[2];
     assert!(prompt.starts_with(&format!(

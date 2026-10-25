@@ -164,6 +164,18 @@ impl MetricsDb {
         Ok(Self { connection })
     }
 
+    /// Observe or stop observing statements in a synthetic fixture database.
+    #[cfg(all(debug_assertions, feature = "fixtures"))]
+    pub fn observe_fixture_statements(
+        &self,
+        callback: Option<fn(rusqlite::trace::TraceEvent<'_>)>,
+    ) {
+        self.connection.trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            callback,
+        );
+    }
+
     /// Compose read-only reports against one snapshot. Nested metric methods
     /// reuse it; an existing caller transaction remains owned by that caller.
     pub fn read_snapshot<T>(&self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {

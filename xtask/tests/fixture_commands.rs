@@ -12,7 +12,11 @@ fn run(args: &[&str]) -> Output {
 }
 
 #[test]
-fn validate_reports_all_entries_and_three_asserted_fixtures() {
+fn validate_reports_each_catalog_entry_and_matching_status_totals() {
+    let fixtures = xt_fixtures::Fixture::all(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures"),
+    )
+    .unwrap();
     let output = run(&["fixture-validate"]);
     assert!(
         output.status.success(),
@@ -20,26 +24,47 @@ fn validate_reports_all_entries_and_three_asserted_fixtures() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report = String::from_utf8(output.stdout).unwrap();
+    let mut populated = 0;
+    let mut skeleton = 0;
+    for fixture in &fixtures {
+        let status = match fixture.manifest().status {
+            xt_fixtures::FixtureStatus::Populated => {
+                populated += 1;
+                "POPULATED"
+            }
+            xt_fixtures::FixtureStatus::Skeleton => {
+                skeleton += 1;
+                "SKELETON"
+            }
+        };
+        let prefix = format!("{}: {status}", fixture.manifest().id);
+        assert_eq!(
+            report
+                .lines()
+                .filter(|line| line.starts_with(&prefix))
+                .count(),
+            1,
+            "{prefix}"
+        );
+    }
     assert_eq!(
         report
             .lines()
-            .filter(|line| line.contains("SKELETON"))
+            .filter(|line| line.contains(": POPULATED"))
             .count(),
-        18
+        populated
     );
     assert_eq!(
         report
             .lines()
-            .filter(|line| line.contains("POPULATED"))
+            .filter(|line| line.contains(": SKELETON"))
             .count(),
-        3
+        skeleton
     );
-    assert!(report.contains("F21: SKELETON"));
-    assert!(report.contains("F3: POPULATED"));
-    assert!(report.contains("F8: POPULATED"));
-    assert!(report.contains(
-        "21 entries structurally valid; 3 populated/asserted; 18 skeleton/unimplemented"
-    ));
+    assert!(report.contains(&format!(
+        "{} entries structurally valid; {populated} populated/asserted; {skeleton} skeleton/unimplemented",
+        fixtures.len(),
+    )));
 }
 
 #[test]
