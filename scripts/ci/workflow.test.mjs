@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { checkNative } from './native-check.mjs';
 
 const source = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const metadata = await readFile(
@@ -23,13 +24,11 @@ const release = await readFile(
   new URL('../../.github/workflows/release-native.yml', import.meta.url),
   'utf8',
 );
-const nativeSource = await readFile(new URL('./native-check.mjs', import.meta.url), 'utf8');
 const jobs = jobsOf(source);
 const releaseJobs = jobsOf(release);
 const editedJobs = jobsOf(metadata);
 
 test('candidate CI jobs have no metadata credentials or grants', () => {
-  assert.equal(Object.keys(jobs).length, 4);
   assert.match(source, /^permissions:\n {2}contents: read\n/m);
   assert.doesNotMatch(
     source.split('\njobs:\n')[0],
@@ -52,7 +51,14 @@ test('candidate CI jobs have no metadata credentials or grants', () => {
 });
 
 test('routine CI is Linux-only and native work is explicit release preparation', () => {
-  assert.deepEqual(Object.keys(jobs).sort(), ['ci-ok', 'policy', 'security', 'ui']);
+  assert.deepEqual(Object.keys(jobs).sort(), [
+    'check',
+    'ci-ok',
+    'policy',
+    'security',
+    'ui',
+    'ui-extras',
+  ]);
   for (const [name, job] of Object.entries(jobs)) assert.match(job, /runs-on: ubuntu-24\.04/, name);
   assert.match(editedJobs.policy, /runs-on: ubuntu-24\.04/);
   assert.deepEqual(
@@ -93,29 +99,49 @@ test('routine CI is Linux-only and native work is explicit release preparation',
   for (const action of release.matchAll(/uses: (\S+)/g)) assert.match(action[1], /@[a-f0-9]{40}$/);
   for (const checkout of release.split(/uses: actions\/checkout@/).slice(1))
     assert.match(checkout.split(/\n {6}- /)[0], /persist-credentials: false/);
-  assert.match(jobs.ui, /path: ~\/\.cache\/ms-playwright/);
-  assert.ok(jobs.ui.includes('playwright install --with-deps ${{ matrix.browser }}'));
+  for (const job of [jobs.ui, jobs['ui-extras']]) {
+    assert.match(job, /path: ~\/\.cache\/ms-playwright/);
+    assert.match(job, /playwright install --with-deps webkit/);
+  }
 });
 
-test('each browser matrix entry keeps every UI gate and reports its own failures', () => {
-  assert.match(jobs.ui, /timeout-minutes: 30\n/);
-  assert.match(
-    jobs.ui,
-    /strategy:\n {6}fail-fast: false\n {6}max-parallel: 2\n {6}matrix:\n {8}browser: \[webkit, chromium\]\n/,
-  );
-  assert.match(jobs.ui, /- run: pnpm check\n/);
-  const selection = '--project=${{ matrix.browser }}';
+test('routine CI checks once and covers every browser gate across four independent WebKit shards', () => {
+  const commands = (job) => [...job.matchAll(/^ {6}- run: (.+)$/gm)].map((match) => match[1]);
   assert.deepEqual(
-    [...jobs.ui.matchAll(/- run: pnpm (e2e[^\n]*)/g)].map((match) => match[1]),
-    ['e2e', 'e2e:gallery:smoke', 'e2e:production'].map((suite) => `${suite} ${selection}`),
+    Object.entries(jobs).flatMap(([name, job]) =>
+      commands(job)
+        .filter((command) => command === 'pnpm check')
+        .map(() => name),
+    ),
+    ['check'],
   );
-  assert.ok(jobs.ui.includes('playwright-ubuntu-24.04-x64-${{ matrix.browser }}-'));
-  assert.doesNotMatch(
-    jobs.ui,
-    /continue-on-error|--(?:grep|shard|workers|timeout|retries|max-failures)/,
+  const shards = jobs.ui
+    .match(/^ {8}shard: \[([^\]]+)\]/m)[1]
+    .split(',')
+    .map(Number);
+  assert.deepEqual(shards, [1, 2, 3, 4]);
+  assert.match(jobs.ui, /^ {6}fail-fast: false$/m);
+  assert.doesNotMatch(jobs.ui, /max-parallel: [1-3]$/m);
+  const expanded = shards.flatMap((shard) =>
+    commands(jobs.ui).map((command) => command.replace('${{ matrix.shard }}', shard)),
   );
+  assert.deepEqual(
+    expanded.filter((command) => command.startsWith('pnpm e2e')),
+    shards.map((shard) => `pnpm e2e --project=webkit --shard=${shard}/${shards.length}`),
+  );
+  assert.deepEqual(
+    commands(jobs['ui-extras']).filter((command) => command.startsWith('pnpm e2e')),
+    ['pnpm e2e:gallery:smoke --project=webkit', 'pnpm e2e:production --project=webkit'],
+  );
+  for (const name of ['check', 'ui', 'ui-extras']) {
+    const job = jobs[name];
+    // Each browser test can use up to three minutes. Setup and the remaining
+    // tests need time too; the job must not expire at an individual test limit.
+    assert.ok(Number(job.match(/timeout-minutes: (\d+)/)[1]) > 3, name);
+    assert.doesNotMatch(job, /^ {4}if:|continue-on-error|--(?:grep|timeout|retries|max-failures)/m);
+  }
+  assert.doesNotMatch(jobs.ui + jobs['ui-extras'], /chromium|matrix\.browser/);
   assert.match(jobs['ci-ok'], /if: \$\{\{ always\(\) \}\}/);
-  assert.match(jobs['ci-ok'], /needs: \[policy, ui, security\]/);
   assert.doesNotMatch(jobs['ci-ok'], /continue-on-error/);
 });
 
@@ -484,7 +510,7 @@ test('the actual aggregate rejects every missing, skipped, cancelled or failed w
     const missing = { ...good };
     delete missing[name];
     assert.equal(aggregate(missing).status, 1, `missing ${name}`);
-    // GitHub exposes the combined matrix outcome as needs.ui.result.
+    // GitHub exposes the combined four-shard outcome as needs.ui.result.
     for (const result of ['skipped', 'cancelled', 'failure', 'in_progress', undefined]) {
       assert.equal(aggregate({ ...good, [name]: { result } }).status, 1, `${name}: ${result}`);
     }
@@ -521,13 +547,7 @@ test('text edits run metadata only; target-branch edits call the full CI and can
   assert.match(source, /group: ci-/);
 });
 
-test('consolidated jobs retain each real command and do not blanket-accept failures', () => {
-  for (const command of [
-    'pnpm check',
-    'playwright install --with-deps ${{ matrix.browser }}',
-    'pnpm e2e',
-  ])
-    assert.ok(jobs.ui.includes(command), command);
+test('required hosted gates retain their commands and pinned actions without accepting failures', () => {
   for (const command of [
     'pnpm test:ci',
     'pnpm test:supply-chain',
@@ -535,16 +555,84 @@ test('consolidated jobs retain each real command and do not blanket-accept failu
     'scan-secrets.mjs --diff',
   ])
     assert.ok(jobs.security.includes(command), command);
-  for (const command of [
-    "['fmt', '--all'",
-    "['clippy', '--workspace'",
-    "['test', '--workspace'",
-    "['sbom']",
-    "['notices:check']",
-    "'--debug'",
-    "'plugin-conformance', 'dto'",
-  ])
-    assert.ok(nativeSource.replace(/\s/g, '').includes(command.replace(/\s/g, '')), command);
-  assert.match(nativeSource, /CI_TRUSTED_ROOT = trusted/);
+  for (const action of source.matchAll(/uses: (\S+)/g)) assert.match(action[1], /@[a-f0-9]{40}$/);
   assert.doesNotMatch(source + metadata, /continue-on-error|\|\| true/);
+});
+
+test('native validation runs every named gate and fails before subsequent work when one fails', async () => {
+  const gates = [
+    ['cargo', 'fmt', '--all', '--', '--check'],
+    [
+      'cargo',
+      'clippy',
+      '--workspace',
+      '--all-targets',
+      '--all-features',
+      '--locked',
+      '--',
+      '-D',
+      'warnings',
+    ],
+    ['cargo', 'test', '--workspace', '--all-features', '--locked'],
+    ['node', 'scripts/ci/run-hook.mjs', 'plugin-conformance'],
+    ['node', 'scripts/ci/run-hook.mjs', 'dto'],
+    ['pnpm', 'sbom'],
+    ['pnpm', 'notices:check'],
+    ['node', 'scripts/security/scan-secrets.mjs', '--content', 'artifacts/sbom.cdx.json'],
+  ];
+  const invoke = async (failedGate) => {
+    const calls = [];
+    const trustedRoots = [];
+    const run = (command, args, { env }) => {
+      const call = [command, ...args];
+      calls.push(call);
+      if (env.CI_TRUSTED_ROOT) trustedRoots.push(env.CI_TRUSTED_ROOT);
+      assert.equal(env.GH_TOKEN, '');
+      assert.equal(env.GITHUB_TOKEN, '');
+      const status = JSON.stringify(call) === JSON.stringify(failedGate) ? 1 : 0;
+      const stdout =
+        command === 'git' && args[0] === 'rev-parse'
+          ? 'b'.repeat(40)
+          : command === 'sw_vers'
+            ? '14.7'
+            : '';
+      return { status, stdout };
+    };
+    const result = checkNative({
+      base: 'a'.repeat(40),
+      platform: 'darwin',
+      run,
+      repo: new URL('../../', import.meta.url).pathname,
+      environment: { GH_TOKEN: 'withheld', GITHUB_TOKEN: 'withheld' },
+      install: async () => [],
+    });
+    if (failedGate) await assert.rejects(result, /Native validation stopped/);
+    else await result;
+    assert.ok(trustedRoots.length > 0);
+    assert.equal(new Set(trustedRoots).size, 1);
+    await assert.rejects(access(trustedRoots[0]), { code: 'ENOENT' });
+    return calls;
+  };
+  const calls = await invoke();
+  const positions = gates.map((gate) =>
+    calls.findIndex((call) => JSON.stringify(call) === JSON.stringify(gate)),
+  );
+  assert.ok(
+    positions.every(
+      (position, index) => position >= 0 && (index === 0 || position > positions[index - 1]),
+    ),
+  );
+  assert.ok(
+    calls.some(
+      ([command, ...args]) => command === 'pnpm' && args[0] === 'tauri' && args.includes('--debug'),
+    ),
+  );
+  for (const [index, gate] of gates.entries()) {
+    const failed = await invoke(gate);
+    assert.deepEqual(failed.at(-1), gate);
+    const reached = failed.filter((call) =>
+      gates.some((named) => JSON.stringify(named) === JSON.stringify(call)),
+    );
+    assert.deepEqual(reached, gates.slice(0, index + 1));
+  }
 });

@@ -54,14 +54,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-  ui:
+  check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        browser: [webkit, chromium]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -75,22 +70,66 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm check
 
+  ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-ubuntu-24.04-x64-${{ matrix.browser }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-ubuntu-24.04-x64-webkit-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Remove unused Chrome package sources
         # Playwright downloads its pinned browsers separately. The runner's
         # preinstalled Chrome repository must not block Ubuntu dependency updates.
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome*.list \
             /etc/apt/sources.list.d/google-chrome*.sources
-      - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps ${{ matrix.browser }}
-      - run: pnpm e2e --project=${{ matrix.browser }}
+      - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps webkit
+      - run: pnpm e2e --project=webkit --shard=${{ matrix.shard }}/4
         env:
           E2E_PORT: '5174'
-      - run: pnpm e2e:gallery:smoke --project=${{ matrix.browser }}
-      - run: pnpm e2e:production --project=${{ matrix.browser }}
+
+  ui-extras:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-ubuntu-24.04-x64-webkit-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Remove unused Chrome package sources
+        # Playwright downloads its pinned browsers separately. The runner's
+        # preinstalled Chrome repository must not block Ubuntu dependency updates.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list \
+            /etc/apt/sources.list.d/google-chrome*.sources
+      - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps webkit
+      - run: pnpm e2e:gallery:smoke --project=webkit
+      - run: pnpm e2e:production --project=webkit
 
   security:
     runs-on: ubuntu-24.04
@@ -118,7 +157,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: ${{ always() }}
-    needs: [policy, ui, security]
+    needs: [policy, check, ui, ui-extras, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
