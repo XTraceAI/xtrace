@@ -8,6 +8,7 @@ mod account_usage_claude;
 mod account_usage_claude_local;
 mod account_usage_claude_probe;
 mod account_usage_claude_screen;
+mod account_usage_claude_sign_in;
 mod account_usage_codex;
 mod account_usage_dto;
 mod account_usage_history;
@@ -80,6 +81,10 @@ pub const GRADING_PROGRESS_EVENT: &str = "grading://progress";
 /// run's status, never before the commit; and when a rubric-making job
 /// starts, saves its rubric and ends.
 pub const GRADING_CHANGED_EVENT: &str = "grading://changed";
+/// Published, with no payload, when the app stops watching for a Claude Code
+/// sign-in the user started from the Usage panel: the read it waited for ran,
+/// or the watch ran out. The frontend reads account usage again.
+pub const CLAUDE_SIGN_IN_EVENT: &str = "account-usage://sign-in-ended";
 /// A rubric-making job's progress (`dto::GradingRubricProgress`): when it
 /// starts, about every five seconds while it runs, and once when it is over.
 pub const GRADING_RUBRIC_PROGRESS_EVENT: &str = "grading://rubric-progress";
@@ -236,6 +241,28 @@ async fn account_usage_refresh_claude(
                 codex: account_usage::failed(dto::AccountUsageIssue::SourceUnavailable),
             }),
     )
+}
+
+/// Opens the user's terminal running their own `claude auth login`, then
+/// watches for the sign-in for a while. Takes nothing from the screen.
+#[tauri::command]
+async fn claude_sign_in(
+    app: tauri::AppHandle,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    if webview_window.label() != tray::MAIN_LABEL {
+        return Err("only the main window may start a sign-in".into());
+    }
+    if app.state::<state::AppState>().app_info().fixture.is_some() {
+        return Err("Sign-in unavailable here".into());
+    }
+    let service = app
+        .state::<Arc<account_usage::AccountUsageService>>()
+        .inner()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || service.sign_in_claude())
+        .await
+        .unwrap_or_else(|_| Err("Terminal did not open".into()))
 }
 
 #[tauri::command]
@@ -1256,6 +1283,12 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => account_usage::AccountUsageService::default(),
     };
+    let usage = {
+        let handle = app.handle().clone();
+        usage.with_sign_in_publish(Box::new(move || {
+            let _ = handle.emit(CLAUDE_SIGN_IN_EVENT, ());
+        }))
+    };
     let usage = Arc::new(usage);
     usage.start_automatic();
     // Unreadable saved settings read as a fresh install: nothing can be
@@ -1417,6 +1450,7 @@ pub fn run() {
             app_info,
             account_usage_read,
             account_usage_refresh_claude,
+            claude_sign_in,
             db_counts,
             live_sessions_read,
             live_sessions_release,

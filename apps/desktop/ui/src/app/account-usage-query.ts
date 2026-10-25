@@ -9,7 +9,8 @@ export const accountUsageReadingMs = 3_000;
 /**
  * Passive mount, timer and focus reads never request Claude credentials or
  * start a Claude read; the app reads Claude on its own schedule. While that
- * read is still running the window checks back sooner for its result.
+ * read is still running the window checks back sooner for its result. The
+ * end of a watched sign-in arrives as an event instead.
  */
 export function accountUsageQueryOptions(source: DataSource) {
   return {

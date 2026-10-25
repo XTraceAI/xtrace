@@ -33,6 +33,8 @@ pub(super) const CLAUDE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 #[derive(Clone, Debug)]
 pub struct ClaudeUsagePaths {
     pub(super) probe_dir: PathBuf,
+    /// Where the sign-in click writes its Terminal script.
+    pub(super) sign_in_dir: PathBuf,
     pub(super) last_reading: PathBuf,
     /// The reading history of both providers (`account-usage-history.jsonl`).
     pub(super) history: PathBuf,
@@ -49,6 +51,7 @@ impl ClaudeUsagePaths {
         };
         Self {
             probe_dir: app_data_dir.join(PROBE_DIR_NAME),
+            sign_in_dir: app_data_dir.join(crate::account_usage_claude_sign_in::SIGN_IN_DIR_NAME),
             last_reading: app_data_dir.join(LAST_READING_FILE),
             history: app_data_dir.join(crate::account_usage_history::HISTORY_FILE),
             config_file,
@@ -83,6 +86,7 @@ impl CachedUsage {
             issue: None,
             checked_at: Some(self.fetched_at_ms.div_euclid(1000)),
             stale_at: None,
+            sign_in_watch_until: None,
             windows: self.windows,
         }
     }
