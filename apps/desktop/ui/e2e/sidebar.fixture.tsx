@@ -87,6 +87,15 @@ for (const host of ['claude', 'codex'] as const) {
   };
 }
 
+// The sign-in click is recorded here instead of opening Terminal;
+// `?signin=fail` answers as the app does when Claude Code is missing.
+const signIns: string[] = [];
+(window as unknown as { signIns: string[] }).signIns = signIns;
+async function signIn() {
+  signIns.push('claude');
+  if (search.get('signin') === 'fail') throw 'Claude Code not found';
+}
+
 function Fixture() {
   const { theme, toggle } = useTheme();
   const [activeKey, setActiveKey] = useState<SidebarKey>('dashboard');
@@ -102,6 +111,7 @@ function Fixture() {
           onNavigate={setActiveKey}
           rulebookCount={5}
           accountUsage={accountUsage}
+          onAccountSignIn={signIn}
           listener={{ status: 'listening', port: 47421 }}
           version="0.1.0"
           updateLabel="up to date"

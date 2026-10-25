@@ -13,6 +13,7 @@ use crate::account_usage_claude_local::{
     CLAUDE_INTERVAL, CachedUsage, ClaudeUsagePaths, load_last_reading, read_cached_usage,
     retry_delay, save_last_reading,
 };
+use crate::account_usage_claude_sign_in::SignInError;
 use crate::account_usage_dto::{
     AccountProviderUsage, AccountUsage, AccountUsageIssue, AccountUsageScope, AccountUsageState,
     AccountUsageWindow,
@@ -48,6 +49,9 @@ pub(super) fn stale_at(checked_at: i64) -> i64 {
 pub(super) fn fresh_at(checked_at: i64, now: i64) -> bool {
     checked_at <= now && now < stale_at(checked_at)
 }
+/// After the user chose to sign in to Claude Code, the automatic reader
+/// checks this long, once a minute, whether it is signed in again.
+const SIGN_IN_WATCH: Duration = Duration::from_secs(15 * 60);
 /// A passive read reuses a Codex result younger than this.
 const CODEX_REUSE: Duration = Duration::from_secs(60);
 
@@ -118,6 +122,10 @@ struct ClaudeState {
     next_auto: Option<i64>,
     /// Modification time of Claude Code's config when last looked at.
     config_seen: Option<SystemTime>,
+    /// Wall-clock milliseconds until which the automatic reader watches for
+    /// a sign-in the user started: each wakeup asks only whether Claude Code
+    /// is still signed out, and reads usage at once when it is not.
+    sign_in_until: Option<i64>,
 }
 
 impl Default for AccountUsageService {
@@ -256,22 +264,67 @@ impl AccountUsageService {
         let Some(paths) = self.claude_local.clone() else {
             return TICK;
         };
-        self.automatic_claude_tick_with(&paths, super::account_usage_claude_probe::read_local)
+        self.automatic_claude_tick_watching(
+            &paths,
+            super::account_usage_claude_probe::read_local,
+            super::account_usage_claude_probe::still_signed_out,
+        )
     }
 
-    /// One wakeup of the automatic reader: use a newer reading Claude Code
-    /// saved on its own, else probe when a read is due. Returns the wait
-    /// until the next wakeup.
+    #[cfg(test)]
     fn automatic_claude_tick_with(
         &self,
         paths: &ClaudeUsagePaths,
         probe: impl FnOnce(&ClaudeUsagePaths) -> AccountProviderUsage,
+    ) -> Duration {
+        self.automatic_claude_tick_watching(paths, probe, |_| {
+            panic!("the sign-in check ran with no sign-in started")
+        })
+    }
+
+    /// The Usage panel's sign-in click: opens the user's terminal running
+    /// their own `claude auth login`, then watches for the sign-in.
+    pub fn sign_in_claude(&self) -> Result<(), String> {
+        if cfg!(feature = "fixtures") {
+            return Err(SignInError::Unsupported.message().into());
+        }
+        let Some(paths) = &self.claude_local else {
+            return Err(SignInError::Unsupported.message().into());
+        };
+        self.sign_in_with(|| super::account_usage_claude_sign_in::open_sign_in(paths))
+    }
+
+    fn sign_in_with(&self, open: impl FnOnce() -> Result<(), SignInError>) -> Result<(), String> {
+        open().map_err(|error| error.message().to_owned())?;
+        self.lock().claude.sign_in_until =
+            Some(Timestamp::now().as_millisecond() + SIGN_IN_WATCH.as_millis() as i64);
+        Ok(())
+    }
+
+    /// One wakeup of the automatic reader: use a newer reading Claude Code
+    /// saved on its own, else probe when a read is due. While a sign-in the
+    /// user started is watched, it instead asks only whether Claude Code is
+    /// still signed out, and reads at once when it is not; no probe runs
+    /// while it is. Returns the wait until the next wakeup.
+    fn automatic_claude_tick_watching(
+        &self,
+        paths: &ClaudeUsagePaths,
+        probe: impl FnOnce(&ClaudeUsagePaths) -> AccountProviderUsage,
+        still_signed_out: impl FnOnce(&ClaudeUsagePaths) -> bool,
     ) -> Duration {
         let mut state = self.lock();
         if state.claude_refreshing {
             return Duration::from_secs(5);
         }
         let now_ms = Timestamp::now().as_millisecond();
+        // An end further away than the whole watch means the clock was set
+        // back: stop watching rather than watch longer.
+        let watching = state.claude.sign_in_until.is_some_and(|until| {
+            now_ms < until && until - now_ms <= SIGN_IN_WATCH.as_millis() as i64
+        });
+        if !watching {
+            state.claude.sign_in_until = None;
+        }
         // A next read further away than the longest wait means the clock was
         // set back: read now rather than wait for it.
         let due = state.claude.next_auto.is_none_or(|at| {
@@ -299,23 +352,40 @@ impl AccountUsageService {
                 .filter(|cached| usable_without_probe(cached, held, Timestamp::now()))
                 .map(CachedUsage::into_usage);
         }
-        if result.is_none() && due {
-            result = Some(probe(paths));
+        let mut signed_in = false;
+        if result.is_none() {
+            if watching {
+                signed_in = !still_signed_out(paths);
+                if signed_in {
+                    result = Some(probe(paths));
+                }
+            } else if due {
+                result = Some(probe(paths));
+            }
         }
 
         let mut state = self.lock();
         state.claude.config_seen = modified;
+        if signed_in {
+            // The read the sign-in was waiting for ran: normal reads resume,
+            // whatever it found.
+            state.claude.sign_in_until = None;
+        }
         let save = result.and_then(|result| state.finish_claude(result));
-        let wait = state
-            .claude
-            .next_auto
-            .map(|at| {
-                Duration::from_millis(
-                    u64::try_from(at - Timestamp::now().as_millisecond()).unwrap_or(0),
-                )
-            })
-            .unwrap_or(TICK)
-            .clamp(Duration::from_secs(1), TICK);
+        let wait = if state.claude.sign_in_until.is_some() {
+            TICK
+        } else {
+            state
+                .claude
+                .next_auto
+                .map(|at| {
+                    Duration::from_millis(
+                        u64::try_from(at - Timestamp::now().as_millisecond()).unwrap_or(0),
+                    )
+                })
+                .unwrap_or(TICK)
+                .clamp(Duration::from_secs(1), TICK)
+        };
         completion.finish(&mut state);
         drop(state);
         if let Some(reading) = save {
@@ -483,6 +553,7 @@ impl ReadState {
         if result.state == AccountUsageState::Available {
             claude.good_at = Some(now);
             claude.last_failure = None;
+            claude.sign_in_until = None;
             claude.failures = 0;
             claude.next_auto = Some(now_ms + CLAUDE_INTERVAL.as_millis() as i64);
             // A held reading timed in the future (the clock was set back) is
@@ -507,6 +578,17 @@ impl ReadState {
     }
 
     fn claude_snapshot(&self) -> AccountProviderUsage {
+        let mut shown = self.claude_reading();
+        let now_ms = Timestamp::now().as_millisecond();
+        shown.sign_in_watch_until = self
+            .claude
+            .sign_in_until
+            .filter(|&until| now_ms < until)
+            .map(|until| until.div_euclid(1000));
+        shown
+    }
+
+    fn claude_reading(&self) -> AccountProviderUsage {
         let claude = &self.claude;
         if let Some(good) = &claude.last_good {
             let mut shown = good.clone();
@@ -565,6 +647,7 @@ pub(super) fn unavailable(issue: AccountUsageIssue) -> AccountProviderUsage {
         issue: Some(issue),
         checked_at: None,
         stale_at: None,
+        sign_in_watch_until: None,
         windows: Vec::new(),
     }
 }
@@ -575,6 +658,7 @@ pub(super) fn failed(issue: AccountUsageIssue) -> AccountProviderUsage {
         issue: Some(issue),
         checked_at: None,
         stale_at: None,
+        sign_in_watch_until: None,
         windows: Vec::new(),
     }
 }
@@ -603,6 +687,7 @@ pub(super) fn available(windows: Vec<AccountUsageWindow>) -> AccountProviderUsag
         issue: None,
         checked_at: Some(Timestamp::now().as_second()),
         stale_at: None,
+        sign_in_watch_until: None,
         windows,
     }
 }
@@ -1573,6 +1658,149 @@ mod tests {
                 Some(AccountUsageIssue::SignedOut)
             )
         );
+    }
+
+    /// A service whose last read found Claude Code signed out, with the next
+    /// automatic read `next_in_ms` away.
+    fn signed_out_service(
+        root: &std::path::Path,
+        next_in_ms: i64,
+    ) -> (AccountUsageService, ClaudeUsagePaths) {
+        let paths = live_paths(root);
+        let service = AccountUsageService::with_claude_local(paths.clone());
+        service.automatic_claude_tick_with(&paths, |_| available(vec![week(70.0)]));
+        service.lock().claude.next_auto = Some(Timestamp::now().as_millisecond());
+        service.automatic_claude_tick_with(&paths, |_| unavailable(AccountUsageIssue::SignedOut));
+        service.lock().claude.next_auto = Some(Timestamp::now().as_millisecond() + next_in_ms);
+        (service, paths)
+    }
+
+    #[test]
+    fn a_sign_in_click_starts_the_watch_only_when_the_terminal_opened() {
+        let root = tempfile::tempdir().unwrap();
+        let (service, _) = signed_out_service(root.path(), 40 * 60_000);
+        assert_eq!(
+            service.sign_in_with(|| Err(SignInError::NotFound)),
+            Err("Claude Code not found".into())
+        );
+        assert_eq!(
+            service.sign_in_with(|| Err(SignInError::CouldNotOpen)),
+            Err("Terminal did not open".into())
+        );
+        assert!(service.lock().claude.sign_in_until.is_none());
+        assert_eq!(service.lock().claude_snapshot().sign_in_watch_until, None);
+        let before = Timestamp::now().as_second();
+        assert_eq!(service.sign_in_with(|| Ok(())), Ok(()));
+        let until = service
+            .lock()
+            .claude_snapshot()
+            .sign_in_watch_until
+            .unwrap();
+        let watch = SIGN_IN_WATCH.as_secs() as i64;
+        assert!((before + watch - 1..=before + watch + 1).contains(&until));
+        // No live paths (tests, fixtures): nothing to open.
+        assert_eq!(
+            AccountUsageService::default().sign_in_claude(),
+            Err("Sign-in unavailable here".into())
+        );
+    }
+
+    #[test]
+    fn while_watching_only_the_sign_in_check_runs_until_it_says_signed_in() {
+        let root = tempfile::tempdir().unwrap();
+        // The backed-off read is long past due: still no probe while signed out.
+        let (service, paths) = signed_out_service(root.path(), -60_000);
+        service.sign_in_with(|| Ok(())).unwrap();
+        for _ in 0..3 {
+            let checked = std::cell::Cell::new(0);
+            let wait = service.automatic_claude_tick_watching(
+                &paths,
+                |_| panic!("probe ran while Claude Code was signed out"),
+                |_| {
+                    checked.set(checked.get() + 1);
+                    true
+                },
+            );
+            assert_eq!(checked.get(), 1);
+            assert_eq!(wait, TICK);
+            let shown = service.lock().claude_snapshot();
+            assert_eq!(shown.issue, Some(AccountUsageIssue::SignedOut));
+            assert!(shown.sign_in_watch_until.is_some());
+        }
+    }
+
+    #[test]
+    fn a_sign_in_is_read_at_once_and_ends_the_watch() {
+        let root = tempfile::tempdir().unwrap();
+        // The next backed-off read is 40 minutes away.
+        let (service, paths) = signed_out_service(root.path(), 40 * 60_000);
+        service.sign_in_with(|| Ok(())).unwrap();
+        let probed = std::cell::Cell::new(false);
+        service.automatic_claude_tick_watching(
+            &paths,
+            |_| {
+                probed.set(true);
+                available(vec![week(80.0)])
+            },
+            |_| false,
+        );
+        assert!(probed.get());
+        let shown = service.lock().claude_snapshot();
+        assert_eq!(shown.state, AccountUsageState::Available);
+        assert_eq!(shown.windows[0].used_percent, 80.0);
+        assert_eq!(shown.sign_in_watch_until, None);
+        // Normal reads resume: the next one waits for the interval.
+        service.automatic_claude_tick_watching(
+            &paths,
+            |_| panic!("probe ran before the interval"),
+            |_| panic!("the sign-in check ran after the watch ended"),
+        );
+        // A read that still fails after the sign-in also ends the watch, and
+        // normal backoff takes over.
+        let (service, paths) = signed_out_service(&root.path().join("again"), 40 * 60_000);
+        service.sign_in_with(|| Ok(())).unwrap();
+        service.automatic_claude_tick_watching(
+            &paths,
+            |_| failed(AccountUsageIssue::Timeout),
+            |_| false,
+        );
+        let state = service.lock();
+        assert!(state.claude.sign_in_until.is_none());
+        assert_eq!(
+            state.claude_snapshot().issue,
+            Some(AccountUsageIssue::Timeout)
+        );
+    }
+
+    #[test]
+    fn the_watch_ends_on_time_and_backoff_resumes() {
+        let root = tempfile::tempdir().unwrap();
+        let (service, paths) = signed_out_service(root.path(), 40 * 60_000);
+        let now = Timestamp::now().as_millisecond();
+        // Ended a moment ago, or (the clock was set back) ends further away
+        // than a whole watch: either way only the normal schedule applies.
+        for until in [now - 1, now + SIGN_IN_WATCH.as_millis() as i64 + 60_000] {
+            service.lock().claude.sign_in_until = Some(until);
+            let wait = service.automatic_claude_tick_watching(
+                &paths,
+                |_| panic!("probe ran before the backed-off read was due"),
+                |_| panic!("the sign-in check ran after the watch ended"),
+            );
+            assert!(service.lock().claude.sign_in_until.is_none());
+            assert_eq!(service.lock().claude_snapshot().sign_in_watch_until, None);
+            assert_eq!(wait, TICK);
+        }
+        service.lock().claude.next_auto = Some(Timestamp::now().as_millisecond());
+        let probed = std::cell::Cell::new(false);
+        service.automatic_claude_tick_watching(
+            &paths,
+            |_| {
+                probed.set(true);
+                unavailable(AccountUsageIssue::SignedOut)
+            },
+            |_| panic!("the sign-in check ran after the watch ended"),
+        );
+        assert!(probed.get());
     }
 
     #[test]

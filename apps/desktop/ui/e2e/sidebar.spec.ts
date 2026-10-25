@@ -188,13 +188,16 @@ test('a stale or signed-out usage row is one warning line that fits the sidebar'
     const name = `${host}=${value}`;
     await page.goto(`/e2e/sidebar.html?${name}`);
     const sidebar = page.getByRole('complementary', { name: 'Workspace' });
-    const row = sidebar.locator(`.xt-host-${host} summary`);
-    const warning = row.locator('.xt-account-row-warning');
+    const group = sidebar.locator('.xt-account-provider-group', {
+      has: page.locator(`.xt-host-${host}`),
+    });
+    const warning = group.locator('.xt-account-row-warning');
     await expect(warning, name).toBeVisible();
-    // Only the warning line is under the numbers, on one line, not cut off.
-    await expect(row.locator('.xt-account-sub'), name).toHaveText(
-      (await warning.textContent()) ?? '',
-    );
+    // Only the warning line is under the numbers (a signed-out line is a
+    // button after the summary), on one line, not cut off.
+    const sub = group.locator('summary .xt-account-sub');
+    if (value.endsWith('signed_out')) await expect(sub, name).toHaveCount(0);
+    else await expect(sub, name).toHaveText((await warning.textContent()) ?? '');
     const fits = await warning.evaluate((element) => ({
       whole: element.scrollWidth <= element.clientWidth,
       lines: Math.round(
@@ -203,4 +206,41 @@ test('a stale or signed-out usage row is one warning line that fits the sidebar'
     }));
     expect(fits, name).toEqual({ whole: true, lines: 1 });
   }
+});
+
+test('the signed-out line signs in by click or key without opening the row', async ({ page }) => {
+  await page.setViewportSize({ width: 1120, height: 720 });
+  const signIns = () => page.evaluate(() => (window as unknown as { signIns: string[] }).signIns);
+  await page.goto('/e2e/sidebar.html?claude=signed_out');
+  const sidebar = page.getByRole('complementary', { name: 'Workspace' });
+  const row = sidebar.locator('details.xt-host-claude');
+  const line = sidebar.getByRole('button', {
+    name: 'Signed out · claude auth login: sign in in Terminal',
+  });
+  await expect(line).toHaveText('Signed out · claude auth login');
+  await line.click();
+  expect(await signIns()).toEqual(['claude']);
+  expect(await row.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+  // From the row by Tab, then Enter and Space.
+  await row.locator('summary').focus();
+  await page.keyboard.press('Tab');
+  await expect(line).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
+  await expect.poll(signIns).toEqual(['claude', 'claude', 'claude']);
+  expect(await row.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+  // Opened, the row offers the same sign-in in its details.
+  await row.locator('summary').click();
+  await expect(line).toHaveCount(0);
+  await row.getByRole('button', { name: 'Sign in in Terminal' }).click();
+  await expect.poll(signIns).toHaveLength(4);
+  // A failure takes the closed line's place, on one line, then goes.
+  await page.goto('/e2e/sidebar.html?claude=signed_out&signin=fail');
+  await sidebar.getByRole('button', { name: /^Signed out · claude auth login/ }).click();
+  const failure = sidebar.locator('.xt-account-sign-in-row [role="status"]');
+  await expect(failure).toHaveText('Claude Code not found');
+  expect(await failure.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+  await expect(failure).toHaveCount(0, { timeout: 10_000 });
 });

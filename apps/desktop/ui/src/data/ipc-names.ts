@@ -3,6 +3,7 @@ export const commands = {
   liveSessionsRelease: 'live_sessions_release',
   accountUsage: 'account_usage_read',
   refreshClaudeUsage: 'account_usage_refresh_claude',
+  claudeSignIn: 'claude_sign_in',
   dashboard: 'metrics_dashboard',
   tokensByHost: 'tokens_by_host',
   spanDetail: 'metrics_span_detail',

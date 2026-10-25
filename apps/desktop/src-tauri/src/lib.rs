@@ -8,6 +8,7 @@ mod account_usage_claude;
 mod account_usage_claude_local;
 mod account_usage_claude_probe;
 mod account_usage_claude_screen;
+mod account_usage_claude_sign_in;
 mod account_usage_codex;
 mod account_usage_dto;
 mod account_usage_history;
@@ -236,6 +237,28 @@ async fn account_usage_refresh_claude(
                 codex: account_usage::failed(dto::AccountUsageIssue::SourceUnavailable),
             }),
     )
+}
+
+/// Opens the user's terminal running their own `claude auth login`, then
+/// watches for the sign-in for a while. Takes nothing from the screen.
+#[tauri::command]
+async fn claude_sign_in(
+    app: tauri::AppHandle,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    if webview_window.label() != tray::MAIN_LABEL {
+        return Err("only the main window may start a sign-in".into());
+    }
+    if app.state::<state::AppState>().app_info().fixture.is_some() {
+        return Err("Sign-in unavailable here".into());
+    }
+    let service = app
+        .state::<Arc<account_usage::AccountUsageService>>()
+        .inner()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || service.sign_in_claude())
+        .await
+        .unwrap_or_else(|_| Err("Terminal did not open".into()))
 }
 
 #[tauri::command]
@@ -1417,6 +1440,7 @@ pub fn run() {
             app_info,
             account_usage_read,
             account_usage_refresh_claude,
+            claude_sign_in,
             db_counts,
             live_sessions_read,
             live_sessions_release,

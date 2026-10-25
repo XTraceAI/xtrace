@@ -84,6 +84,16 @@ fn read_with_probe(
     usage
 }
 
+/// Whether the user's Claude Code says it is signed out right now, from the
+/// same check a failed read makes. Used while the app watches for a sign-in
+/// after the user's click. No Claude Code found is not "signed out".
+pub(super) fn still_signed_out(paths: &ClaudeUsagePaths) -> bool {
+    let Some(binary) = resolve_claude() else {
+        return false;
+    };
+    prepare_probe_dir(&paths.probe_dir).is_ok() && signed_out(&binary, &paths.probe_dir)
+}
+
 /// Deadline for `claude auth status`, including killing it.
 const AUTH_STATUS_DEADLINE: Duration = Duration::from_secs(10);
 /// Output beyond this is not a sign-in status.
@@ -192,8 +202,9 @@ fn prepare_probe_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The user's Claude Code, found by the shared resolver. The probe has no override.
-fn resolve_claude() -> Option<PathBuf> {
+/// The user's Claude Code, found by the shared resolver. The probe has no
+/// override. The sign-in script names the same one.
+pub(super) fn resolve_claude() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     xt_probes::executable::resolve_claude(
         None,

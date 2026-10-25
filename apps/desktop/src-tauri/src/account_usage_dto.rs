@@ -127,6 +127,13 @@ pub struct AccountProviderUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub stale_at: Option<i64>,
+    /// Unix seconds until which the app checks every minute whether Claude
+    /// Code is signed in again, after the user chose to sign in, and reads
+    /// usage as soon as it is. Absent otherwise and for Codex. Never saved
+    /// with the reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub sign_in_watch_until: Option<i64>,
     pub windows: Vec<AccountUsageWindow>,
 }
 

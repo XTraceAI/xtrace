@@ -9,7 +9,8 @@ export const accountUsageReadingMs = 3_000;
 /**
  * Passive mount, timer and focus reads never request Claude credentials or
  * start a Claude read; the app reads Claude on its own schedule. While that
- * read is still running the window checks back sooner for its result.
+ * read is still running, or while the app watches for a sign-in the user
+ * started, the window checks back sooner for its result.
  */
 export function accountUsageQueryOptions(source: DataSource) {
   return {
@@ -20,7 +21,8 @@ export function accountUsageQueryOptions(source: DataSource) {
     refetchInterval: (query?: { state: { data?: AccountUsage } }) =>
       document.visibilityState !== 'visible'
         ? false
-        : query?.state.data?.claude.issue === 'reading'
+        : query?.state.data?.claude.issue === 'reading' ||
+            (query?.state.data?.claude.sign_in_watch_until ?? 0) * 1000 > Date.now()
           ? accountUsageReadingMs
           : accountUsageRefreshMs,
     refetchIntervalInBackground: false,

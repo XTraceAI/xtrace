@@ -101,6 +101,14 @@ export function Shell() {
       setClaudeRefreshing(false);
     }
   }
+  // Present only where the app can open Terminal. A started sign-in makes
+  // the next reading carry the app's watch, so the window looks again soon.
+  const signInClaude = source.claudeSignIn
+    ? async () => {
+        await source.claudeSignIn!();
+        await queryClient.invalidateQueries({ queryKey: queryKeys.accountUsage, exact: true });
+      }
+    : undefined;
   const outlet: ShellOutletContext = { range };
   // Pages whose numbers are taken over the selected event window own the range
   // control and show which window produced them. One session's page is one of
@@ -150,6 +158,7 @@ export function Shell() {
         }
         accountUsageRefreshEnabled={source.kind !== 'preview'}
         onRefreshAccountUsage={() => void refreshClaudeUsage()}
+        onAccountSignIn={signInClaude}
         // Plugin delivery coverage is not read here, so it stays unknown: host
         // scans are never turned into capture surfaces, and no surface is listed.
         surfaces={[]}

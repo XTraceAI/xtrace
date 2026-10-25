@@ -973,6 +973,123 @@ describe('a stale reading', () => {
   });
 });
 
+describe('signing in from a signed-out Claude row', () => {
+  const signedOut = (overrides: Partial<AccountUsage['claude']> = {}): AccountUsage => ({
+    claude: {
+      state: 'stale',
+      issue: 'signed_out',
+      checked_at: Date.now() / 1000 - 17 * 3600,
+      windows: [claudeWeek({ used_percent: 70 })],
+      ...overrides,
+    },
+    codex: { state: 'unavailable', issue: 'source_unavailable', checked_at: null, windows: [] },
+  });
+  const renderRow = (usage: AccountUsage, onSignIn?: () => Promise<void>) =>
+    render(
+      <AccountUsageWidget
+        usage={usage}
+        failed={false}
+        refreshing={false}
+        onRefresh={vi.fn()}
+        onSignIn={onSignIn}
+      />,
+    );
+  const row = () => document.querySelector<HTMLDetailsElement>('.xt-host-claude')!;
+  const summary = () => row().querySelector('summary')!;
+  const line = () =>
+    screen.getByRole('button', { name: 'Signed out · claude auth login: sign in in Terminal' });
+  beforeEach(() => {
+    vi.stubEnv('TZ', 'America/Los_Angeles');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(nowIso));
+  });
+
+  it('makes the one closed-row line a button outside the summary', () => {
+    renderRow(
+      signedOut(),
+      vi.fn(async () => {}),
+    );
+    expect(line().textContent).toBe('Signed out · claude auth login');
+    expect(line().querySelector('code')!.textContent).toBe('claude auth login');
+    expect(summary().contains(line())).toBe(false);
+    expect(summary().querySelector('button, .xt-account-sub')).toBeNull();
+    expect(summary().getAttribute('aria-describedby')).toBe(line().id);
+    // It is reachable by keyboard.
+    expect(line().tabIndex).toBe(0);
+    line().focus();
+    expect(document.activeElement).toBe(line());
+  });
+
+  it('asks the app once per click and never opens the row', async () => {
+    let finish = () => {};
+    const onSignIn = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    renderRow(signedOut(), onSignIn);
+    fireEvent.click(line());
+    // A second click while the first is starting does nothing.
+    fireEvent.click(line());
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    expect(row().open).toBe(false);
+    await act(async () => finish());
+    fireEvent.click(line());
+    expect(onSignIn).toHaveBeenCalledTimes(2);
+    expect(row().open).toBe(false);
+  });
+
+  it('shows a failure on the line for a few seconds', async () => {
+    const onSignIn = vi.fn(() => Promise.reject('Claude Code not found'));
+    renderRow(signedOut(), onSignIn);
+    await act(async () => fireEvent.click(line()));
+    const group = row().parentElement!;
+    const status = within(group).getByRole('status');
+    expect(status.textContent).toBe('Claude Code not found');
+    expect(status.classList.contains('xt-account-row-warning')).toBe(true);
+    expect(summary().getAttribute('aria-describedby')).toBe(status.id);
+    act(() => vi.advanceTimersByTime(6_000));
+    expect(within(group).queryByRole('status')).toBeNull();
+    expect(line()).toBeTruthy();
+  });
+
+  it('in the opened row, offers a sign-in button in place of the command', async () => {
+    const onSignIn = vi.fn(async () => {});
+    renderRow(signedOut(), onSignIn);
+    row().open = true;
+    fireEvent(row(), new Event('toggle'));
+    // The closed row's line gives way to the details.
+    expect(
+      screen.queryByRole('button', { name: 'Signed out · claude auth login: sign in in Terminal' }),
+    ).toBeNull();
+    const detail = row().querySelector('.xt-account-detail')!;
+    expect(detail.textContent).toContain('Claude Code is signed out Sign in in Terminal');
+    await act(async () =>
+      fireEvent.click(
+        within(detail as HTMLElement).getByRole('button', { name: 'Sign in in Terminal' }),
+      ),
+    );
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('works the same with no saved reading', () => {
+    const onSignIn = vi.fn(async () => {});
+    renderRow(signedOut({ state: 'unavailable', checked_at: null, windows: [] }), onSignIn);
+    fireEvent.click(line());
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('is offered only for signed out, and only where the app can open Terminal', () => {
+    renderRow(
+      signedOut({ issue: 'timeout' }),
+      vi.fn(async () => {}),
+    );
+    expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
+    cleanup();
+    renderRow(signedOut());
+    expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
+    expect(summary().querySelector('.xt-account-sub')!.textContent).toBe(
+      'Signed out · claude auth login',
+    );
+  });
+});
+
 it('says how to sign in on one line when Claude Code is signed out and no reading is saved', () => {
   render(
     <AccountUsageWidget
