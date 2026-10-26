@@ -337,7 +337,7 @@ export function SessionTimeline({
             {chosen.repeats.state === 'unknown'
               ? `Stretch ${selected + 1}: repeats not counted. ${unknownRepeatsText(chosen.repeats.reason)}`
               : worst
-                ? `Stretch ${selected + 1}: the most repeated call was ${worst.tool_name}, ${plural(worst.count, 'call', 'calls')} with the same argument.`
+                ? `Stretch ${selected + 1}: the most repeated call was ${worst.tool_name}, ${plural(worst.count, 'call', 'calls')} with the same command, path or pattern.`
                 : `Stretch ${selected + 1}: no call repeated an earlier one.`}
           </p>
           {worst && onShowRepeat && (

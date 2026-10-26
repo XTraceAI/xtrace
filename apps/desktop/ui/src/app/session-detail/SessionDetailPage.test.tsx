@@ -613,6 +613,7 @@ it('shows a call whose identifier is used twice as neither answered nor unanswer
     expect(answered).not.toBeNull();
     return { asked: asked!, answered: answered! };
   });
+  fireEvent.click(screen.getByRole('button', { name: /Tool activity/ }));
   // Each exact record contains one collapsed tool group. Open those groups only.
   fireEvent.click(within(asked).getByRole('button', { expanded: false }));
   fireEvent.click(within(answered).getByRole('button', { expanded: false }));

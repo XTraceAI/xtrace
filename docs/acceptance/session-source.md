@@ -223,3 +223,13 @@ used for the saved measurements.
 Codex group and configured roots that are symlinks: every JSONL session equals
 the ordinary export record for record, the store is refused, and nothing on
 disk changes.
+
+## Conversation presentation
+
+Session detail opts into conversation presentation without changing this reader,
+its generation checks, size refusals, cancellation, adapter or tool/result pairing.
+Original records and blocks stay in native read order. Adjacent activity records
+may share a disclosure only for the native sources=1 contract. Legacy multi-source
+reads retain per-record groups because their answer does not provide boundaries;
+no source labels are inferred. Default shared transcript presentation is unchanged.
+Exact tool-block reveals still use held refs and preserve caller focus.

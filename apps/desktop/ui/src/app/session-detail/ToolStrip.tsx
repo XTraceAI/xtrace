@@ -1,4 +1,5 @@
 import { useContext, useId, useLayoutEffect, useRef, useState } from 'react';
+import { RepeatNotice, type ConversationMarker } from './ConversationActivity';
 import { StatePill } from '../../kit';
 import { CodeSurface } from './TranscriptText';
 import { prefersReducedMotion, RevealContext } from './transcript-reveal';
@@ -308,14 +309,45 @@ function ToolStripRow({ blocks }: { blocks: ToolBlock[] }) {
 }
 
 /** A stretch of tool work inside one record, as rows that open in place. */
-export function ToolActivityStrip({ blocks }: { blocks: ToolBlock[] }) {
-  const groups = toolGroups(blocks);
+export function ToolActivityStrip({
+  blocks,
+  ordered = false,
+  markers = [],
+}: {
+  blocks: ToolBlock[];
+  ordered?: boolean;
+  markers?: readonly ConversationMarker[];
+}) {
+  const groups: ToolBlock[][] = [];
+  if (ordered) {
+    for (const block of blocks) {
+      const last = groups.at(-1);
+      if (
+        last &&
+        toolLabel(last[0]!) === toolLabel(block) &&
+        !markers.some((marker) => marker.blockId === block.id)
+      )
+        last.push(block);
+      else groups.push([block]);
+    }
+  } else groups.push(...toolGroups(blocks));
 
   return (
     <div className="xt-tool-strip">
-      {groups.map((group, index) => (
-        <ToolStripRow key={`${index}:${group[0]?.id ?? ''}`} blocks={group} />
-      ))}
+      {groups.map((group, index) =>
+        ordered ? (
+          <div key={`${index}:${group[0]?.id ?? ''}`}>
+            {markers
+              .filter((marker) => marker.blockId === group[0]?.id)
+              .map((marker) => (
+                <RepeatNotice key={marker.index} marker={marker} />
+              ))}
+            <ToolStripRow blocks={group} />
+          </div>
+        ) : (
+          <ToolStripRow key={`${index}:${group[0]?.id ?? ''}`} blocks={group} />
+        ),
+      )}
     </div>
   );
 }
