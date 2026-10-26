@@ -411,7 +411,7 @@ it('keeps the stretches and the measurements when the transcript cannot be read'
     expect(first.getAttribute('aria-label')).toContain('The transcript is not available to show.'),
   );
   expect(segments()).toHaveLength(5);
-  expect(screen.getByText(/^Records .* measured over the last 7 days$/)).toBeTruthy();
+  expect(screen.getByText(/indexed records · whole session$/)).toBeTruthy();
   fireEvent.click(first);
   expect(live()?.textContent).toContain('The transcript is not available to show.');
 });

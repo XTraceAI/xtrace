@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { useData } from '../../data/DataProvider';
 import { queryKeys } from '../../data/query-client';
@@ -19,7 +19,7 @@ import { DefinitionInfo } from '../dashboard/DefinitionInfo';
 import { useSelectedRange } from '../dashboard/range';
 import { agentTime } from '../agent-duration';
 import { evidenceWords } from '../session-cells';
-import { contextLead, contextTitle, modelLabel } from '../session-context';
+import { contextLead, contextTitle, modelLabel, shortId } from '../session-context';
 import { listState } from '../session-search';
 import { SessionTimeline, type TimelineQuery } from './SessionTimeline';
 import { SessionTranscript } from './SessionTranscript';
@@ -180,14 +180,13 @@ const prName = (link: SessionPrLink) =>
  * opens the network; the app has no page of its own for one pull request.
  */
 function LinkedPrs({ links }: { links: SessionPrLink[] }) {
-  const label = useId();
   if (links.length === 0) return null;
   return (
-    <div className="xt-session-detail-prs">
-      <span id={label} className="xt-session-detail-prs-label">
-        {links.length === 1 ? 'Linked PR' : 'Linked PRs'}
-      </span>
-      <ul aria-labelledby={label}>
+    <details className="xt-session-detail-prs">
+      <summary>
+        {links.length} {links.length === 1 ? 'linked PR' : 'linked PRs'}
+      </summary>
+      <ul aria-label={links.length === 1 ? 'Linked PR' : 'Linked PRs'}>
         {links.map((link) => (
           <li key={link.url}>
             <span
@@ -207,7 +206,7 @@ function LinkedPrs({ links }: { links: SessionPrLink[] }) {
           </li>
         ))}
       </ul>
-    </div>
+    </details>
   );
 }
 
@@ -223,6 +222,7 @@ function LinkedPrs({ links }: { links: SessionPrLink[] }) {
 export function SessionDetailPage() {
   const { sessionId } = useParams();
   const { source } = useData();
+  const conversationBody = useRef<HTMLDivElement>(null);
   const range = useSelectedRange();
   const days = rangeDays[range];
   // The list's filters travel in this page's own address, so going back
@@ -375,18 +375,24 @@ export function SessionDetailPage() {
             <h1 title={row ? contextTitle(row.repo, row.branch) : undefined}>
               {row ? contextLead(row.repo, row.branch) : 'Session'}
             </h1>
-            <p className="xt-session-detail-meta">
-              <span className="xt-session-mono">{sessionId}</span>
-              {row && (
-                <>
-                  <span aria-hidden="true"> · </span>
-                  <span>{modelLabel(row.model, row.other_models)}</span>
-                </>
-              )}
-            </p>
+            <details className="xt-session-detail-meta">
+              <summary>
+                <span>{shortId(sessionId ?? '')}</span>
+                {row && (
+                  <>
+                    <span aria-hidden="true"> · </span>
+                    <span>{modelLabel(row.model, row.other_models)}</span>
+                  </>
+                )}
+              </summary>
+              <p className="xt-session-mono">{sessionId}</p>
+            </details>
           </div>
         </div>
-        <LinkedPrs links={prLinks} />
+        <div className="xt-session-header-facts">
+          {row && <span>{row.record_count.toLocaleString()} indexed records · whole session</span>}
+          <LinkedPrs links={prLinks} />
+        </div>
       </div>
 
       {listed.isError ? (
@@ -408,10 +414,11 @@ export function SessionDetailPage() {
           <Link to={backHref}>Back to all sessions</Link>
         </p>
       ) : (
-        <SectionCard
-          title="Measured in this range"
-          meta={`Records ${row.record_count.toLocaleString()} · measured over the last ${range.replace('d', ' days')}`}
-        >
+        <section className="xt-session-overview" aria-label="Measured in this range">
+          <div>
+            <h2>Measured in this range</h2>
+            <span>Last {range.replace('d', ' days')}</span>
+          </div>
           <dl className="xt-session-measures">
             {MEASURES.map((measure) => (
               <div key={measure.key} className="xt-session-measure">
@@ -436,51 +443,65 @@ export function SessionDetailPage() {
               </div>
             ))}
           </dl>
-        </SectionCard>
+        </section>
       )}
 
-      <SectionCard
-        title="Hands-off stretches"
-        meta={`Measured over the last ${range.replace('d', ' days')}`}
-        // The definition sits behind the same compact control as the
-        // Dashboard's cards; the rule ID is read only inside it.
-        right={<DefinitionInfo ruleId="M-09" name="Hands-off stretches" />}
-      >
-        <SessionTimeline
-          query={timeline}
-          jumps={jumps}
-          selected={selected}
-          onSelect={onSelect}
-          announcement={announcement}
-          reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
-          repeatJumps={repeatJumps}
-          onShowRepeat={onShowRepeat}
-        />
-      </SectionCard>
+      <details className="xt-session-stretches">
+        <summary>Agent activity · Last {range.replace('d', ' days')}</summary>
+        <SectionCard
+          title="Hands-off stretches"
+          meta={`Measured over the last ${range.replace('d', ' days')}`}
+          // The definition sits behind the same compact control as the
+          // Dashboard's cards; the rule ID is read only inside it.
+          right={<DefinitionInfo ruleId="M-09" name="Hands-off stretches" />}
+        >
+          <SessionTimeline
+            query={timeline}
+            jumps={jumps}
+            selected={selected}
+            onSelect={onSelect}
+            announcement={announcement}
+            reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+            repeatJumps={repeatJumps}
+            onShowRepeat={onShowRepeat}
+          />
+        </SectionCard>
+      </details>
 
-      <SectionCard
-        title="Transcript"
-        meta="Read from this session’s own file when you open it. Nothing is stored."
-        right={
-          read.phase === 'failed' ? (
-            <Button variant="outline" height={28} onClick={retry}>
-              Try again
-            </Button>
-          ) : undefined
-        }
-      >
-        {generation && (
-          <p className="xt-session-detail-notice" role="note">
-            {generation}
-          </p>
-        )}
-        <SessionTranscript
-          records={transcript.records}
-          state={transcript.state}
-          reveal={reveal}
-          onReveal={onReveal}
-        />
-      </SectionCard>
+      <div className="xt-session-conversation">
+        <SectionCard
+          title="Transcript"
+          meta="Read from this session’s own file when you open it. Nothing is stored."
+          right={
+            read.phase === 'failed' ? (
+              <Button variant="outline" height={28} onClick={retry}>
+                Try again
+              </Button>
+            ) : undefined
+          }
+        >
+          <div
+            ref={conversationBody}
+            className="xt-conversation-body"
+            role="region"
+            aria-label="Conversation content"
+            tabIndex={0}
+          >
+            {generation && (
+              <p className="xt-session-detail-notice" role="note">
+                {generation}
+              </p>
+            )}
+            <SessionTranscript
+              revealOwner={conversationBody}
+              records={transcript.records}
+              state={transcript.state}
+              reveal={reveal}
+              onReveal={onReveal}
+            />
+          </div>
+        </SectionCard>
+      </div>
     </section>
   );
 }

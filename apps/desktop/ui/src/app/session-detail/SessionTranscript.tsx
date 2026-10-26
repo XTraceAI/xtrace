@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, type RefObject } from 'react';
 import { TranscriptRecordView } from './TranscriptRecordView';
 import {
   type RevealChannel,
   RevealContext,
+  revealInTranscript,
   type RevealOutcome,
   type RevealRequest,
 } from './transcript-reveal';
@@ -45,7 +46,9 @@ export function SessionTranscript({
   state = { kind: 'ready' },
   reveal = null,
   onReveal = NO_REPORT,
+  revealOwner,
 }: {
+  revealOwner?: RefObject<HTMLElement | null>;
   records: readonly TranscriptRecord[];
   state?: TranscriptState;
   /** Show one tool call — see `transcript-reveal.ts`. Absent means none is asked for. */
@@ -53,9 +56,13 @@ export function SessionTranscript({
   /** Told once per request whether its card was shown. Keep it stable across renders. */
   onReveal?: (token: number, outcome: RevealOutcome) => void;
 }) {
+  const scroll = useCallback(
+    (target: HTMLElement) => revealInTranscript(revealOwner?.current ?? null, target),
+    [revealOwner],
+  );
   const channel = useMemo<RevealChannel>(
-    () => ({ request: reveal, report: onReveal }),
-    [reveal, onReveal],
+    () => ({ request: reveal, report: onReveal, scroll }),
+    [reveal, onReveal, scroll],
   );
   if (state.kind === 'loading') {
     return (
