@@ -66,6 +66,43 @@ A target-branch edit calls the full Linux CI against the new base. Separate
 concurrency groups prevent a text edit from cancelling base-change validation.
 Review `base-ci / ci-ok` when present instead of relying on an older source result.
 
+## Prepare a PR description
+
+Before opening or editing a PR, read the template and prepare actual change and
+verification facts in a temporary JSON file outside tracked source:
+
+```json
+{
+  "change": "Explain the concrete problem and resulting behavior.",
+  "verification": "Record actual acceptance cases, commands, results, and checks not run.",
+  "screenshotMissingReason": "Explain why UI screenshots are unavailable, when applicable."
+}
+```
+
+Replace the example text with facts, then run from the Git checkout:
+
+```sh
+node scripts/pr/prepare.mjs --input /tmp/pr-facts.json --base origin/main --output /tmp/pr-body.md
+```
+
+Use the PR's actual target ref for `--base` and a new output filename. Without
+`--output`, the Markdown is printed only. The helper uses the same required-section
+validator as CI and rejects empty or placeholder input before writing output.
+It inspects changed UI/native paths against the target's merge point, including
+working changes and untracked files. Add `--ui` for visible changes elsewhere.
+
+Prefer screenshots in both supported themes. Add `screenshots` to the JSON as
+`[{"theme":"light","url":"https://example.com/light.png"}]` (and a dark entry).
+Use inspected, synthetic or redacted images at already authorized HTTPS locations.
+Missing themes produce a warning and an honest omission note, with the supplied
+reason when present; they never fail this helper or CI. The helper never uploads
+images, contacts GitHub, or verifies the checks claimed in the text.
+
+Read the complete output and use that exact Markdown in an authorized PR
+connector call or `gh pr create/edit --body-file /tmp/pr-body.md`. Read the saved
+PR back to confirm the description and links. Existing review and native checks
+still apply. Run the helper's isolated tests with `node --test scripts/pr/*.test.mjs`.
+
 ## Native validation before merging
 
 Quit any running XTrace Desktop instance before the launch checks; the smoke

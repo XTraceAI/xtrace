@@ -1,0 +1,1 @@
+- Prepare PR descriptions locally with the required sections and optional UI screenshot reminders.
