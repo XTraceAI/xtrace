@@ -54,6 +54,7 @@ use crate::{
     runner::{self, GradeError, Launch, Limits},
     skill::{INSTRUCTIONS_FILE, MAX_INSTRUCTIONS_BYTES, SKILL_DIR_PLACEHOLDER},
     staging::{self, CopyLimits},
+    step::StepCell,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -463,6 +464,9 @@ pub struct MakeRun<'a> {
     pub limits: Limits,
     /// Why the skill's current rubric is refused, when it is made again.
     pub existing: Option<RubricError>,
+    /// Where the step the run is on is kept ([`crate::step`]); `None` reads
+    /// no step.
+    pub step: Option<&'a StepCell>,
 }
 
 /// A rubric the run wrote that the reader accepts.
@@ -550,6 +554,7 @@ pub fn run(spec: &MakeRun<'_>, cancel: Option<&CancelFlag>) -> Result<Written, M
             inherited_env: spec.inherited_env,
             limits: spec.limits,
             leader_record: Some(&record),
+            step: spec.step,
         };
         if index == 0 {
             runner::check_claude_version(&launch, cancel).map_err(MakeError::Run)?;
@@ -615,6 +620,8 @@ pub struct Job<'a> {
     /// The environment this process received.
     pub inherited_env: &'a [(OsString, OsString)],
     pub limits: Limits,
+    /// Where the step the job is on is kept ([`crate::step`]).
+    pub step: Option<&'a StepCell>,
 }
 
 /// Run one job: stage the skill (for a remake, with the refused rubric in
@@ -641,6 +648,7 @@ pub fn make(job: &Job<'_>, cancel: Option<&CancelFlag>) -> Result<Written, MakeE
             inherited_env: job.inherited_env,
             limits: job.limits,
             existing: job.replaced.map(|replaced| replaced.error),
+            step: job.step,
         },
         cancel,
     );

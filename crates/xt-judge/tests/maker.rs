@@ -153,6 +153,7 @@ impl Case {
                 inherited_env: &self.env(),
                 limits,
                 existing,
+                step: None,
             },
             cancel,
         )

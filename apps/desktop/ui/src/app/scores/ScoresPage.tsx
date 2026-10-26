@@ -22,7 +22,9 @@ import {
   attemptText,
   cancelText,
   elapsedText,
+  gradingPillText,
   removeText,
+  runningElsewhereLead,
   runningElsewhereText,
   scoreText,
   severity,
@@ -39,6 +41,7 @@ import {
   waitingElsewhereText,
   waitingText,
   type Loaded,
+  type Reported,
 } from './scores';
 import '../../styles/scores.css';
 
@@ -181,18 +184,17 @@ function RunningElsewhere({
   onCancel,
 }: {
   running: GradingRunningNow;
-  reported: number | undefined;
+  reported: Reported | undefined;
   onCancel: (runId: string) => Promise<void>;
 }) {
-  const elapsed = useElapsed(running.started_at_ms, reported);
+  const elapsed = useElapsed(running.started_at_ms, reported?.elapsed);
   const text = runningElsewhereText(running);
   return (
     <div className="xt-scores-notice xt-scores-running" data-testid="running-elsewhere">
       <div>
         <p className="xt-scores-lead">
           <i className="xt-scores-live" aria-hidden="true" />
-          {text.lead}
-          {elapsed !== undefined && ` · ${elapsedText(elapsed)}`}
+          {runningElsewhereLead(text.lead, reported?.step, elapsed)}
         </p>
         {text.detail && <p className="xt-scores-detail">{text.detail}</p>}
       </div>
@@ -286,10 +288,11 @@ function SkillCard({
 }: {
   skill: GradingSkillOverview;
   startedAtMs: number | undefined;
-  reported: number | undefined;
+  reported: Reported | undefined;
 }) {
   const name = useId();
-  const elapsed = useElapsed(startedAtMs, reported);
+  const elapsed = useElapsed(startedAtMs, reported?.elapsed);
+  const pill = gradingPillText(elapsed, reported?.step);
   const none = skill.graded === 0;
   return (
     <li className="xt-score-card" aria-labelledby={name} data-running={skill.running || undefined}>
@@ -302,7 +305,10 @@ function SkillCard({
         </h2>
         {skill.running && (
           <StatePill tone="accent" height={20} live>
-            {elapsed === undefined ? 'Grading now' : `Grading · ${elapsedText(elapsed)}`}
+            {/* A long step is cut off in the card; the whole line is its title. */}
+            <span className="xt-score-card-going" title={pill}>
+              {pill}
+            </span>
           </StatePill>
         )}
       </div>
@@ -482,7 +488,7 @@ function SkillDetail({
 }: {
   loaded: Loaded;
   skill: GradingSkillOverview;
-  progress: Record<string, number>;
+  progress: Record<string, Reported>;
 }) {
   const { source } = useData();
   const refresh = useRefreshOverview();
@@ -754,11 +760,18 @@ function AddedFrom({
  * A row's place in line, or its newer run, or that its shown score is
  * partial, or nothing.
  */
-function RowState({ row, progress }: { row: GradingProjectRow; progress: Record<string, number> }) {
+function RowState({
+  row,
+  progress,
+}: {
+  row: GradingProjectRow;
+  progress: Record<string, Reported>;
+}) {
   const attempt = row.attempt;
+  const reported = attempt ? progress[attempt.run_id] : undefined;
   const elapsed = useElapsed(
     attempt?.state === 'running' ? attempt.started_at_ms : undefined,
-    attempt ? progress[attempt.run_id] : undefined,
+    reported?.elapsed,
   );
   if (row.waiting) {
     const text = waitingText(row.waiting.ahead);
@@ -774,7 +787,7 @@ function RowState({ row, progress }: { row: GradingProjectRow; progress: Record<
   }
   if (attempt) {
     const running = attempt.state === 'running';
-    const text = attemptText(attempt, running ? elapsed : undefined);
+    const text = attemptText(attempt, running ? elapsed : undefined, reported?.step);
     const when =
       attempt.state === 'running'
         ? `Started ${timeText(attempt.started_at_ms)}`

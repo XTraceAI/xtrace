@@ -380,7 +380,12 @@ fn a_good_run_is_saved_kept_without_work_and_its_staging_removed() {
         .map(|arg| arg.as_str().unwrap())
         .collect();
     let add_dir = argv.iter().position(|arg| *arg == "--add-dir").unwrap();
-    for path in &argv[add_dir + 1..] {
+    // The two folders after `--add-dir`; only the output format follows.
+    assert_eq!(
+        argv[add_dir + 3..],
+        ["--output-format", "stream-json", "--verbose"]
+    );
+    for path in &argv[add_dir + 1..add_dir + 3] {
         assert!(!path.contains(char::is_whitespace), "{path}");
         assert!(path.starts_with(world.staging_root(&run_id).to_str().unwrap()));
     }
@@ -406,6 +411,57 @@ fn a_good_run_is_saved_kept_without_work_and_its_staging_removed() {
     let last = seen.progress.last().unwrap();
     assert_eq!(last.state, GradingProgressState::Finished);
     assert!(seen.progress.iter().all(|report| report.run_id == run_id));
+}
+
+/// Prints Claude Code's stream-json start and a script run, waits for `go`
+/// in the marks folder, then writes a good result and the final line.
+const STEPPING: &str = "def say(value):\n    print(json.dumps(value), flush=True)\n\
+     say({'type': 'system', 'subtype': 'init'})\n\
+     say({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Bash', \
+     'input': {'command': 'python3 ' + G + '/../skill/scripts/analyze.py'}}]}})\n\
+     open(READY, 'w').close()\n\
+     while not os.path.exists(os.path.join(MARKS, 'go')):\n    time.sleep(0.02)\n\
+     write('report.html', '<p>report</p>')\n\
+     write('result.json', GOOD)\n\
+     say({'type': 'result', 'subtype': 'success'})";
+
+#[test]
+fn progress_carries_the_step_the_run_is_on_while_it_runs() {
+    let world = World::new(STEPPING);
+    let service = world.service();
+    let run_id = started(service.start(world.project_path(), "claude-md-doctor"));
+    world.wait_ready();
+    let until = Instant::now() + Duration::from_secs(30);
+    let stepped = || {
+        lock(&world.seen)
+            .progress
+            .iter()
+            .any(|report| report.step.as_deref() == Some("Running analyze.py"))
+    };
+    while !stepped() {
+        assert!(Instant::now() < until, "no report carried the step");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::fs::write(world.root.join("go"), "").unwrap();
+    let row = world.settle(&service, &run_id);
+    assert_eq!(row.status, GradeStatus::Succeeded);
+    let seen = lock(&world.seen);
+    let first = seen.progress.first().unwrap();
+    assert_eq!(
+        (first.state, first.step.as_deref()),
+        (GradingProgressState::Running, None)
+    );
+    let last = seen.progress.last().unwrap();
+    assert_eq!(
+        (last.state, last.step.as_deref()),
+        (GradingProgressState::Finished, None)
+    );
+    // Only the rule's labels are ever reported: never a path.
+    for report in seen.progress.iter() {
+        if let Some(step) = &report.step {
+            assert!(!step.contains('/'), "{step}");
+        }
+    }
 }
 
 #[test]
@@ -2392,7 +2448,7 @@ fn maker_world(maker: &str, grading: &str) -> World {
          \x20       f.write(json.dumps({{'prompt': sys.argv[2], 'out': OUT, 'cwd': TARGET, 'argv': sys.argv}}) + '\\n')\n\
          {maker}\n\
          else:\n\
-         \x20   SKILL_DIR = sys.argv[-1]\n\
+         \x20   SKILL_DIR = sys.argv[sys.argv.index('--add-dir') + 2]\n\
          \x20   open(os.path.join(MARKS, 'staged-rubric'), 'w').write(open(os.path.join(SKILL_DIR, 'xtrace-rubric.md')).read() if os.path.exists(os.path.join(SKILL_DIR, 'xtrace-rubric.md')) else '')\n\
          {grading}\n",
         maker = indent(maker),
@@ -2469,7 +2525,14 @@ fn rubric_at(folder: &Path) -> PathBuf {
 
 #[test]
 fn a_made_rubric_is_saved_next_to_the_skill_and_the_skill_becomes_ready() {
-    let world = maker_world("write('xtrace-rubric.md', MADE)", WRITE_GOOD);
+    // The run says it reads the skill, and takes a moment, before it writes.
+    let world = maker_world(
+        "print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', \
+         'name': 'Read', 'input': {'file_path': TARGET + '/SKILL.md'}}]}}), flush=True)\n\
+         time.sleep(0.5)\n\
+         write('xtrace-rubric.md', MADE)",
+        WRITE_GOOD,
+    );
     let service = world.service();
     let readme = install(&world, "readme", None);
     let row = installed_row(&service, &readme);
@@ -2520,9 +2583,19 @@ fn a_made_rubric_is_saved_next_to_the_skill_and_the_skill_becomes_ready() {
         (first.state, first.location.as_str()),
         (GradingProgressState::Running, readme.as_str())
     );
+    assert_eq!(first.step, None, "no step before the run started");
+    let last = seen.rubric_progress.last().unwrap();
     assert_eq!(
-        seen.rubric_progress.last().unwrap().state,
-        GradingProgressState::Finished
+        (last.state, last.step.as_deref()),
+        (GradingProgressState::Finished, None)
+    );
+    // While it read the skill, a report said so, with the file's name only.
+    assert!(
+        seen.rubric_progress
+            .iter()
+            .any(|report| report.step.as_deref() == Some("Reading SKILL.md")),
+        "{:?}",
+        seen.rubric_progress
     );
     assert!(
         seen.rubric_progress

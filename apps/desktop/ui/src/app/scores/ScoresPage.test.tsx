@@ -930,6 +930,16 @@ it('while one grading runs, another Grade is asked of native, which puts it in l
   await mount('/scores', source);
   const doctor = await waitFor(() => card('CLAUDE.md doctor'));
   expect(within(doctor).getByText('Grading · 0 h 4 m')).toBeTruthy();
+  // A reported step takes the place of "Grading" on the card.
+  act(() =>
+    source.emit(events.gradingProgress, {
+      run_id: '00000000-0000-4000-8000-000000000004',
+      state: 'running',
+      elapsed_seconds: 250,
+      step: 'Reading CLAUDE.md',
+    }),
+  );
+  await waitFor(() => expect(within(doctor).getByText('Reading CLAUDE.md · 0 h 4 m')).toBeTruthy());
   // The row shows the run, so no notice repeats it.
   expect(screen.queryByTestId('running-elsewhere')).toBeNull();
   fireEvent.click(within(doctor).getByRole('link', { name: 'CLAUDE.md doctor' }));
@@ -974,17 +984,43 @@ it('shows the elapsed time progress reports, and reads again for a run it does n
   await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
   const runId = '00000000-0000-4000-8000-000000000004';
   act(() =>
-    source.emit(events.gradingProgress, { run_id: runId, state: 'running', elapsed_seconds: 185 }),
+    source.emit(events.gradingProgress, {
+      run_id: runId,
+      state: 'running',
+      elapsed_seconds: 185,
+      step: null,
+    }),
   );
   await waitFor(() => expect(rows()[3]!.textContent).toContain('Grading now · 0 h 3 m'));
+  // Once a step is reported, it takes the place of "Grading now".
+  act(() =>
+    source.emit(events.gradingProgress, {
+      run_id: runId,
+      state: 'running',
+      elapsed_seconds: 190,
+      step: 'Running analyze.py',
+    }),
+  );
+  await waitFor(() => expect(rows()[3]!.textContent).toContain('Running analyze.py · 0 h 3 m'));
   const before = controls.overview.mock.calls.length;
-  // A payload that is not a progress report changes nothing.
+  // A payload that is not a progress report changes nothing: a step that is
+  // not text makes the whole report unreadable.
   act(() => source.emit(events.gradingProgress, { run_id: runId, state: 'odd' }));
+  act(() =>
+    source.emit(events.gradingProgress, {
+      run_id: runId,
+      state: 'running',
+      elapsed_seconds: 300,
+      step: 7,
+    }),
+  );
+  expect(rows()[3]!.textContent).toContain('Running analyze.py · 0 h 3 m');
   act(() =>
     source.emit(events.gradingProgress, {
       run_id: 'another',
       state: 'running',
       elapsed_seconds: 1,
+      step: null,
     }),
   );
   await waitFor(() => expect(controls.overview.mock.calls.length).toBeGreaterThan(before));
@@ -1037,6 +1073,19 @@ it('offers Cancel for a going run whose project is no longer listed, on both pag
   const notice = await screen.findByTestId('running-elsewhere');
   expect(notice.textContent).toBe(
     '/work/old-atlas is being graded with CLAUDE.md doctor · 0 h 4 mThis project is no longer in your project list, so no row shows it.Cancel',
+  );
+  act(() =>
+    source.emit(events.gradingProgress, {
+      run_id: '00000000-0000-4000-8000-000000000004',
+      state: 'running',
+      elapsed_seconds: 240,
+      step: 'Running analyze.py',
+    }),
+  );
+  await waitFor(() =>
+    expect(within(notice).getByText(/Running analyze\.py/).textContent).toBe(
+      '/work/old-atlas is being graded with CLAUDE.md doctor · Running analyze.py · 0 h 4 m',
+    ),
   );
   fireEvent.click(within(notice).getByRole('button', { name: 'Cancel grading /work/old-atlas' }));
   await waitFor(() =>
@@ -1372,10 +1421,25 @@ it('shows the rubric job’s reported elapsed time and reads again when it is ov
       location,
       state: 'running',
       elapsed_seconds: 95,
+      step: null,
     }),
   );
   await waitFor(() =>
     expect(installedRow(dialog, 'deploy').textContent).toContain('Making a rubric · 0 h 2 m'),
+  );
+  act(() =>
+    source.emit(events.gradingRubricProgress, {
+      job_id: jobId,
+      location,
+      state: 'running',
+      elapsed_seconds: 96,
+      step: 'Reading SKILL.md',
+    }),
+  );
+  await waitFor(() =>
+    expect(installedRow(dialog, 'deploy').textContent).toContain(
+      'Making a rubric · Reading SKILL.md · 0 h 2 m',
+    ),
   );
   const before = controls.installed.mock.calls.length;
   // Not a report: nothing changes.
@@ -1387,6 +1451,7 @@ it('shows the rubric job’s reported elapsed time and reads again when it is ov
       location,
       state: 'finished',
       elapsed_seconds: 100,
+      step: null,
     }),
   );
   await waitFor(() => expect(controls.installed.mock.calls.length).toBeGreaterThan(before));
