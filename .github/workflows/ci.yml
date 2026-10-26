@@ -21,6 +21,22 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
 jobs:
+  selection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run_ui: ${{ steps.select.outputs.run_ui }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - id: select
+        run: node scripts/ci/select-ui.mjs
+
   policy:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -71,6 +87,8 @@ jobs:
       - run: pnpm check
 
   ui:
+    needs: selection
+    if: ${{ needs.selection.outputs.run_ui == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -104,6 +122,8 @@ jobs:
           E2E_PORT: '5174'
 
   ui-extras:
+    needs: selection
+    if: ${{ needs.selection.outputs.run_ui == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -157,7 +177,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: ${{ always() }}
-    needs: [policy, check, ui, ui-extras, security]
+    needs: [selection, policy, check, ui, ui-extras, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

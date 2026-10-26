@@ -2,10 +2,14 @@ import { requireSuccessfulJobs } from './policy.mjs';
 
 try {
   const results = JSON.parse(process.env.NEEDS_JSON);
-  // Every job runs for each supported event. Hooks report explicit absence in a
-  // successful job; no skipped dependency is silently promoted to success.
-  requireSuccessfulJobs(results, ['policy', 'check', 'ui', 'ui-extras', 'security']);
-  console.log('Every required CI job succeeded.');
+  const runUi = results?.selection?.outputs?.run_ui;
+  if (!['true', 'false'].includes(runUi)) throw new Error('Invalid UI selection');
+  requireSuccessfulJobs(
+    results,
+    ['selection', 'policy', 'check', 'ui', 'ui-extras', 'security'],
+    runUi === 'false' ? ['ui', 'ui-extras'] : [],
+  );
+  console.log('Every required CI job succeeded or was explicitly inapplicable.');
 } catch {
   console.error(
     'CI aggregate failed: a required job was missing, skipped, cancelled or unsuccessful.',

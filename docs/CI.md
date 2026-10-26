@@ -5,14 +5,15 @@ Native validation runs locally before merging and on a hosted macOS 14 runner
 only when explicitly preparing a downloadable release. Public disclosure review
 remains manual. These workflows do not publish releases or change repository rules.
 
-| Job         | Required hosted coverage                                                                  |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `policy`    | Reviewed source-commit DCO and substantive contribution descriptions.                     |
-| `check`     | Types, lint, formatting and unit tests, run once.                                         |
-| `ui`        | The full main WebKit browser suite, split across four machines.                           |
-| `ui-extras` | WebKit gallery smoke and production-exclusion checks, run once.                           |
-| `security`  | CI/supply-chain/publication regressions and source-history/diff scanning.                 |
-| `ci-ok`     | Requires all five jobs to succeed; rejects missing, skipped, cancelled or failed results. |
+| Job         | Required hosted coverage                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `policy`    | Reviewed source-commit DCO and substantive contribution descriptions.                    |
+| `check`     | Types, lint, formatting and unit tests, run once.                                        |
+| `ui`        | The full main WebKit browser suite, split across four machines.                          |
+| `ui-extras` | WebKit gallery smoke and production-exclusion checks, run once.                          |
+| `security`  | CI/supply-chain/publication regressions and source-history/diff scanning.                |
+| `selection` | Selects browser jobs conservatively from verified PR event data and Git changes.         |
+| `ci-ok`     | Requires selection and all applicable jobs; permits only explicitly unselected UI skips. |
 
 `ci-ok` certifies these hosted checks only. It does not certify native tests,
 dependency notices, local evidence or disclosure approval. Maintainers review
@@ -32,6 +33,29 @@ test limits, retries and worker settings are unchanged. CI prints browser
 failures as they finish; the HTML reporter remains enabled. Successful hosted
 runs of all four shards and `ui-extras` are required before claiming the full
 browser gate passed.
+
+On ordinary PR opens, reopens, source updates and ready-for-review events,
+`selection` can skip both `ui` and `ui-extras` when every changed path is
+allowlisted documentation or PR preparation tooling. The allowlist covers Markdown
+under `docs/` and `change-notes/`, named root contribution/documentation files,
+the PR template, the PR preparation skill, and direct `scripts/pr/*.mjs` files.
+The root `package.json` is allowed only when its parsed contents are identical
+apart from `scripts.test:ci`. Dependencies, other scripts, build files, UI files,
+non-Markdown documentation inputs and every unknown path keep browser tests.
+Renames check both old and new paths.
+
+The selector verifies the event's base and source commits and the checked-out
+HEAD, accepting only that source commit or its GitHub merge with the stated
+base. Missing or malformed events, unavailable Git revisions, mismatched commits
+and uncertain diffs keep the full browser suite. Main pushes, merge groups and
+target-branch edits always keep it, including edits calling the reusable CI.
+The selector installs no dependencies and receives no API credentials.
+
+`policy`, `check` and `security` still run for every supported full CI event.
+`ci-ok` always runs and requires a successful selector with an exact `true` or
+`false` output. Only `ui` and `ui-extras` may be skipped after `false`; failures,
+cancellations, missing jobs and other skips still fail. A skipped browser job
+does not establish browser coverage for that commit.
 
 The full 96-story gallery sweep runs locally before merging gallery, shared UI,
 theme, font or brand-asset changes. Record its source SHA and results in the PR;
