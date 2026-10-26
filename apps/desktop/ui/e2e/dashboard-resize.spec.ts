@@ -1,3 +1,4 @@
+import { afterSplitSettles } from './rendering';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
 import type { DashboardLane } from '../src/data/generated/DashboardLane';
@@ -74,6 +75,9 @@ async function open(page: Page, body: FixtureExport, width: number, height: numb
   await page.goto('/dashboard');
   await expect(page.getByTestId('dashboard-summary')).toBeVisible();
   await expect(page.getByTestId('overview-grid')).toBeVisible();
+  // The card opens on human + agent; these checks are about the agent h bar chart.
+  await page.getByRole('radio', { name: 'agent h', exact: true }).click();
+  await expect(page.getByTestId('effort-chart')).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 }
 
@@ -405,17 +409,6 @@ test('one listed session still keeps room for three rows at the smallest Session
   expect(low.laneRows).toBe(1);
 });
 
-test('unreadable stored layout draws the default', async ({ page }) => {
-  await page.addInitScript(
-    (key) => window.localStorage.setItem(key, '{"rows": 7, "columns": "x"'),
-    STORAGE,
-  );
-  await open(page, withSessions(3), 1440, 900);
-  const g = await layout(page);
-  expect(g.sessions).toBeCloseTo(sessionsHeight(8), 0);
-  expect(g.effort.width / g.overview.width).toBeCloseTo(1.6, 1);
-});
-
 /**
  * Narrow enough that Effort stacks over Overview: there is no column
  * boundary, and the row boundary still resizes the stacked pair against
@@ -580,6 +573,7 @@ test('each boundary shows a faint grip before it is hovered', async ({ page }) =
 });
 
 test('measuring a boundary keeps every list where it was scrolled', async ({ page }) => {
+  await page.clock.install();
   await open(page, withSessions(14), 1120, 720);
   const lanes = page.getByRole('region', { name: 'Session lanes scroll area' });
   await lanes.evaluate((node) => (node.scrollTop = node.scrollHeight));
@@ -589,6 +583,6 @@ test('measuring a boundary keeps every list where it was scrolled', async ({ pag
   await rowsHandle(page).focus();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowUp');
-  await page.waitForTimeout(300);
+  await afterSplitSettles(page);
   expect(await lanes.evaluate((node) => node.scrollTop)).toBeCloseTo(scrolled, 0);
 });

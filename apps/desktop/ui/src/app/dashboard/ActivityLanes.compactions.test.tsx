@@ -286,7 +286,7 @@ it('keeps a running session’s count when a re-read and its retry both find it 
   watch.observe(row('first'), { subtree: true, childList: true, attributes: true });
   act(() => source.emit(events.turnCompleted));
   await waitFor(() => expect(read).toHaveBeenCalledTimes(before + 2));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await act(async () => {});
   watch.disconnect();
   expect(within(row('first')).getByLabelText('Recorded compactions: 7')).toBeTruthy();
   // Never a dash or a spinner in between.

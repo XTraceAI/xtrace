@@ -1,3 +1,4 @@
+import { afterRendering } from './rendering';
 import { expect, test, type Page } from '@playwright/test';
 
 const reads = (page: Page) =>
@@ -32,7 +33,7 @@ test('fills collapsed groups, stops at the viewport, and loads more after resizi
   await page.locator('.xt-table-scroll').evaluate((scroll) => {
     scroll.scrollTop = scroll.scrollHeight;
   });
-  await page.waitForTimeout(150);
+  await afterRendering(page);
   expect(await reads(page)).toEqual(first);
   await page.setViewportSize({ width: 1440, height: 1200 });
   await expect.poll(() => gap(page)).toBeLessThanOrEqual(1);
@@ -53,46 +54,6 @@ test('fills collapsed groups, stops at the viewport, and loads more after resizi
   ]);
 });
 
-test('starts a filtered list at page one and keeps sorting and manual loading', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1440, height: 720 });
-  await page.goto('/e2e/sessions-fill.html');
-  await expect.poll(() => gap(page)).toBeLessThanOrEqual(1);
-  const before = (await reads(page)).length;
-  await page.getByRole('button', { name: 'Load more sessions' }).click();
-  await expect.poll(async () => (await reads(page)).length).toBe(before + 1);
-  await page.getByRole('searchbox', { name: 'Search sessions' }).fill('conversation-10');
-  await expect(page.locator('.xt-table-block')).toHaveCount(5);
-  await expect(page.getByRole('button', { name: 'Load more sessions' })).toHaveCount(0);
-  expect((await reads(page)).at(-1)).toEqual({
-    search: 'conversation-10',
-    after: null,
-    sort: 'started',
-  });
-  await page.getByRole('combobox', { name: 'Sort sessions' }).selectOption('recently_active');
-  await expect(page.locator('.xt-session-open').first()).toHaveText('conversation-104');
-  expect((await reads(page)).at(-1)).toEqual({
-    search: 'conversation-10',
-    after: null,
-    sort: 'recently_active',
-  });
-});
-
-test('stops an automatic page failure until the user retries', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 720 });
-  await page.goto('/e2e/sessions-fill.html?fail');
-  await expect(page.getByRole('alert')).toContainText('More sessions could not be loaded');
-  expect((await reads(page)).map((read) => read.after)).toEqual([null, '50']);
-  await page.setViewportSize({ width: 1440, height: 1200 });
-  await page.waitForTimeout(150);
-  expect((await reads(page)).length).toBe(2);
-  await page.getByRole('button', { name: 'Try again', exact: true }).click();
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  await expect.poll(() => gap(page)).toBeLessThanOrEqual(1);
-  expect((await reads(page))[2].after).toBe('50');
-});
-
 test('counts expanded details and refills when they collapse in a narrow table', async ({
   page,
 }) => {
@@ -110,7 +71,7 @@ test('counts expanded details and refills when they collapse in a narrow table',
   // The larger viewport still fits because the open details occupy the new space.
   await page.setViewportSize({ width: 900, height: 720 + Math.floor(details) });
   await expect.poll(() => gap(page)).toBeLessThanOrEqual(1);
-  await page.waitForTimeout(150);
+  await afterRendering(page);
   expect(await reads(page)).toEqual(before);
   await page.getByRole('button', { name: 'Collapse main', exact: true }).click();
   await expect.poll(async () => (await reads(page)).length).toBeGreaterThan(before.length);

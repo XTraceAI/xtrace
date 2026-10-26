@@ -15,7 +15,7 @@ use xt_store::{
     },
 };
 use xtrace_desktop::{
-    dashboard::{assemble, fixture_catalog},
+    dashboard::{assemble, day_sessions, fixture_catalog},
     dto::{
         DashboardMetrics, MetricClock, SessionChildCheck, SessionPage, SessionParentContext,
         SessionParentLink, SessionQuery, SubSessionEvidence, session_page, session_row,
@@ -849,5 +849,129 @@ fn a_listed_parent_carries_its_older_sub_sessions_with_their_whole_cost() {
             .lane_sessions
             .iter()
             .all(|s| s.sub_sessions_not_shown.is_none())
+    );
+}
+
+/// A day's sessions box reads its sessions' context the way the Dashboard's
+/// Sessions section reads its own: each sent session carries its verified
+/// parent, known-child bit and display check, and a direct parent that had
+/// no agent time that day comes as a context-only entry — never a session of
+/// the day, never measured, and its own parent not followed. A parent that
+/// is itself one of the day's sessions is not repeated as context, and the
+/// day still adds up to the report's agent time.
+#[test]
+fn a_days_sessions_carry_the_context_the_list_rules_read_with_their_parents() {
+    let root = tempfile::tempdir().unwrap();
+    let db = root.path().join("xtrace.db");
+    let old = |hours: i64| (now() - SignedDuration::from_hours(hours)).to_string();
+    let worked = |native: &str, from: i64, minutes: i64| {
+        vec![
+            record(&format!("{native}-a"), &at(from), false, 7),
+            record(&format!("{native}-b"), &at(from + minutes), false, 7),
+        ]
+    };
+    {
+        let mut store = Store::open(&db).unwrap();
+        // The day's sessions: a parent and its child, a known child whose
+        // parent is not indexed, and a leaf whose parent did nothing that
+        // day; that parent's own parent is indexed and idle too.
+        codex(&mut store, PARENT, 1, &worked("parent", 60, 10));
+        codex(&mut store, CHILD, 2, &worked("child", 62, 4));
+        codex(&mut store, ORPHAN, 3, &worked("orphan", 100, 3));
+        codex(&mut store, LEAF, 4, &worked("leaf", 200, 5));
+        codex(
+            &mut store,
+            MIDDLE,
+            5,
+            &[record("middle-h", &old(24 * 5), true, 0)],
+        );
+        codex(
+            &mut store,
+            GRANDPARENT,
+            6,
+            &[record("grand-h", &old(24 * 5), true, 0)],
+        );
+        store
+            .record_session_creations(
+                &[
+                    spawn(CHILD, PARENT),
+                    spawn(ORPHAN, UNINDEXED),
+                    spawn(LEAF, MIDDLE),
+                    spawn(MIDDLE, GRANDPARENT),
+                ],
+                1,
+            )
+            .unwrap();
+    }
+    let metrics = MetricsDb::open(&db).unwrap();
+    let report = dashboard(&metrics);
+    let date = "2026-09-07";
+    let card = day_sessions(&metrics, 7, report.window.end_ms, date, TimeZone::UTC).unwrap();
+    // The day's own sessions, the most time first.
+    let sent: Vec<(String, u64)> = card
+        .sessions
+        .iter()
+        .map(|s| (s.session_id.clone(), s.agent_ms / 60_000))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            (id(PARENT), 10),
+            (id(LEAF), 5),
+            (id(CHILD), 4),
+            (id(ORPHAN), 3)
+        ]
+    );
+    let of = |native: &str| {
+        let s = card
+            .sessions
+            .iter()
+            .find(|s| s.session_id == id(native))
+            .unwrap();
+        (s.parent.clone(), s.known_child, s.child_check)
+    };
+    // A session that is no known child has had no display check here.
+    assert_eq!(
+        of(PARENT),
+        (None, Some(false), Some(SessionChildCheck::Checking))
+    );
+    assert_eq!(
+        of(CHILD),
+        (
+            Some(parent_link(PARENT)),
+            Some(true),
+            Some(SessionChildCheck::Child)
+        )
+    );
+    // A known child whose parent is not indexed has no verified parent.
+    assert_eq!(
+        of(ORPHAN),
+        (None, Some(true), Some(SessionChildCheck::Child))
+    );
+    assert_eq!(
+        of(LEAF),
+        (
+            Some(parent_link(MIDDLE)),
+            Some(true),
+            Some(SessionChildCheck::Child)
+        )
+    );
+    // Only the idle direct parent is context; its own parent is named on
+    // it, not read.
+    assert_eq!(
+        card.referenced_parents,
+        [parent_context(MIDDLE, true, Some(parent_link(GRANDPARENT)))]
+    );
+    // The day still adds up to the report's.
+    let day = report
+        .leverage
+        .by_day
+        .iter()
+        .find(|day| day.date == date)
+        .unwrap();
+    assert_eq!(card.agent_ms, day.agent_ms);
+    assert_eq!(
+        card.sessions.iter().map(|s| s.agent_ms).sum::<u64>(),
+        day.agent_ms
     );
 }

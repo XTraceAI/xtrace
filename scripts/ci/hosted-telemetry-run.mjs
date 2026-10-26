@@ -65,7 +65,10 @@ export async function removeTelemetryProfiles(session, remove = rm) {
 async function prepareProbe({ source, owned, checked, compilerEnvironment }) {
   const bundle = join(owned, 'Telemetry Proxy Probe.app');
   await mkdir(join(bundle, 'Contents/MacOS'), { recursive: true });
-  const helper = await readFile(join(source, 'hosted-launch.swift'), 'utf8');
+  const helper = await readFile(
+    join(source, 'hosted-launch-telemetry-environment-policy.swift'),
+    'utf8',
+  );
   const template = await readFile(join(source, 'hosted-telemetry-probe.swift'), 'utf8');
   const swift = join(owned, 'telemetry-probe.swift');
   await writeFile(swift, prepareProbeSource(helper, template), { flag: 'wx' });
@@ -424,43 +427,7 @@ export async function runTelemetryPhases(context, session) {
         30_000,
         'Blocked default telemetry attempt',
       );
-    if (phase === 'notice') {
-      // The notice is in the Welcome page's tree, but the pinned bar keeps it
-      // from counting as shown. Opening the Dashboard shows the corner card,
-      // which records it; only then may the blocked attempt happen.
-      await ui('telemetry-notice');
-      // Nothing may be sent while only Welcome is open: the attempt this phase
-      // waits for must come from the corner card that the press brings up.
-      // The snapshot is kept in the report even when the check fails.
-      phaseReport.beforeDashboard = await telemetryProxyState(proxy);
-      requireNoTelemetryAttempt(
-        phaseReport.beforeDashboard,
-        'from the Welcome page before Open Dashboard was pressed',
-      );
-      await ui('telemetry-dashboard-notice');
-      await attempt();
-      await ui('telemetry-turn-off');
-    } else {
-      // Later restarts open on the Dashboard: Welcome is completed and the
-      // disclosure is recorded, so saved-on sends at startup without a click.
-      if (phase === 'saved-on') await attempt();
-      await ui(
-        phase === 'environment-off'
-          ? 'telemetry-environment-off'
-          : phase === 'saved-on'
-            ? 'telemetry-settings-on'
-            : 'telemetry-settings-off',
-      );
-      if (phase === 'saved-off') {
-        phaseReport.beforeEnable = await telemetryProxyState(proxy);
-        requireNoTelemetryAttempt(
-          phaseReport.beforeEnable,
-          'by the saved-off startup before enabling',
-        );
-        await ui('telemetry-settings-enable');
-      }
-      if (phase === 'saved-on') await ui('telemetry-settings-disable');
-    }
+    await runTelemetryPhase(phase, ui, attempt, telemetryProxyState, proxy, phaseReport);
     await stopOwner(owner, checked, helper, automationEnvironment, phase);
     phaseReport.exitConfirmed = true;
     phaseReport.afterExitInventory = await verifyAppInventory(release.bundle);
@@ -514,4 +481,128 @@ export async function unregisterTelemetryProbe(session, checked) {
 export async function telemetryProxiesHealthy(session) {
   for (const proxy of session.proxies)
     if (proxy.exit?.exitConfirmed !== true) await telemetryProxyState(proxy);
+}
+
+export async function finalizeHostedLaunch({
+  session,
+  report = { status: 'failed', releasedAppLaunched: false },
+  failure,
+  telemetryContext,
+  output,
+  budget,
+  staging,
+  launchAttempted,
+  receipt,
+  helper,
+  environmentFile,
+  automationEnvironment,
+  checked,
+  removeOwned,
+  resetProxyReserve = () => {},
+  cleanupTelemetry: cleanup = cleanupTelemetry,
+  telemetryCleanupFacts: facts = telemetryCleanupFacts,
+  stopTelemetryOwners: stopOwners = stopTelemetryOwners,
+  stopTelemetryProxies: stopProxies = stopTelemetryProxies,
+  rm: remove = rm,
+  exists: present,
+}) {
+  try {
+    if (session) {
+      await cleanup(session, {
+        stopOwners: async () => {
+          if (telemetryContext) await stopOwners(session, telemetryContext);
+        },
+        removeOwned,
+        stopProxies: () => {
+          resetProxyReserve();
+          return stopProxies(session, output, { budget });
+        },
+      });
+    } else {
+      if (launchAttempted && !report.exitConfirmed) {
+        if (!(await present(receipt)))
+          throw new Error('Launch outcome has no ownership receipt; app retained');
+        await checked(
+          'cleanup-stop',
+          helper,
+          ['stop', receipt, environmentFile],
+          20_000,
+          automationEnvironment,
+        );
+        report.exitConfirmed = true;
+      }
+      await removeOwned();
+    }
+    if (staging) {
+      if (session) session.stagingRemovalAttempted = true;
+      await remove(staging, { recursive: true });
+    }
+    if (session) session.stagingRemoved = true;
+    report.cleanupConfirmed = true;
+  } catch (error) {
+    if (session) session.cleanupFailed = true;
+    report.cleanupError = error.message;
+    if (error.proxyCleanupError) report.proxyCleanupError = error.proxyCleanupError;
+    failure ||= error;
+  }
+  if (session) {
+    const attempts = session.owners.filter((owner) => owner.kind === 'telemetry');
+    report.exitConfirmed =
+      attempts.some((owner) => owner.launchConfirmed === true) &&
+      attempts.every((owner) => owner.exited === true);
+    report.releasedAppLaunchAttempted = attempts.length > 0;
+    report.releasedAppLaunchOutcomeUnknown = attempts.some(
+      (owner) => owner.launchConfirmed !== true,
+    );
+    report.releasedAppLaunched = attempts.some((owner) => owner.launchConfirmed === true)
+      ? true
+      : attempts.length
+        ? null
+        : false;
+  }
+
+  if (session) report.telemetryCleanup = facts(session);
+  if (failure) report.error = failure.message;
+  else report.status = 'passed';
+  return { report, failure };
+}
+
+export async function runTelemetryPhase(phase, ui, attempt, readState, proxy, phaseReport) {
+  if (phase === 'notice') {
+    // The notice is in the Welcome page's tree, but the pinned bar keeps it
+    // from counting as shown. Opening the Dashboard shows the corner card,
+    // which records it; only then may the blocked attempt happen.
+    await ui('telemetry-notice');
+    // Nothing may be sent while only Welcome is open: the attempt this phase
+    // waits for must come from the corner card that the press brings up.
+    // The snapshot is kept in the report even when the check fails.
+    phaseReport.beforeDashboard = await readState(proxy);
+    requireNoTelemetryAttempt(
+      phaseReport.beforeDashboard,
+      'from the Welcome page before Open Dashboard was pressed',
+    );
+    await ui('telemetry-dashboard-notice');
+    await attempt();
+    await ui('telemetry-turn-off');
+  } else {
+    // Later restarts open on the Dashboard: Welcome is completed and the
+    // disclosure is recorded, so saved-on sends at startup without a click.
+    if (phase === 'saved-on') await attempt();
+    await ui(
+      phase === 'environment-off'
+        ? 'telemetry-environment-off'
+        : phase === 'saved-on'
+          ? 'telemetry-settings-on'
+          : 'telemetry-settings-off',
+    );
+    if (phase === 'saved-off') {
+      phaseReport.beforeEnable = await readState(proxy);
+      requireNoTelemetryAttempt(
+        phaseReport.beforeEnable,
+        'by the saved-off startup before enabling',
+      );
+      await ui('telemetry-settings-enable');
+    }
+    if (phase === 'saved-on') await ui('telemetry-settings-disable');
+  }
 }

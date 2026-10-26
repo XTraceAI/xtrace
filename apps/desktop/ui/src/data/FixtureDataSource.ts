@@ -5,6 +5,8 @@ import type { GradingSkillRemove } from './generated/GradingSkillRemove';
 import type { GradingRubricMake } from './generated/GradingRubricMake';
 import type { GradingLinkLookup } from './generated/GradingLinkLookup';
 import type { GradingLinkKeep } from './generated/GradingLinkKeep';
+import type { GradingRunDetails } from './generated/GradingRunDetails';
+import type { GradingReportOpen } from './generated/GradingReportOpen';
 import type { SessionPage } from './generated/SessionPage';
 import type { SessionRow } from './generated/SessionRow';
 import type { SessionSourceStatus } from './generated/SessionSourceStatus';
@@ -111,6 +113,9 @@ export class FixtureDataSource implements DataSource {
     linkCancel: async () => false,
     linkKeep: async (): Promise<GradingLinkKeep> => ({ state: 'not_configured' }),
     linkDiscard: async () => false,
+    /** No run is stored and no grade folder is read or opened. */
+    runDetails: async (): Promise<GradingRunDetails> => ({ state: 'not_configured' }),
+    openReport: async (): Promise<GradingReportOpen> => ({ state: 'not_configured' }),
   };
   private report(windowDays: number) {
     const report = this.fixture.dashboards.find((entry) => entry.window.days === windowDays);
@@ -216,6 +221,22 @@ export class FixtureDataSource implements DataSource {
     /** Nothing was started, so there is nothing to abandon. */
     cancel: async () => {},
   };
+  /**
+   * The sessions the export read through the native command for exactly this
+   * day of exactly this range's report, in its zone. A request the export did
+   * not read fails rather than being worked out here.
+   */
+  async daySessions(windowDays: number, windowEndMs: number, timezone: string, date: string) {
+    const entry = this.fixture.day_sessions.find(
+      (candidate) =>
+        candidate.window_days === windowDays &&
+        candidate.window_end_ms === windowEndMs &&
+        candidate.timezone === timezone &&
+        candidate.date === date,
+    );
+    if (!entry) throw new Error('The fixture export holds no sessions for this day.');
+    return structuredClone(entry.sessions);
+  }
   async tokensByHost(windowDays: number) {
     const report = this.report(windowDays);
     return structuredClone({ window: report.window, hosts: report.tokens_by_host });

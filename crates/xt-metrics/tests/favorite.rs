@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use serde_json::json;
 use std::path::PathBuf;
 use xt_fixtures::{Fixture, TempDb};
-use xt_metrics::{FavoriteModel, FavoriteUnknown, MetricsDb, PriceCatalog, Window};
+use xt_metrics::{FavoriteModel, FavoriteUnknown, MetricsDb, OutputShareOf, PriceCatalog, Window};
 use xt_store::{CanonicalRecord, retention::RetentionMode};
 mod report_support;
 fn fixture(id: &str) -> Fixture {
@@ -126,6 +126,25 @@ fn favorite_unknown_output_bounds_and_partial_output_observations() {
         );
         let r = query(&db);
         assert_eq!(r.model.as_deref(), expected);
+        if (a, b, u) == (100, 80, 50) {
+            // An unknown favorite still lists every model's part.
+            let shares: Vec<_> = r
+                .output_shares
+                .iter()
+                .map(|row| (&row.of, row.output_tokens))
+                .collect();
+            let model = |model: &str| OutputShareOf::Model {
+                model: model.into(),
+            };
+            assert_eq!(
+                shares,
+                [
+                    (&model("A"), 100),
+                    (&model("B"), 80),
+                    (&OutputShareOf::UnknownModel, 50),
+                ]
+            );
+        }
         if expected.is_none() {
             assert_eq!(r.unknown_reason, Some(FavoriteUnknown::UnknownModelOutput));
         } else {
@@ -143,6 +162,7 @@ fn favorite_unknown_output_bounds_and_partial_output_observations() {
         query(&db).unknown_reason,
         Some(FavoriteUnknown::NoMeasuredOutput)
     );
+    assert!(query(&db).output_shares.is_empty());
 }
 #[test]
 fn favorite_fully_measured_turn_tie_is_lexical_and_first_assistant_owns_turn() {

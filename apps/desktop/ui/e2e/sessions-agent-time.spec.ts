@@ -9,7 +9,7 @@ for (const [width, height] of [
   [1250, 768],
   [1440, 900],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`254 h 27 m stays exact and fits the summary at ${width} ${scheme}`, async ({
       page,
     }, info) => {

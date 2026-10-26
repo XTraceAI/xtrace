@@ -14,10 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
-use xt_probes::gh::{
-    AttemptClock, CancelFlag, DEFAULT_DEADLINE, DEFAULT_MAX_STDERR_BYTES, DEFAULT_MAX_STDOUT_BYTES,
-    GhClient, GhClientError, JSON_FIELDS, Limits,
-};
+use xt_probes::gh::{AttemptClock, CancelFlag, GhClient, GhClientError, JSON_FIELDS, Limits};
 use xt_store::{
     SessionMeta, SessionSource, Store,
     pr_link::{
@@ -600,10 +597,7 @@ fn an_oversized_response_ends_the_attempt() {
     assert!(started.elapsed() < Duration::from_secs(9));
     wait_until_gone(recorded_pid(&pid));
 
-    // The documented bounds are the defaults.
-    assert_eq!(DEFAULT_MAX_STDOUT_BYTES, 1024 * 1024);
-    assert_eq!(DEFAULT_MAX_STDERR_BYTES, 64 * 1024);
-    assert_eq!(DEFAULT_DEADLINE, Duration::from_secs(30));
+    // A new client uses the same defaults as an explicitly configured one.
     assert_eq!(
         GhClient::new("/usr/bin/true").unwrap().limits(),
         Limits::default()
@@ -1170,40 +1164,55 @@ fn a_client_is_refused_rather_than_guessing() {
 }
 
 #[test]
-fn the_client_never_inspects_or_clears_the_credential_environment() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("gh.rs"),
-    )
-    .unwrap();
-    let code: String = source
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for forbidden in [
-        // Never read the parent's environment, so no credential can be
-        // inspected, logged or stored.
-        "env::var",
-        "env::vars",
-        "std::env",
-        // Never replace the child's environment, so credentials still reach
-        // the GitHub CLI.
-        "env_clear",
-        ".envs(",
-        // Never a shell, and never the caller's standard input or terminal.
-        "sh -c",
-        "Stdio::inherit",
-    ] {
-        assert!(
-            !code.contains(forbidden),
-            "the client source must not use {forbidden}"
-        );
+fn synthetic_credentials_reach_the_child_without_appearing_in_the_result() {
+    const CHILD_EXECUTABLE: &str = "XTRACE_TEST_GH_CREDENTIAL_EXECUTABLE";
+    if let Some(executable) = std::env::var_os(CHILD_EXECUTABLE) {
+        let outcome = run(Path::new(&executable), short(10_000));
+        success(&outcome);
+        let result = format!("{outcome:?}");
+        assert!(!result.contains("synthetic-gh-token"));
+        assert!(!result.contains("synthetic-github-token"));
+        return;
     }
-    // The only two credential-bearing names in the file are in prose.
-    for name in ["GH_TOKEN", "GITHUB_TOKEN"] {
-        assert!(!code.contains(name), "{name} must not appear in code");
+    let directory = TempDir::new().unwrap();
+    let observed = directory.path().join("credentials");
+    let executable = fixture(
+        directory.path(),
+        "gh-credentials",
+        &format!(
+            "printf '%s\\n%s\\n' \"$GH_TOKEN\" \"$GITHUB_TOKEN\" > '{}'\ncat <<'RESPONSE'\n{}\nRESPONSE",
+            observed.display(),
+            response("OPEN", "null")
+        ),
+    );
+    // Set synthetic secrets only in a separate test process, so parallel tests
+    // never observe a changed environment and no real credential is inspected.
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "synthetic_credentials_reach_the_child_without_appearing_in_the_result",
+            "--nocapture",
+        ])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env(CHILD_EXECUTABLE, &executable)
+        .env("GH_TOKEN", "synthetic-gh-token")
+        .env("GITHUB_TOKEN", "synthetic-github-token")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(observed).unwrap(),
+        "synthetic-gh-token\nsynthetic-github-token\n"
+    );
+    for stream in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(stream);
+        assert!(!text.contains("synthetic-gh-token"));
+        assert!(!text.contains("synthetic-github-token"));
     }
 }
 

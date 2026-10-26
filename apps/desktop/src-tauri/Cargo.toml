@@ -18,7 +18,7 @@ minisign-verify = "=0.2.5"
 url = "=2.5.8"
 
 [features]
-fixtures = ["dep:xt-fixtures"]
+fixtures = ["dep:xt-fixtures", "xt-metrics/fixtures"]
 
 [dependencies]
 serde.workspace = true

@@ -1,8 +1,13 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import fixture from '../../../fixtures/F1.json';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { DataProvider } from '../../data/DataProvider';
+import type { SessionTitleControls } from '../../data/DataSource';
+import { FixtureDataSource } from '../../data/FixtureDataSource';
+import { events } from '../../data/ipc-names';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { HumanTimeline } from './HumanTimeline';
 
@@ -21,6 +26,13 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+
+const exported = () => structuredClone(fixture as FixtureExport);
+/** Where a session link landed. */
+function SessionPath() {
+  const location = useLocation();
+  return <p data-testid="session-path">{`${location.pathname}${location.search}`}</p>;
+}
 
 const H = 3_600_000;
 /** F1's 7-day report with synthetic stretches (not real history) on its last two days. */
@@ -49,7 +61,7 @@ function report(edit?: (report: DashboardMetrics) => void) {
 const mount = (r: DashboardMetrics) =>
   render(
     <ThemeProvider>
-      <HumanTimeline report={r} />
+      <HumanTimeline report={r} range="7d" />
     </ThemeProvider>,
   );
 
@@ -208,14 +220,14 @@ it('keeps your scroll position when the same range refreshes, and opens a new ra
     refreshed.window.end_ms += 1000;
     view.rerender(
       <ThemeProvider>
-        <HumanTimeline report={refreshed} />
+        <HumanTimeline report={refreshed} range="30d" />
       </ThemeProvider>,
     );
     expect(body.scrollTop).toBe(200);
     // Another range opens on today again.
     view.rerender(
       <ThemeProvider>
-        <HumanTimeline report={range(7)} />
+        <HumanTimeline report={range(7)} range="7d" />
       </ThemeProvider>,
     );
     expect(screen.getByTestId('human-timeline-body').scrollTop).toBe(1200);
@@ -260,6 +272,10 @@ function paired(edit?: (report: DashboardMetrics) => void) {
       day.agent_ms = 0;
       day.quarter_agents = Array.from({ length: 96 }, () => 0);
       day.busiest_quarter = null;
+      day.value = null;
+      day.at_or_below_even = null;
+      // Your time on the leverage day is the row's: measured as zero.
+      day.human_ms = 0;
     }
     const last = r.leverage.by_day.at(-1)!;
     // 00:00–00:30 one agent, 00:30–00:45 three, 08:00 a fifth of one.
@@ -272,72 +288,122 @@ function paired(edit?: (report: DashboardMetrics) => void) {
       last.quarter_agents[index] = agents;
     last.agent_ms = 5 * Q + Q / 5;
     last.busiest_quarter = 2;
+    // The report's own leverage for the day: 78 agent minutes per 30 of yours.
+    last.value = 2.6;
+    last.at_or_below_even = false;
+    last.human_ms = 0.5 * H;
     r.leverage.agent_ms = last.agent_ms;
     r.tiles.leverage = { ...r.tiles.leverage, value: 3.4 };
     edit?.(r);
   });
 }
-const mountPaired = (r: DashboardMetrics) =>
-  render(
-    <ThemeProvider>
-      <HumanTimeline report={r} withAgents />
-    </ThemeProvider>,
+/**
+ * The "human + agent" view reads each open day's sessions, so it is mounted
+ * with F1's fixture source (or `source`) and a router for the session links.
+ */
+async function mountPaired(r: DashboardMetrics, source = new FixtureDataSource(exported())) {
+  const view = render(
+    <MemoryRouter initialEntries={['/dashboard']}>
+      <ThemeProvider>
+        <DataProvider source={source}>
+          <Routes>
+            <Route path="/dashboard" element={<HumanTimeline report={r} range="7d" withAgents />} />
+            <Route path="/sessions/:sessionId" element={<SessionPath />} />
+          </Routes>
+        </DataProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
   );
+  await screen.findAllByTestId('human-day');
+  return view;
+}
 
-it('human + agent: the headline sets your time beside the agents’ and the leverage', () => {
-  mountPaired(paired());
+it('human + agent: the headline sets your time beside the agents’ and the leverage', async () => {
+  await mountPaired(paired());
   expect(screen.getByTestId('human-timeline').dataset.variant).toBe('paired');
   expect(screen.getByTestId('effort-headline').textContent).toBe(
-    '1 h 30 myou1 h 18 magents3.4×agent time per hour of yours',
+    '1 h 30 m1 h 18 m3.4×agent time per hour of yours',
   );
   // No break threshold here, and no colour legend.
   expect(screen.queryByText(/break threshold/)).toBeNull();
 });
 
-it('human + agent: one track per day, the agents’ ridge in it and only your total beside it', () => {
-  mountPaired(paired());
+it('human + agent: one track per day, your bands and the agents line in it, your total and the agents’ beside it', async () => {
+  await mountPaired(paired());
   const rows = screen.getAllByTestId('human-day');
   expect(rows).toHaveLength(7);
   for (const row of rows) expect(row.querySelectorAll('.xt-human-track')).toHaveLength(1);
-  // A day with no agent time draws no ridge.
-  const ridges = screen.getAllByTestId('agent-ridge');
-  expect(ridges).toHaveLength(1);
-  expect(rows[6]!.contains(ridges[0]!)).toBe(true);
-  expect(ridges[0]!.getAttribute('viewBox')).toBe('0 0 960 100');
-  // 3 agents on the report's scale of 10: 30% up, the 08:00 fifth of one 2%.
-  const path = ridges[0]!.querySelector('path')!;
-  expect(path.getAttribute('d')).toContain(' 25,70');
-  expect(path.getAttribute('d')).toContain(' 325,98');
-  expect(path.getAttribute('fill')).toMatch(/^url\(#xt-ridge-[\w-]+\)$/);
-  const gradient = path.getAttribute('fill')!.slice(5, -1);
-  expect(ridges[0]!.querySelector(`linearGradient[id="${gradient}"]`)).not.toBeNull();
-  // The right column is your time only; the agents' total is in the card.
-  expect(rows[6]!.querySelector('.xt-human-total')!.textContent).toBe('0 h 30 m');
-  expect(rows[6]!.textContent).toBe('Sep 70 h 30 m');
+  // A day with no agent time draws no line.
+  const lines = screen.getAllByTestId('agent-line');
+  expect(lines).toHaveLength(1);
+  expect(rows[6]!.contains(lines[0]!)).toBe(true);
+  expect(lines[0]!.getAttribute('viewBox')).toBe('0 0 960 26');
+  // 3 agents on the report's scale of 10: 30% of the way up (25 → 18.1);
+  // the 08:00 fifth of one 2% (24.54). An open, unfilled line.
+  const path = lines[0]!.querySelector('path')!;
+  expect(path.getAttribute('d')).toContain(' 25,18.1');
+  expect(path.getAttribute('d')).toContain(' 325,24.54');
+  expect(path.getAttribute('d')).not.toContain('Z');
+  expect(path.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+  // The line is drawn over your bands.
+  const track = rows[6]!.querySelector('.xt-human-track')!;
+  expect(track.lastElementChild).toBe(lines[0]);
+  expect(track.querySelectorAll('[data-testid="human-stretch"]')).toHaveLength(2);
+  // Your total, then the agents' (the report's whole-day agent time), in
+  // decimal hours on the row; the card keeps hours and minutes.
+  expect(
+    [...rows[6]!.querySelectorAll('.xt-human-total')].map((total) => total.textContent),
+  ).toEqual(['0.5 h', '1.3 h', '2.6×']);
+  expect(rows[6]!.textContent).toBe('Sep 70.5 h1.3 h2.6×');
+  // A day with no leverage says so in the meta colour, never a computed 0.
+  const leverage = screen.getAllByTestId('leverage-row-total');
+  expect(leverage.map((cell) => cell.textContent)).toEqual([...Array(6).fill('—'), '2.6×']);
+  expect(leverage[0]!.dataset.unknown).toBe('');
+  expect(leverage[6]!.dataset.unknown).toBeUndefined();
+  expect(screen.getByTestId('leverage-total-head').querySelector('svg')).not.toBeNull();
+  expect(screen.getAllByTestId('agent-row-total').map((total) => total.textContent)).toEqual([
+    ...Array(6).fill('0 h'),
+    '1.3 h',
+  ]);
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
   expect(rows[6]!.getAttribute('aria-label')).toBe(
-    'Sep 7: 30 minutes; 12:00 AM–12:30 AM, one message at 2:00 AM; agents: 1 hour 18 minutes, busiest 15 minutes at 12:30 AM · 3 agents',
+    'Sep 7: 30 minutes; 12:00 AM–12:30 AM, one message at 2:00 AM; agents: 1 hour 18 minutes, busiest 15 minutes at 12:30 AM · 3 agents; agent time per hour of yours: 2.6×; Enter opens the day’s sessions',
   );
+  // The person icon heads your column, the robot the agents'.
+  expect(screen.getByTestId('human-total-head').querySelector('svg')).not.toBeNull();
+  expect(screen.getByTestId('agent-total-head').querySelector('svg')).not.toBeNull();
 });
 
-it('human + agent: a taller quarter than the scale is drawn at the top', () => {
-  mountPaired(paired((r) => (r.leverage.by_day.at(-1)!.quarter_agents[2] = 14)));
-  expect(screen.getByTestId('agent-ridge').querySelector('path')!.getAttribute('d')).toContain(
-    ' 25,0',
+it('human + agent: the headline keys are named icons, without the words you and agents', async () => {
+  await mountPaired(paired());
+  expect(screen.getByRole('img', { name: 'Your time' }).querySelector('svg')).not.toBeNull();
+  expect(screen.getByRole('img', { name: 'Agent time' }).querySelector('svg')).not.toBeNull();
+  const headline = screen.getByTestId('effort-headline').textContent!;
+  expect(headline).not.toMatch(/\byou\b/);
+  expect(headline).not.toMatch(/\bagents\b/);
+});
+
+it('human + agent: a taller quarter than the scale is drawn at the top', async () => {
+  await mountPaired(paired((r) => (r.leverage.by_day.at(-1)!.quarter_agents[2] = 14)));
+  expect(screen.getByTestId('agent-line').querySelector('path')!.getAttribute('d')).toContain(
+    ' 25,2',
   );
 });
 
 it('human + agent: the day card adds agent time, the busiest quarter and the quarter under the pointer', async () => {
-  mountPaired(paired());
+  await mountPaired(paired());
   const last = screen.getAllByTestId('human-day').at(-1)!;
-  // Keyboard focus: the day's card without a pointer line.
+  // Keyboard focus: the day's card without a pointer line, and no sessions.
   fireEvent.focus(last);
   await screen.findByText('Busiest 15 min');
   expect(screen.getByText('12:30 AM · 3 agents')).toBeTruthy();
   expect(screen.getByText('Agent time').nextSibling!.textContent).toBe('1 h 18 m');
   expect(screen.getByTestId('agent-day-total').textContent).toBe('1 h 18 m');
+  expect(screen.getByTestId('leverage-day').textContent).toBe('Agent time per hour of yours2.6×');
   expect(screen.queryByTestId('agent-quarter')).toBeNull();
   expect(screen.queryByTestId('agent-hairline')).toBeNull();
+  expect(screen.queryByTestId('day-sessions-head')).toBeNull();
+  expect(screen.queryByRole('dialog')).toBeNull();
   // The pointer over 08:00–08:15 (a third of the track) names that quarter.
   const lane = last.querySelector<HTMLElement>('.xt-human-track')!;
   lane.getBoundingClientRect = () => ({ left: 0, width: 960, top: 0 }) as DOMRect;
@@ -346,12 +412,92 @@ it('human + agent: the day card adds agent time, the busiest quarter and the qua
   expect(screen.getByTestId('agent-quarter').textContent).toBe('8:00 AM–8:15 AM0.2 agents');
   fireEvent.pointerMove(lane, { clientX: 500 });
   expect(screen.getByTestId('agent-quarter').textContent).toBe('12:30 PM–12:45 PMno agents');
-  fireEvent.pointerLeave(lane);
+  // Onto the day's totals the card stays open and drops the quarter.
+  fireEvent.pointerLeave(lane, { relatedTarget: within(last).getByTestId('agent-row-total') });
+  expect(screen.queryByTestId('agent-hairline')).toBeNull();
+  expect(screen.queryByTestId('agent-quarter')).toBeNull();
+  // Off the day the card closes: it keeps the quarter until it has gone.
+  fireEvent.pointerMove(lane, { clientX: 321 });
+  fireEvent.pointerLeave(lane, { relatedTarget: document.body });
+  expect(screen.queryByTestId('agent-hairline')).toBeNull();
+  expect(screen.getByTestId('agent-quarter').textContent).toBe('8:00 AM–8:15 AM0.2 agents');
+  fireEvent.blur(last);
+  await waitFor(() => expect(screen.queryByText('Busiest 15 min')).toBeNull());
+  fireEvent.focus(last);
+  await screen.findByText('Busiest 15 min');
   expect(screen.queryByTestId('agent-quarter')).toBeNull();
 });
 
-it('human + agent: unknown human time still says so', () => {
-  mountPaired(
+it('human + agent: a day without leverage says none when your time was zero, unknown when it is unknown', async () => {
+  await mountPaired(
+    paired((r) => {
+      // Sep 1: your time unknown that day; the others measured as zero.
+      r.human_hours.current.by_day[0]!.active_ms = null;
+      r.leverage.by_day[0]!.human_ms = null;
+    }),
+  );
+  const rows = screen.getAllByTestId('human-day');
+  const cells = screen.getAllByTestId('leverage-row-total');
+  // The column draws a dash for both.
+  expect(cells[0]!.textContent).toBe('—');
+  expect(cells[1]!.textContent).toBe('—');
+  expect(rows[0]!.getAttribute('aria-label')).toMatch(
+    /; agent time per hour of yours: unknown; Enter opens the day’s sessions$/,
+  );
+  expect(rows[1]!.getAttribute('aria-label')).toMatch(
+    /; agent time per hour of yours: none; Enter opens the day’s sessions$/,
+  );
+  fireEvent.focus(rows[1]!);
+  await waitFor(() =>
+    expect(screen.getByTestId('leverage-day').textContent).toBe('Agent time per hour of yoursnone'),
+  );
+  fireEvent.blur(rows[1]!);
+  fireEvent.focus(rows[0]!);
+  await waitFor(() =>
+    expect(
+      screen
+        .getAllByTestId('leverage-day')
+        .some((line) => line.textContent === 'Agent time per hour of yoursunknown'),
+    ).toBe(true),
+  );
+});
+
+it('human + agent: a day the report marks at or below even is red, and says so in words', async () => {
+  await mountPaired(
+    paired((r) => {
+      const day = r.leverage.by_day[2]!;
+      day.value = 0.8;
+      day.at_or_below_even = true;
+      day.human_ms = 3_600_000;
+    }),
+  );
+  const cells = screen.getAllByTestId('leverage-row-total');
+  expect(cells[2]!.textContent).toBe('0.8×');
+  expect(cells[2]!.dataset.low).toBe('');
+  expect(cells[6]!.dataset.low).toBeUndefined();
+  const rows = screen.getAllByTestId('human-day');
+  expect(rows[2]!.getAttribute('aria-label')).toMatch(
+    /; agent time per hour of yours: 0\.8×, at or below even; Enter opens the day’s sessions$/,
+  );
+  expect(rows[6]!.getAttribute('aria-label')).toMatch(
+    /; agent time per hour of yours: 2\.6×; Enter opens the day’s sessions$/,
+  );
+  fireEvent.focus(rows[2]!);
+  await waitFor(() =>
+    expect(
+      screen
+        .getAllByTestId('leverage-day')
+        .some(
+          (line) =>
+            line.dataset.low === '' &&
+            line.textContent === 'Agent time per hour of yours0.8×at or below even',
+        ),
+    ).toBe(true),
+  );
+});
+
+it('human + agent: unknown human time still says so', async () => {
+  await mountPaired(
     paired((r) => {
       r.human_hours.current.active_ms = null;
       r.tiles.leverage = { ...r.tiles.leverage, value: null };
@@ -364,11 +510,19 @@ it('human + agent: unknown human time still says so', () => {
   );
 });
 
-it('the plain human h view draws no agent ridge, agent totals or pointer line', () => {
+it('the plain human h view draws no agents line, agent totals, person icon or pointer line', () => {
   mount(paired());
   expect(screen.getByTestId('human-timeline').dataset.variant).toBeUndefined();
-  expect(screen.queryAllByTestId('agent-ridge')).toHaveLength(0);
+  expect(screen.queryAllByTestId('agent-line')).toHaveLength(0);
+  expect(screen.queryByTestId('human-total-head')).toBeNull();
+  expect(screen.queryByTestId('agent-total-head')).toBeNull();
+  expect(screen.queryAllByTestId('agent-row-total')).toHaveLength(0);
+  expect(screen.queryAllByTestId('leverage-row-total')).toHaveLength(0);
+  expect(screen.queryByTestId('leverage-total-head')).toBeNull();
   expect(screen.queryAllByTestId('agent-day-total')).toHaveLength(0);
+  expect(
+    screen.getAllByTestId('human-day').at(-1)!.querySelectorAll('.xt-human-total'),
+  ).toHaveLength(1);
   const track = screen
     .getAllByTestId('human-day')
     .at(-1)!
@@ -376,4 +530,424 @@ it('the plain human h view draws no agent ridge, agent totals or pointer line', 
   track.getBoundingClientRect = () => ({ left: 0, width: 960, top: 0 }) as DOMRect;
   fireEvent.pointerMove(track, { clientX: 321 });
   expect(screen.queryByTestId('agent-hairline')).toBeNull();
+});
+
+const F1_SESSION = '00000000-0000-4000-8000-000000000001';
+/** A day's open sessions box. */
+const sessionsBox = (day = 'Sep 7') => screen.findByRole('dialog', { name: `Sessions on ${day}` });
+/** The pointer onto a day, then onto its date. */
+function hoverDate(row: HTMLElement) {
+  const date = within(row).getByRole('button', { name: /^Sessions on / });
+  fireEvent.mouseEnter(row);
+  fireEvent.mouseEnter(date);
+  return date;
+}
+
+it('human + agent: hovering a date opens its sessions box instead of the day’s card, and a session opens from it', async () => {
+  const source = new FixtureDataSource(exported());
+  const read = vi.spyOn(source, 'daySessions');
+  await mountPaired(paired(), source);
+  const last = screen.getAllByTestId('human-day').at(-1)!;
+  // The rest of the day shows its card, without sessions; nothing is read.
+  fireEvent.mouseEnter(last);
+  await screen.findByText('Busiest 15 min');
+  expect(screen.queryByTestId('day-sessions-head')).toBeNull();
+  expect(read).not.toHaveBeenCalled();
+  // The date: a named popup trigger, never a tab stop.
+  const date = within(last).getByRole('button', { name: 'Sessions on Sep 7' });
+  expect(date.textContent).toBe('Sep 7');
+  expect(date.tabIndex).toBe(-1);
+  expect(date.getAttribute('aria-haspopup')).toBe('dialog');
+  fireEvent.mouseEnter(date);
+  const box = await sessionsBox();
+  const link = await within(box).findByRole('link', {
+    name: `Open session ${F1_SESSION}, 23 minutes this day`,
+  });
+  // One box at a time: the day's card has gone.
+  await waitFor(() => expect(screen.queryByText('Busiest 15 min')).toBeNull());
+  expect(document.querySelectorAll('.xt-effort-tip')).toHaveLength(1);
+  expect(read).toHaveBeenCalledExactlyOnceWith(7, paired().window.end_ms, 'UTC', '2026-09-07');
+  expect(within(box).getByTestId('day-sessions-head').textContent).toBe('Sessions on Sep 7');
+  // Named as the lanes name it, with its time that day as all agent time is written.
+  expect(link.textContent).toBe('Session 000000000 h 23 m');
+  expect(screen.queryByTestId('day-sessions-more')).toBeNull();
+  // The link carries the list that finds the session, over the report's range.
+  expect(link.getAttribute('href')).toBe(
+    `/sessions/${F1_SESSION}?q=${F1_SESSION}&host=claude&range=7d`,
+  );
+  fireEvent.click(link);
+  expect((await screen.findByTestId('session-path')).textContent).toBe(
+    `/sessions/${F1_SESSION}?q=${F1_SESSION}&host=claude&range=7d`,
+  );
+});
+
+it('human + agent: opening a second date’s sessions box closes the first without any pointer move', async () => {
+  await mountPaired(paired());
+  const days = screen.getAllByTestId('human-day');
+  hoverDate(days.at(-1)!);
+  await sessionsBox('Sep 7');
+  // The pointer reaches the next date with no further move or leave event:
+  // only one box stays open all the same.
+  fireEvent.mouseEnter(days.at(-2)!);
+  fireEvent.mouseEnter(within(days.at(-2)!).getByRole('button', { name: 'Sessions on Sep 6' }));
+  await sessionsBox('Sep 6');
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: 'Sessions on Sep 7' })).toBeNull(),
+  );
+  expect(screen.getAllByRole('dialog')).toHaveLength(1);
+});
+
+it('human + agent: a box whose day leaves the range is not open when that day comes back', async () => {
+  const full = paired();
+  const source = new FixtureDataSource(exported());
+  const view = await mountPaired(full, source);
+  // The pointer rests on the oldest date: its box is open.
+  hoverDate(screen.getAllByTestId('human-day')[0]!);
+  await sessionsBox('Sep 1');
+  // A live refresh moves the range on: Sep 1 is no longer drawn.
+  const later = structuredClone(full);
+  later.human_hours.current.by_day.shift();
+  later.leverage.by_day.shift();
+  const draw = (r: DashboardMetrics) =>
+    view.rerender(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <ThemeProvider>
+          <DataProvider source={source}>
+            <Routes>
+              <Route
+                path="/dashboard"
+                element={<HumanTimeline report={r} range="7d" withAgents />}
+              />
+            </Routes>
+          </DataProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  draw(later);
+  expect((await screen.findAllByTestId('human-day'))[0]!.dataset.date).not.toBe('2026-09-01');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // A longer range brings Sep 1 back, with no pointer or focus on it.
+  draw(full);
+  expect((await screen.findAllByTestId('human-day'))[0]!.dataset.date).toBe('2026-09-01');
+  await act(async () => {});
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it('human + agent: a click on a date neither opens nor closes its sessions box', async () => {
+  await mountPaired(paired());
+  const last = screen.getAllByTestId('human-day').at(-1)!;
+  const date = within(last).getByRole('button', { name: 'Sessions on Sep 7' });
+  fireEvent.click(date);
+  await act(async () => {});
+  expect(screen.queryByRole('dialog')).toBeNull();
+  // Opened by hover, a click leaves it as it was.
+  hoverDate(last);
+  await sessionsBox();
+  fireEvent.click(date);
+  await act(async () => {});
+  expect(screen.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeTruthy();
+});
+
+it('human + agent: Enter on the focused day opens its sessions box onto its first session, Escape returns to the day', async () => {
+  const source = new FixtureDataSource(exported());
+  const read = vi.spyOn(source, 'daySessions');
+  await mountPaired(paired(), source);
+  const days = screen.getAllByTestId('human-day');
+  const last = days.at(-1)!;
+  // Focus shows the day's card, as before; the sessions box stays closed.
+  last.focus();
+  await screen.findByText('Busiest 15 min');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(last.getAttribute('aria-label')).toMatch(/; Enter opens the day’s sessions$/);
+  // Enter opens the box; focus lands on the first session once it is read.
+  fireEvent.keyDown(last, { key: 'Enter' });
+  const box = await sessionsBox();
+  const link = await within(box).findByRole('link');
+  await waitFor(() => expect(document.activeElement).toBe(link));
+  await waitFor(() => expect(screen.queryByText('Busiest 15 min')).toBeNull());
+  // Arrow keys inside the box are the box's own, not the days'.
+  fireEvent.keyDown(link, { key: 'ArrowUp' });
+  expect(document.activeElement).toBe(link);
+  fireEvent.keyDown(link, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(document.activeElement).toBe(last);
+  // The focused day's card is back once the box has gone.
+  await screen.findByText('Busiest 15 min');
+  // Space opens it again, straight onto the session; the same day of the
+  // same report is not read again.
+  fireEvent.keyDown(last, { key: ' ' });
+  const again = await within(await sessionsBox()).findByRole('link');
+  await waitFor(() => expect(document.activeElement).toBe(again));
+  expect(read).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(again, { key: 'Escape' });
+  await waitFor(() => expect(document.activeElement).toBe(last));
+  // Arrow keys still move between days, each showing its card.
+  fireEvent.keyDown(last, { key: 'ArrowUp' });
+  expect(document.activeElement).toBe(days.at(-2));
+  await waitFor(() =>
+    expect(document.querySelector('.xt-effort-tip-head')?.textContent).toMatch(/^Sep 6/),
+  );
+  // A day without agent time says so, and focus waits on its box.
+  fireEvent.keyDown(days.at(-2)!, { key: 'Enter' });
+  const before = await sessionsBox('Sep 6');
+  await waitFor(() =>
+    expect(within(before).getByTestId('day-sessions-state').textContent).toBe('No sessions'),
+  );
+  expect(document.activeElement).toBe(before);
+});
+
+it('human + agent: a sessions box says when its sessions are being read or could not be read, and counts the rest', async () => {
+  const source = new FixtureDataSource(exported());
+  let answer: (value: Awaited<ReturnType<FixtureDataSource['daySessions']>>) => void = () => {};
+  const day = paired().leverage.by_day.at(-1)!;
+  const read = vi
+    .spyOn(source, 'daySessions')
+    .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+    .mockRejectedValueOnce(new Error('refused'));
+  await mountPaired(paired(), source);
+  const [first, last] = [
+    screen.getAllByTestId('human-day').at(0)!,
+    screen.getAllByTestId('human-day').at(-1)!,
+  ];
+  last.focus();
+  fireEvent.keyDown(last, { key: 'Enter' });
+  const open = await sessionsBox();
+  expect((await within(open).findByTestId('day-sessions-state')).textContent).toBe(
+    'Reading sessions…',
+  );
+  // Eight named, the most time first, and the three beyond the display cap
+  // counted with their time.
+  answer({
+    date: day.date,
+    start_ms: day.start_ms,
+    end_ms: day.end_ms,
+    agent_ms: 10 * H,
+    sessions: Array.from({ length: 11 }, (_, n) => ({
+      session_id: `s-${n}`,
+      host: n === 0 ? 'codex' : 'claude',
+      title: n === 0 ? 'Fix the sidebar' : null,
+      automated_review: n === 1,
+      agent_ms: n < 8 ? H : (40 * H) / 60,
+      last_activity_at_ms: day.start_ms + 10 * H,
+      parent: null,
+      known_child: false,
+      child_check: 'checked',
+    })),
+    referenced_parents: [],
+  });
+  const links = await within(open).findAllByTestId('day-session');
+  expect(links.map((link) => link.querySelector('span')!.textContent)).toEqual([
+    'Fix the sidebar',
+    'Automated review',
+    ...Array.from({ length: 6 }, (_, n) => `Session s-${n + 2}`),
+  ]);
+  expect(links[0]!.getAttribute('href')).toBe('/sessions/s-0?q=s-0&host=codex&range=7d');
+  expect(screen.getByTestId('day-sessions-more').textContent).toBe('and 3 more sessions2 h 0 m');
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  first.focus();
+  fireEvent.keyDown(first, { key: 'Enter' });
+  const failed = await sessionsBox('Sep 1');
+  await waitFor(() =>
+    expect(within(failed).getByTestId('day-sessions-state').textContent).toBe(
+      'Sessions could not be read',
+    ),
+  );
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+it('human + agent: a sessions box lists sub-sessions as the Sessions section does: under their parent, collapsed, an absent parent named, and the rest counted', async () => {
+  const source = new FixtureDataSource(exported());
+  const day = paired().leverage.by_day.at(-1)!;
+  const M = 60_000;
+  const one = (
+    session_id: string,
+    minutes: number,
+    context: {
+      parent?: string;
+      known_child?: boolean;
+      child_check?: 'checking' | 'checked' | 'child';
+    } = {},
+  ) => ({
+    session_id,
+    host: 'codex',
+    title: session_id === 'p' ? 'Parent work' : null,
+    automated_review: false,
+    agent_ms: minutes * M,
+    last_activity_at_ms: day.start_ms + H,
+    parent: context.parent
+      ? {
+          session_id: context.parent,
+          host: 'codex',
+          title: context.parent === 'gone' ? 'Planning session' : null,
+          evidence: 'native_spawn' as const,
+        }
+      : null,
+    known_child: context.known_child ?? Boolean(context.parent),
+    child_check:
+      context.child_check ?? (context.parent ? ('child' as const) : ('checked' as const)),
+  });
+  const sessions = [
+    one('p', 30),
+    one('k1', 25, { parent: 'gone' }),
+    one('c1', 20, { parent: 'p' }),
+    one('u', 15, { known_child: true, child_check: 'child' }),
+    one('x', 10, { child_check: 'checking' }),
+    one('c2', 5, { parent: 'p' }),
+    one('w', 3, { parent: 'u' }),
+    one('k2', 2, { parent: 'gone' }),
+    ...Array.from({ length: 7 }, (_, n) => one(`o-${n + 1}`, 1)),
+  ];
+  vi.spyOn(source, 'daySessions').mockResolvedValue({
+    date: day.date,
+    start_ms: day.start_ms,
+    end_ms: day.end_ms,
+    agent_ms: sessions.reduce((sum, s) => sum + s.agent_ms, 0),
+    sessions,
+    referenced_parents: [
+      { session_id: 'gone', host: 'codex', known_child: false, child_check: 'checked' },
+    ],
+  });
+  await mountPaired(paired(), source);
+  hoverDate(screen.getAllByTestId('human-day').at(-1)!);
+  const box = await sessionsBox();
+  const links = await within(box).findAllByRole('link');
+  // Eight top-level rows: the parent's group, the absent parent's group and
+  // six ordinary sessions; collapsed groups show their time added up.
+  expect(links.map((link) => link.textContent)).toEqual([
+    'Parent workΣ 0 h 55 m',
+    'Sub-sessions of Planning sessionΣ 0 h 27 m',
+    ...Array.from({ length: 6 }, (_, n) => `Session o-${n + 1}0 h 1 m`),
+  ]);
+  expect(links[0]!.getAttribute('aria-label')).toBe(
+    'Open session Parent work, p, 30 minutes this day; 55 minutes this day with its 2 sub-sessions',
+  );
+  expect(links[1]!.getAttribute('href')).toBe('/sessions/gone?q=gone&host=codex&range=7d');
+  expect(links[1]!.getAttribute('aria-label')).toBe(
+    'Open parent session Planning session, gone, which had no agent time this day; its 2 sub-sessions: 27 minutes this day',
+  );
+  // The ninth row, and what is hidden, counted with their time.
+  expect(within(box).getByTestId('day-sessions-more').textContent).toBe(
+    'and 1 more session0 h 1 m',
+  );
+  const words = (id: string) => {
+    const line = within(box).getByTestId(id);
+    return [line.querySelector('[aria-hidden]')!.textContent, line.querySelector('b')!.textContent];
+  };
+  expect(words('day-sessions-checking')).toEqual(['1 hidden: check not finished', '0 h 10 m']);
+  expect(words('day-sessions-creator')).toEqual(['2 hidden: creator not shown', '0 h 18 m']);
+  // Opening the parent's group lists its sub-sessions under it, each with
+  // its own time; the parent's row then shows its own.
+  const toggle = within(box).getByRole('button', { name: '2 sub-sessions of Parent work' });
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  const open = within(box).getAllByRole('link');
+  expect(open.slice(0, 4).map((link) => link.textContent)).toEqual([
+    'Parent work0 h 30 m',
+    'Session c10 h 20 m',
+    'Session c20 h 5 m',
+    'Sub-sessions of Planning sessionΣ 0 h 27 m',
+  ]);
+  expect(open[1]!.getAttribute('aria-label')).toBe(
+    'Open session c1, sub-session of Parent work, 20 minutes this day',
+  );
+  expect(open[1]!.closest('li')!.style.getPropertyValue('--depth')).toBe('1');
+  // The box stays open, and the cap still counts the same rows.
+  expect(screen.getByRole('dialog', { name: 'Sessions on Sep 7' })).toBeTruthy();
+  expect(within(box).getByTestId('day-sessions-more').textContent).toBe(
+    'and 1 more session0 h 1 m',
+  );
+  // And the absent parent's group, by its own disclosure.
+  fireEvent.click(within(box).getByRole('button', { name: '2 sub-sessions of Planning session' }));
+  expect(
+    within(box)
+      .getAllByRole('link')
+      .slice(3, 6)
+      .map((link) => link.textContent),
+  ).toEqual(['Sub-sessions of Planning session', 'Session k10 h 25 m', 'Session k20 h 2 m']);
+});
+
+it('human + agent: a sessions box drops saved titles read before stored content was deleted', async () => {
+  const source = new FixtureDataSource(exported());
+  const day = paired().leverage.by_day.at(-1)!;
+  const answer = (title: string | null) => ({
+    date: day.date,
+    start_ms: day.start_ms,
+    end_ms: day.end_ms,
+    agent_ms: H,
+    sessions: [
+      {
+        session_id: 's-0',
+        host: 'claude',
+        title,
+        automated_review: false,
+        agent_ms: H,
+        last_activity_at_ms: day.start_ms + H,
+        parent: null,
+        known_child: false,
+        child_check: 'checked' as const,
+      },
+    ],
+    referenced_parents: [],
+  });
+  let after: (value: ReturnType<typeof answer>) => void = () => {};
+  const read = vi
+    .spyOn(source, 'daySessions')
+    .mockResolvedValueOnce(answer('Saved before the delete'))
+    .mockImplementationOnce(() => new Promise((resolve) => (after = resolve)));
+  await mountPaired(paired(), source);
+  hoverDate(screen.getAllByTestId('human-day').at(-1)!);
+  const open = await sessionsBox();
+  await within(open).findByText('Saved before the delete');
+  // The open box reads again and never shows the old title meanwhile.
+  act(() => source.emit(events.contentPurged));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(within(open).queryByText('Saved before the delete')).toBeNull();
+  expect(within(open).getByTestId('day-sessions-state').textContent).toBe('Reading sessions…');
+  await act(async () => after(answer(null)));
+  expect((await within(open).findByTestId('day-session')).textContent).toBe('Session s-01 h 0 m');
+});
+
+it('human + agent: a session’s host title is read again when the session has later activity, on any day', async () => {
+  const source = new FixtureDataSource(exported());
+  const day = paired().leverage.by_day.at(-1)!;
+  // The same hour that day, and later activity the second time, after the day.
+  const answer = (lastActivity: number) => ({
+    date: day.date,
+    start_ms: day.start_ms,
+    end_ms: day.end_ms,
+    agent_ms: H,
+    sessions: [
+      {
+        session_id: 's-0',
+        host: 'claude',
+        title: null,
+        automated_review: false,
+        agent_ms: H,
+        last_activity_at_ms: lastActivity,
+        parent: null,
+        known_child: false,
+        child_check: 'checked' as const,
+      },
+    ],
+    referenced_parents: [],
+  });
+  vi.spyOn(source, 'daySessions')
+    .mockResolvedValueOnce(answer(day.start_ms + H))
+    .mockResolvedValue(answer(day.end_ms + 2 * H));
+  const titles = vi
+    .fn<SessionTitleControls['read']>()
+    .mockResolvedValueOnce({ titles: [{ id: 's-0', title: 'Old name' }] })
+    .mockResolvedValue({ titles: [{ id: 's-0', title: 'New name' }] });
+  Object.assign(source, { titles: { read: titles, cancel: vi.fn(async () => {}) } });
+  await mountPaired(paired(), source);
+  hoverDate(screen.getAllByTestId('human-day').at(-1)!);
+  const open = await sessionsBox();
+  await within(open).findByText('Old name');
+  // Committed data re-reads the box: the same time that day, later activity.
+  act(() => source.emit(events.importReceived));
+  await within(open).findByText('New name', undefined, { timeout: 3000 });
+  expect(titles).toHaveBeenCalledTimes(2);
+  expect(titles.mock.calls.map((call) => call[0])).toEqual([['s-0'], ['s-0']]);
 });

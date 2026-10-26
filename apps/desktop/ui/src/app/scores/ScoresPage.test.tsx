@@ -11,12 +11,14 @@ import type { GradingStart } from '../../data/generated/GradingStart';
 import { events } from '../../data/ipc-names';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
+import { detailsFor, detailsScenario } from './details.synthetic';
 import { linkKeep, linkLookup } from './link.synthetic';
 import { pickerScenario, type PickerScenario } from './picker.synthetic';
 import {
   LINK_HELP,
   LINK_KEEP_NOTE,
   MAKE_RUBRIC_NOTE,
+  attemptText,
   linkKeepStateText,
   rubricProblemText,
 } from './scores';
@@ -77,6 +79,8 @@ function sourceWith(
     linkCancel: vi.fn<GradingControls['linkCancel']>(async () => false),
     linkKeep: vi.fn<GradingControls['linkKeep']>(async () => linkKeep('kept_several')),
     linkDiscard: vi.fn<GradingControls['linkDiscard']>(async () => true),
+    runDetails: vi.fn<GradingControls['runDetails']>(async (runId) => detailsFor(runId)),
+    openReport: vi.fn<GradingControls['openReport']>(async () => ({ state: 'opened' })),
   };
   Object.defineProperty(source, 'grading', { value: controls });
   return { source, controls };
@@ -200,14 +204,14 @@ it('lists every project and the apps it was found in, with Close focused first',
 });
 
 /**
- * The Add a skill dialog's status line for its installed skills ("Add from a
+ * The Add a grading skill dialog's status line for its installed skills ("Add from a
  * link" has its own).
  */
 const listStatus = (dialog: HTMLElement) =>
   within(dialog)
     .getAllByRole('status')
     .find((status) => !status.closest('.xt-score-link'))!;
-/** The Add a skill dialog's group titled `title`, by its heading. */
+/** The Add a grading skill dialog's group titled `title`, by its heading. */
 const group = (dialog: HTMLElement, title: string) =>
   within(dialog)
     .getByRole('heading', { level: 3, name: new RegExp(`^${title}`) })
@@ -219,20 +223,20 @@ const rowNames = (section: HTMLElement) =>
 const fold = (dialog: HTMLElement, title: string) =>
   within(group(dialog, title)).getByRole('button', { name: new RegExp(`^${title}`) });
 
-it('ends the skill cards with Add a skill: three steps, Ready to add, Your skills, then two folded groups', async () => {
+it('ends the skill cards with Add a grading skill: three steps, Ready to add, Your skills, then two folded groups', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
   await waitFor(() => card('CLAUDE.md doctor'));
   const cards = within(within(page()).getByRole('list', { name: 'Grading skills' }))
     .getAllByRole('listitem')
     .filter((item) => item.parentElement?.classList.contains('xt-scores-grid'));
-  const trigger = within(page()).getByRole('button', { name: 'Add a skill' });
+  const trigger = within(page()).getByRole('button', { name: 'Add a grading skill' });
   // It is the last card, after every skill's card.
   expect(cards.length).toBe(2);
   expect(cards.at(-1)!.contains(trigger)).toBe(true);
   expect(trigger.tabIndex).toBe(0);
   fireEvent.click(trigger);
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const close = within(dialog).getByRole('button', { name: 'Close' });
   await waitFor(() => expect(document.activeElement).toBe(close));
   await waitFor(() => expect(within(dialog).getByRole('region', { name: 'Installed skills' })));
@@ -324,8 +328,8 @@ it('ends the skill cards with Add a skill: three steps, Ready to add, Your skill
 it('says how to get a skill ready while none is, and lists a home like a real one', async () => {
   const { source } = sourceWith('graded', undefined, 'yours');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   await within(dialog).findByRole('region', { name: 'Installed skills' });
   const ready = group(dialog, 'Ready to add');
   expect(within(ready).getByRole('heading').textContent).toBe('Ready to add0');
@@ -351,8 +355,8 @@ it('says how to get a skill ready while none is, and lists a home like a real on
   // Closing and opening the dialog folds it again.
   fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  fireEvent.click(screen.getByRole('button', { name: 'Add a skill' }));
-  const again = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(screen.getByRole('button', { name: 'Add a grading skill' }));
+  const again = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   await within(again).findByRole('region', { name: 'Installed skills' });
   expect(fold(again, 'Can’t be scored').getAttribute('aria-expanded')).toBe('false');
 });
@@ -360,8 +364,8 @@ it('says how to get a skill ready while none is, and lists a home like a real on
 it('searches folded groups too: a folded group shows how many of its skills match', async () => {
   const { source } = sourceWith('graded', undefined, 'yours');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const search = await within(dialog).findByRole('searchbox', { name: 'Search installed skills' });
   fireEvent.change(search, { target: { value: 'framer' } });
   expect(fold(dialog, 'Can’t be scored').textContent).toBe('›Can’t be scored1 of 2');
@@ -387,8 +391,8 @@ it('searches folded groups too: a folded group shows how many of its skills matc
 it('filters the installed skills by the search text and says how many match', async () => {
   const { source } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const search = await within(dialog).findByRole('searchbox', { name: 'Search installed skills' });
   fireEvent.change(search, { target: { value: 'LINT' } });
   expect(within(group(dialog, 'Ready to add')).getByRole('heading').textContent).toBe(
@@ -404,8 +408,8 @@ it('filters the installed skills by the search text and says how many match', as
 it('adds a ready skill by its location only, stays open and shows it on Scores', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   controls.installed.mockResolvedValue(pickerScenario('added'));
   controls.overview.mockResolvedValue(scenario('added'));
   fireEvent.click(await within(dialog).findByRole('button', { name: 'Add README check' }));
@@ -417,7 +421,7 @@ it('adds a ready skill by its location only, stays open and shows it on Scores',
   );
   // The dialog stays open; the row moves to Already on Scores, which says so,
   // and the card is behind it.
-  expect(screen.getByRole('dialog', { name: 'Add a skill' })).toBe(dialog);
+  expect(screen.getByRole('dialog', { name: 'Add a grading skill' })).toBe(dialog);
   await waitFor(() =>
     expect(within(dialog).queryByRole('button', { name: 'Add README check' })).toBeNull(),
   );
@@ -443,8 +447,8 @@ it('adds a ready skill by its location only, stays open and shows it on Scores',
 it('keeps Add busy until the list read after it shows the skill on Scores', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const button = await within(dialog).findByRole('button', { name: 'Add README check' });
   // The read after the answer is held until the test lets it finish.
   let finish: () => void = () => {};
@@ -490,8 +494,8 @@ it('keeps Add busy until the list read after it shows the skill on Scores', asyn
 it('clears Add once a read after a refused add shows the row unchanged', async () => {
   const { source, controls } = sourceWith('graded');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   controls.addSkill.mockResolvedValueOnce({ state: 'failed' });
   fireEvent.click(await within(dialog).findByRole('button', { name: 'Add README check' }));
   await waitFor(() =>
@@ -504,12 +508,12 @@ it('clears Add once a read after a refused add shows the row unchanged', async (
   );
 });
 
-it('starts each opening of Add a skill with an empty search', async () => {
+it('starts each opening of Add a grading skill with an empty search', async () => {
   const { source } = sourceWith('graded');
   await mount('/scores', source);
-  const trigger = await screen.findByRole('button', { name: 'Add a skill' });
+  const trigger = await screen.findByRole('button', { name: 'Add a grading skill' });
   fireEvent.click(trigger);
-  let dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  let dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   fireEvent.change(
     await within(dialog).findByRole('searchbox', { name: 'Search installed skills' }),
     { target: { value: 'lint' } },
@@ -518,7 +522,7 @@ it('starts each opening of Add a skill with an empty search', async () => {
   fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   fireEvent.click(trigger);
-  dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   const search = await within(dialog).findByRole<HTMLInputElement>('searchbox', {
     name: 'Search installed skills',
   });
@@ -529,8 +533,8 @@ it('starts each opening of Add a skill with an empty search', async () => {
 it('says why plugin skills are not all listed when the plugin list cannot be used', async () => {
   const { source } = sourceWith('graded', undefined, 'plugins_unread');
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   expect(
     await within(dialog).findByText(
       /Plugin skills are not all listed: Claude Code’s installed_plugins\.json is a link\./,
@@ -556,8 +560,8 @@ it('says when installed skills are not read here or could not be read', async ()
   ] as const) {
     const { source } = sourceWith('graded', undefined, picker);
     await mount('/scores', source);
-    fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
     expect(await within(dialog).findByText(text)).toBeTruthy();
     cleanup();
   }
@@ -640,12 +644,12 @@ it('removes an added skill from Scores by its id and goes back; a built-in one h
       'The skill could not be removed. Try again.',
     ),
   );
-  // While it grades, native refuses and the page says so.
+  // While it grades or waits to, native refuses and the page says so.
   controls.removeSkill.mockResolvedValueOnce({ state: 'running' });
   fireEvent.click(screen.getByRole('button', { name: 'Remove from Scores' }));
   await waitFor(() =>
     expect(page().querySelector('.xt-scores-message')!.textContent).toBe(
-      'This skill is grading a project now. Wait for it to finish or cancel it, then remove it.',
+      'This skill is grading a project now or waiting to. Wait for it to finish or cancel it, then remove it.',
     ),
   );
   expect(screen.getByRole('heading', { level: 1, name: 'README check' })).toBeTruthy();
@@ -656,18 +660,18 @@ it('removes an added skill from Scores by its id and goes back; a built-in one h
   await waitFor(() => expect(document.querySelectorAll('.xt-score-card').length).toBe(1));
 });
 
-it('shows Add a skill before anything is graded, but not on a skill page or in fixture mode', async () => {
+it('shows Add a grading skill before anything is graded, but not on a skill page or in fixture mode', async () => {
   const { source } = sourceWith('empty');
   await mount('/scores', source);
   await waitFor(() => card('CLAUDE.md doctor'));
-  expect(within(page()).getByRole('button', { name: 'Add a skill' })).toBeTruthy();
+  expect(within(page()).getByRole('button', { name: 'Add a grading skill' })).toBeTruthy();
   fireEvent.click(within(page()).getByRole('link', { name: 'CLAUDE.md doctor' }));
   expect(await screen.findByRole('heading', { name: 'Grade your first project' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Add a skill' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add a grading skill' })).toBeNull();
   cleanup();
   await mount('/scores');
   expect(await screen.findByText('Scores are not available here')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Add a skill' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Add a grading skill' })).toBeNull();
 });
 
 it('lists each project’s score, when it was graded and its state', async () => {
@@ -677,7 +681,7 @@ it('lists each project’s score, when it was graded and its state', async () =>
   const [atlas, beacon, cedar, delta] = rows();
   expect(atlas!.textContent).toContain('75');
   expect(atlas!.textContent).toContain('Last try failed: it ran past its time limit');
-  expect(within(atlas!).getByRole('button').textContent).toBe('Grade again');
+  expect(within(atlas!).getByRole('button', { name: /^Grade/ }).textContent).toBe('Grade again');
   expect(beacon!.textContent).toContain('90');
   expect(cedar!.textContent).toContain('61');
   expect(cedar!.textContent).toContain('Partial result');
@@ -687,7 +691,205 @@ it('lists each project’s score, when it was graded and its state', async () =>
   expect(page().querySelector('.xt-scores-average .xt-score-big')?.textContent).toBe('75');
 });
 
-it('starts a grading with only the project path and skill ID, and says why one did not start', async () => {
+/** The details dialog a shown score opened. */
+const detailsDialog = () => screen.findByRole('dialog', { name: /· CLAUDE\.md doctor$/ });
+
+it('opens a shown score’s details by its run ID: every finding most severe first, criteria and the report', async () => {
+  const { source, controls } = sourceWith('graded');
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  // Only a graded project's score opens details.
+  expect(within(rows()[3]!).queryByRole('button', { name: /details for/ })).toBeNull();
+  const trigger = screen.getByRole('button', { name: '75, details for atlas' });
+  fireEvent.click(trigger);
+  const dialog = await detailsDialog();
+  expect(dialog.getAttribute('aria-labelledby')).toBeTruthy();
+  expect(within(dialog).getByRole('heading', { level: 2 }).textContent).toBe(
+    'atlas · CLAUDE.md doctor',
+  );
+  expect(controls.runDetails).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001');
+  await within(dialog).findByText('Complete');
+  expect(within(dialog).getByText('Score 75')).toBeTruthy();
+  expect(within(dialog).getByText('/work/atlas')).toBeTruthy();
+  const answer = detailsScenario('full');
+  if (answer.state !== 'loaded' || answer.content.state !== 'kept')
+    throw new Error('the full answer is loaded and kept');
+  const full = answer.content;
+  if (full.findings.state !== 'listed') throw new Error('the full answer lists its findings');
+  const listed = full.findings.findings;
+  expect(within(dialog).getByText(full.summary)).toBeTruthy();
+  // All five findings, in the native order, each with its explanation and fix.
+  const findings = within(
+    within(dialog).getByRole('region', { name: /Findings/ }) as HTMLElement,
+  ).getAllByRole('listitem');
+  expect(
+    findings.map((item) => item.querySelector('.xt-score-finding-title')?.textContent),
+  ).toEqual(listed.map((finding) => finding.title));
+  expect(findings.map((item) => within(item).getByRole('img').getAttribute('aria-label'))).toEqual([
+    'Critical',
+    'Critical',
+    'Warning',
+    'Note',
+    'Pass',
+  ]);
+  expect(findings[0]!.textContent).toContain(listed[0]!.detail!);
+  expect(findings[0]!.textContent).toContain(`Fix ${listed[0]!.fix!}`);
+  // A finding without an explanation or fix shows only its title.
+  expect(findings[3]!.querySelector('.xt-score-finding-detail')).toBeNull();
+  expect(findings[3]!.querySelector('.xt-score-finding-fix')).toBeNull();
+  const criteria = within(
+    within(dialog).getByRole('region', { name: 'Points by criterion' }) as HTMLElement,
+  ).getAllByRole('listitem');
+  expect(criteria.map((item) => item.textContent)).toEqual([
+    'Instructions reach the agent15 / 30',
+    'Instructions are accurate35 / 40',
+    'Instructions are short and clear25 / 30',
+  ]);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+  await waitFor(() =>
+    expect(controls.openReport).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001'),
+  );
+  expect(within(dialog).getByRole('status').textContent).toBe('');
+  // An answer that opened nothing says why; a failed request says so.
+  controls.openReport.mockResolvedValueOnce({
+    state: 'unavailable',
+    reason: 'folder_not_kept',
+  });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+  await waitFor(() =>
+    expect(within(dialog).getByRole('status').textContent).toBe(
+      'Only the newest grades keep their full report, and this one’s was removed.',
+    ),
+  );
+  controls.openReport.mockRejectedValueOnce(new Error('ipc'));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+  await waitFor(() =>
+    expect(within(dialog).getByRole('status').textContent).toBe(
+      'The report could not be opened. Try again.',
+    ),
+  );
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(controls.start).not.toHaveBeenCalled();
+});
+
+it('says why a grade shows no criteria or report: before rubrics, a pruned folder, deleted content', async () => {
+  const { source, controls } = sourceWith('graded');
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  // beacon: a grade from before rubrics; its report is kept.
+  fireEvent.click(screen.getByRole('button', { name: '90, details for beacon' }));
+  let dialog = await detailsDialog();
+  await within(dialog).findByText(
+    'This grade has no points per criterion: it was made before skills had rubrics.',
+  );
+  expect(within(dialog).getByRole('button', { name: 'Open full report' })).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // cedar: a partial grade whose folder was pruned; its findings stay.
+  fireEvent.click(screen.getByRole('button', { name: '61, details for cedar' }));
+  dialog = await detailsDialog();
+  await within(dialog).findByText(
+    'Partial: the skill skipped a step, so this score may miss something',
+  );
+  expect(
+    within(dialog).getByText(
+      'Only the newest grades keep their saved files, and this one’s were removed, so its points per criterion are gone.',
+    ),
+  ).toBeTruthy();
+  expect(
+    within(dialog).getByText(
+      'Only the newest grades keep their full report, and this one’s was removed.',
+    ),
+  ).toBeTruthy();
+  expect(within(dialog).queryByRole('button', { name: 'Open full report' })).toBeNull();
+  expect(dialog.querySelectorAll('.xt-score-finding')).toHaveLength(2);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // After Delete stored content: the score alone, said once.
+  controls.runDetails.mockResolvedValueOnce(detailsScenario('content_deleted'));
+  fireEvent.click(screen.getByRole('button', { name: '75, details for atlas' }));
+  dialog = await detailsDialog();
+  await within(dialog).findByText(
+    'Stored content was deleted. The score stays; its summary, findings, points and full report are gone.',
+  );
+  expect(within(dialog).getByText('Score 75')).toBeTruthy();
+  expect(within(dialog).queryByRole('heading', { name: /Findings|Summary|Points/ })).toBeNull();
+  expect(within(dialog).queryByRole('button', { name: 'Open full report' })).toBeNull();
+  expect(controls.openReport).not.toHaveBeenCalled();
+});
+
+it('says when a grade’s details could not be read and reads them again on request', async () => {
+  const { source, controls } = sourceWith('graded');
+  controls.runDetails.mockResolvedValueOnce({ state: 'failed' });
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  fireEvent.click(screen.getByRole('button', { name: '75, details for atlas' }));
+  const dialog = await detailsDialog();
+  await within(dialog).findByText('The details could not be read. Try again.');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }));
+  await within(dialog).findByText('Complete');
+  expect(controls.runDetails).toHaveBeenCalledTimes(2);
+  // A run no longer stored says so, with nothing to try again.
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  controls.runDetails.mockResolvedValue({ state: 'not_found' });
+  fireEvent.click(screen.getByRole('button', { name: '90, details for beacon' }));
+  const gone = await detailsDialog();
+  await within(gone).findByText(
+    'This grading is no longer stored. Grade the project again to see its details.',
+  );
+  expect(within(gone).queryByRole('button', { name: 'Try again' })).toBeNull();
+});
+
+it('says stored findings that could not be read, never that a grade has none', async () => {
+  const { source, controls } = sourceWith('graded');
+  controls.runDetails.mockResolvedValueOnce(detailsScenario('findings_unreadable'));
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  fireEvent.click(screen.getByRole('button', { name: '90, details for beacon' }));
+  const dialog = await detailsDialog();
+  await within(dialog).findByText('This grade’s stored findings could not be read.');
+  expect(within(dialog).queryByText('This grade has no findings.')).toBeNull();
+  expect(dialog.querySelector('.xt-score-details-count')).toBeNull();
+  // The rest of the grade shows as usual.
+  expect(within(dialog).getByText('Short, accurate instructions.')).toBeTruthy();
+  expect(within(dialog).getByRole('button', { name: 'Open full report' })).toBeTruthy();
+});
+
+it('reopens a grade’s details on a fresh read after Delete stored content, never the old text', async () => {
+  const { source, controls } = sourceWith('graded');
+  await mount('/scores/claude-md-doctor', source);
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  const trigger = screen.getByRole('button', { name: '75, details for atlas' });
+  fireEvent.click(trigger);
+  let dialog = await detailsDialog();
+  const summary = 'The instructions are mostly accurate';
+  await within(dialog).findByText(new RegExp(summary));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  act(() => source.emit(events.contentPurged));
+  // The next read is held, so nothing but a fresh answer can fill the dialog.
+  let answer: (value: Awaited<ReturnType<GradingControls['runDetails']>>) => void = () => {};
+  controls.runDetails.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+  );
+  fireEvent.click(trigger);
+  dialog = await detailsDialog();
+  await waitFor(() => expect(controls.runDetails).toHaveBeenCalledTimes(2));
+  expect(within(dialog).queryByText(new RegExp(summary))).toBeNull();
+  expect(dialog.querySelector('.xt-score-finding')).toBeNull();
+  act(() => answer(detailsScenario('content_deleted')));
+  await within(dialog).findByText(
+    'Stored content was deleted. The score stays; its summary, findings, points and full report are gone.',
+  );
+  expect(within(dialog).queryByText(new RegExp(summary))).toBeNull();
+});
+
+it('starts a grading with only the project path and skill ID, and says why one did not start or wait', async () => {
   const { source, controls } = sourceWith('empty');
   await mount('/scores/claude-md-doctor', source);
   await screen.findByRole('heading', { name: 'Grade your first project' });
@@ -703,9 +905,11 @@ it('starts a grading with only the project path and skill ID, and says why one d
     ],
     [{ state: 'not_a_project' }, 'beacon is no longer in your project list, so it was not graded.'],
     [
-      { state: 'busy' },
-      'Only one grading runs at a time. Another grading is going now; wait for it to finish or cancel it.',
+      { state: 'already_going' },
+      'beacon is already being graded with this skill, or waiting to be.',
     ],
+    // Waiting in line needs no words: the row says so once it is read again.
+    [{ state: 'waiting', run_id: '00000000-0000-4000-8000-0000000000fd' }, ''],
   ] as const) {
     controls.start.mockResolvedValueOnce(answer);
     fireEvent.click(screen.getByRole('button', { name: 'Grade beacon' }));
@@ -720,7 +924,7 @@ it('starts a grading with only the project path and skill ID, and says why one d
   );
 });
 
-it('while one grading runs, another Grade explains instead of starting, and Cancel stops it', async () => {
+it('while one grading runs, another Grade is asked of native, which puts it in line, and Cancel stops the run', async () => {
   clockAt(STARTED + 4 * MINUTE + 10_000);
   const { source, controls } = sourceWith('running');
   await mount('/scores', source);
@@ -733,14 +937,19 @@ it('while one grading runs, another Grade explains instead of starting, and Canc
   expect(screen.queryByTestId('running-elsewhere')).toBeNull();
   const delta = rows()[3]!;
   expect(delta.textContent).toContain('Grading now · 0 h 4 m');
-  // Grade stays pressable and says why it cannot start; nothing is sent.
+  // Grade stays pressable and is sent: native decides it waits in line.
+  controls.start.mockResolvedValueOnce({
+    state: 'waiting',
+    run_id: '00000000-0000-4000-8000-0000000000fd',
+  });
   const again = screen.getByRole('button', { name: 'Grade again atlas' });
   expect(again.hasAttribute('disabled')).toBe(false);
   fireEvent.click(again);
-  expect(within(page()).getByRole('status').textContent).toBe(
-    'Only one grading runs at a time. delta is being graded with CLAUDE.md doctor now; wait for it to finish or cancel it.',
+  await waitFor(() =>
+    expect(controls.start).toHaveBeenCalledWith('/work/atlas', 'claude-md-doctor'),
   );
-  expect(controls.start).not.toHaveBeenCalled();
+  await waitFor(() => expect(again.getAttribute('aria-disabled')).toBeNull());
+  expect(within(page()).getByRole('status').textContent).toBe('');
   fireEvent.click(screen.getByRole('button', { name: 'Cancel grading delta' }));
   await waitFor(() =>
     expect(controls.cancel).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000004'),
@@ -841,13 +1050,112 @@ it('offers Cancel for a going run whose project is no longer listed, on both pag
   // No row shows the run, so the notice above the table does, with Cancel.
   expect(rows().some((row) => row.textContent?.includes('Grading now'))).toBe(false);
   const above = screen.getByTestId('running-elsewhere');
+  // Grade is sent all the same; native puts it in line.
   fireEvent.click(screen.getByRole('button', { name: 'Grade again atlas' }));
-  expect(within(page()).getByRole('status').textContent).toBe(
-    'Only one grading runs at a time. /work/old-atlas is being graded with CLAUDE.md doctor now; wait for it to finish or cancel it.',
+  await waitFor(() =>
+    expect(controls.start).toHaveBeenCalledWith('/work/atlas', 'claude-md-doctor'),
   );
-  expect(controls.start).not.toHaveBeenCalled();
   fireEvent.click(within(above).getByRole('button', { name: 'Cancel grading /work/old-atlas' }));
   await waitFor(() => expect(controls.cancel).toHaveBeenCalledTimes(2));
+});
+
+it('shows a waiting row’s place in line with its own Cancel, and a waiting grading no row shows', async () => {
+  clockAt(STARTED + 4 * MINUTE);
+  const { source, controls } = sourceWith('waiting');
+  await mount('/scores', source);
+  const doctor = await waitFor(() => card('CLAUDE.md doctor'));
+  // The card counts its waiting gradings beside the one going.
+  expect(within(doctor).getByText('Grading · 0 h 4 m')).toBeTruthy();
+  expect(doctor.querySelector('.xt-score-card-count')!.textContent).toBe(
+    '3 of 4 projects graded · 2 waiting',
+  );
+  const elsewhere = screen.getByTestId('waiting-elsewhere');
+  expect(elsewhere.textContent).toBe(
+    '/work/old-beacon is waiting to be graded with CLAUDE.md doctor · 1 aheadThis project is no longer in your project list, so no row shows it.Cancel',
+  );
+  fireEvent.click(within(doctor).getByRole('link', { name: 'CLAUDE.md doctor' }));
+  await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
+  const [atlas, , , delta] = rows();
+  expect(atlas!.textContent).toContain('Waiting · next in line');
+  expect(delta!.textContent).toContain('Grading now · 0 h 4 m');
+  // It may take its turn before Cancel reaches native. A successful cancel
+  // must not claim it never started: native also accepts a running run.
+  expect(within(atlas!).queryByRole('button', { name: /Grade/ })).toBeNull();
+  fireEvent.click(within(atlas!).getByRole('button', { name: 'Cancel waiting grading atlas' }));
+  await waitFor(() =>
+    expect(controls.cancel).toHaveBeenCalledWith('00000000-0000-4000-8000-0000000000c1'),
+  );
+  await waitFor(() =>
+    expect(within(page()).getByRole('status').textContent).toBe('Cancelling the grading…'),
+  );
+  // The one no row shows is listed above the table too.
+  controls.cancel.mockResolvedValueOnce(false);
+  fireEvent.click(
+    within(screen.getByTestId('waiting-elsewhere')).getByRole('button', {
+      name: 'Cancel waiting grading /work/old-beacon',
+    }),
+  );
+  await waitFor(() =>
+    expect(controls.cancel).toHaveBeenCalledWith('00000000-0000-4000-8000-0000000000c2'),
+  );
+  await waitFor(() =>
+    expect(within(page()).getByRole('status').textContent).toBe(
+      'That grading was no longer waiting.',
+    ),
+  );
+  expect(controls.start).not.toHaveBeenCalled();
+});
+
+it('keeps the shown grade’s details and report separate from a waiting or running replacement’s Cancel', async () => {
+  for (const replacement of ['waiting', 'running'] as const) {
+    const overview = scenario('waiting');
+    if (overview.state !== 'loaded') throw new Error('the waiting overview is loaded');
+    const atlas = overview.skills[0]!.rows[0]!;
+    const shownId = atlas.shown!.run_id;
+    const replacementId = atlas.waiting!.run_id;
+    if (replacement === 'running') {
+      atlas.waiting = null;
+      atlas.attempt = {
+        state: 'running',
+        run_id: replacementId,
+        started_at_ms: STARTED,
+      };
+    }
+    const { source, controls } = sourceWith(async () => overview);
+    await mount('/scores/claude-md-doctor', source);
+    const trigger = await screen.findByRole('button', { name: '75, details for atlas' });
+    fireEvent.click(trigger);
+    const dialog = await detailsDialog();
+    await within(dialog).findByText('Complete');
+    expect(controls.runDetails).toHaveBeenLastCalledWith(shownId);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open full report' }));
+    await waitFor(() => expect(controls.openReport).toHaveBeenLastCalledWith(shownId));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: replacement === 'waiting' ? 'Cancel waiting grading atlas' : 'Cancel grading atlas',
+      }),
+    );
+    await waitFor(() => expect(controls.cancel).toHaveBeenLastCalledWith(replacementId));
+    expect(replacementId).not.toBe(shownId);
+    expect(controls.start).not.toHaveBeenCalled();
+    cleanup();
+  }
+});
+
+it('says why a waiting grading failed when Claude Code was gone at its turn', () => {
+  expect(
+    attemptText(
+      {
+        state: 'failed',
+        run_id: '00000000-0000-4000-8000-0000000000c1',
+        finished_at_ms: STARTED,
+        reason: 'claude_unavailable',
+      },
+      undefined,
+    ),
+  ).toBe('Last try failed: Claude Code was not found on this Mac when its turn came');
 });
 
 it('explains a Grade press while another press’s start is still being answered', async () => {
@@ -903,8 +1211,8 @@ const installedRow = (dialog: HTMLElement, name: string) =>
 
 async function openDialog(source: FixtureDataSource) {
   await mount('/scores', source);
-  fireEvent.click(await screen.findByRole('button', { name: 'Add a skill' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Add a skill' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a grading skill' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a grading skill' });
   await within(dialog).findByRole('region', { name: 'Installed skills' });
   return dialog;
 }
@@ -1029,12 +1337,13 @@ it('a grading going now makes Make a rubric explain instead of starting', async 
   expect(controls.makeRubric).not.toHaveBeenCalled();
 });
 
-it('names a rubric being made on Scores with its own Cancel, and Grade explains it', async () => {
+it('names a rubric being made on Scores with its own Cancel, and says gradings wait for it', async () => {
   clockAt(MAKING_STARTED + 2 * MINUTE + 5_000);
   const { source, controls } = sourceWith('making_rubric');
   await mount('/scores', source);
   const notice = await screen.findByTestId('making-rubric');
   expect(notice.textContent).toContain('A rubric for deploy is being made · 0 h 2 m');
+  expect(notice.textContent).toContain('Gradings you start wait until it is done.');
   fireEvent.click(
     within(notice).getByRole('button', { name: 'Cancel making a rubric for deploy' }),
   );
@@ -1044,11 +1353,11 @@ it('names a rubric being made on Scores with its own Cancel, and Grade explains 
   fireEvent.click(within(card('CLAUDE.md doctor')).getByRole('link', { name: 'CLAUDE.md doctor' }));
   await screen.findByRole('heading', { level: 1, name: 'CLAUDE.md doctor' });
   expect(screen.getByTestId('making-rubric')).toBeTruthy();
+  // Grade is sent all the same; native puts it in line after the job.
   fireEvent.click(screen.getByRole('button', { name: 'Grade again atlas' }));
-  expect(within(page()).getByRole('status').textContent).toBe(
-    'Only one grading runs at a time, and making a rubric counts as one. A rubric for deploy is being made now; wait for it to finish or cancel it.',
+  await waitFor(() =>
+    expect(controls.start).toHaveBeenCalledWith('/work/atlas', 'claude-md-doctor'),
   );
-  expect(controls.start).not.toHaveBeenCalled();
 });
 
 it('shows the rubric job’s reported elapsed time and reads again when it is over', async () => {
@@ -1146,7 +1455,7 @@ it('focuses the status line when a skill tried again is not shown afterwards', a
 /** The documents plugin's pdf skill (`picker.synthetic.json`). */
 const PDF = 'plugin:documents@official/pdf';
 
-/** "Add from a link" in the open Add a skill dialog. */
+/** "Add from a link" in the open Add a grading skill dialog. */
 const linkBox = (dialog: HTMLElement) =>
   within(dialog).getByRole('region', { name: 'Add from a link' });
 /** The made-up look-up's ID (`link.synthetic.json`). */

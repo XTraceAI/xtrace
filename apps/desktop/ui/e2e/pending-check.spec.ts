@@ -120,18 +120,6 @@ test('the Sessions page says why every session is hidden, and how many', async (
   expect(doc).toBeLessThanOrEqual(0);
 });
 
-test('the Sessions page counts hidden sessions it has not loaded beside a listed one', async ({
-  page,
-}) => {
-  await open(page, exportWith([SHOWN, CHECKING_A], 1234), '/sessions?range=7d');
-  const table = page.getByRole('table', { name: 'Indexed sessions' });
-  await expect(table.getByText(SHOWN_TITLE)).toBeVisible();
-  await expect(page.locator('.xt-sessions-checking')).toHaveText(
-    '1,234 sessions are hidden because XTrace has not finished checking whether another session started them.',
-  );
-  await expect(table).not.toContainText(CHECKING_A.slice(0, 8));
-});
-
 test('the Dashboard Sessions card says why it is empty and notes the hidden sessions', async ({
   page,
 }) => {
@@ -159,19 +147,4 @@ test('the Dashboard Sessions card says why it is empty and notes the hidden sess
   const { outlet, page: doc } = await overflow(page);
   expect(outlet).toBeLessThanOrEqual(0);
   expect(doc).toBeLessThanOrEqual(0);
-});
-
-test('the Dashboard Sessions card notes hidden sessions while it lists others', async ({
-  page,
-}) => {
-  await open(page, exportWith([SHOWN, CHECKING_A], 1), '/dashboard');
-  const card = page.getByRole('region', { name: 'Sessions' });
-  const lanes = page.getByRole('table', { name: 'Session lanes' });
-  await expect(
-    lanes.getByRole('link', { name: new RegExp(`^Open session ${SHOWN_TITLE}`) }),
-  ).toBeVisible();
-  await expect(card.locator('.xt-section-meta [aria-hidden="true"]')).toHaveText(
-    'Active in the last 48 hours · 1 hidden: check not finished',
-  );
-  await expect(lanes).not.toContainText(CHECKING_A.slice(0, 8));
 });

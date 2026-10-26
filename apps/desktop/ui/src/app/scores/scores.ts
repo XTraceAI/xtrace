@@ -21,6 +21,9 @@ import type { GradingSkillRemove } from '../../data/generated/GradingSkillRemove
 import type { GradingSkillSource } from '../../data/generated/GradingSkillSource';
 import type { GradingOverview } from '../../data/generated/GradingOverview';
 import type { GradingProgress } from '../../data/generated/GradingProgress';
+import type { GradingReportOpen } from '../../data/generated/GradingReportOpen';
+import type { GradingRunDetails } from '../../data/generated/GradingRunDetails';
+import type { GradingRunGap } from '../../data/generated/GradingRunGap';
 import type { GradingRubricCriterion } from '../../data/generated/GradingRubricCriterion';
 import type { GradingRubricFailure } from '../../data/generated/GradingRubricFailure';
 import type { GradingRubricMake } from '../../data/generated/GradingRubricMake';
@@ -29,6 +32,7 @@ import type { GradingRubricProgress } from '../../data/generated/GradingRubricPr
 import type { GradingRunningNow } from '../../data/generated/GradingRunningNow';
 import type { GradingSeverity } from '../../data/generated/GradingSeverity';
 import type { GradingStart } from '../../data/generated/GradingStart';
+import type { GradingWaitingElsewhere } from '../../data/generated/GradingWaitingElsewhere';
 import type { ProjectSourceId } from '../../data/generated/ProjectSourceId';
 import { events } from '../../data/ipc-names';
 import { queryKeys } from '../../data/query-client';
@@ -66,7 +70,22 @@ export function useRefreshOverview() {
 }
 
 /**
- * The installed skills for the Add a skill dialog, read while it is open.
+ * The details of the run `runId` behind a shown score, read while its
+ * dialog is open. What they hold, in which order, and why criteria or a
+ * report are missing is native.
+ */
+export function useRunDetails(runId: string | null, open: boolean) {
+  const { source } = useData();
+  const grading = source.grading;
+  return useQuery({
+    queryKey: queryKeys.gradingRunDetails(runId ?? ''),
+    queryFn: () => grading!.runDetails(runId!),
+    enabled: !!grading && open && runId !== null,
+  });
+}
+
+/**
+ * The installed skills for the Add a grading skill dialog, read while it is open.
  * Which rows are on Scores, in which group and order, is native.
  */
 export function useInstalledSkills(open: boolean) {
@@ -150,7 +169,7 @@ const isRubricProgress = (payload: unknown): payload is GradingRubricProgress =>
 
 /**
  * The elapsed seconds the latest `grading://rubric-progress` reported, by
- * job ID, while the Add a skill dialog is open. Progress only drives this
+ * job ID, while the Add a grading skill dialog is open. Progress only drives this
  * display: whether a job is going is the installed list's `rubric_job`. A
  * job's last report reads the installed skills and the overview again.
  */
@@ -237,6 +256,7 @@ export const failureText: Record<GradingFailure, string> = {
   result_invalid: 'its result could not be read',
   archive_failed: 'its result could not be saved',
   internal_error: 'XTrace hit an error while saving it',
+  claude_unavailable: 'Claude Code was not found on this Mac when its turn came',
   other: 'of a reason this version of XTrace does not know',
 };
 
@@ -247,6 +267,56 @@ export const severity: Record<GradingSeverity, { label: string; tone: ControlTon
   info: { label: 'Note', tone: 'info' },
   pass: { label: 'Pass', tone: 'success' },
 };
+
+/** Why a run's details could not be shown. */
+export function detailsText(answer: Exclude<GradingRunDetails, { state: 'loaded' }>) {
+  switch (answer.state) {
+    case 'not_found':
+      return 'This grading is no longer stored. Grade the project again to see its details.';
+    case 'not_configured':
+      return 'Grading details are not available in this copy of XTrace.';
+    case 'failed':
+      return 'The details could not be read. Try again.';
+  }
+}
+
+/** Stored findings that could not be read. */
+export const FINDINGS_UNREADABLE = 'This grade’s stored findings could not be read.';
+
+/** Why a run shows no points per criterion, as a sentence. */
+export const criteriaGapText: Record<GradingRunGap, string> = {
+  folder_not_kept:
+    'Only the newest grades keep their saved files, and this one’s were removed, so its points per criterion are gone.',
+  not_reported: 'This grade has no points per criterion: it was made before skills had rubrics.',
+  unreadable:
+    'This grade’s saved files could not be read, so its points per criterion are not shown.',
+};
+
+/** Why a run's full report cannot be opened, as a sentence. */
+export const reportGapText: Record<GradingRunGap, string> = {
+  folder_not_kept: 'Only the newest grades keep their full report, and this one’s was removed.',
+  not_reported: 'The skill wrote no full report for this grade.',
+  unreadable: 'This grade’s full report could not be read.',
+};
+
+/** What an Open full report press that opened nothing says. */
+export function openReportText(answer: Exclude<GradingReportOpen, { state: 'opened' }>) {
+  switch (answer.state) {
+    case 'not_found':
+      return 'This grading is no longer stored, so there is no report to open.';
+    case 'content_deleted':
+      return 'Stored content was deleted, so the full report is gone.';
+    case 'unavailable':
+      return reportGapText[answer.reason];
+    case 'not_configured':
+      return 'Opening reports is not available in this copy of XTrace.';
+    case 'failed':
+      return OPEN_REPORT_FAILED;
+  }
+}
+
+/** An Open full report press whose request itself failed. */
+export const OPEN_REPORT_FAILED = 'The report could not be opened. Try again.';
 
 /** How long a run has been going, in the app's one way of writing agent time. */
 export const elapsedText = (seconds: number) => agentTime(seconds * 1000);
@@ -304,7 +374,29 @@ export function attemptText(attempt: GradingAttempt, elapsed: number | undefined
   }
 }
 
-/** Why another grading cannot start now, naming the one that is going. */
+/** A waiting grading's place in line, by how many wait before it. */
+const placeText = (ahead: number) => (ahead === 0 ? 'next in line' : `${ahead} ahead`);
+
+/** A waiting grading's row state, in words. */
+export const waitingText = (ahead: number) => `Waiting · ${placeText(ahead)}`;
+
+/**
+ * A waiting grading no row shows: which project, with which skill, its place
+ * in line, and why it has no row.
+ */
+export function waitingElsewhereText(waiting: GradingWaitingElsewhere) {
+  const project = waiting.project_name ?? waiting.project_path;
+  const skill = waiting.skill_name ? ` with ${waiting.skill_name}` : '';
+  return {
+    lead: `${project} is waiting to be graded${skill} · ${placeText(waiting.ahead)}`,
+    detail:
+      waiting.project_name === null
+        ? 'This project is no longer in your project list, so no row shows it.'
+        : 'This skill is not on Scores, so no row shows it.',
+  };
+}
+
+/** Why a rubric cannot be made now, naming the grading that is going. */
 export function oneAtATime(running: GradingRunningNow) {
   const project = running.project_name ?? running.project_path;
   const skill = running.skill_name ? ` with ${running.skill_name}` : '';
@@ -333,11 +425,14 @@ export function rubricOneAtATime(making: GradingRubricNow) {
   return `Only one grading runs at a time, and making a rubric counts as one. A rubric for ${making.name} is being made now; wait for it to finish or cancel it.`;
 }
 
-/** What a Grade press that did not start a run says. */
-export function startText(answer: Exclude<GradingStart, { state: 'started' }>, project: string) {
+/** What a Grade press that neither started a run nor joined the line says. */
+export function startText(
+  answer: Exclude<GradingStart, { state: 'started' } | { state: 'waiting' }>,
+  project: string,
+) {
   switch (answer.state) {
-    case 'busy':
-      return 'Only one grading runs at a time. Another grading is going now; wait for it to finish or cancel it.';
+    case 'already_going':
+      return `${project} is already being graded with this skill, or waiting to be.`;
     case 'not_a_project':
       return `${project} is no longer in your project list, so it was not graded.`;
     case 'unknown_skill':
@@ -359,9 +454,18 @@ export function startText(answer: Exclude<GradingStart, { state: 'started' }>, p
 export const STARTING = 'Starting a grading…';
 /** A Grade press whose request itself failed. */
 export const START_FAILED = 'The grading could not be started. Try again.';
-/** What a Cancel press says, by whether the run was still going. */
-export const cancelText = (stopping: boolean) =>
-  stopping ? 'Stopping the grading…' : 'That grading had already finished.';
+/**
+ * What a Cancel press says, by whether the run was still going (or, for a
+ * waiting one, still in line).
+ */
+export const cancelText = (stopping: boolean, waiting = false) =>
+  waiting
+    ? stopping
+      ? 'Cancelling the grading…'
+      : 'That grading was no longer waiting.'
+    : stopping
+      ? 'Stopping the grading…'
+      : 'That grading had already finished.';
 
 /** Why a rubric was refused, as the end of a sentence. */
 export const rubricProblemText: Record<GradingRubricProblem, string> = {
@@ -395,7 +499,7 @@ export const rubricProblemText: Record<GradingRubricProblem, string> = {
 /** The first letter of a sentence end, capitalised to start a line. */
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** A rubric problem as its own line in the Add a skill dialog. */
+/** A rubric problem as its own line in the Add a grading skill dialog. */
 export const rubricProblemLine = (problem: GradingRubricProblem) =>
   `${sentence(rubricProblemText[problem])}.`;
 
@@ -502,7 +606,7 @@ export function removeText(answer: Exclude<GradingSkillRemove, { state: 'removed
     case 'not_found':
       return 'This skill is already off Scores.';
     case 'running':
-      return 'This skill is grading a project now. Wait for it to finish or cancel it, then remove it.';
+      return 'This skill is grading a project now or waiting to. Wait for it to finish or cancel it, then remove it.';
     case 'not_configured':
       return 'Removing skills is not available in this copy of XTrace.';
     case 'failed':

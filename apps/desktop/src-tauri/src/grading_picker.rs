@@ -1,4 +1,4 @@
-//! The one rule for what the "Add a skill" dialog lists ([`picker`]).
+//! The one rule for what the "Add a grading skill" dialog lists ([`picker`]).
 //!
 //! * **Group** of an installed skill: ready (its folder opens as a grading
 //!   skill with a valid `xtrace-rubric.md`), rubric problem (its rubric is

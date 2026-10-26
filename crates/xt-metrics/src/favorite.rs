@@ -14,25 +14,54 @@ pub enum FavoriteUnknown {
     UnknownModelOutput,
     UnknownTurnAttribution,
 }
+/// At most this many named models get a row of their own in
+/// [`FavoriteModel::output_shares`]. One more is listed rather than folded,
+/// so a folded row always holds at least two models.
+pub const SHARE_MODEL_ROWS: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FavoriteModel {
     pub model: Option<String>,
     pub output_tokens: Option<u64>,
     pub unknown_reason: Option<FavoriteUnknown>,
+    /// Every model that wrote measured output in the window, largest first,
+    /// whether or not a favorite is known. Empty when no output was measured
+    /// or all of it was zero.
+    pub output_shares: Vec<OutputShare>,
+}
+/// One row of the window's measured output; its share is of the rows' sum.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OutputShare {
+    pub of: OutputShareOf,
+    pub output_tokens: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OutputShareOf {
+    Model {
+        model: String,
+    },
+    /// Output from responses that recorded no model.
+    UnknownModel,
+    /// The named models beyond [`SHARE_MODEL_ROWS`], together.
+    OtherModels {
+        models: u64,
+    },
 }
 impl FavoriteModel {
-    fn unknown(reason: FavoriteUnknown) -> Self {
+    fn unknown(reason: FavoriteUnknown, output_shares: Vec<OutputShare>) -> Self {
         Self {
             model: None,
             output_tokens: None,
             unknown_reason: Some(reason),
+            output_shares,
         }
     }
-    fn measured(model: String, output: u64) -> Self {
+    fn measured(model: String, output: u64, output_shares: Vec<OutputShare>) -> Self {
         Self {
             model: Some(model),
             output_tokens: Some(output),
             unknown_reason: None,
+            output_shares,
         }
     }
 }
@@ -72,6 +101,56 @@ impl Outputs {
                 .ok_or(Error::CounterOverflow)?;
         }
         Ok(())
+    }
+    /// The rows of [`FavoriteModel::output_shares`]: each named model with
+    /// output, by output and then name, up to [`SHARE_MODEL_ROWS`] when more
+    /// than one would be left over; the unknown-model output placed among them
+    /// by its size, after a named model of equal size; the folded rest last.
+    fn shares(&self) -> Result<Vec<OutputShare>> {
+        let mut rows: Vec<OutputShare> = self
+            .models
+            .iter()
+            .filter(|(_, output)| **output > 0)
+            .map(|(model, output)| OutputShare {
+                of: OutputShareOf::Model {
+                    model: model.clone(),
+                },
+                output_tokens: *output,
+            })
+            .collect();
+        // Stable: equal outputs keep the map's name order.
+        rows.sort_by(|a, b| b.output_tokens.cmp(&a.output_tokens));
+        let folded = if rows.len() > SHARE_MODEL_ROWS + 1 {
+            rows.split_off(SHARE_MODEL_ROWS)
+        } else {
+            Vec::new()
+        };
+        if self.unknown_output > 0 {
+            let at = rows
+                .iter()
+                .position(|named| named.output_tokens < self.unknown_output)
+                .unwrap_or(rows.len());
+            let unknown = OutputShare {
+                of: OutputShareOf::UnknownModel,
+                output_tokens: self.unknown_output,
+            };
+            rows.insert(at, unknown);
+        }
+        if !folded.is_empty() {
+            let mut output: u64 = 0;
+            for row in &folded {
+                output = output
+                    .checked_add(row.output_tokens)
+                    .ok_or(Error::CounterOverflow)?;
+            }
+            rows.push(OutputShare {
+                of: OutputShareOf::OtherModels {
+                    models: folded.len() as u64,
+                },
+                output_tokens: output,
+            });
+        }
+        Ok(rows)
     }
 }
 fn instant(raw: &str, column: usize) -> Result<InstantKey> {
@@ -145,6 +224,7 @@ impl MetricsDb {
     /// [`MetricsDb::favorite_model`] from the window's measured outputs,
     /// inside the caller's snapshot; a tie reads the window's turns.
     pub(crate) fn favorite_from(&self, window: Window, outputs: Outputs) -> Result<FavoriteModel> {
+        let shares = outputs.shares()?;
         let Outputs {
             models,
             unknown_output,
@@ -152,10 +232,16 @@ impl MetricsDb {
             measured,
         } = outputs;
         if !measured {
-            return Ok(FavoriteModel::unknown(FavoriteUnknown::NoMeasuredOutput));
+            return Ok(FavoriteModel::unknown(
+                FavoriteUnknown::NoMeasuredOutput,
+                shares,
+            ));
         }
         let Some(&leader) = models.values().max() else {
-            return Ok(FavoriteModel::unknown(FavoriteUnknown::UnknownModelOutput));
+            return Ok(FavoriteModel::unknown(
+                FavoriteUnknown::UnknownModelOutput,
+                shares,
+            ));
         };
         let contenders: Vec<String> = models
             .iter()
@@ -170,15 +256,23 @@ impl MetricsDb {
                 .max()
                 .unwrap_or(0);
             if contenders.len() != 1 || leader.saturating_sub(rival) <= unknown_output {
-                return Ok(FavoriteModel::unknown(FavoriteUnknown::UnknownModelOutput));
+                return Ok(FavoriteModel::unknown(
+                    FavoriteUnknown::UnknownModelOutput,
+                    shares,
+                ));
             }
         }
         if contenders.len() == 1 {
-            return Ok(FavoriteModel::measured(contenders[0].clone(), leader));
+            return Ok(FavoriteModel::measured(
+                contenders[0].clone(),
+                leader,
+                shares,
+            ));
         }
         let Some(turns) = self.favorite_turns(window, &contenders)? else {
             return Ok(FavoriteModel::unknown(
                 FavoriteUnknown::UnknownTurnAttribution,
+                shares,
             ));
         };
         // BTreeMap's lexical order resolves only fully measured turn ties.
@@ -188,7 +282,7 @@ impl MetricsDb {
             .find(|(_, count)| *count == peak)
             .unwrap()
             .0;
-        Ok(FavoriteModel::measured(model, leader))
+        Ok(FavoriteModel::measured(model, leader, shares))
     }
     fn favorite_turns(
         &self,
@@ -279,6 +373,127 @@ mod tests {
         path::PathBuf,
         sync::atomic::{AtomicBool, Ordering},
     };
+    fn outputs(rows: &[(Option<&str>, u64)]) -> Outputs {
+        let mut outputs = Outputs::default();
+        for (model, output) in rows {
+            outputs.push(*model, *output).unwrap();
+        }
+        outputs
+    }
+    /// Each row as `(name, output)`, the unknown-model row as `?` and the
+    /// folded row as `+N`.
+    fn rows(outputs: &Outputs) -> Vec<(String, u64)> {
+        outputs
+            .shares()
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let name = match row.of {
+                    OutputShareOf::Model { model } => model,
+                    OutputShareOf::UnknownModel => "?".into(),
+                    OutputShareOf::OtherModels { models } => format!("+{models}"),
+                };
+                (name, row.output_tokens)
+            })
+            .collect()
+    }
+    fn row(name: &str, output: u64) -> (String, u64) {
+        (name.into(), output)
+    }
+    #[test]
+    fn output_shares_of_one_model_and_of_none() {
+        assert_eq!(
+            rows(&outputs(&[(Some("A"), 10), (Some("A"), 5)])),
+            [row("A", 15)]
+        );
+        assert!(rows(&Outputs::default()).is_empty());
+        // Measured, but all zero: no row.
+        assert!(rows(&outputs(&[(Some("A"), 0), (None, 0)])).is_empty());
+    }
+    #[test]
+    fn output_shares_list_every_model_with_output_by_output_then_name() {
+        assert_eq!(
+            rows(&outputs(&[
+                (Some("C"), 1),
+                (Some("B"), 3),
+                (Some("A"), 3),
+                (Some("D"), 0),
+                (Some("C"), 1),
+                (Some("E"), 1),
+                (Some("F"), 1),
+                (Some("G"), 1),
+            ])),
+            [
+                row("A", 3),
+                row("B", 3),
+                row("C", 2),
+                row("E", 1),
+                row("F", 1),
+                row("G", 1),
+            ]
+        );
+    }
+    #[test]
+    fn output_shares_place_unknown_model_output_by_size() {
+        assert_eq!(
+            rows(&outputs(&[
+                (Some("A"), 62),
+                (None, 8),
+                (Some(" "), 0),
+                (Some("B"), 30),
+            ])),
+            [row("A", 62), row("B", 30), row("?", 8)]
+        );
+        // After a named model of equal size, before a smaller one.
+        assert_eq!(
+            rows(&outputs(&[(Some("A"), 40), (None, 40), (Some("B"), 20)])),
+            [row("A", 40), row("?", 40), row("B", 20)]
+        );
+        assert_eq!(rows(&outputs(&[(None, 10)])), [row("?", 10)]);
+    }
+    /// `count` named models, `M01` writing the most, each with output.
+    fn named(count: u64) -> Vec<(String, u64)> {
+        (1..=count).map(|n| (format!("M{n:02}"), 100 - n)).collect()
+    }
+    fn of_named(named: &[(String, u64)], extra: &[(Option<&str>, u64)]) -> Outputs {
+        let mut rows: Vec<(Option<&str>, u64)> = named
+            .iter()
+            .map(|(model, output)| (Some(model.as_str()), *output))
+            .collect();
+        rows.extend_from_slice(extra);
+        outputs(&rows)
+    }
+    #[test]
+    fn output_shares_list_one_more_model_rather_than_fold_it() {
+        let nine = named(SHARE_MODEL_ROWS as u64 + 1);
+        let listed: Vec<_> = nine.iter().map(|(m, o)| row(m, *o)).collect();
+        // A zero-output model is no row, so it does not cause a fold either.
+        assert_eq!(rows(&of_named(&nine, &[(Some("Z"), 0)])), listed);
+    }
+    #[test]
+    fn output_shares_fold_two_or_more_models_beyond_the_named_rows() {
+        let ten = named(SHARE_MODEL_ROWS as u64 + 2);
+        let mut expected: Vec<_> = ten[..SHARE_MODEL_ROWS]
+            .iter()
+            .map(|(m, o)| row(m, *o))
+            .collect();
+        expected.push(row("+2", 91 + 90));
+        assert_eq!(rows(&of_named(&ten, &[])), expected);
+        // The no-model row is not a named row: placed by its size, never folded.
+        let mut expected: Vec<_> = ten[..SHARE_MODEL_ROWS]
+            .iter()
+            .map(|(m, o)| row(m, *o))
+            .collect();
+        expected.insert(3, row("?", 97));
+        expected.push(row("+2", 91 + 90));
+        assert_eq!(rows(&of_named(&ten, &[(None, 97)])), expected);
+        // Ties at the limit keep name order; the later names fold.
+        let tied: Vec<(String, u64)> = (1..=11).map(|n| (format!("T{n:02}"), 5)).collect();
+        let shares = rows(&of_named(&tied, &[]));
+        assert_eq!(shares.len(), SHARE_MODEL_ROWS + 1);
+        assert_eq!(shares[SHARE_MODEL_ROWS - 1], row("T08", 5));
+        assert_eq!(shares[SHARE_MODEL_ROWS], row("+3", 15));
+    }
     #[test]
     fn favorite_comparison_and_turn_reads_share_snapshot_and_reuse_transaction() {
         let f = xt_fixtures::Fixture::load(

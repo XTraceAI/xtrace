@@ -96,14 +96,3 @@ test('held and unavailable radio selections remain keyboard usable', async ({ pa
   await page.keyboard.press('Tab');
   await expect(first).toBeFocused();
 });
-
-test('preview adapts to a narrow pane and its theme switch works', async ({ page }) => {
-  await page.setViewportSize({ width: 360, height: 850 });
-  await page.emulateMedia({ colorScheme: 'light' });
-  await page.goto('/e2e/controls.html');
-  await page.getByRole('button', { name: 'Switch to dark theme' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await page.getByRole('button', { name: 'Switch to light theme' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-});

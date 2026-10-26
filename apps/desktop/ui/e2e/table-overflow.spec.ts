@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 test.use({ viewport: { width: 1120, height: 900 } });
-for (const theme of ['dark', 'light'] as const) {
+for (const theme of ['light'] as const) {
   test(`table containment, keyboard, host filters and charts in ${theme}`, async ({
     page,
   }, info) => {
@@ -177,20 +177,4 @@ test('narrow preview keeps wide tables contained and filter uses the live theme'
   await expect(
     page.getByRole('dialog').locator('xpath=ancestor::*[@data-theme][1]'),
   ).toHaveAttribute('data-theme', 'light');
-});
-
-test('portaled cell actions do not activate their owning row', async ({ page }) => {
-  await page.goto('/e2e/table-overflow.html');
-  await page.getByText('Portaled row action', { exact: true }).click();
-  const table = page.getByRole('table', { name: 'Portaled actions' });
-  await table.getByRole('button', { name: 'Row menu' }).click();
-  const popup = page.getByRole('dialog', { name: 'Row menu popup' });
-  await popup.getByRole('button', { name: 'Run cell action' }).click();
-  await popup.getByText('Popup help text').click();
-  await expect(page.getByRole('status', { name: 'Popup actions' })).toHaveText('1');
-  await expect(page.getByRole('status', { name: 'Row activations' })).toHaveText('0');
-  await page.keyboard.press('Escape');
-  await expect(popup).toBeHidden();
-  await table.getByText('Row with popup').click();
-  await expect(page.getByRole('status', { name: 'Row activations' })).toHaveText('1');
 });

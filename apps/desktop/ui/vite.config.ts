@@ -1,6 +1,8 @@
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 
+const timezoneTests = 'src/kit/AccountUsageWidget.test.tsx';
+
 export default defineConfig({
   plugins: [tailwindcss()],
   clearScreen: false,
@@ -9,6 +11,26 @@ export default defineConfig({
   build: { target: 'safari17', assetsInlineLimit: 0 },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.{ts,tsx}'],
+    pool: 'vmThreads',
+    isolate: true,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['src/**/*.test.{ts,tsx}'],
+          exclude: [timezoneTests],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'timezone',
+          // Node applies process.env.TZ changes only in a real process.
+          pool: 'forks',
+          include: [timezoneTests],
+        },
+      },
+    ],
   },
 });

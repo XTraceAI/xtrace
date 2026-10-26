@@ -5,7 +5,10 @@ import { RuleChip } from './RuleChip';
 import { RULE_OPEN_DELAY_MS } from './RulePopover';
 import { ruleSummary } from './rules';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 it('associates a clearly named definition trigger with current rule text on focus', async () => {
   render(<RuleChip ruleId="M-06" subject="Concurrency" size="sm" />);
@@ -27,24 +30,27 @@ it('associates a clearly named definition trigger with current rule text on focu
 it('opens the short plain-language definition after a hover delay, not on a pass', async () => {
   render(<RuleChip ruleId="M-06" subject="Concurrency" />);
   const trigger = screen.getByRole('button', { name: 'About Concurrency' });
-  const hoveredAt = performance.now();
+  vi.useFakeTimers();
   fireEvent.mouseEnter(trigger);
   fireEvent.mouseMove(trigger);
   expect(screen.queryByRole('tooltip')).toBeNull();
-  const tooltip = await screen.findByRole('tooltip');
-  expect(performance.now() - hoveredAt).toBeGreaterThanOrEqual(RULE_OPEN_DELAY_MS - 50);
+  await act(() => vi.advanceTimersByTimeAsync(RULE_OPEN_DELAY_MS - 1));
+  expect(screen.queryByRole('tooltip')).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  const tooltip = screen.getByRole('tooltip');
   expect(tooltip.textContent).toBe(ruleSummary('M-06'));
   expect(tooltip.textContent).toContain('average');
   expect(tooltip.textContent).not.toContain('M-06');
 });
 
 it('does not open when the pointer passes over and leaves before the delay', async () => {
+  vi.useFakeTimers();
   render(<RuleChip ruleId="M-06" subject="Concurrency" />);
   const trigger = screen.getByRole('button', { name: 'About Concurrency' });
   fireEvent.mouseEnter(trigger);
   fireEvent.mouseMove(trigger);
   fireEvent.mouseLeave(trigger);
-  await new Promise((resolve) => setTimeout(resolve, RULE_OPEN_DELAY_MS + 100));
+  await act(() => vi.advanceTimersByTimeAsync(RULE_OPEN_DELAY_MS + 100));
   expect(screen.queryByRole('tooltip')).toBeNull();
 });
 

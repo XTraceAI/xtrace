@@ -6,7 +6,7 @@ import { calendarDay } from '../../kit/clock';
 import { agentTime } from '../agent-duration';
 import { evidenceWords } from '../pr-analytics';
 import { costCell, refreshStatusText, type BarMetric } from './pr-effort';
-import { plural, usd } from './present';
+import { plural, shareText, usd } from './present';
 import { NO_MODEL } from '../session-context';
 
 /**
@@ -165,12 +165,6 @@ export function scaleText(value: number, metric: BarMetric, unit: TimeUnit = HOU
 }
 
 const modelName = (model: MetricModelDayEffort) => model.model ?? NO_MODEL;
-
-function shareText(value: number, total: number) {
-  if (total <= 0) return '—';
-  const pct = (value / total) * 100;
-  return value > 0 && pct < 0.5 ? '<1%' : `${Math.round(pct)}%`;
-}
 
 /** Every model with a value on the day in this measure, largest first. */
 function modelParts(day: MetricEffortDay, metric: BarMetric, total: number): ModelPart[] {

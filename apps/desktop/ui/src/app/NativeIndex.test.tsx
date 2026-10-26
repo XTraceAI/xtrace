@@ -244,9 +244,7 @@ it('reconciles the data queries when the first status seen is already settled', 
   };
   mount(source);
   await screen.findByText('Ready (3 reconciliations)');
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await act(async () => {});
   expect(source.dbCounts).toHaveBeenCalledTimes(2);
   expect(source.nativeIndexStatus).toHaveBeenCalledTimes(1);
 });

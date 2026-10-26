@@ -37,7 +37,10 @@ pub use coverage::{
     SurfaceCapture, SurfaceUsageCoverage, UsageCoverage, UsageCoverageSummary, UsageGap, UsageGate,
 };
 pub use daily::{DayConcurrency, DayHandsOff};
-pub use favorite::{FavoriteComparison, FavoriteModel, FavoriteUnknown};
+pub use favorite::{
+    FavoriteComparison, FavoriteModel, FavoriteUnknown, OutputShare, OutputShareOf,
+    SHARE_MODEL_ROWS,
+};
 pub use hands_off::{ExcludedSurface, HandsOff};
 pub use human::{DayHuman, HumanTime};
 pub use human_hours::{BreakLength, DayHumanHours, HumanHours, HumanHoursPeriods, HumanStretch};
@@ -65,7 +68,7 @@ pub use span_detail::{
     AutomaticText, MAX_PROMPT_CHARS, PromptText, SpanAutomatic, SpanDetail, SpanPrompt, SpanTool,
     notification_summary, prompt_excerpt,
 };
-pub use spans::{ActiveSpan, ActiveSpanReport, DayActive};
+pub use spans::{ActiveSpan, ActiveSpanReport, DayActive, SessionOnDay, SessionsOnDay};
 pub use stats::Delta;
 pub use sweep::Concurrency;
 pub use tokens::{
@@ -159,6 +162,18 @@ impl MetricsDb {
         connection.prepare(&format!("{} LIMIT 0", untimed::QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", pr_effort::LINK_QUERY))?;
         Ok(Self { connection })
+    }
+
+    /// Observe or stop observing statements in a synthetic fixture database.
+    #[cfg(all(debug_assertions, feature = "fixtures"))]
+    pub fn observe_fixture_statements(
+        &self,
+        callback: Option<fn(rusqlite::trace::TraceEvent<'_>)>,
+    ) {
+        self.connection.trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            callback,
+        );
     }
 
     /// Compose read-only reports against one snapshot. Nested metric methods

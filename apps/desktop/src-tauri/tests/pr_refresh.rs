@@ -1539,13 +1539,15 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
             .unwrap();
     }
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (committed_tx, committed_rx) = mpsc::channel();
+    let (observed_tx, observed_rx) = mpsc::channel();
     let writer = {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
             let connection = rusqlite::Connection::open(&database).unwrap();
             connection.busy_timeout(Duration::from_secs(5)).unwrap();
             let mut linked = true;
-            while !stop.load(Ordering::SeqCst) {
+            let mut toggle = || {
                 let transaction = connection.unchecked_transaction().unwrap();
                 if linked {
                     transaction
@@ -1574,15 +1576,31 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
                 }
                 transaction.commit().unwrap();
                 linked = !linked;
+                linked
+            };
+            // Hold each committed initial state until the real reader has
+            // observed it, then leave the writer free to race the later reads.
+            for _ in 0..2 {
+                committed_tx.send(toggle()).unwrap();
+                observed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            }
+            while !stop.load(Ordering::SeqCst) {
+                if matches!(
+                    observed_rx.try_recv(),
+                    Err(mpsc::TryRecvError::Disconnected)
+                ) {
+                    break;
+                }
+                toggle();
             }
         })
     };
 
     let mut listed_linked = 0;
     let mut listed_absent = 0;
-    for _ in 0..400 {
+    let mut read = |expected: Option<bool>| {
         let listed = app.state.pr_list().unwrap();
-        match listed.rows.iter().find(|row| row.pull_request.id == beta) {
+        let linked = match listed.rows.iter().find(|row| row.pull_request.id == beta) {
             // A listed row is a linked row, so its title must say so. A split
             // read could list it with the title it had while unlinked.
             Some(row) => {
@@ -1593,8 +1611,18 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
                 );
                 assert_eq!(row.linked_sessions, 1);
                 listed_linked += 1;
+                true
             }
-            None => listed_absent += 1,
+            None => {
+                listed_absent += 1;
+                false
+            }
+        };
+        if let Some(expected) = expected {
+            assert_eq!(
+                linked, expected,
+                "the reader observed the acknowledged commit"
+            );
         }
         // The selection path reads the same snapshot: a stored ID always
         // resolves, whether or not it is still linked.
@@ -1615,10 +1643,21 @@ fn a_concurrent_writer_is_never_observed_half_applied() {
             report.rows[0].outcome
         );
         assert!(report.rows[0].pull_request.is_some());
+    };
+    for expected in [false, true] {
+        assert_eq!(
+            committed_rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+            expected
+        );
+        read(Some(expected));
+        observed_tx.send(()).unwrap();
+    }
+    for _ in 0..400 {
+        read(None);
     }
     stop.store(true, Ordering::SeqCst);
     writer.join().unwrap();
-    // The writer really did move the row both ways while the reads ran.
+    // Both committed states were observed, alongside the free-running reads.
     assert!(
         listed_linked > 0 && listed_absent > 0,
         "the interleaving never happened: {listed_linked} linked, {listed_absent} absent"

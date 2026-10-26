@@ -4,6 +4,11 @@ import { MemoryRouter } from 'react-router';
 import fixture from '../fixtures/F1.json';
 import { AppRoutes } from '../src/app/AppRoutes';
 import {
+  detailsFor,
+  detailsScenario,
+  type DetailsScenario,
+} from '../src/app/scores/details.synthetic';
+import {
   linkKeep,
   linkLookup,
   type LinkKeepScenario,
@@ -25,7 +30,7 @@ import '../src/index.css';
  * installed skills and `?path=` the address. Nothing runs: every start,
  * cancel, add, remove and rubric making is recorded on `window.__grading`
  * for the spec to count. Starts are answered as `?start=` says (started by
- * default). An add is answered as `?add=` says (added by default); an
+ * default; `waiting` puts it in line with its own run ID). An add is answered as `?add=` says (added by default); an
  * answered add moves the installed skills to `added` and the overview to
  * `added`, as the app would after storing it. A Make a rubric press is
  * answered as `?make=` says (started by default); a started one moves the
@@ -34,7 +39,9 @@ import '../src/index.css';
  * answered as `?link=` says (`several` by default, `one`, an error state, or
  * `wait` to stay unanswered until cancelled) and a Keep as `?keep=` says
  * (`kept_several` by default, `kept_one`, `changed`, or another state); each
- * is recorded too.
+ * is recorded too. A run's details are the synthetic answer for that run
+ * (`details.synthetic.json`), or the one `?details=` names; Open full report
+ * is answered as `?report=` says (`opened` by default) and recorded.
  */
 const params = new URLSearchParams(location.search);
 let name = (params.get('scenario') ?? 'graded') as Scenario;
@@ -52,6 +59,8 @@ const calls = {
   linkCancels: 0,
   keeps: [] as [string, string[]][],
   discards: [] as string[],
+  details: [] as string[],
+  reports: [] as string[],
 };
 let waiting: (() => void) | null = null;
 Object.assign(window, { __grading: calls });
@@ -66,9 +75,9 @@ const controls: GradingControls = {
   start: async (projectPath, skillId) => {
     calls.starts.push([projectPath, skillId]);
     const state = params.get('start') ?? 'started';
-    return state === 'started'
-      ? { state, run_id: '00000000-0000-4000-8000-0000000000ff' }
-      : ({ state } as Awaited<ReturnType<GradingControls['start']>>);
+    if (state === 'started') return { state, run_id: '00000000-0000-4000-8000-0000000000ff' };
+    if (state === 'waiting') return { state, run_id: '00000000-0000-4000-8000-0000000000fd' };
+    return { state } as Awaited<ReturnType<GradingControls['start']>>;
   },
   cancel: async (runId) => {
     calls.cancels.push(runId);
@@ -130,6 +139,18 @@ const controls: GradingControls = {
   linkDiscard: async (lookupId) => {
     calls.discards.push(lookupId);
     return true;
+  },
+  runDetails: async (runId) => {
+    calls.details.push(runId);
+    const named = params.get('details') as DetailsScenario | null;
+    return named ? detailsScenario(named) : detailsFor(runId);
+  },
+  openReport: async (runId) => {
+    calls.reports.push(runId);
+    const state = params.get('report') ?? 'opened';
+    if (state === 'opened') return { state };
+    if (state === 'unavailable') return { state, reason: 'folder_not_kept' };
+    return { state } as Awaited<ReturnType<GradingControls['openReport']>>;
   },
 };
 const source = new FixtureDataSource(fixture as FixtureExport);

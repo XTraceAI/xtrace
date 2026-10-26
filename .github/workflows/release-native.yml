@@ -305,7 +305,8 @@ jobs:
           xcrun --show-sdk-version >> artifacts/hosted-updater-failures/toolchain.log
           shasum -a 256 Cargo.lock >> artifacts/hosted-updater-failures/toolchain.log
           cargo +1.94.1 build --locked -p xtrace-desktop --example updater_failures 2>&1 | tee artifacts/hosted-updater-failures/sdk-build.log
-          xcrun swiftc -module-cache-path target/hosted-updater-swift-cache.noindex scripts/ci/hosted-updater-cancel.swift -o target/debug/hosted-updater-cancel 2>&1 | tee artifacts/hosted-updater-failures/observer-build.log
+          node scripts/ci/hosted-swift.mjs hosted-updater-cancel target/hosted-updater-cancel.swift
+          xcrun swiftc -module-cache-path target/hosted-updater-swift-cache.noindex target/hosted-updater-cancel.swift -o target/debug/hosted-updater-cancel 2>&1 | tee artifacts/hosted-updater-failures/observer-build.log
           shasum -a 256 target/debug/examples/updater_failures target/debug/hosted-updater-cancel > artifacts/hosted-updater-failures/built-helpers.log
           node --test scripts/ci/hosted-updater-failures.test.mjs
       - name: Exercise real SDK rejection and one bounded Cancel-only permission attempt

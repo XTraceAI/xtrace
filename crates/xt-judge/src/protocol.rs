@@ -38,7 +38,7 @@
 
 use serde::Serialize;
 use serde_json::{Map, Value};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use xt_probes::regular_file::{self, RegularFileError};
 
 /// The protocol version this reader accepts.
@@ -219,7 +219,10 @@ pub fn parse(bytes: &[u8], grade_dir: &Path) -> Result<GradeResult, ResultError>
     let insights = items.iter().map(insight).collect::<Result<Vec<_>, _>>()?;
     let report = match object.get("report") {
         Some(Value::Null) => None,
-        Some(Value::String(path)) => Some(report(path, grade_dir)?),
+        Some(Value::String(path)) => {
+            report_path(path, grade_dir)?;
+            Some(path.clone())
+        }
         _ => return Err(ResultError::ReportPath),
     };
     let complete = object
@@ -364,9 +367,13 @@ pub fn report_name_storable(path: &str) -> bool {
     !path.contains("..")
 }
 
-/// A relative path naming an existing regular `.html` file inside the grade
-/// folder and outside its work folder.
-fn report(path: &str, grade_dir: &Path) -> Result<String, ResultError> {
+/// The one rule for a report path: a relative path of plain steps naming an
+/// existing regular `.html` file (its last step not a link) inside the grade
+/// folder, links resolved, and outside its work folder. Returns the file's
+/// resolved path, inside the grade folder's resolved path. The result reader
+/// checks a result's `report` with it, and so does anything that opens a
+/// kept report.
+pub fn report_path(path: &str, grade_dir: &Path) -> Result<PathBuf, ResultError> {
     let relative = Path::new(path);
     if path.is_empty()
         || path.len() > MAX_REPORT_PATH_BYTES
@@ -405,7 +412,7 @@ fn report(path: &str, grade_dir: &Path) -> Result<String, ResultError> {
     if in_work_folder(inside) {
         return Err(ResultError::ReportInWorkFolder);
     }
-    Ok(path.to_owned())
+    Ok(resolved)
 }
 
 /// Whether a path relative to the grade folder lies in its work folder.
@@ -572,6 +579,11 @@ mod tests {
             parse(&serde_json::to_vec(&result).unwrap(), &grade).map(|result| result.report)
         };
         assert_eq!(parse_report("report.html"), Ok(Some("report.html".into())));
+        // The resolved path is the file inside the folder's resolved path.
+        assert_eq!(
+            report_path("sub/r.html", &grade),
+            Ok(std::fs::canonicalize(&grade).unwrap().join("sub/r.html"))
+        );
         assert_eq!(parse_report("sub/r.html"), Ok(Some("sub/r.html".into())));
         assert_eq!(parse_report("work.html"), Ok(Some("work.html".into())));
         for not_html in [

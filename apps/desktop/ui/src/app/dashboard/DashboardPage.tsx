@@ -22,7 +22,7 @@ import { OverviewCard } from './OverviewCard';
 import { type AutoCheck, type EffortMetric } from './pr-effort';
 import { PrRefresh } from './PrRefresh';
 import { SplitHandle } from './SplitHandle';
-import { favoriteUnknownText, plainReason, plural } from './present';
+import { favoriteUnknownText, outputShareRows, plainReason, plural } from './present';
 import { useDashboardReport, useSelectedRange } from './range';
 import '../../styles/dashboard.css';
 
@@ -32,7 +32,8 @@ export function DashboardPage() {
   const range = useSelectedRange();
   const report = useDashboardReport(range);
   // Kept while another range loads, like the open measurement detail.
-  const [effortMetric, setEffortMetric] = useState<EffortMetric>('agent');
+  // Opens on human + agent; not remembered, so every visit starts there.
+  const [effortMetric, setEffortMetric] = useState<EffortMetric>('paired');
   const autoCheck = source.prAutoCheck;
   const auto = useQuery({
     queryKey: queryKeys.prAutoCheck,
@@ -136,6 +137,12 @@ function DashboardReport({
           favorite{' '}
           <RulePopover
             ruleId="M-10"
+            table={{
+              caption: 'Share of output tokens',
+              bare: true,
+              columns: ['Model', 'Share'],
+              rows: outputShareRows(favorite.current.output_shares),
+            }}
             context={
               favorite.previous.model
                 ? `Previous period: ${favorite.previous.model}.`
@@ -186,7 +193,7 @@ function DashboardReport({
             </>
           }
         >
-          <EffortByType report={report} metric={effortMetric} />
+          <EffortByType report={report} metric={effortMetric} range={range} />
         </DashCard>
         {/* Must sit directly between Effort and Overview: it resizes its siblings. */}
         <SplitHandle

@@ -23,6 +23,10 @@ pub enum AccountUsageIssue {
     Network,
     InvalidResponse,
     SourceUnavailable,
+    /// The user's Claude Code is signed out (its own `claude auth status`
+    /// says `loggedIn: false`), so `/usage` shows no plan limits. Found only
+    /// after a failed Claude read; signing in again in Terminal fixes it.
+    SignedOut,
     /// No Claude read has run and none is scheduled (automatic reads are
     /// off). Never a read outcome.
     NotFetched,
@@ -123,6 +127,13 @@ pub struct AccountProviderUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub stale_at: Option<i64>,
+    /// Unix seconds until which the app checks every minute whether Claude
+    /// Code is signed in again, after the user chose to sign in, and reads
+    /// usage as soon as it is. Absent otherwise and for Codex. Never saved
+    /// with the reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub sign_in_watch_until: Option<i64>,
     pub windows: Vec<AccountUsageWindow>,
 }
 

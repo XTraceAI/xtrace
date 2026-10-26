@@ -864,7 +864,10 @@ fn upgrading_an_existing_index_adds_an_empty_relation_store() {
     let before = sessions(&connection);
     for _ in 0..2 {
         let store = open(&directory);
-        assert_eq!(store.schema_version().unwrap(), 26);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            xt_store::LATEST_SCHEMA_VERSION
+        );
         assert_eq!(sessions(&connection), before);
         assert!(store.session_creation(&id(CHILD)).unwrap().is_none());
         assert_eq!(

@@ -1,6 +1,7 @@
+import { Popover } from '@base-ui/react/popover';
 import { Tooltip } from '@base-ui/react/tooltip';
 import {
-  useId,
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -9,27 +10,29 @@ import {
   type KeyboardEvent,
 } from 'react';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
+import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import { UNMEASURED } from '../../kit/format';
+import { Icon } from '../../kit/icons';
+import type { TimeRange } from '../../kit/TopBar';
 import { useSurfaceTheme } from '../../theme/ThemeProvider';
 import { agentTime } from '../agent-duration';
-import { continuous } from '../metric-format';
+import { leverageText } from '../metric-format';
+import { DaySessions } from './DaySessions';
 import {
   QUARTERS,
-  RIDGE_HEIGHT,
-  RIDGE_WIDTH,
-  agentRidges,
+  LINE_HEIGHT,
+  LINE_WIDTH,
+  AT_OR_BELOW_EVEN,
+  agentLines,
   timelineRows,
-  type AgentRidge,
+  type AgentLine,
   type TimelineRow,
 } from './overview';
+import { timelineRowHeight } from './timeline-rows';
 import '../../styles/overview.css';
 
-/** The 7-day range's eight days fill the plot; longer ranges keep that row size and scroll. */
-export const VISIBLE_ROWS = 8;
-/** Below this a row's bar and its gap stop reading as separate rows. */
-const MIN_ROW_PX = 28;
-/** With the agent ridge: a taller track, so the ridge's height reads. */
-const MIN_PAIRED_ROW_PX = 34;
+/** The totals columns whose widths follow their widest text. */
+const TOTAL_COLUMNS = ['you', 'agents', 'leverage'] as const;
 const HOURS = ['00', '06', '12', '18', '24'];
 
 /**
@@ -47,30 +50,62 @@ const HOURS = ['00', '06', '12', '18', '24'];
  *
  * The timeline is one tab stop: one day row at a time (today at first). Up and
  * Down move to the day before or after, Home and End to the first and last;
- * a focused day opens its card, as hovering does.
+ * a focused day opens its card, as hovering does. In "human + agent" a day's
+ * date also opens a box of its sessions, each a link: hovering the date opens
+ * it, and Enter on the focused day moves focus into it; Escape returns to the
+ * day.
  */
 export function HumanTimeline({
   report,
+  range,
   withAgents = false,
 }: {
   report: DashboardMetrics;
+  /** The Dashboard's range, which a day card's session links carry. */
+  range: TimeRange;
   /**
-   * The "human + agent" view: each day's agent time as a ridge rising from
-   * the bottom of its track, as tall as the agents running on average in
-   * each wall-clock quarter-hour on the report's one scale, and your time as
-   * a thin line along the bottom.
+   * The "human + agent" view: each day's agent time as a thin line across
+   * its track, as high as the agents running on average in each wall-clock
+   * quarter-hour on the report's one scale, over soft bands where you were
+   * working.
    */
   withAgents?: boolean;
 }) {
   const human = report.human_hours.current;
   const rows = useMemo(() => timelineRows(human.by_day, report.window), [human, report.window]);
-  const ridges = useMemo(
+  const lines = useMemo(
     () =>
-      withAgents ? agentRidges(report.leverage.by_day, report.leverage.ridge_top_agents) : null,
+      withAgents ? agentLines(report.leverage.by_day, report.leverage.agents_scale_top) : null,
     [withAgents, report.leverage],
   );
-  const minRow = withAgents ? MIN_PAIRED_ROW_PX : MIN_ROW_PX;
+  const root = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  // No total is capped: a busy day's agent hours or a tiny day's leverage
+  // can be far wider than usual. Each totals column is as wide as its
+  // widest text in any row, never narrower than its usual width (in CSS);
+  // the axis and every row read the same widths, so they stay aligned.
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!withAgents || !element) return;
+    let live = true;
+    const fit = () => {
+      if (!live) return;
+      for (const key of TOTAL_COLUMNS) {
+        const widths = [
+          ...element.querySelectorAll<HTMLElement>(
+            `.xt-human-total[data-key="${key}"] > .xt-human-total-text`,
+          ),
+        ].map((text) => text.getBoundingClientRect().width);
+        element.style.setProperty(`--${key}-col`, `${Math.ceil(Math.max(0, ...widths))}px`);
+      }
+    };
+    fit();
+    // Measured again once the mono font has loaded.
+    void document.fonts?.ready.then(fit);
+    return () => {
+      live = false;
+    };
+  }, [withAgents, rows, lines]);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const [above, setAbove] = useState(false);
   /** The range the view last opened on today for; `null` before the first. */
@@ -82,7 +117,22 @@ export function HumanTimeline({
   const [chosen, setChosen] = useState<string | null>(null);
   const found = rows.findIndex((row) => row.date === chosen);
   const current = found >= 0 ? found : rows.length - 1;
+  /**
+   * The one day whose sessions box is open, in "human + agent". Opening a
+   * day's box closes any other at once, without waiting for the pointer to
+   * move: a hover popup only notices the pointer has left when it moves.
+   */
+  const [sessionsDay, setSessionsDay] = useState<string | null>(null);
+  // A box whose day is no longer drawn (a refresh moved the range on, or the
+  // view left "human + agent") is closed, never reopened when that day comes
+  // back with no pointer or focus on it.
+  if (sessionsDay !== null && (!withAgents || !rows.some((row) => row.date === sessionsDay)))
+    setSessionsDay(null);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Keys pressed inside a day's sessions box (it is portalled, but its
+    // events still pass through here) are the box's own.
+    if (!(event.target instanceof HTMLElement) || !event.target.classList.contains('xt-human-row'))
+      return;
     const next = {
       ArrowUp: current - 1,
       ArrowDown: current + 1,
@@ -99,14 +149,13 @@ export function HumanTimeline({
   useLayoutEffect(() => {
     const element = body.current;
     if (!element) return;
-    const fit = () =>
-      setRowHeight(Math.max(minRow, Math.floor(element.clientHeight / VISIBLE_ROWS)));
+    const fit = () => setRowHeight(timelineRowHeight(element.clientHeight, withAgents));
     fit();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(fit);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [minRow]);
+  }, [withAgents]);
   // Open on today, the last row, for each new range; follow a change of row
   // height. Nothing here runs for a new report of the same range.
   useLayoutEffect(() => {
@@ -128,6 +177,7 @@ export function HumanTimeline({
   const unknown = human.active_ms === null;
   return (
     <div
+      ref={root}
       className="xt-effort xt-human"
       data-testid="human-timeline"
       data-variant={withAgents ? 'paired' : undefined}
@@ -153,7 +203,29 @@ export function HumanTimeline({
               <span key={hour}>{hour}</span>
             ))}
           </span>
-          <span />
+          {withAgents ? (
+            <>
+              <span className="xt-human-total-head" data-testid="human-total-head">
+                <Icon name="person" size={13} />
+              </span>
+              <span
+                className="xt-human-total-head"
+                data-key="agents"
+                data-testid="agent-total-head"
+              >
+                <Icon name="bot" size={13} />
+              </span>
+              <span
+                className="xt-human-total-head"
+                data-key="leverage"
+                data-testid="leverage-total-head"
+              >
+                <Icon name="bolt" size={13} />
+              </span>
+            </>
+          ) : (
+            <span />
+          )}
         </div>
         <div
           ref={body}
@@ -175,10 +247,16 @@ export function HumanTimeline({
             <Row
               key={row.date}
               row={row}
-              ridge={ridges?.get(row.date) ?? (ridges ? null : undefined)}
+              line={lines?.get(row.date) ?? (lines ? null : undefined)}
               lower={index >= rows.length / 2}
               current={index === current}
               onFocus={() => setChosen(row.date)}
+              sessionsOpen={sessionsDay === row.date}
+              onSessions={(open) =>
+                setSessionsDay((day) => (open ? row.date : day === row.date ? null : day))
+              }
+              window={report.window}
+              range={range}
             />
           ))}
         </div>
@@ -199,24 +277,30 @@ function PairedHeadline({ report }: { report: DashboardMetrics }) {
   return (
     <p className="xt-effort-headline xt-paired-headline" data-testid="effort-headline">
       <span className="xt-paired-stat">
-        <span className="xt-paired-key" data-key="you" aria-hidden="true" />
+        <span className="xt-paired-key" data-key="you" role="img" aria-label="Your time">
+          <Icon name="person" size={16} />
+          <span className="xt-paired-swatch" data-key="band" />
+        </span>
         <strong data-testid="effort-total">
           {unknown ? 'human time unknown' : agentTime(human.active_ms!)}
         </strong>
-        {!unknown && <small>you</small>}
       </span>
       <span className="xt-paired-stat">
-        <span className="xt-paired-key" data-key="ridge" aria-hidden="true" />
+        <span className="xt-paired-key" data-key="agents" role="img" aria-label="Agent time">
+          <Icon name="bot" size={16} />
+          <svg className="xt-paired-swatch" data-key="line" viewBox="0 0 22 12" focusable="false">
+            <path d="M0,10 L5,9 L8,4 L12,6 L16,2 L22,7" />
+          </svg>
+        </span>
         <strong data-testid="effort-agent-total">{agentTime(report.leverage.agent_ms)}</strong>
-        <small>agents</small>
       </span>
+      {unknown && <small>Could not tell which messages a person sent.</small>}
       <span className="xt-paired-stat" data-stat="leverage">
         <strong data-testid="effort-leverage">
-          {leverage === null ? UNMEASURED : `${continuous(leverage)}×`}
+          {leverage === null ? UNMEASURED : leverageText(leverage)}
         </strong>
         <small>agent time per hour of yours</small>
       </span>
-      {unknown && <small>Could not tell which messages a person sent.</small>}
     </p>
   );
 }
@@ -229,27 +313,81 @@ const isAtBottom = (element: HTMLElement) =>
  * One day: a list item whose name lists every stretch, and whose card opens
  * on hover or focus. Only the current day is in the tab order; arrow keys
  * move between days. Each bar also names its own times.
+ *
+ * In "human + agent" the date also opens the day's sessions box, a list of
+ * links, on hover; the pointer can move from the date into it. Enter or
+ * Space on the focused day opens it with focus on its first session, and
+ * Escape closes it and returns focus to the day. A click on the date does
+ * nothing, so it never leaves a box pinned open. Only one of the day's two
+ * boxes shows at a time: the card waits until the sessions box has gone.
+ * Whether the box is open is the timeline's, which keeps one open at most.
  */
 function Row({
   row,
-  ridge,
+  line,
   lower,
   current,
   onFocus,
+  sessionsOpen,
+  onSessions,
+  window,
+  range,
 }: {
   row: TimelineRow;
-  /** The day's agent ridge in the "human + agent" view; `null` there when the report has none. */
-  ridge?: AgentRidge | null;
+  /** The day's agents line in the "human + agent" view; `null` there when the report has none. */
+  line?: AgentLine | null;
   lower: boolean;
   current: boolean;
   onFocus: () => void;
+  /** The day's sessions box is open: the timeline's one open box. */
+  sessionsOpen: boolean;
+  /** Ask to open or close the day's sessions box. */
+  onSessions: (open: boolean) => void;
+  /** The report's window, which names the day's sessions read. */
+  window: DashboardWindow;
+  /** The Dashboard's range, which the day's session links carry. */
+  range: TimeRange;
 }) {
   const theme = useSurfaceTheme();
-  const paired = ridge !== undefined;
+  const paired = line !== undefined;
   /** The quarter under the pointer, and where along the track it is, in pixels. */
   const [pointer, setPointer] = useState<{ quarter: number; x: number } | null>(null);
-  // One gradient per row: an id the document can reference.
-  const gradient = `xt-ridge-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  /** The pointer is on the track: the hairline shows. */
+  const [onTrack, setOnTrack] = useState(false);
+  /** Hover or focus asks for the day's card. */
+  const [card, setCard] = useState(false);
+  /** The sessions box is open or still closing; the card waits until it has gone. */
+  const [sessionsShown, setSessionsShown] = useState(false);
+  const day = useRef<HTMLElement | null>(null);
+  const dayRef = useCallback((element: HTMLElement | null) => {
+    day.current = element;
+  }, []);
+  const popup = useRef<HTMLDivElement | null>(null);
+  /** Enter asked for focus on the first session, which may not be read yet. */
+  const entering = useRef(false);
+  const enter = (box: HTMLElement) => {
+    const link = box.querySelector<HTMLElement>('a[href]');
+    if (link) {
+      entering.current = false;
+      link.focus();
+    } else box.focus();
+  };
+  const popupRef = useCallback((element: HTMLDivElement | null) => {
+    popup.current = element;
+    if (element && entering.current) enter(element);
+  }, []);
+  // The sessions arrive after the box opened from the keyboard: focus moves
+  // from the box onto the first of them.
+  const listRef = useCallback((list: HTMLElement | null) => {
+    if (list && entering.current && document.activeElement === popup.current) enter(list);
+  }, []);
+  // Another day's box opening closes this one: focus inside it goes back to
+  // the day rather than being lost with the box.
+  useLayoutEffect(() => {
+    if (sessionsOpen) return;
+    entering.current = false;
+    if (popup.current?.contains(document.activeElement)) day.current?.focus();
+  }, [sessionsOpen]);
   const track = (
     <span
       className="xt-human-track"
@@ -261,29 +399,30 @@ function Row({
               if (box.width <= 0) return;
               const x = Math.max(0, Math.min(box.width - 1, event.clientX - box.left));
               setPointer({ quarter: Math.floor((x / box.width) * QUARTERS), x });
+              setOnTrack(true);
             }
           : undefined
       }
-      onPointerLeave={paired ? () => setPointer(null) : undefined}
+      onPointerLeave={
+        paired
+          ? (event) => {
+              setOnTrack(false);
+              // Onto the day's totals the card stays open and drops the
+              // quarter now. Off the day, or onto its date, the card closes
+              // and keeps it until it has gone: a card whose content changed
+              // as it closed would resize under the positioner's own size
+              // watcher (a ResizeObserver loop in WebKit).
+              const to = event.relatedTarget;
+              if (
+                to instanceof Element &&
+                event.currentTarget.parentElement?.contains(to) &&
+                !to.closest('.xt-human-day')
+              )
+                setPointer(null);
+            }
+          : undefined
+      }
     >
-      {paired && ridge?.path && (
-        <svg
-          className="xt-agent-ridge"
-          data-testid="agent-ridge"
-          viewBox={`0 0 ${RIDGE_WIDTH} ${RIDGE_HEIGHT}`}
-          preserveAspectRatio="none"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <defs>
-            <linearGradient id={gradient} x1="0" y1="1" x2="0" y2="0">
-              <stop offset="0" className="xt-agent-ridge-stop" stopOpacity={0.55} />
-              <stop offset="1" className="xt-agent-ridge-stop" stopOpacity={0.18} />
-            </linearGradient>
-          </defs>
-          <path d={ridge.path} fill={`url(#${gradient})`} />
-        </svg>
-      )}
       {row.bars.map((bar, index) => (
         <span
           key={index}
@@ -316,7 +455,19 @@ function Row({
           ))}
         </span>
       ))}
-      {pointer && (
+      {paired && line?.path && (
+        <svg
+          className="xt-agent-line"
+          data-testid="agent-line"
+          viewBox={`0 0 ${LINE_WIDTH} ${LINE_HEIGHT}`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path d={line.path} vectorEffect="non-scaling-stroke" />
+        </svg>
+      )}
+      {pointer && onTrack && (
         <span
           className="xt-human-hair"
           data-testid="agent-hairline"
@@ -327,11 +478,20 @@ function Row({
     </span>
   );
   const name = paired
-    ? `${row.name}; agents: ${ridge ? `${ridge.spoken}${ridge.busiest ? `, busiest 15 minutes at ${ridge.busiest}` : ''}` : 'unknown'}`
+    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}; Enter opens the day’s sessions`
     : row.name;
-  return (
-    <Tooltip.Root disableHoverablePopup>
+  const sessionsName = `Sessions on ${row.label}`;
+  const dayCard = (
+    <Tooltip.Root
+      disableHoverablePopup
+      open={card && !sessionsShown}
+      onOpenChange={(open) => setCard(open)}
+      onOpenChangeComplete={(open) => {
+        if (!open) setPointer(null);
+      }}
+    >
       <Tooltip.Trigger
+        ref={dayRef}
         delay={0}
         closeOnClick={false}
         render={
@@ -339,6 +499,23 @@ function Row({
             role="listitem"
             tabIndex={current ? 0 : -1}
             onFocus={onFocus}
+            onKeyDown={
+              paired
+                ? (event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    entering.current = true;
+                    // An open box takes focus now; a closed (or closing) one
+                    // opens and takes it once shown.
+                    if (sessionsOpen && popup.current) enter(popup.current);
+                    else {
+                      setSessionsShown(true);
+                      onSessions(true);
+                    }
+                  }
+                : undefined
+            }
             aria-label={name}
             className="xt-human-row"
             data-testid="human-day"
@@ -346,11 +523,54 @@ function Row({
           />
         }
       >
-        <span className="xt-human-day" data-weekend={row.weekend || undefined}>
-          {row.label}
-        </span>
+        {paired ? (
+          <Popover.Trigger
+            nativeButton={false}
+            openOnHover
+            delay={0}
+            // Not a tab stop: the day is, and Enter on it opens this box.
+            tabIndex={-1}
+            aria-label={sessionsName}
+            // Focus that lands on the date (a click, or Shift+Tab out of the
+            // box) belongs to the day.
+            onFocus={() => day.current?.focus()}
+            render={<span className="xt-human-day" data-weekend={row.weekend || undefined} />}
+          >
+            {row.label}
+          </Popover.Trigger>
+        ) : (
+          <span className="xt-human-day" data-weekend={row.weekend || undefined}>
+            {row.label}
+          </span>
+        )}
         {track}
-        <span className="xt-human-total">{row.total ?? '—'}</span>
+        <span
+          className="xt-human-total"
+          data-key={paired ? 'you' : undefined}
+          data-unknown={paired && row.total === null ? '' : undefined}
+        >
+          {paired ? (
+            <span className="xt-human-total-text">{line?.yourHours ?? UNMEASURED}</span>
+          ) : (
+            (row.total ?? '—')
+          )}
+        </span>
+        {paired && (
+          <span className="xt-human-total" data-key="agents" data-testid="agent-row-total">
+            <span className="xt-human-total-text">{line ? line.hours : UNMEASURED}</span>
+          </span>
+        )}
+        {paired && (
+          <span
+            className="xt-human-total"
+            data-key="leverage"
+            data-unknown={line?.leverage ? undefined : ''}
+            data-low={line?.atOrBelowEven ? '' : undefined}
+            data-testid="leverage-row-total"
+          >
+            <span className="xt-human-total-text">{line?.leverage ?? UNMEASURED}</span>
+          </span>
+        )}
       </Tooltip.Trigger>
       <Tooltip.Portal data-theme={theme}>
         <Tooltip.Positioner
@@ -382,18 +602,27 @@ function Row({
                 <span className="xt-effort-tip-divider" />
                 <span className="xt-effort-tip-row" data-agent="">
                   <span>Agent time</span>
-                  <b data-testid="agent-day-total">{ridge ? ridge.total : 'unknown'}</b>
+                  <b data-testid="agent-day-total">{line ? line.total : 'unknown'}</b>
                 </span>
-                {ridge?.busiest && (
+                {line?.busiest && (
                   <span className="xt-effort-tip-row">
                     <span>Busiest 15 min</span>
-                    <em>{ridge.busiest}</em>
+                    <em>{line.busiest}</em>
                   </span>
                 )}
-                {ridge && pointer && (
+                <span
+                  className="xt-effort-tip-row"
+                  data-low={line?.atOrBelowEven ? '' : undefined}
+                  data-testid="leverage-day"
+                >
+                  <span>Agent time per hour of yours</span>
+                  <b>{line?.leverage ?? line?.leverageWords ?? 'unknown'}</b>
+                  {line?.atOrBelowEven && <em>{AT_OR_BELOW_EVEN}</em>}
+                </span>
+                {line && pointer && (
                   <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
-                    <span>{ridge.quarter(pointer.quarter).span}</span>
-                    <em>{ridge.quarter(pointer.quarter).agents}</em>
+                    <span>{line.quarter(pointer.quarter).span}</span>
+                    <em>{line.quarter(pointer.quarter).agents}</em>
                   </span>
                 )}
               </>
@@ -402,5 +631,65 @@ function Row({
         </Tooltip.Positioner>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+  if (!paired) return dayCard;
+  return (
+    <Popover.Root
+      open={sessionsOpen}
+      onOpenChange={(open, details) => {
+        // A click (or tap) on the date neither opens, pins nor closes the
+        // box: a pinned box would stay open beside the next day's. Hover
+        // opens it, and Enter or Space on the day for the keyboard.
+        if (details.reason === 'trigger-press') {
+          details.cancel();
+          return;
+        }
+        if (open) setSessionsShown(true);
+        // Escape from inside the box hands focus back to the day.
+        else if (details.reason === 'escape-key' && popup.current?.contains(document.activeElement))
+          day.current?.focus();
+        onSessions(open);
+      }}
+      onOpenChangeComplete={(open) => {
+        // A box reopened before it had gone keeps its element: focus moves
+        // in here instead of when the element appears.
+        if (open && entering.current && popup.current) enter(popup.current);
+        if (!open) setSessionsShown(false);
+      }}
+    >
+      {dayCard}
+      <Popover.Portal data-theme={theme}>
+        {/* Beside the date, over the track, and never flipped back over the
+            dates: a box above or below its date would cover the next date
+            and keep the pointer moving down the dates from reaching it. It
+            grows away from the nearer end of the list and shifts only up or
+            down to fit. */}
+        <Popover.Positioner
+          className="xt-rule-positioner xt-day-sessions-positioner"
+          positionMethod="fixed"
+          side="inline-end"
+          align={lower ? 'end' : 'start'}
+          sideOffset={4}
+          collisionPadding={8}
+          collisionAvoidance={{ side: 'none', align: 'shift', fallbackAxisSide: 'none' }}
+        >
+          <Popover.Popup
+            ref={popupRef}
+            className="xt-rule-popover xt-effort-tip"
+            aria-label={sessionsName}
+            initialFocus={false}
+            finalFocus={false}
+          >
+            <DaySessions
+              window={window}
+              date={row.date}
+              label={row.label}
+              range={range}
+              listRef={listRef}
+            />
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

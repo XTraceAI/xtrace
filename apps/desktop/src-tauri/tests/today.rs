@@ -1,3 +1,7 @@
+#[cfg(all(debug_assertions, feature = "fixtures"))]
+#[path = "support/read_snapshot.rs"]
+mod read_snapshot;
+
 use jiff::Timestamp;
 use serde_json::json;
 use xt_store::{CanonicalRecord, SessionMeta, SessionSource, Store};
@@ -458,25 +462,65 @@ mod summary {
         assert_eq!(read(&db, now, TimeZone::UTC).human.active_ms, None);
     }
 
-    /// Tokens, cost and spans are read in one snapshot, by construction.
     #[test]
-    fn today_reads_stay_inside_one_snapshot_by_construction() {
-        let module = include_str!("../src/today.rs");
-        let (_, body) = module.split_once("pub fn today(").expect("today");
-        let (_, closure) = body
-            .split_once("db.read_snapshot(|db| {")
-            .expect("one snapshot");
-        let (closure, _) = closure.split_once("})?;").expect("snapshot end");
-        for read in [
-            "db.tokens(window",
-            "db.cost(window",
-            "db.active_last_day(window",
-            "db.human_hours(window",
-        ] {
-            assert_eq!(module.matches(read).count(), 1, "{read} is read elsewhere");
-            assert!(closure.contains(read), "{read} is outside the snapshot");
-        }
-        assert_eq!(module.matches("read_snapshot(").count(), 1);
+    fn today_keeps_all_fields_in_one_snapshot_while_a_writer_commits() {
+        let mut db = TempDb::empty().unwrap();
+        let human = |id: &str, timestamp: &str| {
+            serde_json::from_value(json!({"uuid": id, "type": "user", "timestamp": timestamp,
+                "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+            }))
+            .unwrap()
+        };
+        let response = |id: &str, timestamp: &str| {
+            serde_json::from_value(json!({"uuid": id, "type": "assistant", "timestamp": timestamp,
+                "requestId": id,
+                "message": {"id": id, "role": "assistant", "model": "test-claude", "content": [],
+                    "usage": {"input_tokens": 1000, "output_tokens": 7, "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0, "service_tier": "standard"}}
+            })).unwrap()
+        };
+        seed(
+            db.store_mut(),
+            "snapshot",
+            &[
+                human("human-first", "2026-09-08T09:00:00Z"),
+                human("human-last", "2026-09-08T09:20:00Z"),
+                response("first", "2026-09-08T10:00:00Z"),
+                response("last", "2026-09-08T10:10:00Z"),
+            ],
+        );
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        let read = |metrics: &MetricsDb| {
+            today(
+                metrics,
+                ms("2026-09-08T12:00:00Z"),
+                TimeZone::UTC,
+                MetricClock::System,
+                &catalog(),
+                xt_metrics::BreakLength::default(),
+            )
+            .unwrap()
+        };
+        let before = read(&metrics);
+        let write = crate::read_snapshot::change_after_first_read(&metrics, db.path(),
+            "BEGIN IMMEDIATE;
+             UPDATE usage SET output_tokens=output_tokens+1000;
+             UPDATE sessions SET cwd='/after', git_branch='after', title='After' WHERE session_id='snapshot';
+             UPDATE records SET ts_ms=ts_ms+60000, ts='2026-09-08T10:11:00Z' WHERE uuid='last';
+             UPDATE records SET is_human=NULL WHERE uuid='human-last';
+             COMMIT;"
+        );
+        let during = read(&metrics);
+        write.assert_committed();
+        assert_eq!(
+            during, before,
+            "every field uses the app's original snapshot"
+        );
+        let after = read(&metrics);
+        assert_ne!(after.output, before.output, "output changed");
+        assert_ne!(after.cost, before.cost, "cost changed");
+        assert_ne!(after.agent, before.agent, "agent time changed");
+        assert_ne!(after.human, before.human, "human time changed");
     }
 
     #[test]

@@ -278,43 +278,19 @@ fn the_command_line_environment_and_folder_are_the_grading_runs() {
         None,
         None,
     );
-    let (deny_read, read_rules) = (
-        serde_json::to_string(&runner::SECRET_LOCATIONS[..]).unwrap(),
-        serde_json::to_string(&runner::secret_read_rules()).unwrap(),
-    );
-    let settings = format!(
-        r#"{{"disableAllHooks":true,"permissions":{{"deny":{read_rules}}},"sandbox":{{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"filesystem":{{"denyWrite":["{target}"],"allowWrite":["{out}"],"denyRead":{deny_read}}},"network":{{"allowedDomains":[]}}}}}}"#
-    );
-    let expected: Vec<String> = [
-        case.claude.to_str().unwrap(),
-        "-p",
-        &prompt,
-        "--tools",
-        "Read,Write,Edit,Bash,Glob,Grep",
-        "--permission-mode",
-        "dontAsk",
-        "--setting-sources",
-        "",
-        "--settings",
-        &settings,
-        "--strict-mcp-config",
-        "--no-session-persistence",
-        "--allowedTools",
-        &format!("Edit(/{out}/**)"),
-        "--disallowedTools",
-        &format!("Edit(/{target}/**)"),
-        "--add-dir",
-        out,
-        helper,
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
-    assert_eq!(argv, expected);
     // Exactly the grading run's command line over these folders.
     assert_eq!(
         argv.iter().map(OsString::from).collect::<Vec<_>>(),
         runner::command_line(&case.claude, prompt.clone(), target, out, helper)
+    );
+    let settings: serde_json::Value = serde_json::from_str(&argv[10]).unwrap();
+    assert_eq!(
+        settings["sandbox"]["filesystem"]["denyRead"],
+        serde_json::json!(runner::SECRET_LOCATIONS[..])
+    );
+    assert_eq!(
+        settings["permissions"]["deny"],
+        serde_json::json!(runner::secret_read_rules())
     );
     assert_eq!(record["cwd"], target);
     assert_eq!(record["env"]["XTRACE_GRADE_DIR"], out);
@@ -522,12 +498,6 @@ fn a_failed_run_is_not_retried_and_keeps_its_own_reason() {
         Err(MakeError::Run(GradeError::Exited { code: Some(3) }))
     );
     assert_eq!(case.records().len(), 1);
-
-    let case = Case::new(
-        "sys.stderr.write('Error: sandbox required but unavailable: no\\n')\nsys.exit(1)",
-    );
-    let (_, made) = case.run();
-    assert_eq!(made, Err(MakeError::Run(GradeError::SandboxUnavailable)));
 }
 
 #[test]

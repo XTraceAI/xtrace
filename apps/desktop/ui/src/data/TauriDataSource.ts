@@ -28,6 +28,7 @@ import type { ContentPurge } from './generated/ContentPurge';
 import type { TodaySummary } from './generated/TodaySummary';
 import type { SessionTitles } from './generated/SessionTitles';
 import type { SessionCompactions } from './generated/SessionCompactions';
+import type { DashboardDaySessions } from './generated/DashboardDaySessions';
 import type { DashboardSpanDetail } from './generated/DashboardSpanDetail';
 import type { RuleActivityResult } from './generated/RuleActivityResult';
 import type { ProjectList } from './generated/ProjectList';
@@ -41,6 +42,8 @@ import type { GradingSkillRemove } from './generated/GradingSkillRemove';
 import type { GradingRubricMake } from './generated/GradingRubricMake';
 import type { GradingLinkLookup } from './generated/GradingLinkLookup';
 import type { GradingLinkKeep } from './generated/GradingLinkKeep';
+import type { GradingRunDetails } from './generated/GradingRunDetails';
+import type { GradingReportOpen } from './generated/GradingReportOpen';
 import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
@@ -97,6 +100,9 @@ export class TauriDataSource implements DataSource {
   refreshClaudeUsage() {
     return invoke<AccountUsage>(commands.refreshClaudeUsage);
   }
+  claudeSignIn() {
+    return invoke<void>(commands.claudeSignIn);
+  }
   readonly tray = windowLabel() === TRAY_WINDOW ? trayControls : undefined;
   readonly prAutoCheck = {
     status: () => invoke<PrAutoCheckStatus>(commands.prAutoCheckStatus),
@@ -123,6 +129,14 @@ export class TauriDataSource implements DataSource {
       invoke<DashboardSpanDetail>(commands.spanDetail, { sessionId, startMs, endMs, readId }),
     cancel: (readId: string) => invoke<void>(commands.cancelSpanDetail, { readId }),
   };
+  daySessions(windowDays: number, windowEndMs: number, timezone: string, date: string) {
+    return invoke<DashboardDaySessions>(commands.daySessions, {
+      windowDays,
+      windowEndMs,
+      timezone,
+      date,
+    });
+  }
   readonly ruleActivity = {
     read: (readId: string) => invoke<RuleActivityResult>(commands.ruleActivityRead, { readId }),
     cancel: (readId: string) => invoke<void>(commands.ruleActivityCancel, { readId }),
@@ -148,6 +162,8 @@ export class TauriDataSource implements DataSource {
     linkKeep: (lookupId: string, paths: string[]) =>
       invoke<GradingLinkKeep>(commands.gradingLinkKeep, { lookupId, paths }),
     linkDiscard: (lookupId: string) => invoke<boolean>(commands.gradingLinkDiscard, { lookupId }),
+    runDetails: (runId: string) => invoke<GradingRunDetails>(commands.gradingRunDetails, { runId }),
+    openReport: (runId: string) => invoke<GradingReportOpen>(commands.gradingReportOpen, { runId }),
   };
   readonly typingSpeed = {
     read: () => invoke<number>(commands.typingSpeed),

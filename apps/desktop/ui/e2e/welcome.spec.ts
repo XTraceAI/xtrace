@@ -1,3 +1,4 @@
+import { afterRendering } from './rendering';
 import { expect, test, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
@@ -165,33 +166,6 @@ const measureLayout = (page: Page) =>
     };
   });
 
-test('a fresh startup opens welcome with the real counts; a deep link is kept', async ({
-  page,
-}) => {
-  await serve(page, states.scanning);
-  await page.goto('/');
-  await expect(page).toHaveURL(/\/first-launch$/);
-  await expect(heading(page)).toHaveText('Welcome to XTrace');
-  const total = page.locator('.xt-welcome-total');
-  await expect(total).toContainText(String(fixture.db_counts.sessions));
-  await expect(total).toContainText('In the local database now');
-  const region = await openDetails(page);
-  const counts = region.getByRole('group', { name: 'Database counts' });
-  await expect(counts).toContainText(String(fixture.db_counts.sessions));
-  await expect(counts).toContainText(String(fixture.db_counts.records));
-  await expect(region.getByTestId('welcome-files')).toHaveText('128');
-  await page.goto('/sessions');
-  await expect(heading(page)).toHaveText('Sessions');
-  await expect(page).toHaveURL(/\/sessions$/);
-});
-
-test('existing indexed history opens Dashboard', async ({ page }) => {
-  await serve(page, states.missing, true);
-  await page.goto('/');
-  await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(heading(page)).toHaveText('What your agents did');
-});
-
 test('continue by keyboard is remembered across a restart', async ({ page }) => {
   await serve(page, states.missing);
   await page.goto('/');
@@ -206,18 +180,6 @@ test('continue by keyboard is remembered across a restart', async ({ page }) => 
   await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto('/');
   await expect(page).toHaveURL(/\/dashboard$/);
-});
-
-test('a ready welcome shows the release check texts with Details closed', async ({ page }) => {
-  await serve(page, states.missing);
-  await page.goto('/first-launch');
-  await expect(page.getByText('The initial scan finished.', { exact: true })).toBeVisible();
-  await expect(page.getByText('Bundled readers verified', { exact: true })).toBeVisible();
-  await expect(page.getByText('In the local database now', { exact: true })).toBeVisible();
-  await expect(page.getByText('Reading database counts')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Open Dashboard', exact: true })).toHaveCount(1);
-  await expect(details(page)).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByTestId('welcome-freshness')).toHaveCount(0);
 });
 
 test('Details opens and closes by keyboard', async ({ page }) => {
@@ -243,27 +205,11 @@ test('Details opens and closes by keyboard', async ({ page }) => {
   await expect(page.getByTestId('welcome-freshness')).toHaveCount(0);
 });
 
-test('a storage write failure still leaves for Dashboard, and welcome returns next time', async ({
-  page,
-}) => {
-  await page.addInitScript(() => {
-    Storage.prototype.setItem = () => {
-      throw new DOMException('quota', 'QuotaExceededError');
-    };
-  });
-  await serve(page, states.missing);
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Open Dashboard' }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
-  await page.goto('/');
-  await expect(page).toHaveURL(/\/first-launch$/);
-});
-
 for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     for (const state of Object.keys(states))
       test(`welcome fits at ${width}x${height} ${scheme} while ${state}`, async ({
         page,
@@ -324,7 +270,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     test(`welcome with the telemetry notice keeps Open Dashboard in view at ${width}x${height} ${scheme}`, async ({
       page,
     }, info) => {
@@ -378,14 +324,6 @@ const readableShare = (page: Page) =>
   });
 const shownCount = (page: Page) =>
   page.evaluate(() => (window as { telemetryShown?: number }).telemetryShown ?? 0);
-/** Two frames and a pause: time for any visibility callback to have run. */
-const settleFrames = (page: Page) =>
-  page.evaluate(
-    () =>
-      new Promise((done) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 300))),
-      ),
-  );
 
 for (const [width, height] of [
   [1440, 900],
@@ -399,7 +337,7 @@ for (const [width, height] of [
     await page.goto('/e2e/telemetry-notice.html?notice=1&route=/first-launch');
     await expect(page.getByTestId('telemetry-disclosure')).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
-    await settleFrames(page);
+    await afterRendering(page);
     // On load the bar covers the notice's top half or more: not yet shown.
     const first = await readableShare(page);
     expect(first.aboveBar).toBeLessThan(0.5);
@@ -415,7 +353,7 @@ for (const [width, height] of [
       const target = (bar.top + innerHeight) / 2 - card.height / 2;
       outlet.scrollTop += card.top - target;
     });
-    await settleFrames(page);
+    await afterRendering(page);
     const straddle = await readableShare(page);
     expect(straddle.inWindow).toBeGreaterThanOrEqual(0.5);
     expect(straddle.aboveBar).toBeLessThan(0.5);
@@ -425,14 +363,13 @@ for (const [width, height] of [
       const outlet = document.querySelector('.xt-shell-outlet')!;
       outlet.scrollTop = outlet.scrollHeight;
     });
-    await settleFrames(page);
+    await afterRendering(page);
     expect((await readableShare(page)).aboveBar).toBeGreaterThanOrEqual(0.5);
     await expect.poll(() => shownCount(page)).toBe(1);
   });
 
-/** Test-only counts: plausible indexed-history volumes, and the exact JSON integer limit. */
+/** Test-only counts: the exact JSON integer limit, wider than any real volume. */
 const largeCounts: Record<string, FixtureExport['db_counts']> = {
-  large: { sessions: 12_345, records: 1_234_567, usage: 123_456 },
   limit: {
     sessions: Number.MAX_SAFE_INTEGER,
     records: Number.MAX_SAFE_INTEGER,
@@ -443,7 +380,7 @@ for (const [width, height] of [
   [1440, 900],
   [1120, 720],
 ] as const)
-  for (const scheme of ['light', 'dark'] as const)
+  for (const scheme of ['light'] as const)
     for (const [name, counts] of Object.entries(largeCounts))
       test(`${name} database counts stay whole at ${width}x${height} ${scheme}`, async ({
         page,

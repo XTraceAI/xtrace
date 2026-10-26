@@ -1,63 +1,16 @@
+import { swiftPolicy, writeHostedSwift } from './hosted-swift.mjs';
+import { compilerControls } from './hosted-compiler-controls.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { guardProcessDetails, guardFailureMetadata } from './hosted-guard-diagnostics.mjs';
 
-// BEGIN COMPILER DIAGNOSTICS: local assertions and owned temporary cleanup.
-function recordCompiler(owner, label, timeout, elapsed, result) {
-  owner.hasResult = true;
-  owner.retain ||= Boolean(result.error || result.signal || result.status === null);
-  let message = 'Compiler result diagnostics unavailable';
-  try {
-    message = JSON.stringify(guardProcessDetails(label, timeout, elapsed, result));
-    console.log(message);
-  } catch {
-    /* Logging cannot change the status assertion. */
-  }
-  assert.equal(result.status, 0, message);
-}
-function diagnoseCompiler(owner, deadline) {
-  if (!owner.hasResult || owner.metadataCollected) return;
-  owner.metadataCollected = true;
-  try {
-    const metadata = guardFailureMetadata('swift', deadline);
-    owner.retain ||= metadata.uncertainCompletion;
-    console.log(JSON.stringify({ compilerMetadata: metadata }));
-  } catch {
-    owner.retain = true;
-    try {
-      console.log('Compiler metadata unavailable; descendant cleanup unconfirmed');
-    } catch {
-      /* Keep the primary error. */
-    }
-  }
-}
-async function cleanupCompiler(directory, owner) {
-  if (owner.retain) {
-    try {
-      console.log(
-        JSON.stringify({
-          temporaryProofRetained: true,
-          directory: basename(directory),
-          compilerDescendants: 'unconfirmed',
-          runnerTeardownVerified: false,
-        }),
-      );
-    } catch {
-      /* Keep the primary error. */
-    }
-  } else await rm(directory, { recursive: true, force: true });
-}
-// END COMPILER DIAGNOSTICS
+const { recordCompiler, diagnoseCompiler, cleanupCompiler } = compilerControls();
 
 const nativeControlBudgetMs = 120_000;
-const launcher = await readFile(new URL('./hosted-launch.swift', import.meta.url), 'utf8');
-const block = (name) =>
-  launcher.split(`// BEGIN ${name}:`)[1].split('\n').slice(1).join('\n').split(`// END ${name}`)[0];
 
 test('both signed jobs include stop controls and allow their native test budget', async () => {
   const workflow = await readFile(
@@ -94,7 +47,11 @@ test(
           '-typecheck',
           '-module-cache-path',
           cache,
-          fileURLToPath(new URL('./hosted-launch.swift', import.meta.url)),
+          await writeHostedSwift(
+            fileURLToPath(new URL('.', import.meta.url)),
+            'hosted-launch',
+            join(owned, 'hosted-launch.swift'),
+          ),
         ],
         { encoding: 'utf8', timeout: 60000 },
       );
@@ -105,14 +62,8 @@ test(
         performance.now() - typecheckBegan,
         fullCheck,
       );
-      const receipt = launcher.slice(
-        launcher.indexOf('struct Receipt:'),
-        launcher.indexOf('// BEGIN TRANSITION POLICY'),
-      );
-      const strictStart = launcher.slice(
-        launcher.indexOf('func processStart('),
-        launcher.indexOf('\nvar stopPhase'),
-      );
+      const receipt = await swiftPolicy('RECEIPT');
+      const strictStart = await swiftPolicy('PROCESS START');
       const controls = await readFile(
         new URL('./fixtures/hosted-stop-controls.swift', import.meta.url),
         'utf8',
@@ -120,9 +71,9 @@ test(
       const source =
         'import Foundation\nimport Darwin\nfunc fail(_ text: String) -> Never { fatalError(text) }\n' +
         receipt +
-        block('TRANSITION POLICY') +
-        block('STOP POLICY') +
-        block('PROCESS QUERY') +
+        (await swiftPolicy('TRANSITION POLICY')) +
+        (await swiftPolicy('STOP POLICY')) +
+        (await swiftPolicy('PROCESS QUERY')) +
         strictStart +
         controls;
       const sourcePath = join(owned, 'main.swift');

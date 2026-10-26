@@ -85,7 +85,7 @@ folder).
 
 ## Adding from a link
 
-The top of the Add a skill dialog has **Add from a link**: paste a public
+The top of the Add a grading skill dialog has **Add from a link**: paste a public
 GitHub link and press **Look up**. Accepted links are
 `https://github.com/<owner>/<repo>` (with or without `.git`),
 `…/tree/<branch, tag or commit>` with or without a folder after it, and
@@ -148,7 +148,7 @@ name has a `/` cannot be named yet.
 
 ## Making a rubric
 
-The Add a skill dialog starts with three steps (pick a skill, make a rubric,
+The Add a grading skill dialog starts with three steps (pick a skill, make a rubric,
 add it) and lists the installed skills in four groups, decided in Rust
 (`crate::grading_picker`, each row's `group`): **Ready to add**, **Your
 skills** (every skill a rubric can be made for), and two groups folded at

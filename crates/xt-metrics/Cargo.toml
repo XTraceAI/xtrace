@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+fixtures = ["rusqlite/trace"]
+
 [dependencies]
 xt-store = { path = "../xt-store" }
 serde.workspace = true

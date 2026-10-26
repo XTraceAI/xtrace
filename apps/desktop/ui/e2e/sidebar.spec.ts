@@ -123,6 +123,10 @@ test('sidebar geometry, controlled state, theme and Hub dismissal', async ({ pag
   await trigger.click();
   await expect(coverage).toBeHidden();
   await expect(hub).toBeVisible();
+  // And the reverse: opening the status panel closes the Hub.
+  await capture.click();
+  await expect(hub).toBeHidden();
+  await expect(coverage).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Reserve native controls' }).click();
   await expect(sidebar).toHaveCSS('padding-top', '74px');
@@ -157,4 +161,107 @@ test('remaining bars fit the compact sidebar at 1120×720 in both themes', async
     );
     await sidebar.screenshot({ path: info.outputPath(`remaining-${scheme}-1120x720.png`) });
   }
+});
+
+test('a stale or signed-out usage row is one warning line that fits the sidebar', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1120, height: 720 });
+  const issues = [
+    'none',
+    'reading',
+    'signed_out',
+    'no_login',
+    'credential_access_required',
+    'credential_unavailable',
+    'unauthorized',
+    'rate_limited',
+    'timeout',
+    'network',
+    'invalid_response',
+    'source_unavailable',
+  ];
+  const cases = [
+    ...issues.map((issue) => ({ host: 'claude', value: issue })),
+    ...issues.map((issue) => ({ host: 'claude', value: `reset-${issue}` })),
+    { host: 'claude', value: 'missing-signed_out' },
+    { host: 'codex', value: 'none' },
+    { host: 'codex', value: 'reset-invalid_response' },
+  ];
+  for (const { host, value } of cases) {
+    const name = `${host}=${value}`;
+    await page.goto(`/e2e/sidebar.html?${name}`);
+    const sidebar = page.getByRole('complementary', { name: 'Workspace' });
+    const group = sidebar.locator('.xt-account-provider-group', {
+      has: page.locator(`.xt-host-${host}`),
+    });
+    const warning = group.locator('.xt-account-row-warning');
+    await expect(warning, name).toBeVisible();
+    // Only the warning line is under the numbers (a signed-out line is a
+    // button after the summary), on one line, not cut off.
+    const sub = group.locator('summary .xt-account-sub');
+    if (value.endsWith('signed_out')) await expect(sub, name).toHaveCount(0);
+    else await expect(sub, name).toHaveText((await warning.textContent()) ?? '');
+    const fits = await warning.evaluate((element) => ({
+      whole: element.scrollWidth <= element.clientWidth,
+      lines: Math.round(
+        element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight),
+      ),
+    }));
+    expect(fits, name).toEqual({ whole: true, lines: 1 });
+  }
+});
+
+test('the signed-out line signs in by click or key without opening the row', async ({ page }) => {
+  await page.setViewportSize({ width: 1120, height: 720 });
+  const signIns = () => page.evaluate(() => (window as unknown as { signIns: string[] }).signIns);
+  await page.goto('/e2e/sidebar.html?claude=signed_out');
+  const sidebar = page.getByRole('complementary', { name: 'Workspace' });
+  const row = sidebar.locator('details.xt-host-claude');
+  const line = sidebar.getByRole('button', {
+    name: 'Signed out · claude auth login: sign in in Terminal',
+  });
+  await expect(line).toHaveText('Signed out · claude auth login');
+  await line.click();
+  expect(await signIns()).toEqual(['claude']);
+  expect(await row.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+  // From the row by Tab, then Enter and Space.
+  await row.locator('summary').focus();
+  await page.keyboard.press('Tab');
+  await expect(line).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
+  await expect.poll(signIns).toEqual(['claude', 'claude', 'claude']);
+  expect(await row.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+  // Opened, the row offers the same sign-in in its details.
+  await row.locator('summary').click();
+  await expect(line).toHaveCount(0);
+  await row.getByRole('button', { name: 'Sign in in Terminal' }).click();
+  await expect.poll(signIns).toHaveLength(4);
+  // A failure shows on the same focused button, on one line, then goes.
+  await page.goto('/e2e/sidebar.html?claude=signed_out&signin=fail');
+  const button = sidebar.locator('.xt-account-sign-in-row button');
+  await button.focus();
+  await page.keyboard.press('Enter');
+  await expect(button).toHaveText('Claude Code not found');
+  await expect(button).toBeFocused();
+  await expect(sidebar.locator('.xt-account-provider-group [role="status"]')).toHaveText(
+    'Claude Code not found',
+  );
+  expect(await button.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(button).toHaveText('Signed out · claude auth login', { timeout: 10_000 });
+  await expect(button).toBeFocused();
+  // While the app waits for the sign-in, the line says so and opens Terminal again.
+  await page.goto('/e2e/sidebar.html?claude=signed_out&watch=1');
+  const waiting = sidebar.getByRole('button', {
+    name: 'Waiting for sign-in…: open Terminal again',
+  });
+  await expect(waiting).toHaveText('Waiting for sign-in…');
+  expect(await waiting.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+  await waiting.click();
+  await expect.poll(signIns).toEqual(['claude']);
+  await row.locator('summary').click();
+  await expect(row.getByRole('button', { name: 'Open Terminal again' })).toBeVisible();
 });

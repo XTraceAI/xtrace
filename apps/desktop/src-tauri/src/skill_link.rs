@@ -1,4 +1,4 @@
-//! "Add from a link" in the Add a skill dialog: look a public GitHub link
+//! "Add from a link" in the Add a grading skill dialog: look a public GitHub link
 //! up, preview the skills it holds, and keep the chosen ones in
 //! `~/.agents/skills` (with a `~/.claude/skills` link when that name is free).
 //!

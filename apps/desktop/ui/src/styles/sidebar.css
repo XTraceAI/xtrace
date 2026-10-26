@@ -234,6 +234,9 @@
   width: 16px;
   height: 16px;
 }
+.xt-account-provider-group {
+  min-width: 0;
+}
 .xt-account-provider {
   border-top: 1px solid var(--border);
   padding-top: 6px;
@@ -283,15 +286,84 @@
   font-size: 9px;
   line-height: 1.3;
 }
-.xt-account-pace {
+.xt-account-pace,
+.xt-account-warning {
   display: block;
   color: var(--meta);
   font-size: 9px;
   line-height: 1.3;
 }
-.xt-account-pace.is-warning {
+/* A warning in view on the row: a run-out time, or why a reading is old. */
+.xt-account-pace.is-warning,
+.xt-account-warning {
   color: var(--warning);
   font-weight: 600;
+}
+/* A closed row's one warning line: never wraps. */
+.xt-account-row-warning {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xt-account-row-warning code {
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-size: 9px;
+}
+/* The closed signed-out row's line, under the summary's text column
+   (16px glyph + 7px gap). */
+.xt-account-sign-in-row {
+  margin-top: 2px;
+  padding-left: 23px;
+  min-width: 0;
+}
+/* Sign-in buttons read as links: the row's line and the details' action. */
+.xt-account-sign-in {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.3;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.xt-account-sign-in.xt-account-warning {
+  color: var(--warning);
+}
+.xt-account-action .xt-account-sign-in {
+  font-weight: 600;
+  color: var(--accent);
+}
+/* A failed sign-in click, beside the opened row's button. */
+.xt-account-sign-in-error {
+  color: var(--warning);
+  font-weight: 600;
+}
+.xt-account-sign-in:hover {
+  text-decoration: underline;
+}
+.xt-account-sign-in:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* A fix to run, in a row's details. */
+.xt-account-action {
+  display: block;
+  font-weight: 400;
+}
+.xt-account-action code {
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-size: 9px;
+  color: var(--ink);
+}
+/* An old reading's numbers are not current: they do not look it. */
+.xt-account-provider.is-stale .xt-account-value {
+  color: var(--meta);
+}
+.xt-account-provider.is-stale .xt-account-summary-track > span {
+  opacity: 0.45;
 }
 .xt-account-daily {
   display: flex;

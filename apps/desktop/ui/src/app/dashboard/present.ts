@@ -5,6 +5,7 @@ import type { MetricCaptureGap } from '../../data/generated/MetricCaptureGap';
 import type { MetricExcludedSurface } from '../../data/generated/MetricExcludedSurface';
 import type { MetricFavoriteUnknown } from '../../data/generated/MetricFavoriteUnknown';
 import type { MetricInventory } from '../../data/generated/MetricInventory';
+import type { MetricOutputShare } from '../../data/generated/MetricOutputShare';
 import type { MetricTile } from '../../data/generated/MetricTile';
 import type { MetricUnpricedReason } from '../../data/generated/MetricUnpricedReason';
 import type { MetricUsageGap } from '../../data/generated/MetricUsageGap';
@@ -14,8 +15,12 @@ import type { ControlTone } from '../../kit/control-tone';
 import { surfaceLabel } from '../../kit/hosts';
 import { rules, type RuleId } from '../../kit/rules';
 import type { TimeRange } from '../../kit/TopBar';
+import { NO_MODEL } from '../session-context';
 
-/** Presentation only: every value here was calculated by the Rust report. */
+/**
+ * Presentation only: every value here was calculated by the Rust report,
+ * except shares, which `shareText` writes from the report's own counts.
+ */
 
 /**
  * Money and a host's surface are each written in one place (the kit's `usd`
@@ -98,6 +103,30 @@ export const favoriteUnknownText: Record<MetricFavoriteUnknown, string> = {
   unknown_model_output: 'Measured output has an unknown model',
   unknown_turn_attribution: 'A tie could not be resolved from turn attribution',
 };
+
+/**
+ * A part's share of a whole, as every share is written: a whole percent, or
+ * `<1%` for a part that rounds to none; `—` when there is no whole.
+ */
+export function shareText(value: number, total: number) {
+  if (total <= 0) return '—';
+  const pct = (value / total) * 100;
+  return value > 0 && pct < 0.5 ? '<1%' : `${Math.round(pct)}%`;
+}
+
+/** Each row of a period's output, named, with its share of the rows' sum. */
+export function outputShareRows(shares: readonly MetricOutputShare[]) {
+  const total = shares.reduce((sum, row) => sum + row.output_tokens, 0);
+  return shares.map(({ of, output_tokens }) => ({
+    label:
+      of.kind === 'model'
+        ? of.model
+        : of.kind === 'unknown_model'
+          ? NO_MODEL
+          : plural(of.models, 'other model'),
+    value: shareText(output_tokens, total),
+  }));
+}
 
 export const unpricedText: Record<MetricUnpricedReason, string> = {
   missing_model: 'model not recorded',

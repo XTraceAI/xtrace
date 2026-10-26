@@ -2554,7 +2554,10 @@ fn the_preview_upgrade_reads_unchanged_claude_history_once_to_fill_previews() {
     );
     let before = hashes(&home);
     let mut store = Store::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 26);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        xt_store::LATEST_SCHEMA_VERSION
+    );
     assert_eq!(
         sql.query_row(
             "SELECT count(*) FROM native_checkpoints WHERE source='transcript'",

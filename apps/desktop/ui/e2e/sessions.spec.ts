@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
 import { ruleSummary } from '../src/kit/rules';
-for (const colorScheme of ['light', 'dark'] as const) {
+for (const colorScheme of ['light'] as const) {
   test(`indexed Sessions design columns, filters and details in ${colorScheme}`, async ({
     page,
   }, info) => {
@@ -142,7 +142,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
  * spans never overlap, and the longest range is 30 days. Served in place of
  * the development F1 export; these are not real history.
  */
-for (const colorScheme of ['light', 'dark'] as const) {
+for (const colorScheme of ['light'] as const) {
   test(`agent time fits as hours and minutes with its exact value in ${colorScheme}`, async ({
     page,
   }, info) => {

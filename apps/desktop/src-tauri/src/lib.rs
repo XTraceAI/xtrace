@@ -8,6 +8,7 @@ mod account_usage_claude;
 mod account_usage_claude_local;
 mod account_usage_claude_probe;
 mod account_usage_claude_screen;
+mod account_usage_claude_sign_in;
 mod account_usage_codex;
 mod account_usage_dto;
 mod account_usage_history;
@@ -19,6 +20,7 @@ pub mod dto;
 mod earlier_install;
 pub mod gh_cli;
 pub mod grading;
+mod grading_details;
 mod grading_dto;
 mod grading_link_dto;
 pub mod grading_overview;
@@ -80,6 +82,10 @@ pub const GRADING_PROGRESS_EVENT: &str = "grading://progress";
 /// run's status, never before the commit; and when a rubric-making job
 /// starts, saves its rubric and ends.
 pub const GRADING_CHANGED_EVENT: &str = "grading://changed";
+/// Published, with no payload, when the app stops watching for a Claude Code
+/// sign-in the user started from the Usage panel: the read it waited for ran,
+/// or the watch ran out. The frontend reads account usage again.
+pub const CLAUDE_SIGN_IN_EVENT: &str = "account-usage://sign-in-ended";
 /// A rubric-making job's progress (`dto::GradingRubricProgress`): when it
 /// starts, about every five seconds while it runs, and once when it is over.
 pub const GRADING_RUBRIC_PROGRESS_EVENT: &str = "grading://rubric-progress";
@@ -238,6 +244,28 @@ async fn account_usage_refresh_claude(
     )
 }
 
+/// Opens the user's terminal running their own `claude auth login`, then
+/// watches for the sign-in for a while. Takes nothing from the screen.
+#[tauri::command]
+async fn claude_sign_in(
+    app: tauri::AppHandle,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    if webview_window.label() != tray::MAIN_LABEL {
+        return Err("only the main window may start a sign-in".into());
+    }
+    if app.state::<state::AppState>().app_info().fixture.is_some() {
+        return Err("Sign-in unavailable here".into());
+    }
+    let service = app
+        .state::<Arc<account_usage::AccountUsageService>>()
+        .inner()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || service.sign_in_claude())
+        .await
+        .unwrap_or_else(|_| Err("Terminal did not open".into()))
+}
+
 #[tauri::command]
 async fn sessions_list(
     app: tauri::AppHandle,
@@ -280,6 +308,24 @@ async fn tokens_by_host(
     window_days: u32,
 ) -> Result<dto::TokensByHost, String> {
     read_on_worker(app, move |state| state.tokens_by_host(window_days)).await
+}
+
+/// The sessions behind one day of the Dashboard's agent time, read when that
+/// day's card opens: the report's range, the end of the window it was read
+/// over, the zone it was read in (`window.timezone`) and the day. Metadata
+/// only; no transcript is read.
+#[tauri::command]
+async fn metrics_day_sessions(
+    app: tauri::AppHandle,
+    window_days: u32,
+    window_end_ms: i64,
+    timezone: String,
+    date: String,
+) -> Result<dto::DashboardDaySessions, String> {
+    read_on_worker(app, move |state| {
+        state.day_sessions(window_days, window_end_ms, &timezone, &date)
+    })
+    .await
 }
 
 /// Exactly one session's row, or nothing. Named, never searched for.
@@ -509,7 +555,7 @@ async fn grading_overview<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::G
     .await
 }
 
-/// The skills installed under the native home, for the "Add a skill"
+/// The skills installed under the native home, for the "Add a grading skill"
 /// dialog: each one's rubric status and whether it can be added, decided
 /// natively. Reading this starts and writes nothing. Fixture mode answers
 /// `not_configured`.
@@ -564,7 +610,7 @@ async fn grading_skill_remove<R: tauri::Runtime>(
     .await
 }
 
-/// Look a public GitHub link up for the Add a skill dialog: GitHub's API
+/// Look a public GitHub link up for the Add a grading skill dialog: GitHub's API
 /// names the commit, its archive is downloaded and unpacked within bounds
 /// into a private staging folder, and the skills it holds are answered with
 /// whether each can be kept. The only network use of the dialog, started
@@ -626,6 +672,40 @@ async fn grading_link_discard<R: tauri::Runtime>(
     .unwrap_or(false)
 }
 
+/// The details of the run behind a shown score: its summary, every finding
+/// most severe first, its rubric criteria with their points and whether its
+/// full report can be opened, decided natively. Reading this starts and
+/// writes nothing. Fixture mode answers `not_configured`.
+#[tauri::command]
+async fn grading_run_details<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    run_id: String,
+) -> dto::GradingRunDetails {
+    on_grading_worker(app, dto::GradingRunDetails::Failed, move |service| {
+        service.run_details(&run_id)
+    })
+    .await
+}
+
+/// Open a succeeded run's kept HTML report with macOS's default app for
+/// HTML. The renderer names only the run; the file is the one the run's
+/// checked grade folder names. Only the main window may ask. Fixture mode
+/// answers `not_configured`.
+#[tauri::command]
+async fn grading_report_open<R: tauri::Runtime>(
+    webview_window: tauri::WebviewWindow<R>,
+    run_id: String,
+) -> dto::GradingReportOpen {
+    if webview_window.label() != tray::MAIN_LABEL {
+        return dto::GradingReportOpen::Failed;
+    }
+    let app = webview_window.app_handle().clone();
+    on_grading_worker(app, dto::GradingReportOpen::Failed, move |service| {
+        service.open_report(&run_id)
+    })
+    .await
+}
+
 /// The recent grading runs, newest first. Reading this starts nothing.
 #[tauri::command]
 async fn grading_runs<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::GradingRuns {
@@ -633,8 +713,10 @@ async fn grading_runs<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> dto::Gradi
 }
 
 /// Grade one listed project with one grading skill. The path must be exactly
-/// a project a fresh project list names; one run at a time. Returns once the
-/// run's `running` row is saved; the run continues on its own thread.
+/// a project a fresh project list names; one run at a time, and a request
+/// made while the slot is held waits in line (`waiting`). Returns once the
+/// run's `running` row is saved, or once it is in line; the run continues on
+/// its own thread.
 #[tauri::command]
 async fn grading_start<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -647,8 +729,9 @@ async fn grading_start<R: tauri::Runtime>(
     .await
 }
 
-/// Ask the grading run or rubric-making job `run_id` to stop. False when it
-/// is not the one going.
+/// Ask the grading run or rubric-making job `run_id` to stop, or take the
+/// waiting grading `run_id` out of the line. False when it is neither going
+/// nor waiting.
 #[tauri::command]
 fn grading_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>, run_id: String) -> bool {
     app.try_state::<grading::GradingService>()
@@ -1195,7 +1278,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(projects::ProjectsService::new(state.native_home()));
     // Grading runs a built-in or added skill on a listed project, on
     // request only, and lists the skills installed under the same native
-    // home when the Add a skill dialog asks. Fixture startup has no native
+    // home when the Add a grading skill dialog asks. Fixture startup has no native
     // home and no bundled skill: its service answers `not_configured`,
     // never runs anything and never reads a home folder.
     let grading = match (state.fixture_now_ms(), state.native_home()) {
@@ -1220,7 +1303,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => grading::GradingService::not_configured(),
     };
-    // "Add from a link" looks public GitHub links up for the Add a skill
+    // "Add from a link" looks public GitHub links up for the Add a grading skill
     // dialog, only when its Look up is pressed, and keeps chosen skills in
     // the same native home's `~/.agents/skills`. Fixture startup's service
     // answers `not_configured` and never uses the network.
@@ -1255,6 +1338,12 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             )
         }
         _ => account_usage::AccountUsageService::default(),
+    };
+    let usage = {
+        let handle = app.handle().clone();
+        usage.with_sign_in_publish(Box::new(move || {
+            let _ = handle.emit(CLAUDE_SIGN_IN_EVENT, ());
+        }))
     };
     let usage = Arc::new(usage);
     usage.start_automatic();
@@ -1417,6 +1506,7 @@ pub fn run() {
             app_info,
             account_usage_read,
             account_usage_refresh_claude,
+            claude_sign_in,
             db_counts,
             live_sessions_read,
             live_sessions_release,
@@ -1425,6 +1515,7 @@ pub fn run() {
             metrics_dashboard,
             metrics_span_detail,
             cancel_metrics_span_detail,
+            metrics_day_sessions,
             tokens_by_host,
             session_row,
             session_stretches,
@@ -1446,6 +1537,8 @@ pub fn run() {
             grading_skill_add,
             grading_skill_remove,
             grading_rubric_make,
+            grading_run_details,
+            grading_report_open,
             grading_link_lookup,
             grading_link_cancel,
             grading_link_keep,
@@ -2570,7 +2663,7 @@ mod tests {
         }
     }
 
-    /// The nine grading commands through Tauri's own IPC dispatch, and the
+    /// The eleven grading commands through Tauri's own IPC dispatch, and the
     /// three grading events through its emitter. Fixture startup's service is
     /// not configured; without a managed service every command fails closed.
     #[test]
@@ -2604,7 +2697,9 @@ mod tests {
                 grading_installed_skills,
                 grading_skill_add,
                 grading_skill_remove,
-                grading_rubric_make
+                grading_rubric_make,
+                grading_run_details,
+                grading_report_open
             ]);
             let builder = match service {
                 Some(service) => builder.manage(service),
@@ -2623,6 +2718,7 @@ mod tests {
 
         let add = serde_json::json!({"location": "plugin:tools@market/lint"});
         let remove = serde_json::json!({"skillId": "x"});
+        let run = serde_json::json!({"runId": "0f8fad5b-d9cb-469f-a165-70867728950e"});
         let app = build(Some(grading::GradingService::not_configured()));
         for (cmd, body) in [
             ("grading_skills", serde_json::json!({})),
@@ -2633,6 +2729,8 @@ mod tests {
             ("grading_skill_add", add.clone()),
             ("grading_skill_remove", remove.clone()),
             ("grading_rubric_make", add.clone()),
+            ("grading_run_details", run.clone()),
+            ("grading_report_open", run.clone()),
         ] {
             assert_eq!(invoke(&app, cmd, body), Ok(not_configured.clone()), "{cmd}");
         }
@@ -2651,6 +2749,8 @@ mod tests {
             ("grading_skill_add", add.clone()),
             ("grading_skill_remove", remove),
             ("grading_rubric_make", add),
+            ("grading_run_details", run.clone()),
+            ("grading_report_open", run),
         ] {
             assert_eq!(invoke(&app, cmd, body), Ok(failed.clone()), "{cmd}");
         }
