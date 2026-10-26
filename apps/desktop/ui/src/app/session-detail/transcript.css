@@ -443,3 +443,103 @@
     transition: outline-color 160ms ease-out;
   }
 }
+
+/* Read-only conversation mode is opt-in; excerpts retain the original record cards. */
+.xt-conversation {
+  width: 100%;
+  max-width: 800px;
+  margin-inline: auto;
+  gap: 22px;
+  padding: 24px 24px 32px;
+}
+.xt-conversation-entry {
+  min-width: 0;
+}
+.xt-conversation-turn {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  gap: 8px;
+}
+.xt-conversation-turn[data-role='user'] {
+  margin-left: 15%;
+  padding: 14px 18px;
+  background: var(--subtle);
+  border-radius: 12px;
+}
+.xt-conversation-turn .xt-turn-head {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.xt-conversation-turn .xt-tx-text,
+.xt-conversation-turn .xt-md {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.xt-conversation-activity {
+  margin-block: 8px;
+}
+.xt-conversation-activity > button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+  color: var(--meta);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.xt-conversation-activity > div:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 0 8px 14px;
+  border-left: 1px solid var(--divider);
+}
+.xt-conversation .xt-tool-strip {
+  background: transparent;
+}
+.xt-conversation .xt-tool-strip > div + div {
+  border-top: 1px solid var(--divider);
+}
+.xt-conversation-repeat {
+  margin-block: 12px;
+  padding: 10px 13px;
+  border-left: 3px solid var(--divider);
+  border-radius: 0 6px 6px 0;
+  color: var(--body);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.xt-conversation-repeat strong {
+  font-weight: 500;
+}
+.xt-conversation-repeat p {
+  margin: 4px 0 0;
+  color: var(--meta);
+  font-size: 11px;
+}
+.xt-conversation-repeat[data-circling] {
+  border-left-color: var(--warning);
+  color: var(--warning);
+}
+.xt-conversation-repeat[data-current] {
+  background: var(--accent-tint);
+  border-left-color: var(--accent);
+}
+@media (max-width: 700px) {
+  .xt-conversation {
+    padding: 20px 4px;
+  }
+  .xt-conversation-turn[data-role='user'] {
+    margin-left: 7%;
+  }
+}

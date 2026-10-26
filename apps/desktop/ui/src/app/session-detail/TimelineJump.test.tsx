@@ -213,7 +213,10 @@ const highlighted = () => [...document.querySelectorAll('.xt-tool-card[data-high
 const live = () =>
   screen
     .getAllByRole('status')
-    .find((node) => node.getAttribute('aria-live') === 'polite' && node.closest('.xt-timeline'));
+    .find(
+      (node) =>
+        node.getAttribute('aria-live') === 'polite' && node.closest('.xt-session-conversation'),
+    );
 
 it('reveals a stretch’s first call by opening its closed row, and leaves focus where it was', async () => {
   const { data } = source({});
@@ -240,7 +243,7 @@ it('reveals a stretch’s first call by opening its closed row, and leaves focus
   expect(document.activeElement).toBe(first);
   expect(first.getAttribute('aria-pressed')).toBe('true');
   // And it is said out loud.
-  expect(live()?.textContent).toBe('Showing the first tool call of stretch 1: Read.');
+  expect(live()?.textContent).toBe('Showing the first tool call of activity period 1: Read.');
 });
 
 it('respects a reader who asked for less motion', async () => {
@@ -292,7 +295,7 @@ it.each([
     expect(highlighted()).toHaveLength(0);
     expect(scrolled).toHaveLength(0);
     expect(live()?.textContent).toBe(
-      `The first tool call of stretch ${index + 1} cannot be shown. ${reason}`,
+      `The first tool call of activity period ${index + 1} cannot be shown. ${reason}`,
     );
   },
 );
@@ -326,7 +329,7 @@ it('moves the highlight when another stretch is pressed', async () => {
   expect(highlighted().map((card) => card.getAttribute('data-block-id'))).toEqual([`${CALLER}:1`]);
   fireEvent.click(segments()[4]);
   expect(highlighted().map((card) => card.getAttribute('data-block-id'))).toEqual([`${LATER}:0`]);
-  expect(live()?.textContent).toBe('Showing the first tool call of stretch 5: Grep.');
+  expect(live()?.textContent).toBe('Showing the first tool call of activity period 5: Grep.');
 });
 
 it('reveals without building a selector out of an identifier from the history', async () => {
@@ -669,9 +672,7 @@ it('shows a stretch’s repeated call through the same reveal, and keeps focus o
   // and what happened is said.
   expect(segments()[0].getAttribute('aria-pressed')).toBe('true');
   expect(document.activeElement).toBe(button);
-  expect(live()?.textContent).toBe(
-    'Showing the earliest of the repeated calls in stretch 1: Bash.',
-  );
+  expect(live()?.textContent).toBe('Showing the earliest matching call: Bash.');
 });
 
 it('reveals the same call again when the repeated call is the one the stretch started with', async () => {
@@ -681,14 +682,12 @@ it('reveals the same call again when the repeated call is the one the stretch st
   mount(data);
   await transcriptReady();
   fireEvent.click(await segment(1));
-  expect(live()?.textContent).toBe('Showing the first tool call of stretch 2: Grep.');
+  expect(live()?.textContent).toBe('Showing the first tool call of activity period 2: Grep.');
   scrolled.length = 0;
   fireEvent.click(showRepeat());
   expect(highlighted().map((card) => card.getAttribute('data-block-id'))).toEqual([`${LATER}:0`]);
   expect(scrolled).toHaveLength(1);
-  expect(live()?.textContent).toBe(
-    'Showing the earliest of the repeated calls in stretch 2: Grep.',
-  );
+  expect(live()?.textContent).toBe('Showing the earliest matching call: Grep.');
 });
 
 it('refuses a repeated call whose position two records share', async () => {
@@ -713,7 +712,7 @@ it('refuses a repeated call whose position two records share', async () => {
   expect(highlighted()).toHaveLength(0);
   expect(scrolled).toHaveLength(0);
   expect(live()?.textContent).toBe(
-    'The repeated call of stretch 1 cannot be shown. More than one block in the transcript sits where that call was recorded, so which one is meant is not known.',
+    'The repeated call of activity period 1 cannot be shown. More than one block in the transcript sits where that call was recorded, so which one is meant is not known.',
   );
   expect(live()?.getAttribute('data-reason')).toBe('ambiguous');
 });
@@ -732,7 +731,7 @@ it('keeps what M-20 measured and says why a repeated call cannot be shown withou
   fireEvent.click(showRepeat());
   expect(highlighted()).toHaveLength(0);
   expect(live()?.textContent).toBe(
-    'The repeated call of stretch 1 cannot be shown. The transcript is not available to show.',
+    'The repeated call of activity period 1 cannot be shown. The transcript is not available to show.',
   );
 });
 
@@ -797,4 +796,67 @@ it('drops a repeated-call press when the answer for the same window is replaced'
   expect(highlighted()).toHaveLength(0);
   expect(screen.queryByRole('button', { name: /^Show repeated call/ })).toBeNull();
   expect(live()?.textContent).toBe('');
+});
+
+it('navigates every native repeat representative without selecting initially or replacing the conversation', async () => {
+  const answer = structuredClone(withRepeats) as Extract<
+    MetricSessionStretches,
+    { state: 'measured' }
+  >;
+  answer.stretches.push(
+    repeating(stretch(20, null), 'Missing', 9, { record_uuid: 'absent', block_index: 7 }, false),
+  );
+  const { data } = source({ stretches: answer });
+  mount(data);
+  await transcriptReady();
+  const navigation = screen.getByRole('navigation', { name: 'Repeated activity' });
+  const next = within(navigation).getByRole('button', { name: 'Next ↓' });
+  expect(navigation.textContent).toContain('3 notices');
+  expect(highlighted()).toHaveLength(0);
+  expect(scrolled).toHaveLength(0);
+  const before = [...document.querySelectorAll('[data-record-id]')];
+  next.focus();
+  fireEvent.click(next);
+  expect(navigation.textContent).toContain('1 of 3');
+  expect(document.activeElement).toBe(next);
+  expect(highlighted()[0]?.getAttribute('data-block-id')).toBe(`${CALLER}:2`);
+  fireEvent.click(next);
+  expect(navigation.textContent).toContain('2 of 3');
+  expect(highlighted()[0]?.getAttribute('data-block-id')).toBe(`${LATER}:0`);
+  fireEvent.click(next);
+  expect(navigation.textContent).toContain('3 of 3');
+  expect(highlighted()).toHaveLength(0);
+  expect(document.querySelector('.xt-session-conversation [role="status"]')?.textContent).toContain(
+    'not in the transcript',
+  );
+  expect([...document.querySelectorAll('[data-record-id]')]).toEqual(before);
+});
+
+it('keeps one active announcement when Agent activity measurements are open', async () => {
+  const { data } = source({ stretches: withRepeats });
+  mount(data);
+  await transcriptReady();
+  fireEvent.click(screen.getByText(/Agent activity · Last/));
+  fireEvent.click(screen.getByRole('button', { name: 'Next ↓' }));
+  expect(
+    screen
+      .getAllByRole('status')
+      .filter((node) => node.textContent === 'Showing the earliest matching call: Bash.'),
+  ).toHaveLength(1);
+  expect(document.querySelector('.xt-timeline [role="status"]')?.textContent).toBe('');
+});
+
+it('enables adjacent record groups only for one native source, never for unknown legacy source boundaries', async () => {
+  const single = loaded([records()[1]!, { ...records()[1]!, id: 'another' }]);
+  const multiple = { ...single, sources: 2 };
+  const { data } = source({ transcripts: { [SESSION]: single, [OTHER_SESSION]: multiple } });
+  const other = `/sessions/${OTHER_SESSION}`;
+  mount(data, `/sessions/${SESSION}`, other);
+  await waitFor(() => expect(document.querySelectorAll('[data-record-id]')).toHaveLength(2));
+  expect(screen.getAllByRole('button', { name: /Tool activity/ })).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: `go ${other}` }));
+  await waitFor(() =>
+    expect(screen.getAllByRole('button', { name: /Tool activity/ })).toHaveLength(2),
+  );
+  expect(screen.queryByRole('separator')).toBeNull();
 });

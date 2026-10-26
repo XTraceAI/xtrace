@@ -18,6 +18,8 @@ test('production build ignores the fixture flag and contains no fixture export o
   expect(javascript).not.toContain('fixture://F1');
   expect(javascript).not.toContain('Only F1 is implemented');
   expect(javascript).not.toContain('fixtures/F1.json');
+  expect(javascript).not.toContain('synthetic-conversation');
+  expect(javascript).not.toContain('Synthetic configuration content.');
   expect(javascript).toContain('app_info');
   expect(javascript).toContain('db_counts');
   const errors: string[] = [];

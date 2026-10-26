@@ -87,6 +87,32 @@ for (const size of [
       await page.screenshot({ path: info.outputPath(`focused-prs-${theme}.png`) });
       await prs.click();
       await page.screenshot({ path: info.outputPath(`layout-${theme}.png`) });
+      const navigation = page.getByRole('navigation', { name: 'Repeated activity' });
+      const next = navigation.getByRole('button', { name: 'Next ↓' });
+      await expect(navigation).toContainText('1 notice');
+      const activity = owner.getByRole('button', { name: 'Tool activity · 2 saved messages' });
+      await expect(activity).toHaveAttribute('aria-expanded', 'false');
+      await next.focus();
+      await next.press('Enter');
+      const repeatedTarget = owner.locator('.xt-tool-card[data-block-id="exact-target:3"]');
+      await expect(repeatedTarget).toHaveAttribute('data-highlighted', 'true');
+      await expect(activity).toHaveAttribute('aria-expanded', 'true');
+      await expect(next).toBeFocused();
+      await expect(navigation).toContainText('1 of 1');
+      await expect
+        .poll(() =>
+          repeatedTarget.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const owner = element.closest('.xt-conversation-body')!.getBoundingClientRect();
+            return box.top >= owner.top - 1 && box.top < owner.bottom;
+          }),
+        )
+        .toBe(true);
+      await activity.click();
+      await expect(activity).toHaveAttribute('aria-expanded', 'false');
+      await next.focus();
+      await next.press('Enter');
+      await expect(activity).toHaveAttribute('aria-expanded', 'false');
       await page.locator('.xt-session-stretches > summary').click();
       const stretch = page
         .getByRole('list', { name: 'Hands-off stretches, in order' })
@@ -145,7 +171,7 @@ for (const motion of ['reduce', 'no-preference'] as const) {
   test(`keyboard reveal stays visible above the shell with ${motion} motion`, async ({ page }) => {
     await page.setViewportSize({ width: 1120, height: 720 });
     await page.emulateMedia({ reducedMotion: motion });
-    await page.goto('/e2e/session-layout.html');
+    await page.goto('/e2e/session-layout.html?mode=compact');
     const owner = page.getByRole('region', { name: 'Conversation content' });
     await expect(owner.getByText(/Synthetic message 0/)).toBeVisible();
     await page.locator('.xt-session-stretches > summary').click();

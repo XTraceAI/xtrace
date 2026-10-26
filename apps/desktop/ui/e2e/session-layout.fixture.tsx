@@ -52,6 +52,12 @@ records.push({
     },
   ],
 });
+records.push({
+  id: 'adjacent-tool',
+  role: 'assistant',
+  at: null,
+  blocks: [{ kind: 'tool_call', index: 0, name: 'Bash', call_id: 'adjacent-call', input: null }],
+});
 source.sessionRow = async () => row;
 source.sessionTranscript = async () =>
   mode === 'failed'
@@ -75,7 +81,18 @@ source.sessionStretches = async () => ({
     duration_ms: 180_000,
     first_tool: { record_uuid: 'exact-target', block_index: 3 },
     active_duration_ms: 180_000,
-    repeats: { state: 'measured', repeats: 0, worst: null },
+    repeats: {
+      state: 'measured',
+      repeats: n === 0 ? 3 : 0,
+      worst:
+        n === 0
+          ? {
+              tool_name: 'Read',
+              count: 4,
+              representative: { record_uuid: 'exact-target', block_index: 3 },
+            }
+          : null,
+    },
     circling: false,
   })),
 });
