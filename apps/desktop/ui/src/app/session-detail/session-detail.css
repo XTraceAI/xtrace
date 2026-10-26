@@ -49,18 +49,13 @@
     monospace;
   overflow-wrap: anywhere;
 }
-/* Every recorded link, wrapping under the title rather than clipped to it;
-   the badge itself is the list's, a little larger here. */
+/* Recorded links wrap inside their disclosure;
+   each badge keeps the list's evidence style. */
 .xt-session-detail-prs {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-}
-.xt-session-detail-prs-label {
-  flex: none;
-  color: var(--meta);
-  font-size: 11px;
 }
 .xt-session-detail-prs ul {
   display: flex;
