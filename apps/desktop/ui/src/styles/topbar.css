@@ -22,6 +22,27 @@
     monospace;
   white-space: nowrap;
 }
+.xt-topbar-history {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.xt-topbar-history button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--meta);
+  background: transparent;
+  cursor: pointer;
+}
+.xt-topbar-history button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--track);
+}
 .xt-topbar-home {
   color: var(--accent-ink);
 }
