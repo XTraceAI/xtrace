@@ -33,7 +33,12 @@ the verified pinned reader's `--exact-detail` mode and a Python 3.10+
 interpreter resolved for that open. Reads are bounded and cancellable, hold
 records in memory, and write no transcript cache or staged source copy. Reader
 setup and execution failures return a closed unavailable reason; Cursor SQLite
-stores remain unsupported. See [session source](acceptance/session-source.md).
+stores remain unsupported. Large Codex conversations can use the pinned
+producer's opt-in context protocol through `session_source::load_codex_page`.
+This API returns complete-record portions with generation-bound cursors and
+exact saved tool-call targets. Its separate `codex_transcript_page` command
+never labels a portion as a whole transcript. Ordinary imports, small full
+reads, Claude and Cursor retain their existing readers. See [session source](acceptance/session-source.md).
 The session page shows the M-09
 hands-off stretches that session contributed in the selected window, read from
 `xt-metrics` as metadata only, and reveals a stretch's first tool call only when

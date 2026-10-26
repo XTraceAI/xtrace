@@ -426,6 +426,37 @@ async fn session_transcript(
         .map_err(|error| error.to_string())
 }
 
+/// One bounded portion of a Codex conversation, under this open's cancel token.
+#[tauri::command]
+async fn codex_transcript_page(
+    app: tauri::AppHandle,
+    session_id: String,
+    read_id: String,
+    selection: dto::CodexPageRequest,
+) -> Result<dto::CodexPageStatus, String> {
+    on_worker(READ_WORKER_FAILED, move || {
+        let reads = app
+            .try_state::<transcript_reads::TranscriptReads>()
+            .ok_or(state::StateError::Closed)?;
+        let read = reads
+            .begin(&read_id)
+            .map_err(|_| state::StateError::ReadRefused)?;
+        let state = app
+            .try_state::<state::AppState>()
+            .ok_or(state::StateError::Closed)?;
+        let index = app
+            .try_state::<native_index::NativeIndex>()
+            .ok_or(state::StateError::Closed)?;
+        state.codex_transcript_page(
+            &session_id,
+            &selection,
+            read.token(),
+            index.detail_readers(),
+        )
+    })
+    .await
+}
+
 /// The host's own title for each named session that has one, read from its
 /// original local source for the rows a view is showing and never stored.
 ///
@@ -1521,6 +1552,7 @@ pub fn run() {
             session_row,
             session_stretches,
             session_transcript,
+            codex_transcript_page,
             cancel_session_transcript,
             session_titles,
             cancel_session_titles,
