@@ -2661,6 +2661,15 @@ fn the_rubric_making_run_has_the_gradings_command_line_over_its_own_folders() {
             .collect::<Vec<_>>(),
         xt_judge::runner::command_line(&world.claude, argv[2].clone(), target, out, helper),
     );
+    let settings: serde_json::Value = serde_json::from_str(&argv[10]).unwrap();
+    assert_eq!(
+        settings["sandbox"]["filesystem"]["denyRead"],
+        serde_json::json!(xt_judge::runner::SECRET_LOCATIONS[..])
+    );
+    assert_eq!(
+        settings["permissions"]["deny"],
+        serde_json::json!(xt_judge::runner::secret_read_rules())
+    );
     let prompt = &argv[2];
     assert!(prompt.starts_with(&format!(
         "XTrace rubric-making run (headless). TARGET = {target}. OUT = {out}."

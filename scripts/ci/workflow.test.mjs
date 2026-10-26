@@ -56,6 +56,7 @@ test('routine CI is Linux-only and native work is explicit release preparation',
     'ci-ok',
     'policy',
     'security',
+    'selection',
     'ui',
     'ui-extras',
   ]);
@@ -138,11 +139,25 @@ test('routine CI checks once and covers every browser gate across four independe
     // Each browser test can use up to three minutes. Setup and the remaining
     // tests need time too; the job must not expire at an individual test limit.
     assert.ok(Number(job.match(/timeout-minutes: (\d+)/)[1]) > 3, name);
-    assert.doesNotMatch(job, /^ {4}if:|continue-on-error|--(?:grep|timeout|retries|max-failures)/m);
+    assert.doesNotMatch(job, /continue-on-error|--(?:grep|timeout|retries|max-failures)/m);
+    if (name === 'check') assert.doesNotMatch(job, /^ {4}(?:if|needs):/m);
   }
   assert.doesNotMatch(jobs.ui + jobs['ui-extras'], /chromium|matrix\.browser/);
   assert.match(jobs['ci-ok'], /if: \$\{\{ always\(\) \}\}/);
   assert.doesNotMatch(jobs['ci-ok'], /continue-on-error/);
+});
+
+test('only browser jobs depend on a dependency-free, credential-free selector', () => {
+  assert.match(jobs.selection, /fetch-depth: 0/);
+  assert.match(jobs.selection, /run_ui: \$\{\{ steps\.select\.outputs\.run_ui \}\}/);
+  assert.match(jobs.selection, /- id: select\n {8}run: node scripts\/ci\/select-ui\.mjs/);
+  assert.doesNotMatch(jobs.selection, /pnpm|install|cache:|GITHUB_TOKEN|GH_TOKEN/);
+  for (const name of ['ui', 'ui-extras']) {
+    assert.match(jobs[name], /^ {4}needs: selection$/m);
+    assert.match(jobs[name], /^ {4}if: \$\{\{ needs\.selection\.outputs\.run_ui == 'true' \}\}$/m);
+  }
+  for (const name of ['policy', 'check', 'security', 'selection'])
+    assert.doesNotMatch(jobs[name], /^ {4}(?:if|needs):/m);
 });
 
 test('actual release shell guards accept only default history or matching reviewed tags', async (t) => {
@@ -500,6 +515,7 @@ test('the actual aggregate rejects every missing, skipped, cancelled or failed w
   const declared = jobs['ci-ok'].match(/needs: \[([^\]]+)\]/)[1].split(', ');
   assert.deepEqual(declared.sort(), [...required].sort());
   const good = Object.fromEntries(required.map((name) => [name, { result: 'success' }]));
+  good.selection.outputs = { run_ui: 'true' };
   const aggregate = (needs) =>
     spawnSync(process.execPath, [new URL('./aggregate.mjs', import.meta.url).pathname], {
       env: { ...process.env, NEEDS_JSON: JSON.stringify(needs) },
@@ -515,6 +531,32 @@ test('the actual aggregate rejects every missing, skipped, cancelled or failed w
       assert.equal(aggregate({ ...good, [name]: { result } }).status, 1, `${name}: ${result}`);
     }
   }
+  const noUi = {
+    ...good,
+    selection: { result: 'success', outputs: { run_ui: 'false' } },
+    ui: { result: 'skipped' },
+    'ui-extras': { result: 'skipped' },
+  };
+  assert.equal(aggregate(noUi).status, 0);
+  for (const name of required) {
+    const missing = { ...noUi };
+    delete missing[name];
+    assert.equal(aggregate(missing).status, 1, `unselected missing ${name}`);
+    for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
+      if (['ui', 'ui-extras'].includes(name) && result === 'skipped') continue;
+      assert.equal(
+        aggregate({ ...noUi, [name]: { ...noUi[name], result } }).status,
+        1,
+        `unselected ${name}: ${result}`,
+      );
+    }
+  }
+  for (const run_ui of [undefined, '', 'TRUE', 'False', true, false, 'false\n'])
+    assert.equal(
+      aggregate({ ...noUi, selection: { result: 'success', outputs: { run_ui } } }).status,
+      1,
+    );
+  assert.equal(aggregate({ ...noUi, selection: { result: 'success' } }).status, 1);
 });
 
 test('text edits run metadata only; target-branch edits call the full CI and cannot cancel it', () => {
