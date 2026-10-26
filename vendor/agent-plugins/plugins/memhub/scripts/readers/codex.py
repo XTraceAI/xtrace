@@ -509,7 +509,7 @@ def _title(rollout: list[dict], session_id: str | None = None, *, strict=False, 
 def rollout_to_claude_records(rollout: list[dict], *, strict=False, title_index=None,
                              identity_namespace=None, initial_usage_total=None,
                              usage_baseline_unknown=False, record_sources=None, usage_targets=None,
-                             record_guard=None, record_origins=None) -> tuple[list[dict], dict]:
+                             record_guard=None, record_origins=None, record_projection=None, retention_guard=None) -> tuple[list[dict], dict]:
     """Return ``(claude_records, meta)``.
 
     ``meta`` = ``{session_id, cwd, model, originator, cli_version, title}``.
@@ -572,6 +572,8 @@ def rollout_to_claude_records(rollout: list[dict], *, strict=False, title_index=
             record_guard(len(out) + 1)
         if record_origins is not None:
             record_origins[id(record)] = (record, kind)
+        if record_projection is not None:
+            record_projection(record)
         out.append(record)
 
     sid_key = identity_namespace or sm.get("id") or "unknown"
@@ -651,6 +653,17 @@ def rollout_to_claude_records(rollout: list[dict], *, strict=False, title_index=
         last_assistant = assistant(block)
         keep(last_assistant, kind)
 
+    def merge_usage(record, usage):
+        if retention_guard is None:
+            _merge_usage(record, usage)
+        else:
+            proposed = {**record, "message": dict(record["message"])}
+            if isinstance(proposed["message"].get("usage"), dict):
+                proposed["message"]["usage"] = dict(proposed["message"]["usage"])
+            _merge_usage(proposed, usage)
+            retention_guard(proposed, None, None)
+            record["message"] = proposed["message"]
+
     def append_usage_only(usage: dict[str, int], event_idx: int) -> None:
         # A model request can consume tokens without yielding an emit-worthy
         # response item (empty assistant text, compaction, failed generation).
@@ -662,7 +675,7 @@ def rollout_to_claude_records(rollout: list[dict], *, strict=False, title_index=
             _uuid.NAMESPACE_URL,
             f"memhub:codex:{sid_key}:usage-only:{event_idx}",
         ))
-        _merge_usage(record, usage)
+        merge_usage(record, usage)
         if usage_targets is not None:
             usage_targets[event_idx] = record
         keep(record, "usage_only")
@@ -692,7 +705,7 @@ def rollout_to_claude_records(rollout: list[dict], *, strict=False, title_index=
                     previous_usage_total = total
                 if usage:
                     if last_assistant is not None:
-                        _merge_usage(last_assistant, usage)
+                        merge_usage(last_assistant, usage)
                         if usage_targets is not None:
                             usage_targets[idx] = last_assistant
                         # One cumulative delta belongs to one model request.

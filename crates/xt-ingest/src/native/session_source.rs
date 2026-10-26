@@ -48,6 +48,9 @@
 //! refused before any interpreter or producer is looked for, so opening one
 //! starts no process and writes no file.
 
+mod codex_page;
+pub use codex_page::*;
+
 use super::checkpoint::{self, FileIdentity, ResumeBasis};
 use super::claude_fs::{self, ClaudeFile};
 use super::readers_cli::{
@@ -511,6 +514,14 @@ fn session_from_stream(
     roots: &[PathBuf],
     stream: &[u8],
 ) -> Result<LoadedSession, SourceUnavailable> {
+    session_from_stream_mode(request, roots, stream, false)
+}
+fn session_from_stream_mode(
+    request: &SessionSourceRequest<'_>,
+    roots: &[PathBuf],
+    stream: &[u8],
+    context_page: bool,
+) -> Result<LoadedSession, SourceUnavailable> {
     if cancelled(request.cancel) {
         return Err(SourceUnavailable::Cancelled);
     }
@@ -528,6 +539,9 @@ fn session_from_stream(
         return Err(broken("reader output ends inside a line"));
     }
     let mut events = StreamEvents::new(request.host, xt_store::SessionSource::ReadersCli);
+    if context_page {
+        events = events.with_context_page();
+    }
     let mut header = None;
     let mut records = Vec::new();
     let mut dropped_records = 0_u64;

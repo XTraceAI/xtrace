@@ -490,6 +490,7 @@ fn header(
     summaries: &[StopHookSummary],
 ) -> SessionHeader {
     SessionHeader {
+        context_page: false,
         kind: "session".into(),
         host: Host::Claude.as_str().into(),
         conversation_id: expected_conversation_id(Host::Claude, &file.session_id),

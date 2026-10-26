@@ -228,9 +228,9 @@ fn reader_reason(failure: DetailFailure) -> SessionSourceReason {
         }
         // More output than the producer's own ceiling allows is a broken
         // contract, as is anything else that is not one whole session.
-        DetailFailure::OutputBound | DetailFailure::Protocol(_) => {
-            SessionSourceReason::ReaderProtocol
-        }
+        DetailFailure::OutputBound
+        | DetailFailure::Protocol(_)
+        | DetailFailure::Refused(DetailRefusal::Context(_)) => SessionSourceReason::ReaderProtocol,
     }
 }
 
