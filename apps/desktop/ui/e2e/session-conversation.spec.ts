@@ -123,3 +123,94 @@ test('keeps keyboard focus when a single repeated-activity notice reaches both b
   await expect(navigation).toContainText('1 of 1');
   await expect(next).toBeFocused();
 });
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`reads bounded conversation portions and exact repeated activity, ${theme}`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1120, height: 900 });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    await page.goto('/e2e/session-conversation.html?paged');
+    const conversation = page.getByRole('region', { name: 'Conversation', exact: true });
+    const navigation = conversation.getByRole('navigation', { name: 'Repeated activity' });
+    const next = navigation.getByRole('button', { name: 'Next ↓' });
+    const previous = navigation.getByRole('button', { name: '↑ Previous' });
+    const later = conversation.getByRole('button', { name: 'Later messages' });
+    const earlier = conversation.getByRole('button', { name: 'Earlier messages' });
+    await expect(conversation).toContainText('Showing messages 1–2 of 6.');
+    await expect(navigation).toContainText('3 notices');
+    await expect(conversation.locator('.xt-conversation-repeat')).toHaveCount(0);
+    await expect(conversation.locator('[data-record-id="prompt"]')).toHaveClass(
+      /xt-conversation-turn/,
+    );
+    await later.focus();
+    await page.keyboard.press('Enter');
+    await expect(conversation).toContainText('Showing messages 3–6 of 6.');
+    await expect(later).toBeFocused();
+    await expect(conversation.locator('.xt-conversation-repeat')).toHaveCount(2);
+    await earlier.focus();
+    await page.keyboard.press('Enter');
+    await expect(conversation).toContainText('Showing messages 1–2 of 6.');
+    await expect(earlier).toBeFocused();
+    await next.focus();
+    await page.keyboard.press('Enter');
+    await expect(navigation).toContainText('1 of 3');
+    await expect(conversation.locator('.xt-tool-card[data-block-id="tools:0"]')).toHaveAttribute(
+      'data-highlighted',
+      'true',
+    );
+    await expect(next).toBeFocused();
+    await page.getByText('Agent activity', { exact: true }).click();
+    await next.focus();
+    await page.keyboard.press('Enter');
+    const target = conversation.locator('.xt-tool-card[data-block-id="mixed:3"]');
+    await expect(navigation).toContainText('2 of 3');
+    await expect(target).toHaveAttribute('data-highlighted', 'true');
+    await expect(target).toBeInViewport();
+    await expect(next).toBeFocused();
+    await expect(conversation.locator('.xt-conversation-repeat[data-current="true"]')).toHaveCount(
+      1,
+    );
+    await expect(
+      page
+        .locator('[role="status"][aria-live="polite"]')
+        .filter({ hasText: 'Showing the earliest matching call: mcp__workspace__update_plan.' }),
+    ).toHaveCount(1);
+    if (process.env.PAGED_CONVERSATION_SHOTS)
+      await page.screenshot({
+        path: `${process.env.PAGED_CONVERSATION_SHOTS}/large-codex-section-${testInfo.project.name}-${theme}.png`,
+        fullPage: true,
+      });
+    await page.keyboard.press('Enter');
+    await expect(navigation).toContainText('3 of 3');
+    await expect(conversation).toContainText('The saved tool call could not be found');
+    await expect(conversation.locator('[data-highlighted]')).toHaveCount(0);
+    await expect(next).toBeFocused();
+    await previous.focus();
+    await page.keyboard.press('Enter');
+    await expect(navigation).toContainText('2 of 3');
+    await expect(target).toHaveAttribute('data-highlighted', 'true');
+    await expect(previous).toBeFocused();
+    await page.setViewportSize({ width: 760, height: 900 });
+    expect(
+      await conversation.evaluate((node) => node.scrollWidth - node.clientWidth),
+    ).toBeLessThanOrEqual(1);
+  });
+}
+
+test('retains a changed-source refusal until the bounded conversation is explicitly reloaded', async ({
+  page,
+}) => {
+  await page.goto('/e2e/session-conversation.html?paged&paged-changed');
+  const conversation = page.getByRole('region', { name: 'Conversation', exact: true });
+  await expect(conversation).toContainText('Showing messages 1–2 of 6.');
+  await conversation.getByRole('button', { name: 'Next ↓' }).click();
+  await expect(conversation).toContainText('This conversation changed while you were reading it.');
+  await expect(
+    conversation.getByText('Please rename the sample app and keep its project folder name.', {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await conversation.getByRole('button', { name: 'Load conversation again' }).click();
+  await expect(conversation).toContainText('Showing messages 1–2 of 6.');
+});

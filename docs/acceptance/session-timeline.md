@@ -47,10 +47,11 @@ The remaining measurement and segment contracts apply inside Agent activity.
 - `sessionStretches(sessionId, windowDays)` is a metadata query, cached under
   the `sessions` prefix beside the session's row and invalidated with it by
   every ingest event.
-- Changing the range re-reads the stretches for the new window and **never**
-  re-reads the transcript, whose read is keyed by the session alone. The
-  session page owns the range control, because its row and its stretches are
-  both measured over the window.
+- Changing the range re-reads the stretches for the new window and never
+  repeats the whole-transcript read, which is keyed by the session alone.
+  A bounded Codex portion clears highlights owned by the previous range while
+  preserving its active read. The session page owns the range control,
+  because its row and its stretches are both measured over the window.
 - The same answer carries M-20. The app reads M-09's stretches and M-20's
   repeats **inside one database snapshot over the same selected window**, so
   the stretches M-20 counted are the stretches M-09 states even while the
@@ -136,12 +137,16 @@ The remaining measurement and segment contracts apply inside Agent activity.
 repeated call` button appears under the stretches. It goes to the
   **earliest** call of that group, through exactly the path a first call
   takes: the same position check against the loaded transcript, the same
-  reasons when it cannot, and the same reveal request. Nothing new is looked
-  up, and there is no fallback.
-- Its accessible name says why the call cannot be shown before it is pressed;
+  reasons when it cannot, and the same reveal request. Whole transcripts use
+  the records already held. Large Codex conversations load a bounded portion
+  around that exact saved record and block, then validate and reveal it.
+  Neither path substitutes a nearby call.
+- A bounded Codex target is labeled as needing a read and check. Otherwise,
+  its accessible name says why the call cannot be shown before it is pressed;
   pressed, the reason is on screen. Focus stays on the button, the stretch
-  stays selected, and the live region says `Showing the earliest of the
-repeated calls in stretch N: Tool.`
+  stays selected, and the conversation's single live region says
+  `Showing the earliest matching call: Tool.` Standalone timeline wording
+  remains unchanged.
 - When the repeated call is the call the stretch started with, pressing it
   reveals that call again as a new request.
 - The press belongs to the same session, window, transcript read and accepted

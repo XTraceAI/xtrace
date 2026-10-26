@@ -127,6 +127,11 @@ export function ToolCallCard({
         </p>
       ) : null}
 
+      {outcome.state === 'not_checked' ? (
+        <p className="xt-tool-note">
+          Results for this call are not checked across the whole conversation.
+        </p>
+      ) : null}
       {outcome.state === 'unrecorded' ? (
         <p className="xt-tool-note">No result for this call is in the record.</p>
       ) : null}
@@ -139,7 +144,9 @@ export function ToolCallCard({
       ) : null}
 
       {block.kind === 'tool_call' ? <ToolPayload label="Input" payload={block.input} /> : null}
-      {outcome.state === 'unrecorded' || outcome.state === 'ambiguous' ? null : (
+      {outcome.state === 'unrecorded' ||
+      outcome.state === 'ambiguous' ||
+      outcome.state === 'not_checked' ? null : (
         // A failed call's output is not an error message: it is what the command printed
         // before it gave up, and colouring it red would restate the failure as the content.
         <ToolPayload label="Output" payload={outcome.output} />
