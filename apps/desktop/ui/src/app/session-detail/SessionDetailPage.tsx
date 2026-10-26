@@ -186,7 +186,7 @@ function LinkedPrs({ links }: { links: SessionPrLink[] }) {
       <summary>
         {links.length} {links.length === 1 ? 'linked PR' : 'linked PRs'}
       </summary>
-      <ul aria-label={links.length === 1 ? 'Linked PR' : 'Linked PRs'}>
+      <ul tabIndex={0} aria-label={links.length === 1 ? 'Linked PR' : 'Linked PRs'}>
         {links.map((link) => (
           <li key={link.url}>
             <span

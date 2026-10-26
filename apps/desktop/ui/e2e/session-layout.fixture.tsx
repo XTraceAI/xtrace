@@ -19,7 +19,7 @@ const row = {
   branch: 'layout',
   record_count: 1200,
   pr_links: Array.from({ length: 24 }, (_, number) => ({
-    repository: 'sample/layout',
+    repository: 'sample/synthetic-layout-keyboard-scrolling-acceptance',
     number,
     url: `https://github.com/sample/layout/pull/${number}`,
     confidence: 'exact' as const,

@@ -43,10 +43,48 @@ for (const size of [
       await expect(page.getByText('synthetic-layout', { exact: true })).toBeVisible();
       await page.locator('.xt-session-detail-meta > summary').click();
       const prs = page.locator('.xt-session-detail-prs > summary');
-      await prs.click();
-      await expect(
-        page.getByRole('list', { name: 'Linked PRs' }).getByRole('listitem'),
-      ).toHaveCount(24);
+      await prs.focus();
+      await page.keyboard.press('Enter');
+      const links = page.getByRole('list', { name: 'Linked PRs' });
+      await expect(links.getByRole('listitem')).toHaveCount(24);
+      expect(await links.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
+        true,
+      );
+      await prs.focus();
+      await page.keyboard.press('Tab');
+      await expect(links).toBeFocused();
+      const positions = () =>
+        links.evaluate((element) => [
+          element.closest('.xt-shell-outlet')!.scrollTop,
+          window.scrollY,
+        ]);
+      const beforeLinks = await positions();
+      await page.keyboard.press('End');
+      await expect
+        .poll(() =>
+          links.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBe(0);
+      expect(await links.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      expect(await positions()).toEqual(beforeLinks);
+      await expect(links).toBeFocused();
+      const ring = await links.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const shell = element.closest('.xt-shell-outlet')!.getBoundingClientRect();
+        return {
+          fits:
+            box.left >= 0 &&
+            box.right <= innerWidth &&
+            box.top >= shell.top &&
+            box.bottom <= shell.bottom,
+          width: parseFloat(getComputedStyle(element).outlineWidth),
+        };
+      });
+      expect(ring.fits).toBe(true);
+      expect(ring.width).toBeGreaterThan(0);
+      await page.screenshot({ path: info.outputPath(`focused-prs-${theme}.png`) });
       await prs.click();
       await page.screenshot({ path: info.outputPath(`layout-${theme}.png`) });
       await page.locator('.xt-session-stretches > summary').click();
