@@ -33,9 +33,17 @@ In the PR description, include:
   failure cases. A passing command alone does not define the expected behavior.
 - Commands run, actual results, and evidence such as focused output or screenshots.
   Identify any checks not run and why; do not count planned checks as passing.
-- For UI changes, screenshots in every currently supported theme and a native macOS interaction check.
+- For UI changes, prefer screenshots in every currently supported theme. If unavailable,
+  give a short reason; missing screenshots do not block PR preparation or CI.
+  Include a native macOS interaction check.
   For window chrome, verify the traffic lights, dragging, and fullscreen transitions.
   Verify both light and dark appearance.
+
+Before creating or updating a PR, including small changes, follow
+[the PR preparation skill](.agents/skills/xtrace-pr-preparation/SKILL.md) and use
+the [description helper](docs/CI.md#prepare-a-pr-description) to produce the exact
+body submitted to GitHub. It catches missing required text before submission;
+CI keeps the same description check as a backup.
 
 Use synthetic or redacted evidence. Do not commit personal transcripts, local
 databases, credentials, or private source paths.
