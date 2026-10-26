@@ -20,6 +20,12 @@ export type TopBarProps = RangeProps & {
   onCustomRange?: () => void;
   right?: ReactNode;
   nativeDrag?: boolean;
+  history?: {
+    canGoBack: boolean;
+    canGoForward: boolean;
+    goBack: () => void;
+    goForward: () => void;
+  };
 };
 
 const ranges: TimeRange[] = ['7d', '14d', '30d'];
@@ -36,9 +42,39 @@ export function TopBar({
   onCustomRange,
   right,
   nativeDrag = false,
+  history,
 }: TopBarProps) {
   return (
     <header className="xt-topbar" data-tauri-drag-region={nativeDrag ? 'deep' : undefined}>
+      {history && (
+        <div
+          className="xt-topbar-history"
+          role="group"
+          aria-label="Page history"
+          data-tauri-drag-region={nativeDrag ? 'false' : undefined}
+        >
+          <button
+            type="button"
+            aria-label="Back"
+            title="Back (⌘[)"
+            aria-keyshortcuts="Meta+["
+            disabled={!history.canGoBack}
+            onClick={history.goBack}
+          >
+            <Icon name="back" size={15} />
+          </button>
+          <button
+            type="button"
+            aria-label="Forward"
+            title="Forward (⌘])"
+            aria-keyshortcuts="Meta+]"
+            disabled={!history.canGoForward}
+            onClick={history.goForward}
+          >
+            <Icon name="forward" size={15} />
+          </button>
+        </div>
+      )}
       <nav className="xt-topbar-breadcrumb" aria-label="Breadcrumb">
         <span className="xt-topbar-home">~</span>
         <span aria-hidden="true">/</span>

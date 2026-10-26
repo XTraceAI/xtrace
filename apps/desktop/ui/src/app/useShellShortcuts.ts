@@ -1,11 +1,22 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router';
-export function useShellShortcuts() {
+export function useShellShortcuts({
+  goBack,
+  goForward,
+}: {
+  goBack: () => void;
+  goForward: () => void;
+}) {
   const navigate = useNavigate();
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!event.metaKey || event.altKey || event.ctrlKey || event.shiftKey || event.isComposing)
         return;
+      if (event.key === '[' || event.key === ']') {
+        event.preventDefault();
+        if (event.key === '[') goBack();
+        else goForward();
+      }
       if (event.key === ',') {
         event.preventDefault();
         void navigate('/settings');
@@ -22,5 +33,5 @@ export function useShellShortcuts() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [navigate]);
+  }, [navigate, goBack, goForward]);
 }
