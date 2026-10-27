@@ -89,7 +89,10 @@ source.sessionStretches = async () => ({
           ? {
               tool_name: 'Read',
               count: 4,
-              representative: { record_uuid: 'exact-target', block_index: 3 },
+              representative: {
+                record_uuid: mode === 'unavailable-repeat' ? 'missing-target' : 'exact-target',
+                block_index: 3,
+              },
             }
           : null,
     },

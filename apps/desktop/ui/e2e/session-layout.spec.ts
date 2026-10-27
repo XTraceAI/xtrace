@@ -244,3 +244,112 @@ test('a fully visible owner reveals its exact target without moving the page', a
     .toBe(true);
   expect(await position()).toEqual(before);
 });
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`unavailable repeat feedback stays on screen after reading to the end, ${theme}`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width: 1120, height: 720 });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    await page.goto('/e2e/session-layout.html?mode=unavailable-repeat');
+    const owner = page.getByRole('region', { name: 'Conversation content' });
+    await expect(owner.getByText('Synthetic message 0.', { exact: false })).toBeVisible();
+    const recordOrder = () =>
+      owner
+        .locator('[data-record-id]')
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-record-id')));
+    const order = await recordOrder();
+    await owner.focus();
+    await owner.press('End');
+    await expect
+      .poll(() => owner.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
+      .toBe(0);
+    const beforeHeight = await owner.evaluate((node) => node.clientHeight);
+    const before = await owner.evaluate((node) => ({
+      scrollTop: node.scrollTop,
+      outer: node.closest('.xt-shell-outlet')!.scrollTop,
+      page: window.scrollY,
+      headerTop: node
+        .closest('.xt-section-card')!
+        .querySelector('.xt-section-header')!
+        .getBoundingClientRect().top,
+    }));
+    const next = page
+      .getByRole('navigation', { name: 'Repeated activity' })
+      .getByRole('button', { name: 'Next ↓' });
+    await next.focus();
+    await next.press('Enter');
+    const status = page.locator('.xt-session-conversation [role="status"][aria-live="polite"]');
+    await expect(status).toHaveCount(1);
+    await expect(status).toHaveText(
+      'The repeated call of activity period 1 cannot be shown. That tool call is not in the transcript that was read.',
+    );
+    await expect(next).toBeFocused();
+    expect(await recordOrder()).toEqual(order);
+    const painted = await status.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+      const ancestors = [];
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        const bounds = parent.getBoundingClientRect();
+        const x = /auto|scroll|hidden|clip/.test(style.overflowX);
+        const y = /auto|scroll|hidden|clip/.test(style.overflowY);
+        if (x) {
+          clip.left = Math.max(clip.left, bounds.left);
+          clip.right = Math.min(clip.right, bounds.right);
+        }
+        if (y) {
+          clip.top = Math.max(clip.top, bounds.top);
+          clip.bottom = Math.min(clip.bottom, bounds.bottom);
+        }
+        if (x || y)
+          ancestors.push({
+            className: parent.className,
+            overflowX: style.overflowX,
+            overflowY: style.overflowY,
+            top: bounds.top,
+            bottom: bounds.bottom,
+          });
+      }
+      return {
+        box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+        clip,
+        ancestors,
+        fullyPainted:
+          box.width > 0 &&
+          box.height > 0 &&
+          box.left >= clip.left &&
+          box.right <= clip.right &&
+          box.top >= clip.top &&
+          box.bottom <= clip.bottom,
+      };
+    });
+    const after = await owner.evaluate((node) => ({
+      scrollTop: node.scrollTop,
+      outer: node.closest('.xt-shell-outlet')!.scrollTop,
+      page: window.scrollY,
+      headerTop: node
+        .closest('.xt-section-card')!
+        .querySelector('.xt-section-header')!
+        .getBoundingClientRect().top,
+    }));
+    await info.attach('feedback-geometry', {
+      body: JSON.stringify(
+        {
+          before,
+          after,
+          beforeHeight,
+          afterHeight: await owner.evaluate((node) => node.clientHeight),
+          painted,
+        },
+        null,
+        2,
+      ),
+      contentType: 'application/json',
+    });
+    await page.screenshot({ path: info.outputPath(`feedback-${theme}.png`) });
+    expect(painted.fullyPainted).toBe(true);
+    expect(after).toEqual(before);
+  });
+}

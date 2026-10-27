@@ -504,6 +504,14 @@ export function SessionDetailPage() {
             ) : undefined
           }
         >
+          <p
+            className="xt-timeline-note"
+            role="status"
+            aria-live="polite"
+            data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+          >
+            {announcement ?? ''}
+          </p>
           <div
             ref={conversationBody}
             className="xt-conversation-body"
@@ -511,14 +519,6 @@ export function SessionDetailPage() {
             aria-label="Conversation content"
             tabIndex={0}
           >
-            <p
-              className="xt-timeline-note"
-              role="status"
-              aria-live="polite"
-              data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
-            >
-              {announcement ?? ''}
-            </p>
             {generation && (
               <p className="xt-session-detail-notice" role="note">
                 {generation}
