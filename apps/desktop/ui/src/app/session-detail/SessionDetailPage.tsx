@@ -1,3 +1,4 @@
+import { RepeatNavigation, type ConversationMarker } from './ConversationActivity';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
@@ -132,7 +133,7 @@ function pressText(
   pressed: Press,
   result: { token: number; outcome: RevealOutcome } | null,
 ): string | null {
-  const stretch = `stretch ${pressed.index + 1}`;
+  const stretch = `activity period ${pressed.index + 1}`;
   const which = pressed.call === 'first' ? 'The first tool call' : 'The repeated call';
   if (pressed.kind === 'unavailable') {
     return `${which} of ${stretch} cannot be shown. ${jumpUnavailableText(pressed.reason)}`;
@@ -144,7 +145,7 @@ function pressText(
   const tool = pressed.tool ? `: ${pressed.tool}` : '';
   return pressed.call === 'first'
     ? `Showing the first tool call of ${stretch}${tool}.`
-    : `Showing the earliest of the repeated calls in ${stretch}${tool}.`;
+    : `Showing the earliest matching call${tool}.`;
 }
 
 /** What a press was made against. Replace any of it and the press is void. */
@@ -355,6 +356,26 @@ export function SessionDetailPage() {
           : null
       : null;
 
+  const repeatedIndexes = stretches.flatMap((stretch, index) =>
+    stretch.repeats.state === 'measured' && stretch.repeats.worst ? [index] : [],
+  );
+  const markers: ConversationMarker[] = repeatedIndexes.flatMap((index) => {
+    const stretch = stretches[index]!;
+    const jump = repeatJumps[index];
+    if (jump?.kind !== 'target' || stretch.repeats.state !== 'measured' || !stretch.repeats.worst)
+      return [];
+    return [
+      {
+        index,
+        blockId: jump.blockId,
+        tool: stretch.repeats.worst.tool_name,
+        count: stretch.repeats.worst.count,
+        circling: stretch.circling === true,
+        selected: pressed?.call === 'repeated' && selected === index,
+      },
+    ];
+  });
+
   if (source.kind === 'preview') {
     return (
       <section className="xt-session-detail">
@@ -439,48 +460,73 @@ export function SessionDetailPage() {
         </SectionCard>
       )}
 
-      <SectionCard
-        title="Hands-off stretches"
-        meta={`Measured over the last ${range.replace('d', ' days')}`}
-        // The definition sits behind the same compact control as the
-        // Dashboard's cards; the rule ID is read only inside it.
-        right={<DefinitionInfo ruleId="M-09" name="Hands-off stretches" />}
-      >
-        <SessionTimeline
-          query={timeline}
-          jumps={jumps}
-          selected={selected}
-          onSelect={onSelect}
-          announcement={announcement}
-          reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
-          repeatJumps={repeatJumps}
-          onShowRepeat={onShowRepeat}
-        />
-      </SectionCard>
-
-      <SectionCard
-        title="Transcript"
-        meta="Read from this session’s own file when you open it. Nothing is stored."
-        right={
-          read.phase === 'failed' ? (
-            <Button variant="outline" height={28} onClick={retry}>
-              Try again
-            </Button>
-          ) : undefined
-        }
-      >
-        {generation && (
-          <p className="xt-session-detail-notice" role="note">
-            {generation}
+      <details className="xt-conversation-measurements">
+        <summary>Agent activity</summary>
+        <SectionCard
+          title="Hands-off stretches"
+          meta={`Measured over the last ${range.replace('d', ' days')}`}
+          // The definition sits behind the same compact control as the
+          // Dashboard's cards; the rule ID is read only inside it.
+          right={<DefinitionInfo ruleId="M-09" name="Hands-off stretches" />}
+        >
+          <SessionTimeline
+            query={timeline}
+            jumps={jumps}
+            selected={selected}
+            onSelect={onSelect}
+            announcement={null}
+            reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+            repeatJumps={repeatJumps}
+            onShowRepeat={onShowRepeat}
+          />
+        </SectionCard>
+      </details>
+      <div className="xt-session-conversation">
+        <SectionCard
+          title="Conversation"
+          right={
+            read.phase === 'failed' ? (
+              <Button variant="outline" height={28} onClick={retry}>
+                Try again
+              </Button>
+            ) : timeline.phase === 'ready' && timeline.stretches.state === 'measured' ? (
+              <RepeatNavigation
+                indexes={repeatedIndexes}
+                selected={pressed?.call === 'repeated' ? selected : null}
+                onSelect={onShowRepeat}
+              />
+            ) : undefined
+          }
+        >
+          <p className="xt-session-detail-notice">
+            Read-only history from this session’s own files. Nothing is stored.
           </p>
-        )}
-        <SessionTranscript
-          records={transcript.records}
-          state={transcript.state}
-          reveal={reveal}
-          onReveal={onReveal}
-        />
-      </SectionCard>
+          <p
+            className="xt-timeline-note"
+            role="status"
+            aria-live="polite"
+            data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+          >
+            {announcement ?? ''}
+          </p>
+          {generation && (
+            <p className="xt-session-detail-notice" role="note">
+              {generation}
+            </p>
+          )}
+          <SessionTranscript
+            conversation
+            markers={markers}
+            groupAdjacentActivity={
+              read.phase === 'read' && read.status.state === 'loaded' && read.status.sources === 1
+            }
+            records={transcript.records}
+            state={transcript.state}
+            reveal={reveal}
+            onReveal={onReveal}
+          />
+        </SectionCard>
+      </div>
     </section>
   );
 }

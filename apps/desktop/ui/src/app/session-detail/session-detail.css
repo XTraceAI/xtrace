@@ -263,3 +263,35 @@
 .xt-timeline-note:empty {
   display: none;
 }
+
+.xt-conversation-measurements > summary {
+  color: var(--meta);
+  font-size: 12px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+.xt-conversation-measurements .xt-timeline-segments {
+  grid-template-columns: 1fr;
+}
+.xt-conversation-navigation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--meta);
+  font-size: 12px;
+}
+.xt-session-conversation .xt-section-header {
+  height: auto !important;
+  min-height: 48px;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-block: 10px;
+}
+.xt-session-conversation .xt-section-right {
+  min-width: 0;
+}
+.xt-conversation-navigation button[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}

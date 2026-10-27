@@ -1,8 +1,8 @@
 # Session detail timeline acceptance
 
-One session's page shows the M-09 hands-off stretches it contributed in the
-selected window, above its transcript, and lets a reader go from a stretch to
-the tool call it started with. Each stretch also says what M-20 measured about
+One session's page shows a continuous, read-only conversation. M-09 hands-off
+stretches for the selected window remain available under Agent activity, where
+a reader can go to the tool call an activity period started with. Each stretch also says what M-20 measured about
 it: its active time, how many of its calls repeated an earlier one, which tool
 repeated most, and whether it was circling. The stretches come from
 [session-stretches.md](session-stretches.md); the transcript from
@@ -10,6 +10,37 @@ repeated most, and whether it was circling. The stretches come from
 
 Run `pnpm --dir apps/desktop/ui exec vitest run src/app/session-detail
 src/data/DataSource.test.ts` and `pnpm check`.
+
+## Conversation and repeated activity
+
+- User-role records appear in bubbles labelled User; the role does not establish
+  who typed them. Agent text is plain. System, unsupported and empty records keep
+  their honest labels. Default shared and gallery presentation stays unchanged.
+- Tool-only and empty-agent records collapse into activity disclosures. Adjacent
+  records may share one disclosure only when the native answer states sources=1.
+  That is the reader's source grouping contract, not a physical-file count for
+  every host. For legacy multi-source reads without boundaries, groups remain
+  per record and the view invents no source separator labels. Native read order,
+  original blocks and result locations remain unchanged; nothing sorts by time.
+- Marked records stop adjacent groups. Mixed text/tool records split rows at the
+  exact marked block, including consecutive calls of the same tool. Multiple
+  native groups sharing a representative remain separate notices.
+- Previous/Next counts every native measured non-null most-repeated group, in
+  native order, including unavailable representatives. It starts unselected,
+  jumps only after a press and never filters the conversation. Boundary controls
+  use guarded aria-disabled behavior so the pressed caller keeps focus.
+- Notices require the existing exact block-position proof. Counts describe
+  matching calls, not total repeats or identical complete arguments. Only native
+  circling=true gives warning styling. Titles reuse the tool-name formatter;
+  details keep the raw name. Each notice marks the earliest matching call and
+  does not claim to enumerate its whole group.
+- Opening an activity for a reveal happens once per request token; readers may
+  close it afterward. One page-level live status states the result, including
+  unavailable reasons, even with Agent activity open. Standalone timeline
+  announcements remain unchanged. Existing session/range/read/answer ownership
+  destroys old selection rather than restoring it on return.
+
+The remaining measurement and segment contracts apply inside Agent activity.
 
 ## The query
 

@@ -1,3 +1,4 @@
+import type { ConversationMarker } from './ConversationActivity';
 import { ToolActivityStrip } from './ToolStrip';
 import { TranscriptMarkdown } from './TranscriptMarkdown';
 import { CodeSurface, TranscriptText } from './TranscriptText';
@@ -65,22 +66,24 @@ function TranscriptBlockView({
   );
 }
 
-/**
- * One record, full width and left aligned.
- *
- * Every turn is the same shape whoever it is from: a transcript is a record being read, not a
- * conversation being held, and chat bubbles would put the person and the agent on opposite
- * sides of a column that is only ever scanned top to bottom.
- *
- * The id goes onto the element untouched, and the header states a time only when the record
- * carries one — a turn with no recorded timestamp is shown without one rather than borrowing
- * a neighbour's.
- */
-export function TranscriptRecordView({ record }: { record: TranscriptRecord }) {
+/** One saved record; conversation mode changes its presentation, never its identity. */
+export function TranscriptRecordView({
+  record,
+  conversation = false,
+  markers = [],
+}: {
+  record: TranscriptRecord;
+  conversation?: boolean;
+  markers?: readonly ConversationMarker[];
+}) {
   const segments = recordSegments(record);
 
   return (
-    <article className="xt-turn" data-role={record.role} data-record-id={record.id}>
+    <article
+      className={`xt-turn${conversation ? ' xt-conversation-turn' : ''}`}
+      data-role={record.role}
+      data-record-id={record.id}
+    >
       <header className="xt-turn-head">
         <span>{ROLE_LABEL[record.role]}</span>
         {typeof record.ordinal === 'number' ? <span>turn {record.ordinal}</span> : null}
@@ -99,7 +102,12 @@ export function TranscriptRecordView({ record }: { record: TranscriptRecord }) {
         ) : (
           segments.map((segment) =>
             segment.kind === 'tools' ? (
-              <ToolActivityStrip key={segment.key} blocks={segment.blocks} />
+              <ToolActivityStrip
+                key={segment.key}
+                blocks={segment.blocks}
+                ordered={conversation}
+                markers={markers}
+              />
             ) : (
               <TranscriptBlockView key={segment.key} block={segment.block} role={record.role} />
             ),
