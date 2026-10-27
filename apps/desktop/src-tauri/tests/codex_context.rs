@@ -13,8 +13,8 @@ use xt_ingest::native::{
 use xt_store::{Host, Store};
 use xtrace_desktop::{
     dto::{
-        CodexPageReason, CodexPageRequest, CodexPageStatus, ReaderLimit, SessionSourceReason,
-        SessionSourceStatus,
+        ReaderLimit, SessionPageReason, SessionPageSelection, SessionPageStatus,
+        SessionSourceReason, SessionSourceStatus,
     },
     native_index::DetailReaders,
     state::{AppState, StartupOptions},
@@ -121,13 +121,13 @@ fn oversized_codex_conversation_pages_and_exact_calls_stay_in_order() {
         }
     ));
     let first = state
-        .codex_transcript_page(&id, &CodexPageRequest::First, &token, &readers)
+        .session_transcript_page(&id, &SessionPageSelection::First, &token, &readers)
         .unwrap();
-    let CodexPageStatus::Loaded {
+    let SessionPageStatus::Loaded {
         records: first_records,
         start: 0,
         end,
-        total,
+        total_records: total,
         next: Some(next),
         digest,
         ..
@@ -138,16 +138,16 @@ fn oversized_codex_conversation_pages_and_exact_calls_stay_in_order() {
     assert_eq!(first_records.len(), 200);
     assert!(total > end);
     let later = state
-        .codex_transcript_page(
+        .session_transcript_page(
             &id,
-            &CodexPageRequest::Cursor {
+            &SessionPageSelection::Cursor {
                 cursor: next.clone(),
             },
             &token,
             &readers,
         )
         .unwrap();
-    let CodexPageStatus::Loaded {
+    let SessionPageStatus::Loaded {
         records: later_records,
         start,
         end: final_end,
@@ -166,14 +166,14 @@ fn oversized_codex_conversation_pages_and_exact_calls_stay_in_order() {
             .any(|r| first_records.iter().any(|p| p.id == r.id))
     );
     let earlier = state
-        .codex_transcript_page(
+        .session_transcript_page(
             &id,
-            &CodexPageRequest::Cursor { cursor: previous },
+            &SessionPageSelection::Cursor { cursor: previous },
             &token,
             &readers,
         )
         .unwrap();
-    let CodexPageStatus::Loaded {
+    let SessionPageStatus::Loaded {
         records: earlier_records,
         start: 0,
         ..
@@ -194,16 +194,17 @@ fn oversized_codex_conversation_pages_and_exact_calls_stay_in_order() {
             })
         })
         .unwrap();
-    let request = CodexPageRequest::ToolCall {
+    let request = SessionPageSelection::Anchor {
+        expected: xtrace_desktop::dto::SessionPageTargetKind::ToolCall,
         record_uuid: target.id.clone(),
-        block: 0,
+        block: Some(0),
         generation: Some(digest),
     };
     for _ in 0..2 {
         let anchored = state
-            .codex_transcript_page(&id, &request, &token, &readers)
+            .session_transcript_page(&id, &request, &token, &readers)
             .unwrap();
-        let CodexPageStatus::Loaded {
+        let SessionPageStatus::Loaded {
             records,
             target: Some(at),
             ..
@@ -211,18 +212,21 @@ fn oversized_codex_conversation_pages_and_exact_calls_stay_in_order() {
         else {
             panic!("anchor {anchored:?}")
         };
-        assert_eq!(&records[at as usize], target);
-        assert!(at > 0);
+        assert_eq!(&records[at.record as usize], target);
+        assert!(at.record > 0);
+        assert_eq!(at.block, Some(0));
     }
     let cancelled = CancelToken::new();
     cancelled.cancel();
     assert!(matches!(
         state
-            .codex_transcript_page(&id, &request, &cancelled, &readers)
+            .session_transcript_page(&id, &request, &cancelled, &readers)
             .unwrap(),
-        CodexPageStatus::Unavailable {
-            reason: CodexPageReason::Source {
-                detail: SessionSourceReason::Cancelled
+        SessionPageStatus::Unavailable {
+            reason: SessionPageReason::Read {
+                detail: xtrace_desktop::dto::SessionExcerptReason::Source {
+                    source: SessionSourceReason::Cancelled
+                }
             }
         }
     ));
@@ -235,15 +239,15 @@ fn oversized_codex_conversation_pages_and_exact_calls_stay_in_order() {
         .unwrap();
     assert!(matches!(
         state
-            .codex_transcript_page(
+            .session_transcript_page(
                 &id,
-                &CodexPageRequest::Cursor { cursor: next },
+                &SessionPageSelection::Cursor { cursor: next },
                 &token,
                 &readers
             )
             .unwrap(),
-        CodexPageStatus::Unavailable {
-            reason: CodexPageReason::Changed
+        SessionPageStatus::Unavailable {
+            reason: SessionPageReason::Changed
         }
     ));
     let after_bytes = fs::read(&source).unwrap();

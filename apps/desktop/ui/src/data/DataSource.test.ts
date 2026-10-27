@@ -1271,3 +1271,24 @@ it('keeps warning reads optional in browser preview and dismissals absent in bro
   expect(fixture.warningDismissals).toBeUndefined();
   expect(invoke).not.toHaveBeenCalled();
 });
+
+it('passes generic page selections and this read name to the existing native page command', async () => {
+  const source = new TauriDataSource();
+  const response = { state: 'unavailable', reason: { reason: 'changed' } } as const;
+  vi.mocked(invoke).mockResolvedValue(response);
+  const selection = {
+    kind: 'anchor',
+    record_uuid: 'saved-message',
+    block: 128,
+    expected: 'tool_block',
+    generation: 'a'.repeat(64),
+  } as const;
+  expect(await source.sessionTranscriptPage('session-1', selection, 'page-read-1')).toEqual(
+    response,
+  );
+  expect(invoke).toHaveBeenCalledWith('session_transcript_page', {
+    sessionId: 'session-1',
+    selection,
+    readId: 'page-read-1',
+  });
+});

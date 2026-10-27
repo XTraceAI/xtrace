@@ -1,7 +1,7 @@
 import type { SessionDiagnosis } from './generated/SessionDiagnosis';
 import type { SavedSkill } from './generated/SavedSkill';
-import type { CodexPageRequest } from './generated/CodexPageRequest';
-import type { CodexPageStatus } from './generated/CodexPageStatus';
+import type { SessionPageSelection } from './generated/SessionPageSelection';
+import type { SessionPageStatus } from './generated/SessionPageStatus';
 import type { DashboardMetrics } from './generated/DashboardMetrics';
 import type { TokensByHost } from './generated/TokensByHost';
 import type { SessionPage } from './generated/SessionPage';
@@ -371,11 +371,11 @@ export interface DataSource {
    * read is resolved behind this seam, from what the index recorded — a view
    * that could name a path could name any path, and this read opens files.
    */
-  codexTranscriptPage?(
+  sessionTranscriptPage?(
     sessionId: string,
-    selection: CodexPageRequest,
+    selection: SessionPageSelection,
     readId: string,
-  ): Promise<CodexPageStatus>;
+  ): Promise<SessionPageStatus>;
   sessionTranscript(sessionId: string, readId: string): Promise<SessionSourceStatus>;
   /** Abandon a read. Cancelling one that has not begun is not a mistake. */
   cancelSessionTranscript(readId: string): Promise<void>;

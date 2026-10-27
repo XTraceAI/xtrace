@@ -29,11 +29,11 @@ import { useDiagnose } from '../useSessionDiagnosis';
 import { SessionTimeline, type TimelineQuery } from './SessionTimeline';
 import { SessionTranscript } from './SessionTranscript';
 import {
-  CodexPagedTranscript,
-  type CodexPageIntent,
-  type CodexPageFeedback,
-  type CodexRepeatCandidate,
-} from './CodexPagedTranscript';
+  PagedSessionTranscript,
+  type PageIntent,
+  type PageFeedback,
+  type PageRepeatCandidate,
+} from './PagedSessionTranscript';
 import { type TranscriptProps, transcriptProps } from './transcript-adapter';
 import { jumpUnavailableText, type JumpUnavailable, resolveJump } from './timeline-jump';
 import type { RevealOutcome, RevealRequest } from './transcript-reveal';
@@ -158,7 +158,7 @@ function pressText(
     : `Showing the earliest matching call${tool}.`;
 }
 
-function pageFeedbackText(feedback: CodexPageFeedback | null): string | null {
+function pageFeedbackText(feedback: PageFeedback | null): string | null {
   if (!feedback) return null;
   const { intent, target, outcome, unavailable } = feedback;
   const which = intent.call === 'first' ? 'The first tool call' : 'The repeated call';
@@ -330,20 +330,21 @@ export function SessionDetailPage() {
     [setParams],
   );
   const paged =
-    host === 'codex' &&
-    !!source.codexTranscriptPage &&
+    (host === 'codex' || host === 'claude') &&
+    !!source.sessionTranscriptPage &&
     read.phase === 'read' &&
     read.status.state === 'unavailable' &&
-    ((read.status.reason.reason === 'reader_limit' &&
+    ((host === 'codex' &&
+      read.status.reason.reason === 'reader_limit' &&
       ['source_bytes', 'output_bytes'].includes(read.status.reason.limit)) ||
       (read.status.reason.reason === 'too_large' && read.status.reason.limit === 'bytes'));
   const [pageIntent, setPageIntent] = useState<{
-    intent: CodexPageIntent;
+    intent: PageIntent;
     scope: PressScope;
   } | null>(null);
-  const [pageFeedback, setPageFeedback] = useState<CodexPageFeedback | null>(null);
+  const [pageFeedback, setPageFeedback] = useState<PageFeedback | null>(null);
   const onPageFeedback = useCallback(
-    (feedback: CodexPageFeedback | null) => setPageFeedback(feedback),
+    (feedback: PageFeedback | null) => setPageFeedback(feedback),
     [],
   );
   const clearPageSelection = useCallback(() => {
@@ -493,7 +494,7 @@ export function SessionDetailPage() {
           : null
       : null;
 
-  const repeatCandidates = useMemo<CodexRepeatCandidate[]>(
+  const repeatCandidates = useMemo<PageRepeatCandidate[]>(
     () =>
       stretches.flatMap((stretch, index) =>
         stretch.repeats.state === 'measured' && stretch.repeats.worst
@@ -576,9 +577,10 @@ export function SessionDetailPage() {
             </p>
           )}
           {paged && sessionId ? (
-            <CodexPagedTranscript
-              key={sessionId}
+            <PagedSessionTranscript
+              key={`${sessionId}:${host}`}
               sessionId={sessionId}
+              host={host === 'claude' ? 'claude' : 'codex'}
               intent={ownedPageIntent?.intent ?? null}
               repeatCandidates={repeatCandidates}
               onFeedback={onPageFeedback}

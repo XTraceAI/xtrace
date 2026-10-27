@@ -1,5 +1,5 @@
 import type { DataSource } from '../src/data/DataSource';
-import type { CodexPageStatus } from '../src/data/generated/CodexPageStatus';
+import type { SessionPageStatus } from '../src/data/generated/SessionPageStatus';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -104,15 +104,20 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
     ],
   });
   if (new URLSearchParams(location.search).has('paged')) {
+    const pagedHost =
+      new URLSearchParams(location.search).get('host') === 'claude' ? 'claude' : 'codex';
     const data: DataSource = source;
     const rowRead = source.sessionRow;
     source.sessionRow = async (...args) => {
       const found = await rowRead(...args);
-      return found ? { ...found, host: 'codex' } : null;
+      return found ? { ...found, host: pagedHost } : null;
     };
     source.sessionTranscript = async () => ({
       state: 'unavailable',
-      reason: { reason: 'reader_limit', limit: 'source_bytes' },
+      reason:
+        pagedHost === 'claude'
+          ? { reason: 'too_large', limit: 'bytes', reached: 99, ceiling: 10 }
+          : { reason: 'reader_limit', limit: 'source_bytes' },
     });
     const stretchesRead = source.sessionStretches;
     source.sessionStretches = async (...args) => {
@@ -128,11 +133,8 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
         : answer;
     };
     const digest = 'a'.repeat(64);
-    data.codexTranscriptPage = async (_id, selection): Promise<CodexPageStatus> => {
-      if (
-        selection.kind === 'tool_call' &&
-        new URLSearchParams(location.search).has('paged-changed')
-      )
+    data.sessionTranscriptPage = async (_id, selection): Promise<SessionPageStatus> => {
+      if (selection.kind === 'anchor' && new URLSearchParams(location.search).has('paged-changed'))
         return { state: 'unavailable', reason: { reason: 'changed' } };
       let start = 0,
         end = 2,
@@ -141,15 +143,22 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
         start = 2;
         end = records.length;
       }
-      if (selection.kind === 'tool_call') {
+      if (selection.kind === 'anchor') {
         const found = records.findIndex((record) => record.id === selection.record_uuid);
-        if (found < 0) return { state: 'unavailable', reason: { reason: 'target_missing' } };
+        if (found < 0)
+          return {
+            state: 'unavailable',
+            reason: { reason: 'read', detail: { reason: 'target_missing' } },
+          };
         if (
           !records[found]?.blocks.some(
             (block) => block.index === selection.block && block.kind === 'tool_call',
           )
         )
-          return { state: 'unavailable', reason: { reason: 'block_missing' } };
+          return {
+            state: 'unavailable',
+            reason: { reason: 'read', detail: { reason: 'block_missing' } },
+          };
         start = Math.max(0, found - 1);
         end = Math.min(records.length, found + 2);
         target = found - start;
@@ -160,10 +169,19 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
         records: records.slice(start, end),
         start,
         end,
-        total: records.length,
+        generation:
+          pagedHost === 'claude'
+            ? { generation: 'indexed', appended: false }
+            : { generation: 'unrecorded' },
+        record_ranges: [{ start: 0, end: end - start }],
+        dropped_records: 0,
+        total_records: records.length,
         previous: start > 0 ? `v1:before:${start}:${digest}` : null,
         next: end < records.length ? `v1:after:${end}:${digest}` : null,
-        target,
+        target:
+          target === null
+            ? null
+            : { record: target, block: selection.kind === 'anchor' ? selection.block : null },
       };
     };
   }
