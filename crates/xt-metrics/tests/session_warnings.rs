@@ -329,6 +329,202 @@ fn codex_results_without_a_flag_are_unknown() {
     assert_eq!((found.tool_results, found.tool_results_known), (2, 0));
 }
 
+fn result_observation(kind: &str) -> CanonicalRecord {
+    let block = |id| json!({"type":"tool_result","tool_use_id":id,"is_error":true,"content":""});
+    let content = match kind {
+        "unknown" => Value::Null,
+        "empty" => json!([]),
+        "other" => json!([{"type":"text","text":""}]),
+        "one" => json!([block("t1")]),
+        "two" => json!([block("t1"), block("t2")]),
+        "replaced" => json!([block("t1"), {"type":"text","text":""}]),
+        _ => unreachable!(),
+    };
+    record(json!({"uuid":"r","type":"user","timestamp":at(0,2),
+        "message":{"role":"user","content":content}}))
+}
+
+fn observed_result_pair(first: &str, second: &str, same_batch: bool) -> TempDb {
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        SESSION,
+        "claude",
+        &[
+            says("h", &at(0, 0), "Run both checks please"),
+            calls(
+                "a",
+                &at(0, 1),
+                &[
+                    ("t1", "Bash", json!({"command":"pnpm test"})),
+                    ("t2", "Bash", json!({"command":"pnpm test"})),
+                ],
+            ),
+        ],
+        false,
+    );
+    let observations = [result_observation(first), result_observation(second)];
+    if same_batch {
+        db.store_mut()
+            .upsert_records(SESSION, &observations, false)
+            .unwrap();
+    } else {
+        for observation in &observations {
+            db.store_mut()
+                .upsert_records(SESSION, std::slice::from_ref(observation), false)
+                .unwrap();
+        }
+    }
+    db
+}
+
+#[test]
+fn a_removed_result_cannot_keep_a_repeated_failure_warning_alive() {
+    let mut db = TempDb::empty().unwrap();
+    let original = result_observation("two");
+    seed(
+        &mut db,
+        SESSION,
+        "claude",
+        &[
+            says("h", &at(0, 0), "Run both checks please"),
+            calls(
+                "a",
+                &at(0, 1),
+                &[
+                    ("t1", "Bash", json!({"command":"pnpm test"})),
+                    ("t2", "Bash", json!({"command":"pnpm test"})),
+                ],
+            ),
+            original.clone(),
+        ],
+        false,
+    );
+    let before = warnings(&db, SESSION);
+    assert!(
+        before
+            .warnings
+            .iter()
+            .any(|w| w.kind == WarningKind::RepeatedFailure)
+    );
+    assert_eq!(before.checks.repeated_failure, CheckState::Complete);
+    let mut removed = original;
+    removed.message.content.as_mut().unwrap().pop();
+    db.store_mut()
+        .upsert_records(SESSION, &[removed], false)
+        .unwrap();
+    let found = warnings(&db, SESSION);
+    assert!(
+        found
+            .warnings
+            .iter()
+            .all(|w| w.kind != WarningKind::RepeatedFailure)
+    );
+    assert_eq!(
+        found.checks.repeated_failure,
+        CheckState::Incomplete {
+            missing: vec![Missing::OutcomeUnknown { results: 1 }]
+        }
+    );
+    assert_eq!((found.tool_results, found.tool_results_known), (2, 1));
+}
+
+#[test]
+fn result_position_disagreements_are_unknown_in_both_orders() {
+    for (first, second) in [
+        ("two", "one"),
+        ("one", "two"),
+        ("two", "replaced"),
+        ("replaced", "two"),
+    ] {
+        for same_batch in [false, true] {
+            let db = observed_result_pair(first, second, same_batch);
+            let found = warnings(&db, SESSION);
+            assert!(
+                found
+                    .warnings
+                    .iter()
+                    .all(|w| w.kind != WarningKind::RepeatedFailure),
+                "{first} -> {second}, same batch: {same_batch}"
+            );
+            assert_eq!(
+                found.checks.repeated_failure,
+                CheckState::Incomplete {
+                    missing: vec![Missing::OutcomeUnknown { results: 1 }]
+                }
+            );
+            assert_eq!((found.tool_results, found.tool_results_known), (2, 1));
+        }
+    }
+}
+
+#[test]
+fn conflicted_empty_result_observations_never_report_a_complete_check() {
+    for (first, second) in [
+        ("empty", "two"),
+        ("two", "empty"),
+        ("other", "two"),
+        ("two", "other"),
+    ] {
+        for same_batch in [false, true] {
+            let db = observed_result_pair(first, second, same_batch);
+            let parent_conflict: bool = Connection::open(db.path())
+                .unwrap()
+                .query_row(
+                    "SELECT has_conflict FROM records WHERE uuid='r'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(parent_conflict);
+            let found = warnings(&db, SESSION);
+            assert!(
+                found
+                    .warnings
+                    .iter()
+                    .all(|w| w.kind != WarningKind::RepeatedFailure)
+            );
+            let missing = if found.tool_results == 0 {
+                Missing::OutcomeNotSaved { records: 1 }
+            } else {
+                assert_eq!(found.tool_results, 2);
+                Missing::OutcomeUnknown { results: 2 }
+            };
+            let expected = CheckState::Incomplete {
+                missing: vec![missing],
+            };
+            assert_eq!(
+                found.checks.repeated_failure, expected,
+                "{first} -> {second}, same batch: {same_batch}"
+            );
+            assert_eq!(found.checks.interruption, expected);
+            assert_eq!(found.tool_results_known, 0);
+        }
+    }
+}
+
+#[test]
+fn unknown_content_does_not_dispute_known_failure_evidence() {
+    for (first, second) in [("unknown", "two"), ("two", "unknown"), ("two", "two")] {
+        for same_batch in [false, true] {
+            let db = observed_result_pair(first, second, same_batch);
+            let found = warnings(&db, SESSION);
+            assert!(
+                found
+                    .warnings
+                    .iter()
+                    .any(|w| w.kind == WarningKind::RepeatedFailure)
+            );
+            assert_eq!(
+                found.checks.repeated_failure,
+                CheckState::Complete,
+                "{first} -> {second}, same batch: {same_batch}"
+            );
+            assert_eq!((found.tool_results, found.tool_results_known), (2, 2));
+        }
+    }
+}
+
 /// Read one session the way the writer does, with its tool-sent claims, so
 /// previews and proofs are kept as ingestion keeps them.
 fn ingest(

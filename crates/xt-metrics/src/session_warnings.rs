@@ -65,13 +65,13 @@ use xt_store::{
 /// One session's records inside the window, with the stored facts every rule
 /// reads: who sent each one (M-02), whether only part of a person's record is
 /// theirs, the stored interruption flag, the stated tool-result presence, the
-/// record it follows in its source, and whether a stored proof says Codex
-/// wrote it as its interrupted-turn note (`?4`).
+/// record it follows in its source, whether a stored proof says Codex wrote
+/// it as its interrupted-turn note (`?4`), and the record's conflict flag.
 pub(crate) const RECORD_QUERY: &str = "SELECT v.uuid,v.ts,v.ts_ms,v.type,v.is_sidechain,
        v.human_is_eligible,v.human_text_len IS NOT v.text_len,v.is_interrupted,
        v.is_tool_result_carrier,v.parent_uuid,
        EXISTS(SELECT 1 FROM tool_sent_inputs t WHERE t.record_uuid=v.uuid
-           AND t.session_id=v.session_id AND t.evidence_kind=?4)
+           AND t.session_id=v.session_id AND t.evidence_kind=?4),v.has_conflict
      FROM v_session_events v
      WHERE v.session_id=?1 AND v.ts_ms>=?2 AND v.ts_ms<?3";
 
@@ -1703,7 +1703,7 @@ impl MetricsDb {
             record: EvidenceRecord,
             parent: Option<String>,
             partial: bool,
-            /// May carry a tool result: stated so, or unknown.
+            /// May carry a tool result: stated so, unknown, or contradicted.
             carrier: bool,
         }
         let start = InstantKey::from_millisecond(window.start_ms());
@@ -1751,7 +1751,8 @@ impl MetricsDb {
                 },
                 parent: row.get(9)?,
                 partial: row.get(6)?,
-                carrier: !agent && row.get::<_, Option<bool>>(8)? != Some(false),
+                carrier: !agent
+                    && (row.get::<_, bool>(11)? || row.get::<_, Option<bool>>(8)? != Some(false)),
             });
         }
         drop(result);

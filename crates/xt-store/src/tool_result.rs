@@ -21,6 +21,7 @@ use crate::{
 };
 use rusqlite::{Connection, params};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// The start of the tool result Claude Code writes when the person declines a
 /// tool call at its permission prompt. It comes with `is_error: true`.
@@ -222,11 +223,25 @@ pub(crate) fn keep(
     Ok(written > 0)
 }
 
+fn mark_conflicted(
+    connection: &Connection,
+    session_id: &str,
+    uuid: &str,
+    block_index: i64,
+) -> Result<()> {
+    connection.execute(
+        "UPDATE tool_results SET conflicted=1 WHERE record_uuid=?1 AND session_id=?2
+           AND block_index=?3 AND fact_version<=?4 AND conflicted=0",
+        params![uuid, session_id, block_index, FACT_VERSION],
+    )?;
+    Ok(())
+}
+
 /// Keep the call identifiers and result facts the accepted inputs of one
-/// write state. Only a record this session owns, unconflicted, is written to
-/// (each statement checks that itself, so no row is read for it); an input
-/// whose content was not observed states nothing. Returns how many result rows
-/// were written or replaced.
+/// write state. Only owned records are considered, and new facts require an
+/// unconflicted parent. Contradicted positions keep their facts with a sticky
+/// conflict mark. An input whose content was not observed states nothing.
+/// Returns how many result rows were written or replaced.
 pub(crate) fn apply(
     connection: &Connection,
     session_id: &str,
@@ -245,6 +260,30 @@ pub(crate) fn apply(
         let Some(blocks) = &input.message.content else {
             continue;
         };
+        let previous_results = if input.record_type == RecordType::User {
+            let mut statement = connection.prepare(
+                "SELECT block_index FROM tool_results WHERE record_uuid=?1 AND session_id=?2",
+            )?;
+            statement
+                .query_map(params![uuid, session_id], |row| row.get(0))?
+                .collect::<rusqlite::Result<BTreeSet<i64>>>()?
+        } else {
+            BTreeSet::new()
+        };
+        // Any saved result proves a prior complete content observation. Keep
+        // its positions, including conflicted ones, when comparing this array.
+        // No rows can also mean legacy/unknown content, so that alone proves no absence.
+        for &index in &previous_results {
+            let present = usize::try_from(index)
+                .ok()
+                .and_then(|index| blocks.get(index))
+                .is_some_and(|block| {
+                    block.get("type").and_then(Value::as_str) == Some("tool_result")
+                });
+            if !present {
+                mark_conflicted(connection, session_id, uuid, index)?;
+            }
+        }
         for (index, block) in blocks.iter().enumerate() {
             let index = index as i64;
             match block.get("type").and_then(Value::as_str) {
@@ -273,6 +312,9 @@ pub(crate) fn apply(
                         &facts(block),
                         FACT_VERSION,
                     )?);
+                    if !previous_results.is_empty() && !previous_results.contains(&index) {
+                        mark_conflicted(connection, session_id, uuid, index)?;
+                    }
                 }
                 _ => {}
             }
