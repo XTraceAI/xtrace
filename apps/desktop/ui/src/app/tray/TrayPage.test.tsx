@@ -152,6 +152,10 @@ function nativeTray(initial = summary(), visible = false) {
     // The tray reads only today; any other read is a failure here.
     sessionRow: elsewhere,
     sessionStretches: elsewhere,
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: elsewhere,
     cancelSessionTranscript: elsewhere,
     pullRequests: elsewhere,

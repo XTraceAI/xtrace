@@ -1,3 +1,4 @@
+import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
 import type { GradingStart } from './generated/GradingStart';
 import type { GradingInstalledSkills } from './generated/GradingInstalledSkills';
 import type { GradingSkillAdd } from './generated/GradingSkillAdd';
@@ -400,6 +401,12 @@ export class FixtureDataSource implements DataSource {
    * app gives when it has no native home — not an empty transcript, which
    * would say the session recorded nothing.
    */
+  async sessionWarningContext(): Promise<SessionExcerptStatus> {
+    return {
+      state: 'unavailable',
+      reason: { reason: 'source', source: { reason: 'not_indexed' } },
+    };
+  }
   async sessionTranscript(): Promise<SessionSourceStatus> {
     return { state: 'unavailable', reason: { reason: 'not_indexed' } };
   }

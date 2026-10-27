@@ -411,3 +411,42 @@ export function transcriptProps(status: SessionSourceStatus, complete = true): T
     state: note ? { kind: 'incomplete', note } : { kind: 'ready' },
   };
 }
+
+const GENERATION = {
+  // Says what is true of the *measurements*, and nothing about whether the
+  // text is whole. Whether it is whole is the transcript's own statement, made
+  // beside this one — and a session can perfectly well have grown since it was
+  // indexed *and* be missing part of itself, in which case a sentence here
+  // calling the text complete would contradict the notice underneath it.
+  appended:
+    'This session has been written to since it was last indexed. The measurements beside it describe the part that was indexed.',
+  unrecorded:
+    'This text is not tied to a measurement: at least one of this session’s files has no recorded reading.',
+} as const;
+
+export function generationNote(
+  status:
+    | {
+        state: 'loaded';
+        generation: Extract<SessionSourceStatus, { state: 'loaded' }>['generation'];
+      }
+    | { state: 'unavailable' },
+): string | null {
+  if (status.state !== 'loaded') return null;
+  return status.generation.generation === 'unrecorded'
+    ? GENERATION.unrecorded
+    : status.generation.appended
+      ? GENERATION.appended
+      : null;
+}
+
+/** An excerpt cannot establish call/result uniqueness outside its window. */
+export function excerptRecord(source: SourceRecord, onlyToolResults: boolean): TranscriptRecord {
+  const paired = pairs([], false);
+  return {
+    id: source.id,
+    role: source.role === 'user' && onlyToolResults ? 'tool' : source.role,
+    at: at(source.at),
+    blocks: source.blocks.map((part) => block(source, part, paired)),
+  };
+}

@@ -425,6 +425,10 @@ it('keeps indexed rows visible with a warning when native indexing is disabled',
     sessionRow: (sessionId, windowDays) => fixtureSource.sessionRow(sessionId, windowDays),
     sessionStretches: (sessionId, windowDays) =>
       fixtureSource.sessionStretches(sessionId, windowDays),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: () => fixtureSource.sessionTranscript(),
     cancelSessionTranscript: () => fixtureSource.cancelSessionTranscript(),
     sessionsList: (filter, after, windowDays) =>

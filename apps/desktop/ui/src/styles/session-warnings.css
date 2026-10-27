@@ -258,3 +258,60 @@
 .xt-session-title-line .xt-warning-marker {
   align-self: center;
 }
+
+.xt-warning-context {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.xt-warning-context-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  justify-content: space-between;
+}
+.xt-warning-context-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.xt-warning-context-head > span,
+.xt-warning-context-note,
+.xt-warning-context-tool-time {
+  margin: 0;
+  color: var(--meta);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.xt-warning-context-message {
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.xt-warning-context-message:last-child {
+  border-bottom: 0;
+}
+.xt-warning-context-trigger {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--meta);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.xt-warning-context .xt-turn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.xt-warning-context .xt-transcript {
+  gap: 0;
+  padding: 0;
+}
+.xt-warning-context .xt-tx-text {
+  font-size: 12px;
+}
+.xt-warning-context .xt-tool-card[data-highlighted] {
+  box-shadow: none;
+}
