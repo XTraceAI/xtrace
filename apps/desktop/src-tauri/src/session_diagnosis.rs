@@ -1,6 +1,9 @@
-//! Translate a diagnosis outcome and select its exact conversation as messages.
+//! Diagnose outcomes, exact conversation messages and explicit project skill saves.
 
-use crate::session_diagnosis_dto::{self as dto, DiagnosisSent, SessionDiagnosis};
+use crate::session_diagnosis_dto::{
+    self as dto, DiagnosisSent, SaveSkillRefusal, SavedSkill, SessionDiagnosis,
+};
+use crate::state::{AppState, StateError};
 use crate::transcript_dto::{SourceBlock, SourcePayload, SourceRecord, SourceResultPart};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -484,6 +487,209 @@ fn short_input(payload: &SourcePayload) -> String {
         let cut: String = line.chars().take(MAX_CALL_INPUT_CHARS - 1).collect();
         format!("{}…", cut.trim_end())
     }
+}
+
+/// Save a suggested skill into the session's project, as the module says.
+pub fn save_suggested_skill(
+    state: &AppState,
+    session_id: &str,
+    name: &str,
+    draft: &str,
+) -> Result<SavedSkill, StateError> {
+    let refused = |reason| SavedSkill::Refused {
+        reason,
+        text: dto::refusal_text(reason).to_owned(),
+    };
+    if let Err(reason) = check_skill(name, draft) {
+        return Ok(refused(reason));
+    }
+    let Some(session) = state.with_store(|store| Ok(store.session(session_id)?))? else {
+        return Ok(refused(SaveSkillRefusal::SessionNotFound));
+    };
+    let Some(cwd) = session.meta.cwd.filter(|cwd| !cwd.trim().is_empty()) else {
+        return Ok(refused(SaveSkillRefusal::NoProjectFolder));
+    };
+    let home = state
+        .native_home()
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+    Ok(
+        match write_skill(Path::new(&cwd), home.as_deref(), name, draft) {
+            Ok(path) => SavedSkill::Saved {
+                path: path.to_string_lossy().into_owned(),
+                text: dto::saved_text(name),
+            },
+            Err(reason) => refused(reason),
+        },
+    )
+}
+
+/// The name and draft checks of a save: a skill name, a draft the
+/// diagnosis reader accepts as a skill, whose own `name:` is `name`, with no
+/// personal detail or secret.
+pub fn check_skill(name: &str, draft: &str) -> Result<String, SaveSkillRefusal> {
+    if !xt_judge::rubric::is_slug(name) {
+        return Err(SaveSkillRefusal::InvalidName);
+    }
+    let draft = answer::normalise_draft(draft);
+    answer::check_skill_draft(&draft).map_err(|_| SaveSkillRefusal::InvalidDraft)?;
+    if answer::skill_draft_name(&draft).ok().as_deref() != Some(name) {
+        return Err(SaveSkillRefusal::NameMismatch);
+    }
+    if answer::has_secret(&draft) {
+        return Err(SaveSkillRefusal::Secret);
+    }
+    let draft = answer::quote_description(&draft).map_err(|_| SaveSkillRefusal::InvalidDraft)?;
+    answer::check_skill_draft(&draft).map_err(|_| SaveSkillRefusal::InvalidDraft)?;
+    Ok(draft)
+}
+
+/// Write `<project>/.claude/skills/<name>/SKILL.md`, the checks first.
+pub fn write_skill(
+    project: &Path,
+    home: Option<&Path>,
+    name: &str,
+    draft: &str,
+) -> Result<PathBuf, SaveSkillRefusal> {
+    write_skill_inner(
+        project,
+        home,
+        name,
+        draft,
+        #[cfg(test)]
+        None,
+    )
+}
+
+#[cfg(test)]
+type SaveTestWrite = fn(&mut std::fs::File, &[u8]) -> std::io::Result<()>;
+
+#[cfg(test)]
+#[derive(Default)]
+struct SaveTestHooks {
+    before_open: Option<fn(&Path)>,
+    write: Option<SaveTestWrite>,
+}
+
+fn write_skill_inner(
+    project: &Path,
+    home: Option<&Path>,
+    name: &str,
+    draft: &str,
+    #[cfg(test)] hooks: Option<&SaveTestHooks>,
+) -> Result<PathBuf, SaveSkillRefusal> {
+    let draft = check_skill(name, draft)?;
+    if !project.is_absolute() {
+        return Err(SaveSkillRefusal::ProjectUnavailable);
+    }
+    // The project must be a real folder, named as it resolves: no link, no
+    // `..`.
+    let resolved =
+        std::fs::canonicalize(project).map_err(|_| SaveSkillRefusal::ProjectUnavailable)?;
+    if resolved != project || !resolved.is_dir() {
+        return Err(SaveSkillRefusal::ProjectUnavailable);
+    }
+    if let Some(home) = home.and_then(|home| std::fs::canonicalize(home).ok())
+        && home.starts_with(&resolved)
+    {
+        return Err(SaveSkillRefusal::ProjectUnavailable);
+    }
+    // Folders this save created, removed again (deepest first) if it fails.
+    let mut created: Vec<PathBuf> = Vec::new();
+    let undo = |created: &[PathBuf]| {
+        for folder in created.iter().rev() {
+            let _ = std::fs::remove_dir(folder);
+        }
+    };
+    let mut folder = resolved.clone();
+    for part in [".claude", "skills"] {
+        folder.push(part);
+        match std::fs::symlink_metadata(&folder) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => {
+                undo(&created);
+                return Err(SaveSkillRefusal::UnsafeFolder);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if std::fs::create_dir(&folder).is_err() {
+                    undo(&created);
+                    return Err(SaveSkillRefusal::WriteFailed);
+                }
+                created.push(folder.clone());
+            }
+            Err(_) => {
+                undo(&created);
+                return Err(SaveSkillRefusal::WriteFailed);
+            }
+        }
+    }
+    // Checked again right before the skill's own folder is made, to narrow
+    // the time in which `.claude` or `skills` could be swapped for a link.
+    if !real_folders(&resolved, &folder) {
+        undo(&created);
+        return Err(SaveSkillRefusal::UnsafeFolder);
+    }
+    let skill = folder.join(name);
+    match std::fs::create_dir(&skill) {
+        Ok(()) => created.push(skill.clone()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            undo(&created);
+            return Err(SaveSkillRefusal::AlreadyExists);
+        }
+        Err(_) => {
+            undo(&created);
+            return Err(SaveSkillRefusal::WriteFailed);
+        }
+    }
+    // The new folder must be where it was meant to be: no folder above it
+    // turned into a link meanwhile.
+    if std::fs::canonicalize(&skill).ok().as_deref() != Some(skill.as_path()) {
+        undo(&created);
+        return Err(SaveSkillRefusal::UnsafeFolder);
+    }
+    let path = skill.join("SKILL.md");
+    #[cfg(test)]
+    if let Some(before_open) = hooks.and_then(|hooks| hooks.before_open) {
+        before_open(&path);
+    }
+    // `create_new` never follows or replaces a link at the file's own name.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(_) => {
+            undo(&created);
+            return Err(SaveSkillRefusal::WriteFailed);
+        }
+    };
+    let written = (|| {
+        use std::io::Write;
+        #[cfg(test)]
+        if let Some(write) = hooks.and_then(|hooks| hooks.write) {
+            return write(&mut file, draft.as_bytes());
+        }
+        file.write_all(draft.as_bytes())?;
+        file.sync_all()
+    })();
+    drop(file);
+    if written.is_err() {
+        let _ = std::fs::remove_file(&path);
+        undo(&created);
+        return Err(SaveSkillRefusal::WriteFailed);
+    }
+    Ok(path)
+}
+
+/// Whether `<project>/.claude` and `<project>/.claude/skills` are both real
+/// folders (not links) and `folder` resolves to itself.
+fn real_folders(project: &Path, folder: &Path) -> bool {
+    let claude = project.join(".claude");
+    [claude.as_path(), folder]
+        .iter()
+        .all(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir()))
+        && std::fs::canonicalize(folder).ok().as_deref() == Some(folder)
 }
 
 #[cfg(test)]

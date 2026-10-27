@@ -680,3 +680,315 @@ fn unknown_subagent_identity_refuses_context_instead_of_mixing_two_subagents() {
         assert_eq!(main[0].sender, Sender::Person);
     }
 }
+
+const SKILL: &str = "---\nname: shop-api-tests\ndescription: Use when running the shop-api \
+                     tests.\n---\n\n# Run shop-api tests\n\n1. Start the database.\n2. Run the \
+                     tests.\n";
+
+fn project() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = std::fs::canonicalize(dir.path()).unwrap().join("shop-api");
+    std::fs::create_dir(&path).unwrap();
+    (dir, path)
+}
+
+/// `SKILL` as saved: its description written as a quoted string.
+fn saved(skill: &str) -> String {
+    answer::quote_description(skill).unwrap()
+}
+
+#[test]
+fn a_suggested_skill_is_saved_in_the_project_once() {
+    let (_dir, project) = project();
+    let path = write_skill(&project, None, "shop-api-tests", SKILL).unwrap();
+    assert_eq!(path, project.join(".claude/skills/shop-api-tests/SKILL.md"));
+    assert_eq!(
+        path,
+        skill_path(project.to_str().unwrap(), "shop-api-tests"),
+        "the path the answer names"
+    );
+    let written = saved(SKILL);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+    // Never over an existing one, and the existing one is untouched.
+    let other = SKILL.replace("Start the database", "Something else");
+    assert_eq!(
+        write_skill(&project, None, "shop-api-tests", &other),
+        Err(SaveSkillRefusal::AlreadyExists)
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+}
+
+#[test]
+fn a_saved_skill_header_reads_as_yaml_whatever_its_description_holds() {
+    let (_dir, project) = project();
+    let draft = SKILL.replace(
+        "description: Use when running the shop-api tests.",
+        "description: Use when: the shop-api tests fail #2 [ci]",
+    );
+    let path = write_skill(&project, None, "shop-api-tests", &draft).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    let line = written.lines().nth(2).unwrap();
+    let value = line.strip_prefix("description: ").unwrap();
+    // A JSON string is a YAML double-quoted scalar.
+    assert!(value.starts_with('"'));
+    let text: String = serde_json::from_str(value).unwrap();
+    assert_eq!(text, "Use when: the shop-api tests fail #2 [ci]");
+    assert!(written.starts_with("---\nname: shop-api-tests\n"));
+}
+
+#[test]
+fn a_failed_save_leaves_no_folder_it_made_and_keeps_the_ones_it_did_not() {
+    use std::os::unix::fs::PermissionsExt;
+    // The project's own `.claude` exists and cannot be written into: the
+    // save fails, `.claude` stays, nothing new is there.
+    let (_dir, project) = project();
+    let claude = project.join(".claude");
+    std::fs::create_dir(&claude).unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let outcome = write_skill(&project, None, "shop-api-tests", SKILL);
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(outcome, Err(SaveSkillRefusal::WriteFailed));
+    assert!(claude.is_dir());
+    assert_eq!(std::fs::read_dir(&claude).unwrap().count(), 0);
+    // The project folder itself cannot be written into: nothing is made.
+    let (_dir2, project) = self::project();
+    std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let outcome = write_skill(&project, None, "shop-api-tests", SKILL);
+    std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(outcome, Err(SaveSkillRefusal::WriteFailed));
+    assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+}
+
+#[test]
+fn a_suggested_skill_is_refused_unless_name_draft_and_folder_are_safe() {
+    let (dir, project) = project();
+    let write = |name: &str, draft: &str| write_skill(&project, None, name, draft);
+    assert_eq!(write("../x", SKILL), Err(SaveSkillRefusal::InvalidName));
+    assert_eq!(write("Shop", SKILL), Err(SaveSkillRefusal::InvalidName));
+    assert_eq!(
+        write("other-name", SKILL),
+        Err(SaveSkillRefusal::NameMismatch)
+    );
+    assert_eq!(
+        write("shop-api-tests", "just text"),
+        Err(SaveSkillRefusal::InvalidDraft)
+    );
+    assert_eq!(
+        write(
+            "shop-api-tests",
+            &SKILL.replace("Start the database.", "Ask ana@example.com.")
+        ),
+        Err(SaveSkillRefusal::Secret)
+    );
+    // A relative, missing or linked project folder.
+    assert_eq!(
+        write_skill(Path::new("shop-api"), None, "shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::ProjectUnavailable)
+    );
+    assert_eq!(
+        write_skill(&project.join("gone"), None, "shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::ProjectUnavailable)
+    );
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&project, &link).unwrap();
+    assert_eq!(
+        write_skill(&link, None, "shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::ProjectUnavailable)
+    );
+    // The home folder, or a folder above it, is never a project here.
+    assert_eq!(
+        write_skill(&project, Some(&project), "shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::ProjectUnavailable)
+    );
+    assert_eq!(
+        write_skill(&project.join(".."), None, "shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::ProjectUnavailable)
+    );
+    let nested_home = project.join("home");
+    std::fs::create_dir(&nested_home).unwrap();
+    assert_eq!(
+        write_skill(&project, Some(&nested_home), "shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::ProjectUnavailable)
+    );
+    // A `.claude` that is a link is not followed.
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, project.join(".claude")).unwrap();
+    assert_eq!(
+        write("shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::UnsafeFolder)
+    );
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    assert!(!project.join(".claude/skills").exists());
+    let (other_dir, other_project) = self::project();
+    let other_target = other_dir.path().join("elsewhere");
+    std::fs::create_dir(&other_target).unwrap();
+    std::fs::create_dir(other_project.join(".claude")).unwrap();
+    std::os::unix::fs::symlink(&other_target, other_project.join(".claude/skills")).unwrap();
+    assert_eq!(
+        write_skill(&other_project, None, "shop-api-tests", SKILL),
+        Err(SaveSkillRefusal::UnsafeFolder)
+    );
+    assert_eq!(std::fs::read_dir(other_target).unwrap().count(), 0);
+}
+
+#[test]
+fn save_regression_rechecks_the_quoted_draft_at_the_byte_boundary() {
+    let (_dir, project) = project();
+    let prefix = format!(
+        "---\nname: boundary\ndescription: {}\n---\n# Boundary\n\n1. ",
+        "\\".repeat(answer::MAX_DESCRIPTION_CHARS)
+    );
+    let draft = |bytes| format!("{prefix}{}\n", "x".repeat(bytes - prefix.len() - 1));
+    let expanding = draft(answer::MAX_SKILL_BYTES);
+    assert_eq!(answer::check_skill_draft(&expanding), Ok(()));
+    assert!(answer::quote_description(&expanding).unwrap().len() > answer::MAX_SKILL_BYTES);
+    assert_eq!(
+        write_skill(&project, None, "boundary", &expanding),
+        Err(SaveSkillRefusal::InvalidDraft)
+    );
+    assert!(
+        !project.join(".claude").exists(),
+        "refused before creating folders"
+    );
+
+    let fitting = draft(answer::MAX_SKILL_BYTES - answer::MAX_DESCRIPTION_CHARS - 2);
+    let path = write_skill(&project, None, "boundary", &fitting).unwrap();
+    let written = std::fs::read_to_string(path).unwrap();
+    assert_eq!(written.len(), answer::MAX_SKILL_BYTES);
+    assert_eq!(answer::check_skill_draft(&written), Ok(()));
+    assert_eq!(written, answer::quote_description(&fitting).unwrap());
+}
+
+#[test]
+fn save_regression_failed_create_new_preserves_a_competing_file() {
+    let (_dir, project) = project();
+    let hooks = SaveTestHooks {
+        before_open: Some(|path| std::fs::write(path, "competing writer's skill").unwrap()),
+        ..Default::default()
+    };
+    assert_eq!(
+        write_skill_inner(&project, None, "shop-api-tests", SKILL, Some(&hooks)),
+        Err(SaveSkillRefusal::WriteFailed)
+    );
+    let path = skill_path(project.to_str().unwrap(), "shop-api-tests");
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "competing writer's skill"
+    );
+}
+
+#[test]
+fn an_owned_partial_write_removes_only_owned_files_and_new_empty_folders() {
+    for setup in [
+        "new folders",
+        "existing parents",
+        "unrelated file in new folder",
+    ] {
+        let (_dir, project) = project();
+        let parent = project.join(".claude/skills");
+        if setup == "existing parents" {
+            std::fs::create_dir_all(&parent).unwrap();
+            std::fs::write(parent.join("existing.txt"), "keep existing").unwrap();
+        }
+        let hooks = SaveTestHooks {
+            before_open: (setup == "unrelated file in new folder").then_some(|path: &Path| {
+                std::fs::write(
+                    path.parent().unwrap().join("unrelated.txt"),
+                    "keep unrelated",
+                )
+                .unwrap();
+            }),
+            write: Some(|file, _| {
+                use std::io::Write;
+                file.write_all(b"owned partial skill")?;
+                Err(std::io::Error::other("injected write failure"))
+            }),
+        };
+        assert_eq!(
+            write_skill_inner(&project, None, "shop-api-tests", SKILL, Some(&hooks)),
+            Err(SaveSkillRefusal::WriteFailed),
+            "{setup}"
+        );
+        let skill = parent.join("shop-api-tests");
+        assert!(!skill.join("SKILL.md").exists(), "{setup}");
+        match setup {
+            "new folders" => assert!(!project.join(".claude").exists()),
+            "existing parents" => {
+                assert!(!skill.exists());
+                assert_eq!(
+                    std::fs::read_to_string(parent.join("existing.txt")).unwrap(),
+                    "keep existing"
+                );
+            }
+            _ => assert_eq!(
+                std::fs::read_to_string(skill.join("unrelated.txt")).unwrap(),
+                "keep unrelated"
+            ),
+        }
+    }
+}
+
+#[test]
+fn saving_uses_the_indexed_sessions_project_and_returns_typed_refusals() {
+    let (dir, project) = project();
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let state = AppState::build(
+        crate::state::StartupOptions {
+            data_dir: Some(dir.path().join("data")),
+            native_home: Some(home.clone()),
+            ..Default::default()
+        },
+        || panic!("synthetic data directory is explicit"),
+        || panic!("synthetic home is explicit"),
+    )
+    .unwrap();
+    let session = uuid(91);
+    let no_project = uuid(92);
+    state
+        .with_store(|store| {
+            let mut metadata =
+                xt_store::SessionMeta::new(&session, "codex", xt_store::SessionSource::Transcript);
+            metadata.cwd = Some(project.to_string_lossy().into_owned());
+            store.upsert_session(&metadata, false)?;
+            store.upsert_session(
+                &xt_store::SessionMeta::new(
+                    &no_project,
+                    "claude",
+                    xt_store::SessionSource::Transcript,
+                ),
+                false,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        !project.join(".claude").exists(),
+        "loading metadata starts no save"
+    );
+    for (session_id, reason) in [
+        (&uuid(93), SaveSkillRefusal::SessionNotFound),
+        (&no_project, SaveSkillRefusal::NoProjectFolder),
+    ] {
+        assert_eq!(
+            save_suggested_skill(&state, session_id, "shop-api-tests", SKILL).unwrap(),
+            SavedSkill::Refused {
+                reason,
+                text: dto::refusal_text(reason).into()
+            }
+        );
+    }
+    let saved = save_suggested_skill(&state, &session, "shop-api-tests", SKILL).unwrap();
+    let path = skill_path(project.to_str().unwrap(), "shop-api-tests");
+    assert_eq!(
+        saved,
+        SavedSkill::Saved {
+            path: path.to_string_lossy().into_owned(),
+            text: "Saved the skill shop-api-tests in this project.".into(),
+        }
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), self::saved(SKILL));
+    assert!(!home.join(".claude").exists());
+    state.shutdown();
+}

@@ -634,6 +634,33 @@ pub enum SaveSkillRefusal {
     WriteFailed,
 }
 
+pub fn refusal_text(reason: SaveSkillRefusal) -> &'static str {
+    match reason {
+        SaveSkillRefusal::InvalidName => {
+            "A skill name uses only lowercase letters, digits and -, at most 64 characters."
+        }
+        SaveSkillRefusal::InvalidDraft => "This draft is not a skill XTrace can save.",
+        SaveSkillRefusal::NameMismatch => "The draft's own name is not the name given.",
+        SaveSkillRefusal::Secret => {
+            "The draft contains an email address, key or token. Remove it first."
+        }
+        SaveSkillRefusal::SessionNotFound => "This Mac's index holds no such session.",
+        SaveSkillRefusal::NoProjectFolder => "This session does not say which project it ran in.",
+        SaveSkillRefusal::ProjectUnavailable => {
+            "The session's project folder is missing, or is your home folder."
+        }
+        SaveSkillRefusal::AlreadyExists => "The project already has a skill with this name.",
+        SaveSkillRefusal::UnsafeFolder => {
+            "The project's .claude/skills folder is a link or not a folder, so nothing was written."
+        }
+        SaveSkillRefusal::WriteFailed => "The skill could not be written. Nothing was saved.",
+    }
+}
+
+pub fn saved_text(name: &str) -> String {
+    format!("Saved the skill {name} in this project.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

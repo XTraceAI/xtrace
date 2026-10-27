@@ -594,6 +594,23 @@ fn cancel_session_transcript(
     reads.cancel(&read_id);
 }
 
+/// Save a skill a diagnosis suggested, on the person's explicit click, as
+/// `<project>/.claude/skills/<name>/SKILL.md` in the session's own project
+/// folder: the name and draft are checked first, an existing skill is never
+/// replaced, and the answer says where it was written or why not.
+#[tauri::command]
+async fn save_suggested_skill(
+    app: tauri::AppHandle,
+    session_id: String,
+    name: String,
+    draft: String,
+) -> Result<dto::SavedSkill, String> {
+    write_on_worker(app, move |state| {
+        session_diagnosis::save_suggested_skill(state, &session_id, &name, &draft)
+    })
+    .await
+}
+
 /// One bounded snapshot of the default local rulebook's recorded activity
 /// over the fixed trailing 14 days. `read_id` is the view's own name for this
 /// read and the only thing it sends: no root, path, range or filter. One read
@@ -1634,6 +1651,7 @@ pub fn run() {
             metrics_window_warnings,
             dismiss_session_warning,
             restore_session_warning,
+            save_suggested_skill,
             session_transcript,
             codex_transcript_page,
             cancel_session_transcript,
