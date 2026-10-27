@@ -1,37 +1,26 @@
 import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useData } from '../data/DataProvider';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useData, useDiagnosisRun } from '../data/DataProvider';
 import type { DiagnosisControls } from '../data/DataSource';
-import type { SessionDiagnosis } from '../data/generated/SessionDiagnosis';
+import { keptKey, type DiagnosisRun, type Kept } from '../data/diagnosis-runs';
 import type { SessionWarningItem } from '../data/generated/SessionWarningItem';
 
-/** What the page is doing with Diagnose: asking first, or running one. */
-type Stage = { readonly sessionId: string } & (
-  | { readonly kind: 'confirm'; readonly warningId: string }
-  | { readonly kind: 'running'; readonly warningId: string; readonly readId: string }
-);
+export type { Kept } from '../data/diagnosis-runs';
 
-/** A kept answer, or that the diagnosis could not be asked for at all. */
-export type Kept = { readonly readId: string } & (
-  { readonly answer: SessionDiagnosis } | { readonly failed: true }
-);
-
-const keptKey = (sessionId: string, warningId: string) =>
-  ['session-diagnosis', sessionId, warningId] as const;
-
-let counter = 0;
-/** A name for one run, unique in this window. */
-function nextReadId(): string {
-  counter += 1;
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? `diagnose-${crypto.randomUUID()}`
-    : `diagnose-${Date.now()}-${counter}`;
-}
+/**
+ * What a view is doing with Diagnose: asking first (this view's own
+ * question), or the app's one running diagnosis, wherever it was sent from.
+ */
+type Stage =
+  | { readonly kind: 'confirm'; readonly sessionId: string; readonly warningId: string }
+  | ({ readonly kind: 'running' } & DiagnosisRun);
 
 export interface Diagnose {
   readonly controls: DiagnosisControls;
   readonly sessionId: string;
   readonly stage: Stage | null;
+  /** The run this view sent, if it is the one running: it keeps focus on Stop. */
+  readonly sentHere: string | null;
   /** Shows the sentence before sending for this warning. */
   ask(warningId: string): void;
   /** Closes the sentence before sending; nothing was sent. */
@@ -45,8 +34,12 @@ export interface Diagnose {
 }
 
 /**
- * Diagnose for one session's page, or `null` where no coding tool can be run
+ * Diagnose for one session's view, or `null` where no coding tool can be run
  * (the browser fixture without its test controls).
+ *
+ * The running diagnosis is the source runtime's (`DiagnosisRuns`), not this
+ * view's: a view that closes or navigates away leaves it running, and the
+ * next view to show its warning shows Stop, then its answer.
  */
 export function useDiagnose(
   sessionId: string,
@@ -54,94 +47,62 @@ export function useDiagnose(
   warnings: readonly SessionWarningItem[] | undefined,
   selectedWarningId?: string | null,
 ): Diagnose | null {
-  const { source } = useData();
+  const { source, diagnosisRuns } = useData();
   const client = useQueryClient();
   const controls = source.diagnosis;
-  const [stage, setStage] = useState<Stage | null>(null);
-  const running = useRef<{
-    readId: string;
-    controls: DiagnosisControls;
-    disposed: boolean;
-  } | null>(null);
-  useEffect(
-    () => () => {
-      const run = running.current;
-      if (!run) return;
-      run.disposed = true;
-      running.current = null;
-      // A view that disappears cannot keep Stop on screen. Stop its own run;
-      // a disposed answer must not reach a later view through the cache.
-      void run.controls.cancel(run.readId).catch(() => false);
-    },
-    [],
-  );
-  const currentStage =
-    stage?.kind === 'confirm' &&
-    (stage.sessionId !== sessionId ||
-      (selectedWarningId !== undefined && stage.warningId !== selectedWarningId) ||
-      !warnings?.some((warning) => warning.id === stage.warningId))
+  const run = useDiagnosisRun();
+  const [asked, setAsked] = useState<{ sessionId: string; warningId: string } | null>(null);
+  const [sentHere, setSentHere] = useState<string | null>(null);
+  const currentAsked =
+    asked &&
+    (asked.sessionId !== sessionId ||
+      (selectedWarningId !== undefined && asked.warningId !== selectedWarningId) ||
+      !warnings?.some((warning) => warning.id === asked.warningId))
       ? null
-      : stage;
+      : asked;
   useEffect(() => {
-    if (stage !== currentStage) setStage(currentStage);
-  }, [stage, currentStage]);
+    if (asked !== currentAsked) setAsked(currentAsked);
+  }, [asked, currentAsked]);
+  const stage = useMemo<Stage | null>(
+    () =>
+      run
+        ? { kind: 'running', ...run }
+        : currentAsked
+          ? { kind: 'confirm', ...currentAsked }
+          : null,
+    [run, currentAsked],
+  );
   const ask = useCallback(
     (warningId: string) => {
-      if (running.current || !warnings?.some((warning) => warning.id === warningId)) return;
-      setStage({ kind: 'confirm', sessionId, warningId });
+      if (run || !warnings?.some((warning) => warning.id === warningId)) return;
+      setAsked({ sessionId, warningId });
     },
-    [sessionId, warnings],
+    [run, sessionId, warnings],
   );
-  const notNow = useCallback(
-    () => setStage((current) => (current?.kind === 'confirm' ? null : current)),
-    [],
-  );
+  const notNow = useCallback(() => setAsked(null), []);
   const send = useCallback(
     (warningId: string) => {
-      if (
-        !controls ||
-        running.current ||
-        currentStage?.kind !== 'confirm' ||
-        currentStage.warningId !== warningId
-      )
-        return;
-      const readId = nextReadId();
-      const run = { readId, controls, disposed: false };
-      running.current = run;
-      setStage({ kind: 'running', sessionId, warningId, readId });
-      controls
-        .diagnose(sessionId, warningId, timezone, readId)
-        .then(
-          (answer): Kept => ({ readId, answer }),
-          (): Kept => ({ readId, failed: true }),
-        )
-        .then((kept) => {
-          if (run.disposed) return;
-          client.setQueryData(keptKey(sessionId, warningId), kept);
-          running.current = null;
-          setStage((current) =>
-            current?.kind === 'running' && current.readId === readId ? null : current,
-          );
-        });
+      if (!controls || run || currentAsked?.warningId !== warningId) return;
+      if (!diagnosisRuns.start(sessionId, warningId, timezone)) return;
+      setAsked(null);
+      setSentHere(diagnosisRuns.getRun()?.readId ?? null);
     },
-    [client, controls, sessionId, timezone, currentStage],
+    [controls, run, diagnosisRuns, sessionId, timezone, currentAsked],
   );
-  const stop = useCallback(() => {
-    const run = running.current;
-    return run ? run.controls.cancel(run.readId).catch(() => false) : Promise.resolve(false);
-  }, []);
+  const stop = useCallback(() => diagnosisRuns.stop(), [diagnosisRuns]);
   // Put away, not removed: the answer's observers on the page let go of it
   // at once.
   const close = useCallback(
     (warningId: string) => client.setQueryData<Kept | null>(keptKey(sessionId, warningId), null),
     [client, sessionId],
   );
+  const mine = run && run.readId === sentHere ? sentHere : null;
   return useMemo(
     () =>
       controls
-        ? { controls, sessionId, stage: currentStage, ask, notNow, send, stop, close }
+        ? { controls, sessionId, stage, sentHere: mine, ask, notNow, send, stop, close }
         : null,
-    [controls, sessionId, currentStage, ask, notNow, send, stop, close],
+    [controls, sessionId, stage, mine, ask, notNow, send, stop, close],
   );
 }
 

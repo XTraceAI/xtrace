@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { StartupSplash } from '../kit/StartupSplash';
 import type { DataSource } from './DataSource';
+import { createDiagnosisRuns, type DiagnosisRuns } from './diagnosis-runs';
 import { createPrRefreshOperation, type PrRefreshOperation } from './pr-refresh-operation';
 import { createQueryClient } from './query-client';
 import {
@@ -29,6 +30,7 @@ export type LiveUpdates = {
 const DataContext = createContext<{
   source: DataSource;
   prRefresh: PrRefreshOperation;
+  diagnosisRuns: DiagnosisRuns;
 } | null>(null);
 // Apart from the data context, so a change of connection state re-renders what
 // shows it and not every screen that reads data.
@@ -52,6 +54,9 @@ function SourceRuntime({ source, children }: ProviderProps) {
   // One manual pull-request refresh per runtime, owned here so that no screen
   // unmounting (a range change, another route) loses the batch or its Cancel.
   const [prRefresh] = useState(() => createPrRefreshOperation(source, client));
+  // The one running diagnosis, owned here for the same reason: closing a
+  // warning's window or leaving a session page does not stop it.
+  const [diagnosisRuns] = useState(() => createDiagnosisRuns(source, client));
   const [subscription, setSubscription] = useState<{
     attempt: number;
     state: SubscriptionState;
@@ -61,6 +66,10 @@ function SourceRuntime({ source, children }: ProviderProps) {
     prRefresh.attach();
     return () => prRefresh.detach();
   }, [prRefresh]);
+  useEffect(() => {
+    diagnosisRuns.attach();
+    return () => diagnosisRuns.detach();
+  }, [diagnosisRuns]);
   // Only the runtime ending (unmounting, or its source being replaced) stops
   // its reads; a reconnect leaves every read, the pull-request batch and any
   // open transcript alone.
@@ -121,7 +130,10 @@ function SourceRuntime({ source, children }: ProviderProps) {
   // open: a failed first attempt opens the app with its notice and Reconnect,
   // and a reconnect never closes it again.
   const open = attempt > 0 || state !== 'connecting';
-  const data = useMemo(() => ({ source, prRefresh }), [source, prRefresh]);
+  const data = useMemo(
+    () => ({ source, prRefresh, diagnosisRuns }),
+    [source, prRefresh, diagnosisRuns],
+  );
   const live = useMemo(() => ({ state, attempt, reconnect }), [state, attempt, reconnect]);
   return (
     <DataContext.Provider value={data}>
@@ -138,6 +150,11 @@ export function usePrRefresh() {
   const { prRefresh } = useData();
   const state = useSyncExternalStore(prRefresh.subscribe, prRefresh.getState);
   return [state, prRefresh] as const;
+}
+/** The diagnosis running in this runtime, if any. */
+export function useDiagnosisRun() {
+  const { diagnosisRuns } = useData();
+  return useSyncExternalStore(diagnosisRuns.subscribe, diagnosisRuns.getRun);
 }
 /** Whether data events are heard, and the manual reconnect when they are not. */
 export function useLiveUpdates() {
