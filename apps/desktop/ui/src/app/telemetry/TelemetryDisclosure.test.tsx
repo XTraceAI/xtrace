@@ -156,6 +156,10 @@ function source(telemetry?: TelemetryControls, history = true): DataSource {
     sessionsList: unused,
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: unused,
     cancelSessionTranscript: async () => {},
     pullRequests: unused,

@@ -224,6 +224,10 @@ it('balances delayed async subscriptions under StrictMode and cancels pending in
     },
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     dashboard: async () => exported.dashboards[0],
