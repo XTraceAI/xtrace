@@ -13,6 +13,11 @@ pub use crate::session_compactions::{
     CompactionCount, CompactionEvent, CompactionReason, CompactionTrigger, InheritedCompactions,
     SessionCompaction, SessionCompactions,
 };
+pub use crate::session_diagnosis_dto::{
+    DiagnosisDraftKind, DiagnosisLimit, DiagnosisLimitKind, DiagnosisRealProblem, DiagnosisSent,
+    DiagnosisSkip, DiagnosisSuggestion, DiagnosisTool, DiagnosisToolTried, SaveSkillRefusal,
+    SavedSkill, SessionDiagnosis,
+};
 pub use crate::session_source_dto::*;
 pub use crate::session_titles::{SessionTitle, SessionTitles};
 pub use crate::session_warnings_dto::{
@@ -329,6 +334,8 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     SessionWarningsList::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     DashboardWarnings::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionWarningDismissal::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionDiagnosis::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SavedSkill::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     crate::session_warnings_dto::export_text(directory.as_ref())?;
     PrList::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     PrRefreshReport::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
