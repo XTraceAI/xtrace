@@ -931,3 +931,529 @@ fn a_batch_and_a_window_read_give_each_session_the_answer_it_gets_alone() {
         .collect();
     assert_eq!(inside, expected);
 }
+
+fn warm_saved(db: &mut TempDb, force: bool) {
+    let candidate = MetricsDb::open(db.path())
+        .unwrap()
+        .prepare_session_warning_refresh(&if force {
+            vec![SESSION.to_owned()]
+        } else {
+            vec![]
+        })
+        .unwrap()
+        .unwrap();
+    assert!(
+        db.store_mut()
+            .publish_session_warnings(&candidate.rows)
+            .unwrap()
+            .rejected
+            == 0
+    );
+}
+
+#[test]
+fn saved_answers_round_trip_every_rule_state_point_size_and_requested_zone() {
+    for start in [
+        "2026-09-07T12:00:00Z",
+        "2026-03-08T09:58:00Z",
+        "2026-11-01T08:58:00Z",
+    ] {
+        let mut db = TempDb::empty().unwrap();
+        let delta = ms(start) - ms(&at(0, 0));
+        let mut rows = conversation();
+        rows.push(says("marker", &at(12, 0), "[Request interrupted by user]"));
+        rows.push(calls(
+            "interrupt-call",
+            &at(13, 0),
+            &[(
+                "interrupt-tool",
+                "Bash",
+                json!({"command":"echo synthetic"}),
+            )],
+        ));
+        rows.push(result(
+            "interrupt-result",
+            &at(13, 1),
+            "interrupt-tool",
+            Some(true),
+            "[Request interrupted by user for tool use]",
+        ));
+        rows.push(says(
+            "next-day-prompt",
+            "2026-09-08T12:00:00Z",
+            "Fix the build please",
+        ));
+        for row in &mut rows {
+            row.timestamp = Some(
+                Timestamp::from_millisecond(ms(row.timestamp.as_deref().unwrap()) + delta)
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        seed(&mut db, SESSION, "claude", &rows, true);
+        let mut untimed = says("untimed-r", &at(0, 0), "a synthetic untimed input");
+        untimed.timestamp = None;
+        seed(&mut db, "untimed", "claude", &[untimed], true);
+        seed(&mut db, "empty", "claude", &[], true);
+        seed(
+            &mut db,
+            "quiet",
+            "claude",
+            &[says("quiet-r", start, "a single synthetic request")],
+            true,
+        );
+        warm_saved(&mut db, false);
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        assert!(
+            metrics
+                .prepare_session_warning_refresh(&[])
+                .unwrap()
+                .is_none()
+        );
+        for name in ["UTC", "America/Los_Angeles", "Asia/Tokyo"] {
+            let zone = TimeZone::get(name).unwrap();
+            let ids = [SESSION, "untimed", "empty", "quiet", "missing"];
+            let computed = metrics
+                .whole_session_warnings(&ids, RepeatThresholds::default(), &zone)
+                .unwrap();
+            let saved = metrics.saved_whole_session_warnings(&ids, &zone).unwrap();
+            assert_eq!(saved, computed, "{start} {name}");
+            let start = ms(start);
+            let window = Window::new(start - 1000, start + 2 * 86_400_000).unwrap();
+            assert_eq!(
+                metrics.saved_warnings_in_window(window, &zone).unwrap(),
+                metrics
+                    .warnings_in_window(window, RepeatThresholds::default(), &zone)
+                    .unwrap()
+            );
+            assert!(!metrics.session_warning_refresh_needed());
+        }
+        let sql = Connection::open(db.path()).unwrap();
+        let payload: String = sql
+            .query_row(
+                "SELECT payload_json FROM saved_session_warnings WHERE session_id=?1",
+                [SESSION],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for forbidden in [
+            "Fix the build please",
+            "pnpm test",
+            "America/Los_Angeles",
+            "tool_use_id",
+            "group_key",
+        ] {
+            assert!(!payload.contains(forbidden), "{forbidden}");
+        }
+        let value: Value = serde_json::from_str(&payload).unwrap();
+        let kinds: BTreeSet<_> = value["answer"]["warnings"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["reason"]["reason"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            BTreeSet::from([
+                "correction",
+                "interrupted",
+                "stopped_call",
+                "repeated_prompt",
+                "repeated_failure",
+                "repeated_calls"
+            ])
+        );
+    }
+}
+
+#[test]
+fn stale_missing_corrupt_and_new_version_answers_compute_then_repair() {
+    let mut db = TempDb::empty().unwrap();
+    seed(&mut db, SESSION, "claude", &conversation(), true);
+    let computed = whole(&db, &[SESSION]);
+    let cold = MetricsDb::open(db.path()).unwrap();
+    assert_eq!(
+        cold.saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+            .unwrap(),
+        computed
+    );
+    assert!(cold.session_warning_refresh_needed());
+    warm_saved(&mut db, false);
+    for mutation in [
+        "DELETE FROM saved_session_warnings",
+        "UPDATE saved_session_warnings SET payload_json='{}'",
+        "UPDATE saved_session_warnings SET payload_json=json_set(payload_json,'$.version',999)",
+        "UPDATE saved_session_warnings SET rule_version=999",
+    ] {
+        Connection::open(db.path())
+            .unwrap()
+            .execute_batch(mutation)
+            .unwrap();
+        let metrics = MetricsDb::open(db.path()).unwrap();
+        assert_eq!(
+            metrics
+                .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+                .unwrap(),
+            computed,
+            "{mutation}"
+        );
+        assert!(metrics.session_warning_refresh_needed());
+        warm_saved(&mut db, !metrics.session_warning_repairs().is_empty());
+        assert!(
+            MetricsDb::open(db.path())
+                .unwrap()
+                .session_warning_cache_is_current()
+                .unwrap()
+        );
+    }
+    // A direct canonical writer changes old records without changing counts or timestamps.
+    let before = MetricsDb::open(db.path())
+        .unwrap()
+        .prepare_session_warning_refresh(&[SESSION.to_owned()])
+        .unwrap()
+        .unwrap();
+    Connection::open(db.path())
+        .unwrap()
+        .execute("UPDATE records SET is_human=0 WHERE uuid='h2'", [])
+        .unwrap();
+    assert!(
+        db.store_mut()
+            .publish_session_warnings(&before.rows)
+            .unwrap()
+            .rejected
+            > 0
+    );
+    let stale = MetricsDb::open(db.path()).unwrap();
+    assert!(!stale.session_warning_cache_is_current().unwrap());
+    assert_eq!(
+        stale
+            .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+            .unwrap(),
+        whole(&db, &[SESSION])
+    );
+    warm_saved(&mut db, false);
+}
+
+#[test]
+fn another_sessions_timestamp_health_invalidates_the_saved_answer() {
+    let mut db = TempDb::empty().unwrap();
+    seed(&mut db, SESSION, "claude", &conversation(), true);
+    warm_saved(&mut db, false);
+    let before = MetricsDb::open(db.path())
+        .unwrap()
+        .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+        .unwrap();
+    for index in 0..4 {
+        let rows: Vec<_> = (0..6)
+            .map(|n| {
+                says(
+                    &format!("health-{index}-{n}"),
+                    &at(0, 30),
+                    "the same instant",
+                )
+            })
+            .collect();
+        seed(&mut db, &format!("health-{index}"), "claude", &rows, true);
+    }
+    let oracle = whole(&db, &[SESSION]);
+    assert_ne!(before, oracle);
+    warm_saved(&mut db, false);
+    assert_eq!(
+        MetricsDb::open(db.path())
+            .unwrap()
+            .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+            .unwrap(),
+        oracle
+    );
+}
+
+#[test]
+fn saved_two_failures_in_one_record_keep_the_second_block_and_growth_count() {
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        SESSION,
+        "claude",
+        &[
+            says("h", &at(0, 0), "fix the synthetic tests please"),
+            calls(
+                "calls",
+                &at(0, 1),
+                &[
+                    ("c1", "Bash", json!({"command":"test"})),
+                    ("c2", "Bash", json!({"command":"test"})),
+                ],
+            ),
+            record(
+                json!({"uuid":"results","type":"user","timestamp":at(0,2),"message":{"role":"user","content":[
+                    {"type":"tool_result","tool_use_id":"c1","is_error":true,"content":"failed"},
+                    {"type":"tool_result","tool_use_id":"c2","is_error":true,"content":"failed"}
+                ]}}),
+            ),
+        ],
+        true,
+    );
+    warm_saved(&mut db, false);
+    let before = MetricsDb::open(db.path())
+        .unwrap()
+        .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+        .unwrap();
+    let warning = read(&before[SESSION])
+        .warnings
+        .iter()
+        .find(|w| w.kind == WarningKind::RepeatedFailure)
+        .unwrap();
+    assert_eq!(
+        warning.points_at(),
+        xt_metrics::WarningPoint {
+            record_uuid: "results".into(),
+            block: Some(1)
+        }
+    );
+    assert_eq!(warning.size, Some(2));
+    for mutation in [
+        "UPDATE saved_session_warnings SET payload_json=json_remove(payload_json,'$.answer.warnings.warnings[0].repeat','$.answer.warnings.warnings[0].size')",
+        "UPDATE saved_session_warnings SET payload_json=json_set(payload_json,'$.answer.warnings.warnings[0].kind','correction')",
+    ] {
+        Connection::open(db.path())
+            .unwrap()
+            .execute_batch(mutation)
+            .unwrap();
+        let corrupted = MetricsDb::open(db.path()).unwrap();
+        assert_eq!(
+            corrupted
+                .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+                .unwrap(),
+            before
+        );
+        assert!(!corrupted.session_warning_repairs().is_empty());
+        warm_saved(&mut db, true);
+    }
+    db.store_mut()
+        .dismiss_warning(SESSION, &warning.id(), warning.size, 1)
+        .unwrap();
+    db.store_mut()
+        .upsert_records(
+            SESSION,
+            &[
+                calls(
+                    "more-call",
+                    &at(1, 0),
+                    &[("c3", "Bash", json!({"command":"test"}))],
+                ),
+                result("more-result", &at(1, 1), "c3", Some(true), "failed"),
+            ],
+            true,
+        )
+        .unwrap();
+    warm_saved(&mut db, false);
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let after = metrics
+        .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+        .unwrap();
+    let grown = read(&after[SESSION])
+        .warnings
+        .iter()
+        .find(|w| w.id() == warning.id())
+        .unwrap();
+    assert_eq!(grown.size, Some(3));
+    assert_eq!(grown.points_at(), warning.points_at());
+    assert_eq!(
+        metrics.dismissed_warnings(&[SESSION]).unwrap()[SESSION][&warning.id()].size,
+        Some(2)
+    );
+    assert!(
+        db.store_mut()
+            .restore_warning(SESSION, &warning.id())
+            .unwrap()
+    );
+    assert!(metrics.dismissed_warnings(&[SESSION]).unwrap().is_empty());
+    assert_eq!(
+        metrics
+            .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+            .unwrap(),
+        after
+    );
+}
+
+#[test]
+fn content_purge_clears_saved_correction_span_and_rejects_its_late_candidate() {
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        SESSION,
+        "claude",
+        &[
+            says("purge-person", &at(0, 0), "please fix the test"),
+            reply("purge-agent", &at(1, 0)),
+            says(
+                "purge-correction",
+                &at(2, 0),
+                "still cachepurgeuniqueword not working",
+            ),
+        ],
+        true,
+    );
+    warm_saved(&mut db, false);
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    assert!(metrics.session_warning_cache_is_current().unwrap());
+    let sql = Connection::open(db.path()).unwrap();
+    let saved: String = sql
+        .query_row(
+            "SELECT payload_json FROM saved_session_warnings WHERE session_id=?1",
+            [SESSION],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(saved.contains("still cachepurgeuniqueword not"));
+    // A current cache normally needs no work: force this identifier to hold a
+    // real, nonempty pre-purge candidate at the source's current revision.
+    let candidate = metrics
+        .prepare_session_warning_refresh(&[SESSION.to_owned()])
+        .unwrap()
+        .unwrap();
+    assert_eq!(candidate.rows.len(), 1);
+    assert!(
+        candidate.rows[0]
+            .payload_json
+            .contains("cachepurgeuniqueword")
+    );
+    let before_revision: i64 = sql
+        .query_row(
+            "SELECT revision FROM session_warning_inputs WHERE session_id=?1",
+            [SESSION],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(candidate.rows[0].revision, before_revision);
+    let purged = db
+        .store_mut()
+        .purge_content(&xt_store::retention::ContentRegistry::default())
+        .unwrap();
+    assert!(purged.invalidate_content);
+    assert_eq!(
+        purged
+            .tables
+            .iter()
+            .find(|table| table.table == "saved_session_warnings")
+            .unwrap()
+            .rows,
+        1
+    );
+    // No refresh worker exists in this test. The rows are gone at commit.
+    assert_eq!(
+        sql.query_row("SELECT count(*) FROM saved_session_warnings", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let after_revision: i64 = sql
+        .query_row(
+            "SELECT revision FROM session_warning_inputs WHERE session_id=?1",
+            [SESSION],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(after_revision > before_revision);
+    let late = db
+        .store_mut()
+        .publish_session_warnings(&candidate.rows)
+        .unwrap();
+    assert_eq!((late.published, late.rejected), (0, 1));
+    assert_eq!(
+        sql.query_row("SELECT count(*) FROM saved_session_warnings", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let fresh = metrics
+        .prepare_session_warning_refresh(&[])
+        .unwrap()
+        .unwrap();
+    assert_eq!(fresh.rows.len(), 1);
+    assert!(!fresh.rows[0].payload_json.contains("cachepurgeuniqueword"));
+}
+
+#[test]
+fn repeated_call_evidence_uses_the_filtered_representative_and_refreshes_old_cache() {
+    let mut db = TempDb::empty().unwrap();
+    let mut rows = vec![says("human-start", &at(0, 0), "start the updater tests")];
+    for n in 1..=12 {
+        rows.push(reply(&format!("setup-{n}"), &at(0, n)));
+    }
+    let expected: Vec<_> = (0..20)
+        .map(|n| (format!("todo-{n}"), "TodoWrite", json!({"todos":[]})))
+        .collect();
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|(id, name, input)| (id.as_str(), *name, input.clone()))
+        .collect();
+    rows.push(calls("expected-tools", &at(1, 0), &expected));
+    let repeated: Vec<_> = (0..6)
+        .map(|n| {
+            (
+                format!("poll-{n}"),
+                "write_stdin",
+                json!({"session_id":123,"chars":""}),
+            )
+        })
+        .collect();
+    let repeated: Vec<_> = repeated
+        .iter()
+        .map(|(id, name, input)| (id.as_str(), *name, input.clone()))
+        .collect();
+    rows.push(calls("actual-repeated-call", &at(2, 0), &repeated));
+    rows.push(reply("finish", &at(6, 0)));
+    seed(&mut db, SESSION, "claude", &rows, true);
+    let computed = whole(&db, &[SESSION]);
+    let warning = read(&computed[SESSION])
+        .warnings
+        .iter()
+        .find(|w| w.kind == WarningKind::RepeatedCalls)
+        .unwrap();
+    assert_eq!(warning.id(), "repeated_calls:human-start");
+    assert_eq!(warning.at_ms, ms(&at(0, 0)));
+    assert_eq!(
+        warning.points_at(),
+        xt_metrics::WarningPoint {
+            record_uuid: "actual-repeated-call".into(),
+            block: Some(0)
+        }
+    );
+    let all = MetricsDb::open(db.path())
+        .unwrap()
+        .session_repeats(window(), SESSION, RepeatThresholds::default())
+        .unwrap();
+    let SessionRepeats::Measured { stretches, .. } = all else {
+        panic!("repeats")
+    };
+    let xt_metrics::RepeatDensity::Measured {
+        worst: Some(worst), ..
+    } = &stretches[0].repeats
+    else {
+        panic!("worst")
+    };
+    assert_eq!(worst.tool_name, "TodoWrite");
+    warm_saved(&mut db, false);
+    Connection::open(db.path())
+        .unwrap()
+        .execute("UPDATE saved_session_warnings SET rule_version=1", [])
+        .unwrap();
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    assert!(!metrics.session_warning_cache_is_current().unwrap());
+    assert_eq!(
+        metrics
+            .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+            .unwrap(),
+        computed
+    );
+    warm_saved(&mut db, false);
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    assert!(metrics.session_warning_cache_is_current().unwrap());
+    assert_eq!(
+        metrics
+            .saved_whole_session_warnings(&[SESSION], &TimeZone::UTC)
+            .unwrap(),
+        computed
+    );
+}

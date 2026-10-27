@@ -53,7 +53,7 @@ use crate::{
     span_detail::{self, PersonText},
 };
 use jiff::{Timestamp, tz::TimeZone};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use xt_store::{
     Host,
@@ -184,7 +184,7 @@ pub fn expected_repeat(name: &str) -> bool {
 }
 
 /// The five rules.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
     Correction,
@@ -236,11 +236,15 @@ pub struct SessionWarning {
     pub at_ms: i64,
     /// The saved records it points at, earliest first.
     pub record_uuids: Vec<String>,
-    /// One short sentence. A correction quotes only the matched words; no
-    /// other message text is ever part of it.
+    /// One short sentence. A correction quotes its matched span, including
+    /// words between "still" and its nearby negative word.
     pub reason: String,
-    /// For a repeated prompt or failure, the first repeat (the second of the
-    /// repeated messages or failed results); `None` for the other kinds.
+    /// Compact presentation from the same native facts as `reason`.
+    /// Not part of the saved neutral answer's storage shape.
+    #[serde(skip)]
+    pub compact_reason: String,
+    /// The representative tool call for repeated calls, or the first repeat
+    /// (the second message/result) for a repeated prompt or failure.
     /// Read through [`SessionWarning::points_at`]. Not serialised.
     #[serde(skip)]
     pub repeat: Option<WarningPoint>,
@@ -248,14 +252,25 @@ pub struct SessionWarning {
     /// was sent (a repeated prompt), how many times the call failed (a
     /// repeated failure), or how many repeated calls the stretch has
     /// (repeated calls). `None` for a correction or an interruption, which
-    /// are one event each. Not serialised.
+    /// are one event each. A dismissal keeps the size it was dismissed at,
+    /// and the warning is dismissed only while it has not grown past it.
+    /// Not serialised.
     #[serde(skip)]
     pub size: Option<u64>,
 }
 
+/// One stored dismissal of a warning (migration 28).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dismissal {
+    /// The warning's [`SessionWarning::size`] when it was dismissed.
+    pub size: Option<u64>,
+    /// When, UTC milliseconds.
+    pub dismissed_at_ms: i64,
+}
+
 /// The message a warning points at: a saved record, and for a tool result
 /// that result's block in it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarningPoint {
     pub record_uuid: String,
     pub block: Option<u32>,
@@ -270,7 +285,8 @@ impl SessionWarning {
     }
 
     /// The one answer to "which message does this warning point at": the
-    /// first repeat for a repeated prompt or failure (its own block too, even
+    /// representative tool call for repeated calls, or the first repeat for
+    /// a repeated prompt or failure (its own block too, even
     /// when both failures are in one record), otherwise the anchor's record
     /// and, for `record#block`, its block.
     pub fn points_at(&self) -> WarningPoint {
@@ -295,7 +311,7 @@ impl SessionWarning {
 }
 
 /// Inputs a rule needed and could not read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "missing", rename_all = "snake_case")]
 pub enum Missing {
     /// A person's messages whose words neither content retention nor the
@@ -337,7 +353,7 @@ pub enum Missing {
 }
 
 /// Whether a rule read every input it needed.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum CheckState {
     /// Everything was read: no warning of this kind means none happened.
@@ -361,7 +377,7 @@ impl CheckState {
 }
 
 /// Each rule's coverage for one session.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarningChecks {
     pub correction: CheckState,
     pub interruption: CheckState,
@@ -440,6 +456,10 @@ pub(crate) const ACTIVE_QUERY: &str = "SELECT DISTINCT session_id FROM v_session
 /// Records that state no time; restricted and grouped like [`SPAN_QUERY`].
 pub(crate) const UNTIMED_QUERY: &str =
     "SELECT session_id,count(*),0 FROM v_records WHERE ts_ms IS NULL";
+
+/// The warnings the user dismissed (migration 28), by session and identity.
+pub(crate) const DISMISSED_QUERY: &str =
+    "SELECT session_id,warning_id,size,dismissed_at FROM dismissed_warnings";
 
 /// The window a session's whole history is read over: from a second before its
 /// first timed record to two after its last, so a record whose exact instant
@@ -637,6 +657,299 @@ fn clock_times(moments: &[i64], zone: &TimeZone) -> String {
         .join(", ")
 }
 
+/// The facts needed to word a warning without a clock zone. A correction's
+/// matched span can include intervening message words; content purge deletes
+/// the saved answers that retain those spans.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub(crate) enum WarningReason {
+    Correction {
+        phrase: String,
+        moment: i64,
+    },
+    Interrupted {
+        moment: i64,
+    },
+    StoppedCall {
+        declined: bool,
+        tool: String,
+        moment: i64,
+    },
+    RepeatedPrompt {
+        moments: Vec<i64>,
+        count: u64,
+    },
+    RepeatedFailure {
+        tool: String,
+        tool_only: bool,
+        moments: Vec<i64>,
+        count: u64,
+    },
+    RepeatedCalls {
+        repeats: u64,
+        active_duration_ms: u64,
+        worst: Option<WorstCall>,
+        start_ms: i64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct WorstCall {
+    tool: String,
+    tool_only: bool,
+    count: u64,
+}
+
+impl WarningReason {
+    fn compact(&self) -> String {
+        match self {
+            Self::Correction { .. } => "After an agent reply".into(),
+            Self::Interrupted { .. } => "Agent interrupted".into(),
+            Self::StoppedCall { declined, tool, .. } => {
+                format!(
+                    "{} {tool}",
+                    if *declined { "Declined" } else { "Interrupted" }
+                )
+            }
+            Self::RepeatedPrompt { count, .. } => {
+                format!("Same prompt sent {}", times_word(*count as usize))
+            }
+            Self::RepeatedFailure {
+                tool,
+                tool_only,
+                count,
+                ..
+            } => {
+                format!(
+                    "{} failed {}",
+                    call_words(tool, *tool_only),
+                    times_word(*count as usize)
+                )
+            }
+            Self::RepeatedCalls {
+                repeats,
+                active_duration_ms,
+                ..
+            } => {
+                format!(
+                    "{repeats} repeats · {} active min",
+                    active_duration_ms / 60_000
+                )
+            }
+        }
+    }
+
+    fn render(&self, zone: &TimeZone) -> String {
+        match self {
+            Self::Correction { phrase, moment } => format!(
+                "you wrote \"{phrase}\" after a reply ({})",
+                clock_times(&[*moment], zone)
+            ),
+            Self::Interrupted { moment } => format!(
+                "you interrupted the agent ({})",
+                clock_times(&[*moment], zone)
+            ),
+            Self::StoppedCall {
+                declined,
+                tool,
+                moment,
+            } => format!(
+                "you {} a call to {tool} ({})",
+                if *declined { "declined" } else { "interrupted" },
+                clock_times(&[*moment], zone)
+            ),
+            Self::RepeatedPrompt { moments, count } => format!(
+                "same prompt sent {} ({})",
+                times_word(*count as usize),
+                clock_times(moments, zone)
+            ),
+            Self::RepeatedFailure {
+                tool,
+                tool_only,
+                moments,
+                count,
+            } => format!(
+                "{} failed {} ({})",
+                call_words(tool, *tool_only),
+                times_word(*count as usize),
+                clock_times(moments, zone)
+            ),
+            Self::RepeatedCalls {
+                repeats,
+                active_duration_ms,
+                worst,
+                start_ms,
+            } => {
+                let worst = worst
+                    .as_ref()
+                    .map(|worst| {
+                        format!(
+                            ", most often {} ({})",
+                            call_words(&worst.tool, worst.tool_only),
+                            times_word(worst.count as usize)
+                        )
+                    })
+                    .unwrap_or_default();
+                format!(
+                    "{repeats} repeated calls in {} active minutes{worst} (from {})",
+                    active_duration_ms / 60_000,
+                    clock_times(&[*start_ms], zone)
+                )
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NeutralWarning {
+    kind: WarningKind,
+    session_id: String,
+    anchor: String,
+    at_ms: i64,
+    record_uuids: Vec<String>,
+    reason: WarningReason,
+    repeat: Option<WarningPoint>,
+    size: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NeutralSessionWarnings {
+    pub(crate) session_id: String,
+    warnings: Vec<NeutralWarning>,
+    checks: WarningChecks,
+    person_messages: u64,
+    person_messages_read: u64,
+    tool_results: u64,
+    tool_results_known: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum NeutralWholeSessionWarnings {
+    Missing,
+    Untimed {
+        untimed_records: u64,
+    },
+    Read {
+        warnings: NeutralSessionWarnings,
+        untimed_records: u64,
+    },
+}
+
+type NeutralWholeWarningBatch = (
+    BTreeMap<String, NeutralWholeSessionWarnings>,
+    BTreeMap<String, (i64, i64)>,
+);
+
+impl NeutralWholeSessionWarnings {
+    pub(crate) fn render(&self, zone: &TimeZone) -> WholeSessionWarnings {
+        match self {
+            Self::Missing => WholeSessionWarnings::Missing,
+            Self::Untimed { untimed_records } => WholeSessionWarnings::Untimed {
+                untimed_records: *untimed_records,
+            },
+            Self::Read {
+                warnings,
+                untimed_records,
+            } => WholeSessionWarnings::Read {
+                warnings: warnings.render(zone),
+                untimed_records: *untimed_records,
+            },
+        }
+    }
+}
+
+impl NeutralSessionWarnings {
+    pub(crate) fn is_valid_for(&self, session_id: &str) -> bool {
+        self.session_id == session_id
+            && self.person_messages_read <= self.person_messages
+            && self.tool_results_known <= self.tool_results
+            && self.warnings.iter().all(|warning| {
+                if warning.session_id != session_id
+                    || warning.anchor.is_empty()
+                    || warning.record_uuids.is_empty()
+                {
+                    return false;
+                }
+                let single = || warning.repeat.is_none() && warning.size.is_none();
+                let repeated = |count: u64, moments: &[i64], prompt: bool| {
+                    count >= REPEAT_AT_LEAST as u64
+                        && warning.size == Some(count)
+                        && moments.len() as u64 == count
+                        && warning.record_uuids.len() as u64 == count
+                        && moments.get(1) == Some(&warning.at_ms)
+                        && warning.repeat.as_ref().is_some_and(|point| {
+                            warning.record_uuids.get(1) == Some(&point.record_uuid)
+                                && (!prompt || point.block.is_none())
+                        })
+                };
+                match (&warning.kind, &warning.reason) {
+                    (WarningKind::Correction, WarningReason::Correction { moment, .. })
+                    | (WarningKind::Interruption, WarningReason::Interrupted { moment }) => {
+                        single() && *moment == warning.at_ms
+                    }
+                    (WarningKind::Interruption, WarningReason::StoppedCall { .. }) => single(),
+                    (
+                        WarningKind::RepeatedPrompt,
+                        WarningReason::RepeatedPrompt { count, moments },
+                    ) => repeated(*count, moments, true),
+                    (
+                        WarningKind::RepeatedFailure,
+                        WarningReason::RepeatedFailure { count, moments, .. },
+                    ) => repeated(*count, moments, false),
+                    (
+                        WarningKind::RepeatedCalls,
+                        WarningReason::RepeatedCalls {
+                            repeats,
+                            start_ms,
+                            worst,
+                            ..
+                        },
+                    ) => {
+                        *repeats > 0
+                            && warning.size == Some(*repeats)
+                            && (match (&warning.repeat, worst) {
+                                (Some(point), Some(_)) => {
+                                    point.block.is_some()
+                                        && warning.record_uuids.contains(&point.record_uuid)
+                                }
+                                (None, None) => true,
+                                _ => false,
+                            })
+                            && *start_ms == warning.at_ms
+                    }
+                    _ => false,
+                }
+            })
+    }
+
+    pub(crate) fn render(&self, zone: &TimeZone) -> SessionWarnings {
+        SessionWarnings {
+            session_id: self.session_id.clone(),
+            warnings: self
+                .warnings
+                .iter()
+                .map(|warning| SessionWarning {
+                    kind: warning.kind,
+                    session_id: warning.session_id.clone(),
+                    anchor: warning.anchor.clone(),
+                    at_ms: warning.at_ms,
+                    record_uuids: warning.record_uuids.clone(),
+                    reason: warning.reason.render(zone),
+                    compact_reason: warning.reason.compact(),
+                    repeat: warning.repeat.clone(),
+                    size: warning.size,
+                })
+                .collect(),
+            checks: self.checks.clone(),
+            person_messages: self.person_messages,
+            person_messages_read: self.person_messages_read,
+            tool_results: self.tool_results,
+            tool_results_known: self.tool_results_known,
+        }
+    }
+}
+
 /// The interruption warning the next record may still belong to.
 struct OpenStop {
     index: usize,
@@ -649,10 +962,14 @@ struct OpenStop {
 /// warning, and every statement about what could not be checked, comes from
 /// here.
 pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
+    decide_neutral(evidence).render(zone)
+}
+
+pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
     let session_id = &evidence.session_id;
-    let mut warnings: Vec<SessionWarning> = Vec::new();
-    let warn =
-        |kind, anchor: String, at_ms, record_uuids: Vec<String>, reason: String| SessionWarning {
+    let mut warnings: Vec<NeutralWarning> = Vec::new();
+    let warn = |kind, anchor: String, at_ms, record_uuids: Vec<String>, reason: WarningReason| {
+        NeutralWarning {
             kind,
             session_id: session_id.clone(),
             anchor,
@@ -661,7 +978,8 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
             reason,
             repeat: None,
             size: None,
-        };
+        }
+    };
     let mut stops = BTreeMap::<&str, Vec<&ToolOutcome>>::new();
     for outcome in evidence
         .outcomes
@@ -695,14 +1013,11 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
         }
         for outcome in stops.get(record.uuid.as_str()).into_iter().flatten() {
             let tool = outcome.call.as_ref().map_or("a tool", |c| c.name.as_str());
-            let verb = match outcome.ended {
-                Outcome::Declined => "declined",
-                _ => "interrupted",
+            let reason = WarningReason::StoppedCall {
+                declined: outcome.ended == Outcome::Declined,
+                tool: tool.to_owned(),
+                moment: outcome.at_ms,
             };
-            let reason = format!(
-                "you {verb} a call to {tool} ({})",
-                clock_times(&[outcome.at_ms], zone)
-            );
             match &open {
                 // The marker came first at the same moment: the same
                 // interruption, now named by the call.
@@ -739,10 +1054,9 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                         record.uuid.clone(),
                         record.at_ms,
                         vec![record.uuid.clone()],
-                        format!(
-                            "you interrupted the agent ({})",
-                            clock_times(&[record.at_ms], zone)
-                        ),
+                        WarningReason::Interrupted {
+                            moment: record.at_ms,
+                        },
                     ));
                     open = Some(OpenStop {
                         index: warnings.len() - 1,
@@ -779,10 +1093,10 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                 record.uuid.clone(),
                 record.at_ms,
                 vec![record.uuid.clone()],
-                format!(
-                    "you wrote \"{phrase}\" after a reply ({})",
-                    clock_times(&[record.at_ms], zone)
-                ),
+                WarningReason::Correction {
+                    phrase,
+                    moment: record.at_ms,
+                },
             ))
         };
         match &record.words {
@@ -819,7 +1133,7 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
         .filter(|sent| sent.len() >= REPEAT_AT_LEAST)
     {
         let moments: Vec<_> = sent.iter().map(|r| r.at_ms).collect();
-        warnings.push(SessionWarning {
+        warnings.push(NeutralWarning {
             repeat: Some(WarningPoint {
                 record_uuid: sent[1].uuid.clone(),
                 block: None,
@@ -830,11 +1144,10 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                 sent[0].uuid.clone(),
                 sent[1].at_ms,
                 sent.iter().map(|r| r.uuid.clone()).collect(),
-                format!(
-                    "same prompt sent {} ({})",
-                    times_word(sent.len()),
-                    clock_times(&moments, zone)
-                ),
+                WarningReason::RepeatedPrompt {
+                    moments,
+                    count: sent.len() as u64,
+                },
             )
         });
     }
@@ -878,7 +1191,7 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
         let moments: Vec<_> = failed.iter().map(|(o, _)| o.at_ms).collect();
         let (first, call) = failed[0];
         let second = failed[1].0;
-        warnings.push(SessionWarning {
+        warnings.push(NeutralWarning {
             repeat: Some(WarningPoint {
                 record_uuid: second.result_uuid.clone(),
                 block: u32::try_from(second.result_block).ok(),
@@ -889,12 +1202,12 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                 format!("{}#{}", first.result_uuid, first.result_block),
                 second.at_ms,
                 failed.iter().map(|(o, _)| o.result_uuid.clone()).collect(),
-                format!(
-                    "{} failed {} ({})",
-                    call_words(&call.name, call.tool_only),
-                    times_word(failed.len()),
-                    clock_times(&moments, zone)
-                ),
+                WarningReason::RepeatedFailure {
+                    tool: call.name.clone(),
+                    tool_only: call.tool_only,
+                    moments,
+                    count: failed.len() as u64,
+                },
             )
         });
     }
@@ -951,17 +1264,23 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                     (RepeatDensity::Measured { repeats, worst }, Some(true)) => {
                         let mut uuids = BTreeSet::new();
                         uuids.insert(stretch.start_uuid.clone());
+                        let repeat = worst.as_ref().and_then(|group| {
+                            Some(WarningPoint {
+                                record_uuid: group.representative.record_uuid.clone(),
+                                block: Some(u32::try_from(group.representative.block_index).ok()?),
+                            })
+                        });
                         let worst = worst.as_ref().map(|group| {
                             let block = &group.representative;
                             uuids.insert(block.record_uuid.clone());
                             let tool_only = evidence
                                 .tool_only_calls
                                 .contains(&(block.record_uuid.clone(), block.block_index));
-                            format!(
-                                ", most often {} ({})",
-                                call_words(&group.tool_name, tool_only),
-                                times_word(group.count as usize)
-                            )
+                            WorstCall {
+                                tool: group.tool_name.clone(),
+                                tool_only,
+                                count: group.count,
+                            }
                         });
                         uuids.insert(stretch.end_uuid.clone());
                         // The stretch's own start, which M-20 states whether
@@ -973,19 +1292,20 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
                             .unwrap_or_default();
                         let mut record_uuids: Vec<_> = uuids.into_iter().collect();
                         record_uuids.sort_by_key(|uuid| at(uuid));
-                        warnings.push(SessionWarning {
+                        warnings.push(NeutralWarning {
+                            repeat,
                             size: Some(*repeats),
                             ..warn(
                                 WarningKind::RepeatedCalls,
                                 stretch.start_uuid.clone(),
                                 start_ms,
                                 record_uuids,
-                                format!(
-                                    "{repeats} repeated calls in {} active minutes{} (from {})",
-                                    stretch.active_duration_ms / 60_000,
-                                    worst.unwrap_or_default(),
-                                    clock_times(&[start_ms], zone)
-                                ),
+                                WarningReason::RepeatedCalls {
+                                    repeats: *repeats,
+                                    active_duration_ms: stretch.active_duration_ms,
+                                    worst,
+                                    start_ms,
+                                },
                             )
                         });
                     }
@@ -1001,7 +1321,7 @@ pub(crate) fn decide(evidence: &Evidence, zone: &TimeZone) -> SessionWarnings {
     }
 
     warnings.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then(a.kind.cmp(&b.kind)));
-    SessionWarnings {
+    NeutralSessionWarnings {
         session_id: session_id.clone(),
         warnings,
         checks: WarningChecks {
@@ -1164,11 +1484,30 @@ impl MetricsDb {
         BTreeMap<String, WholeSessionWarnings>,
         BTreeMap<String, (i64, i64)>,
     )> {
+        let (answers, spans) = self.whole_neutral_in_snapshot(ids, thresholds, &|| false)?;
+        Ok((
+            answers
+                .into_iter()
+                .map(|(id, answer)| (id, answer.render(zone)))
+                .collect(),
+            spans,
+        ))
+    }
+
+    pub(crate) fn whole_neutral_in_snapshot(
+        &self,
+        ids: &[&str],
+        thresholds: RepeatThresholds,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<NeutralWholeWarningBatch> {
         let mut answers = BTreeMap::new();
         let mut owned = BTreeMap::<String, (String, Option<String>)>::new();
         let mut spans = BTreeMap::<String, (i64, i64)>::new();
         let mut untimed = BTreeMap::<String, (i64, i64)>::new();
         for chunk in ids.chunks(crate::MAX_SESSIONS) {
+            if cancelled() {
+                return Err(crate::Error::Cancelled);
+            }
             let by_id = |query: &str| crate::session::by_session_from(query, chunk.len(), 1);
             let mut statement = self
                 .connection
@@ -1223,17 +1562,20 @@ impl MetricsDb {
             })
             .collect();
         for id in ids.iter().copied() {
+            if cancelled() {
+                return Err(crate::Error::Cancelled);
+            }
             let untimed_records = untimed
                 .get(id)
                 .map_or(0, |(count, _)| u64::try_from(*count).unwrap_or(0));
             let Some(key) = owned.get(id) else {
-                answers.insert(id.to_owned(), WholeSessionWarnings::Missing);
+                answers.insert(id.to_owned(), NeutralWholeSessionWarnings::Missing);
                 continue;
             };
             let Some(window) = windows.get(id).copied() else {
                 answers.insert(
                     id.to_owned(),
-                    WholeSessionWarnings::Untimed { untimed_records },
+                    NeutralWholeSessionWarnings::Untimed { untimed_records },
                 );
                 continue;
             };
@@ -1259,13 +1601,46 @@ impl MetricsDb {
             let evidence = self.warning_evidence(window, id, repeats, &mut stored)?;
             answers.insert(
                 id.to_owned(),
-                WholeSessionWarnings::Read {
-                    warnings: decide(&evidence, zone),
+                NeutralWholeSessionWarnings::Read {
+                    warnings: decide_neutral(&evidence),
                     untimed_records,
                 },
             );
         }
         Ok((answers, spans))
+    }
+
+    /// The warnings the user dismissed for each named session: each
+    /// warning's identity ([`SessionWarning::id`]), how big it was when
+    /// dismissed and when ([`Dismissal`]). Sessions with none are left out. Read in the
+    /// caller's snapshot, so a warnings answer read with it hides exactly the
+    /// dismissals stored when it was read. Hiding them is the reader's
+    /// product decision; [`decide`] never sees a dismissal.
+    pub fn dismissed_warnings(
+        &self,
+        sessions: &[&str],
+    ) -> Result<BTreeMap<String, BTreeMap<String, Dismissal>>> {
+        let mut found = BTreeMap::<String, BTreeMap<String, Dismissal>>::new();
+        for chunk in sessions.chunks(crate::MAX_SESSIONS) {
+            let mut statement = self.connection.prepare(&crate::session::by_session_from(
+                DISMISSED_QUERY,
+                chunk.len(),
+                1,
+            ))?;
+            let mut rows = statement.query(rusqlite::params_from_iter(chunk))?;
+            while let Some(row) = rows.next()? {
+                let size: Option<i64> = row.get(2)?;
+                found.entry(row.get(0)?).or_default().insert(
+                    row.get(1)?,
+                    Dismissal {
+                        // The table keeps sizes at 1 or more.
+                        size: size.and_then(|size| u64::try_from(size).ok()),
+                        dismissed_at_ms: row.get(3)?,
+                    },
+                );
+            }
+        }
+        Ok(found)
     }
 
     /// The warnings that fall inside `window` of every session with a timed
@@ -1546,6 +1921,92 @@ mod tests {
 
     fn utc() -> TimeZone {
         TimeZone::UTC
+    }
+
+    #[test]
+    fn compact_reasons_keep_the_native_facts_without_parsing_sentences() {
+        let cases = [
+            (
+                WarningReason::Correction {
+                    phrase: "no".into(),
+                    moment: 0,
+                },
+                "After an agent reply",
+            ),
+            (
+                WarningReason::Interrupted { moment: 0 },
+                "Agent interrupted",
+            ),
+            (
+                WarningReason::StoppedCall {
+                    declined: true,
+                    tool: "Edit".into(),
+                    moment: 0,
+                },
+                "Declined Edit",
+            ),
+            (
+                WarningReason::StoppedCall {
+                    declined: false,
+                    tool: "Bash".into(),
+                    moment: 0,
+                },
+                "Interrupted Bash",
+            ),
+            (
+                WarningReason::RepeatedPrompt {
+                    moments: vec![0, 1],
+                    count: 2,
+                },
+                "Same prompt sent twice",
+            ),
+            (
+                WarningReason::RepeatedFailure {
+                    tool: "Bash".into(),
+                    tool_only: false,
+                    moments: vec![0, 1],
+                    count: 2,
+                },
+                "the same Bash call failed twice",
+            ),
+            (
+                WarningReason::RepeatedFailure {
+                    tool: "Bash".into(),
+                    tool_only: true,
+                    moments: vec![0, 1, 2],
+                    count: 3,
+                },
+                "Bash failed 3 times",
+            ),
+            (
+                WarningReason::RepeatedCalls {
+                    repeats: 6,
+                    active_duration_ms: 26 * MINUTE as u64 + 59_999,
+                    worst: None,
+                    start_ms: 0,
+                },
+                "6 repeats · 26 active min",
+            ),
+        ];
+        for (reason, expected) in cases {
+            assert_eq!(reason.compact(), expected);
+        }
+        let with_worst = WarningReason::RepeatedCalls {
+            repeats: 6,
+            active_duration_ms: 26 * MINUTE as u64,
+            worst: Some(WorstCall {
+                tool: "Bash".into(),
+                tool_only: false,
+                count: 5,
+            }),
+            start_ms: 0,
+        };
+        assert_eq!(with_worst.compact(), "6 repeats · 26 active min");
+        assert!(
+            with_worst
+                .render(&utc())
+                .contains("most often the same Bash call (5 times)")
+        );
     }
 
     fn agent(uuid: &str, minute: i64) -> EvidenceRecord {
@@ -2330,6 +2791,14 @@ mod tests {
         assert_eq!(circling.len(), 1);
         assert_eq!(circling[0].record_uuids, uuids(&["p1", "a1", "a2"]));
         assert_eq!(circling[0].at_ms, T0);
+        assert_eq!(
+            circling[0].points_at(),
+            WarningPoint {
+                record_uuid: "a1".into(),
+                block: Some(0),
+            }
+        );
+        assert_eq!(circling[0].id(), "repeated_calls:p1");
         assert!(
             circling[0].reason.starts_with(
                 "6 repeated calls in 9 active minutes, most often the same Bash call (5 times)"

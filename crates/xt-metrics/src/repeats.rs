@@ -90,7 +90,7 @@ impl RepeatThresholds {
 
 /// Why a stretch's repeat count could not be established. Each names a missing
 /// piece of evidence, never a measured absence of repeats.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnknownRepeats {
     /// A record in the stretch never stated how many calls it made.
