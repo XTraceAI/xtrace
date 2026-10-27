@@ -137,3 +137,6 @@ export function listAddress(
   params.set(sessionParams.range, range);
   return params;
 }
+
+/** The warning a shared marker opens on its session page. */
+export const WARNING_PARAM = 'warning';

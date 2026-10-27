@@ -1,0 +1,256 @@
+/* M-21 session warnings. A warning is drawn in the danger ink as a round
+   dot, so it cannot be mistaken for a compaction tick (an upright mark in
+   the warning ink) on the same track. Every mark is a fixed size and
+   absolutely placed or inline in a line that already exists, so no row
+   changes height when warnings arrive. */
+
+/* A warning on a track: the element is a transparent hit area; the dot is
+   its ::before, ringed with the surface colour so it reads over a span. */
+.xt-warning-dot {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.xt-warning-dot::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.xt-warning-dot:hover::before,
+.xt-warning-dot:focus-visible::before {
+  inset: 1px;
+}
+.xt-warning-dot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A row's compact marker: the sign and a count, in the danger ink on its
+   tint, the height of the line it sits in. */
+.xt-warning-marker {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 15px;
+  margin-inline-start: 5px;
+  padding: 0 4px 0 3px;
+  border-radius: 4px;
+  color: var(--danger);
+  background: var(--danger-tint);
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  /* A link to its session's Warnings card. */
+  cursor: pointer;
+}
+.xt-warning-marker:hover {
+  background: color-mix(in srgb, var(--danger-tint), var(--danger) 10%);
+}
+.xt-warning-marker:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The tooltip: one line per warning, its label in the ink. */
+.xt-warning-tip {
+  display: grid;
+  gap: 4px;
+  max-width: min(420px, calc(100vw - 16px));
+}
+.xt-warning-tip-head {
+  color: var(--meta);
+}
+/* What pressing the mark does, under its warnings. */
+.xt-warning-tip-hint {
+  color: var(--meta);
+  font-size: 11px;
+}
+.xt-warning-line {
+  display: block;
+}
+.xt-warning-line b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* A session's page: the summary, the warnings, then each check. */
+.xt-warnings {
+  display: grid;
+  gap: 10px;
+}
+.xt-warnings-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--body);
+}
+.xt-warnings-summary[data-warned] {
+  color: var(--danger);
+}
+.xt-warnings-summary[data-warned] span {
+  color: var(--ink);
+}
+.xt-warnings-list,
+.xt-warnings-checks {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.xt-warnings-list > li {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 2px 4px 2px 18px;
+  border-radius: 5px;
+  color: var(--body);
+  scroll-margin-block: 80px;
+}
+.xt-warnings-list > li > .xt-warning-line {
+  flex: 1 1 260px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.xt-warnings-list > li:focus-visible,
+.xt-warnings-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.xt-warnings-summary:focus:not(:focus-visible) {
+  outline: none;
+}
+/* The warning a mark opened the page at. */
+.xt-warnings-list > li[data-highlighted] {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+.xt-warnings-list > li:focus:not(:focus-visible) {
+  outline: none;
+}
+/* A warning's buttons: room for more before Dismiss. They keep to the end of
+   the line and wrap under the warning when the card is narrow. */
+.xt-warning-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+.xt-warning-action {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--body);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.xt-warning-action:hover {
+  background: var(--subtle);
+  color: var(--ink);
+}
+.xt-warning-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.xt-warning-action[aria-disabled='true'] {
+  cursor: progress;
+  opacity: 0.6;
+}
+/* A warning that grew after it was dismissed, so it shows again. */
+.xt-warning-returned {
+  flex: 1 0 100%;
+  color: var(--secondary);
+  font-size: 12px;
+}
+.xt-warning-refused {
+  flex: 1 0 100%;
+  color: var(--danger);
+  font-size: 12px;
+}
+/* Dismissed warnings: apart, quieter, each with an undo. */
+.xt-warnings-dismissed {
+  display: grid;
+  gap: 4px;
+}
+.xt-warnings-dismissed-head {
+  margin: 0;
+  color: var(--meta);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.xt-warnings-list[data-dismissed] li {
+  color: var(--meta);
+}
+.xt-warnings-list[data-dismissed] li::before {
+  background: var(--meta);
+}
+.xt-warnings-list[data-dismissed] .xt-warning-line b {
+  color: var(--body);
+}
+.xt-warnings-list > li::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: calc(2px + 0.5em);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.xt-warnings-checks {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--meta);
+  font-size: 12px;
+}
+.xt-warnings-checks li {
+  display: flex;
+  gap: 6px;
+}
+.xt-warnings-checks li:not([data-complete]) {
+  color: var(--body);
+}
+.xt-warnings-check-mark {
+  flex: 0 0 10px;
+  color: var(--meta);
+}
+
+.xt-warning-day {
+  color: var(--meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.xt-warnings-check-details > summary {
+  width: fit-content;
+  color: var(--meta);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.xt-warnings-check-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

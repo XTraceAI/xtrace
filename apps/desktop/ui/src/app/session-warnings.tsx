@@ -1,3 +1,8 @@
+import { Tooltip } from '@base-ui/react/tooltip';
+import { Link } from 'react-router';
+import { useSurfaceTheme } from '../theme/ThemeProvider';
+import { WARNING_PARAM, sessionHref } from './session-search';
+import '../styles/session-warnings.css';
 import {
   useQueries,
   useQuery,
@@ -5,7 +10,16 @@ import {
   type QueryClient,
   type QueryFilters,
 } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { useData } from '../data/DataProvider';
 import type { DataSource } from '../data/DataSource';
 import type { SessionWarningItem } from '../data/generated/SessionWarningItem';
@@ -320,4 +334,452 @@ export function useWarningDismissals(
     refused: refused.has(pressKey({ id: warning.id, undo })),
     onPress: dismissal ? () => press({ id: warning.id, undo }) : undefined,
   });
+}
+
+/**
+ * Where a mark opens: its session's page, carrying the list state that finds
+ * the session (as the row's own link does) and the warning to show, or the
+ * whole card when `warningId` is empty.
+ */
+export function warningHref(sessionId: string, warningId: string, carry?: URLSearchParams | null) {
+  const base = sessionHref(sessionId, carry);
+  const warning = new URLSearchParams({ [WARNING_PARAM]: warningId });
+  return `${base}${base.includes('?') ? '&' : '?'}${warning}`;
+}
+
+/**
+ * What a Dashboard session row's marker for `count` warnings before its
+ * `hours`-hour activity axis is named: the native template, filled in.
+ */
+export const beforeAxisLabel = (count: number, hours: number) =>
+  (count === 1 ? SESSION_WARNINGS_TEXT.before_axis_one : SESSION_WARNINGS_TEXT.before_axis_many)
+    .replace('{count}', String(count))
+    .replace('{hours}', String(hours));
+
+/** The zone this Mac shows, as the session page's own times are written. */
+export const localZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+};
+
+/** The warning sign: a small triangle in the danger ink. */
+export function WarningSign({ size = 12 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M10.3 3.9 1.8 18.4A2 2 0 0 0 3.5 21.4h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 9.5v4.5M12 17.5v.01" />
+    </svg>
+  );
+}
+
+/**
+ * One warning's line in a tooltip or list: its day, its label, then its
+ * reason, whose clock times carry no date of their own.
+ */
+export function WarningLine({ warning, id }: { warning: SessionWarningItem; id?: string }) {
+  return (
+    <span className="xt-warning-line" data-kind={warning.kind} id={id}>
+      <span className="xt-warning-day">{warning.day}</span> <b>{warning.label}</b> {warning.reason}
+    </span>
+  );
+}
+
+/**
+ * One warning drawn on an activity track at `left` (0–1): a small round dot
+ * in the danger ink, ringed with the surface colour so it reads over a span
+ * bar. It is a focusable, named control, like the compaction ticks beside it are
+ * focusable marks; hovering or focusing it shows the warning's label and
+ * reason. `to` opens its session page; `onOpen` opens Dashboard detail.
+ */
+export function WarningDot({
+  warning,
+  left,
+  to,
+  onOpen,
+  suppressTooltip = false,
+}: {
+  warning: SessionWarningItem;
+  left: number;
+  suppressTooltip?: boolean;
+} & (
+  { to: string; onOpen?: never } | { to?: never; onOpen: (button: HTMLButtonElement) => void }
+)) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const theme = useSurfaceTheme();
+  return (
+    <Tooltip.Root disableHoverablePopup open={open && !suppressTooltip} onOpenChange={setOpen}>
+      <Tooltip.Trigger
+        render={
+          onOpen ? (
+            <button
+              type="button"
+              className="xt-warning-dot"
+              data-kind={warning.kind}
+              data-testid="warning-dot"
+              data-warning-id={warning.id}
+              style={{ left: `${left * 100}%` }}
+              tabIndex={0}
+              aria-haspopup="dialog"
+              onClick={(event) => onOpen(event.currentTarget)}
+            />
+          ) : (
+            <Link
+              to={to}
+              className="xt-warning-dot"
+              data-kind={warning.kind}
+              data-testid="warning-dot"
+              data-warning-id={warning.id}
+              style={{ left: `${left * 100}%` }}
+              // WebKit leaves links out of the Tab order unless told.
+              tabIndex={0}
+            />
+          )
+        }
+        // The dot has no text for a name to label.
+        aria-label={warning.name}
+        aria-describedby={id}
+        delay={0}
+      />
+      <Tooltip.Portal data-theme={theme}>
+        <Tooltip.Positioner
+          className="xt-rule-positioner"
+          positionMethod="fixed"
+          side="top"
+          align="center"
+          sideOffset={6}
+          collisionPadding={8}
+        >
+          <Tooltip.Popup
+            id={id}
+            role="tooltip"
+            className="xt-rule-popover xt-warning-tip"
+            data-testid="warning-tip"
+          >
+            <WarningLine warning={warning} />
+            {!onOpen && (
+              <span className="xt-warning-tip-hint">{SESSION_WARNINGS_TEXT.open_hint}</span>
+            )}
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
+/**
+ * A row's compact warning marker: the sign and a count, one tab stop, whose
+ * tooltip lists each warning's label and reason. `label` is its accessible
+ * name; `heading` heads the list. It is a link to `to`, the session's page
+ * at its Warnings card. Nothing is drawn without a warning.
+ */
+export function WarningMarker({
+  warnings,
+  label,
+  heading,
+  count,
+  to,
+  testId = 'warning-marker',
+}: {
+  warnings: readonly SessionWarningItem[];
+  label: string;
+  heading?: string;
+  /** What the marker shows beside the sign; the number of warnings by default. */
+  count?: string;
+  to: string;
+  testId?: string;
+}) {
+  const id = useId();
+  const theme = useSurfaceTheme();
+  if (warnings.length === 0) return null;
+  return (
+    <Tooltip.Root disableHoverablePopup>
+      <Tooltip.Trigger
+        // WebKit leaves links out of the Tab order unless told.
+        render={<Link to={to} className="xt-warning-marker" data-testid={testId} tabIndex={0} />}
+        aria-label={label}
+        aria-describedby={id}
+        delay={0}
+      >
+        <WarningSign size={11} />
+        <span aria-hidden="true">{count ?? warnings.length.toLocaleString('en-US')}</span>
+      </Tooltip.Trigger>
+      <Tooltip.Portal data-theme={theme}>
+        <Tooltip.Positioner
+          className="xt-rule-positioner"
+          positionMethod="fixed"
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+        >
+          <Tooltip.Popup
+            id={id}
+            role="tooltip"
+            className="xt-rule-popover xt-warning-tip"
+            data-testid={`${testId}-tip`}
+          >
+            {heading && <span className="xt-warning-tip-head">{heading}</span>}
+            {warnings.map((warning) => (
+              <WarningLine key={warning.id} warning={warning} />
+            ))}
+            <span className="xt-warning-tip-hint">{SESSION_WARNINGS_TEXT.open_hint}</span>
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
+/**
+ * A listed session's marker: its count and every warning's reason, from the
+ * native answer. A session with no warning, or not read yet, shows nothing:
+ * a row never marks healthy or unread data, and its page says what the
+ * checks could not read.
+ */
+export function SessionWarningMarker({
+  answer,
+  to,
+}: {
+  answer: SessionWarningsAnswer | undefined;
+  /** The session's page at its Warnings card. */
+  to: string;
+}) {
+  if (answer?.state !== 'read' || !answer.count_label) return null;
+  return (
+    <WarningMarker
+      warnings={answer.warnings}
+      label={answer.count_label}
+      heading={answer.count_label}
+      to={to}
+    />
+  );
+}
+
+export function WarningChecks({
+  answer,
+}: {
+  answer: Extract<SessionWarningsAnswer, { state: 'read' }>;
+}) {
+  return (
+    <details className="xt-warnings-check-details">
+      <summary tabIndex={0}>{answer.checks_summary}</summary>
+      <ul className="xt-warnings-checks" aria-label="Checks" data-testid="warnings-checks">
+        {answer.checks.map((check) => (
+          <li key={check.kind} data-complete={check.complete || undefined}>
+            <span className="xt-warnings-check-mark" aria-hidden="true">
+              {check.complete ? '✓' : '–'}
+            </span>
+            <span>{check.text}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/**
+ * A session's own warnings, for its page: the native summary, each warning
+ * not dismissed with a Dismiss button, the dismissed ones apart with an Undo,
+ * and each check's line, so a session some checks could not fully read says
+ * so instead of reading as one with nothing wrong.
+ *
+ * `highlight` is the warning a mark opened the page at (its `id`), or empty
+ * for the card as a whole: once the answer is in, the card scrolls into view
+ * and focus moves to that warning, marked, or to the card. `actions` is the
+ * place for more buttons on each warning not dismissed, before Dismiss, and
+ * `below` for content supplied under the warning.
+ */
+export function SessionWarningsDetail({
+  sessionId,
+  answer,
+  pending,
+  failed,
+  highlight = null,
+  actions,
+  below,
+}: {
+  sessionId: string;
+  answer: SessionWarningsAnswer | undefined;
+  pending: boolean;
+  failed: boolean;
+  highlight?: string | null;
+  actions?: (warning: SessionWarningItem) => ReactNode;
+  below?: (warning: SessionWarningItem) => ReactNode;
+}) {
+  const card = useRef<HTMLDivElement>(null);
+  const shown = useRef<string | null>(null);
+  const read = answer?.state === 'read' ? answer : null;
+  const rowProps = useWarningDismissals(sessionId, read, card);
+  useEffect(() => {
+    if (!read || highlight === null || shown.current === highlight) return;
+    shown.current = highlight;
+    const element = card.current;
+    if (!element) return;
+    const target =
+      (highlight &&
+        [...element.querySelectorAll<HTMLElement>('[data-warning-id]')].find(
+          (item) => item.dataset.warningId === highlight,
+        )) ||
+      element.querySelector<HTMLElement>('.xt-warnings-summary') ||
+      element;
+    // Not every engine a test runs in scrolls.
+    target.scrollIntoView?.({ block: 'center' });
+    target.focus({ preventScroll: true });
+  }, [read, highlight]);
+  if (failed && !answer)
+    return (
+      <p className="xt-session-detail-notice" role="status" data-testid="warnings-state">
+        {SESSION_WARNINGS_TEXT.session_unread}
+      </p>
+    );
+  if (!answer)
+    return (
+      <p className="xt-session-detail-notice" role="status" data-testid="warnings-state">
+        {pending
+          ? SESSION_WARNINGS_TEXT.session_reading
+          : SESSION_WARNINGS_TEXT.session_unavailable}
+      </p>
+    );
+  if (answer.state === 'missing')
+    return (
+      <p className="xt-session-detail-notice" role="status" data-testid="warnings-state">
+        {SESSION_WARNINGS_TEXT.session_missing}
+      </p>
+    );
+  const item = (warning: SessionWarningItem, undo: boolean) => (
+    <WarningRow
+      key={warning.id}
+      warning={warning}
+      undo={undo}
+      highlighted={highlight !== null && highlight !== '' && highlight === warning.id}
+      {...rowProps(warning, undo)}
+      actions={undo ? undefined : actions?.(warning)}
+      below={undo ? undefined : below?.(warning)}
+    />
+  );
+  return (
+    <div ref={card} className="xt-warnings" data-testid="session-warnings">
+      <p
+        tabIndex={-1}
+        className="xt-warnings-summary"
+        data-warned={answer.warnings.length > 0 || undefined}
+        data-incomplete={answer.incomplete_checks > 0 || undefined}
+        data-testid="warnings-summary"
+      >
+        {answer.warnings.length > 0 && <WarningSign size={13} />}
+        <span>{answer.summary}</span>
+      </p>
+      {answer.warnings.length > 0 && (
+        <ol className="xt-warnings-list" aria-label="Warnings" data-testid="warnings-list">
+          {answer.warnings.map((warning) => item(warning, false))}
+        </ol>
+      )}
+      {answer.dismissed.length > 0 && (
+        <section className="xt-warnings-dismissed" aria-labelledby={`${sessionId}-dismissed`}>
+          <h3 id={`${sessionId}-dismissed`} className="xt-warnings-dismissed-head">
+            {SESSION_WARNINGS_TEXT.dismissed_heading}
+          </h3>
+          <ol
+            className="xt-warnings-list"
+            data-dismissed=""
+            aria-label={SESSION_WARNINGS_TEXT.dismissed_heading}
+            data-testid="warnings-dismissed"
+          >
+            {answer.dismissed.map((warning) => item(warning, true))}
+          </ol>
+        </section>
+      )}
+      <WarningChecks answer={answer} />
+    </div>
+  );
+}
+
+/**
+ * One warning on its session's page: its line and, where dismissals are
+ * stored, its button (Dismiss, or Undo for a dismissed one), described by
+ * the line. `actions` go before the button.
+ */
+export function WarningRow({
+  warning,
+  undo,
+  highlighted,
+  busy,
+  refused,
+  onPress,
+  actions,
+  below,
+  summary,
+  context,
+}: {
+  warning: SessionWarningItem;
+  undo: boolean;
+  highlighted: boolean;
+  busy: boolean;
+  refused: boolean;
+  onPress?: () => void;
+  actions?: ReactNode;
+  below?: ReactNode;
+  summary?: ReactNode;
+  context?: ReactNode;
+}) {
+  const line = useId();
+  return (
+    <li
+      data-kind={warning.kind}
+      data-warning-id={warning.id}
+      // The saved message the native answer points at.
+      data-points-at={pointsAt(warning)}
+      data-highlighted={highlighted || undefined}
+      data-testid={undo ? 'dismissed-warning' : 'warning-item'}
+      tabIndex={-1}
+    >
+      {summary ? <div id={line}>{summary}</div> : <WarningLine warning={warning} id={line} />}
+      {context}
+      {(onPress || actions) && (
+        <span className="xt-warning-actions">
+          {actions}
+          {onPress && (
+            <button
+              type="button"
+              className="xt-warning-action"
+              data-action={undo ? 'restore' : 'dismiss'}
+              aria-describedby={line}
+              // WebKit leaves buttons out of the Tab order unless told.
+              tabIndex={0}
+              aria-disabled={busy || undefined}
+              onClick={busy ? undefined : onPress}
+            >
+              {undo ? SESSION_WARNINGS_TEXT.restore : SESSION_WARNINGS_TEXT.dismiss}
+            </button>
+          )}
+        </span>
+      )}
+      {warning.returned && (
+        <span className="xt-warning-returned" data-testid="warning-returned">
+          {warning.returned}
+        </span>
+      )}
+      {refused && (
+        <span className="xt-warning-refused" role="alert" data-testid="warning-refused">
+          {undo ? SESSION_WARNINGS_TEXT.restore_failed : SESSION_WARNINGS_TEXT.dismiss_failed}
+        </span>
+      )}
+      {below}
+    </li>
+  );
 }
