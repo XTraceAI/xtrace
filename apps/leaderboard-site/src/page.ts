@@ -94,7 +94,8 @@ export function pageResponse(rows: ListedRow[]): Response {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': PAGE_CACHE_CONTROL,
       'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
+      'content-security-policy':
+        "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
     },
   });
 }

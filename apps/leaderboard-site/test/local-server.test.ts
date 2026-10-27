@@ -6,6 +6,7 @@ import { createApp } from '../src/app.js';
 import { applySchema } from '../src/db.js';
 import { openLocalDatabase, readSchema, startLocalServer } from '../src/local.js';
 import { installApp } from '../src/runtime.js';
+import { readFileSync } from 'node:fs';
 
 let server: Server;
 let origin: string;
@@ -89,6 +90,33 @@ test('join, score, me, leaderboard and page over HTTP', async () => {
 
   assert.equal((await fetch(`${origin}/api/me`, { method: 'DELETE', headers: auth })).status, 204);
   assert.equal((await fetch(`${origin}/api/me`, { headers: auth })).status, 401);
+});
+
+test('HEAD / answers like GET without a body', async () => {
+  const head = await fetch(`${origin}/`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.equal(head.headers.get('cache-control'), 'public, s-maxage=60, stale-while-revalidate=60');
+  assert.equal(await head.text(), '');
+});
+
+test('Vercel installs this package with the pinned pnpm and no strict Node check', () => {
+  const vercel = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8')) as {
+    installCommand: string;
+  };
+  const site = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    name: string;
+  };
+  const root = JSON.parse(
+    readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+  ) as {
+    packageManager: string;
+  };
+  const [, version] = root.packageManager.split('@');
+  assert.equal(
+    vercel.installCommand,
+    `npx --yes pnpm@${version} install --frozen-lockfile --config.engine-strict=false --filter ${site.name}...`,
+  );
 });
 
 test('unknown paths are 404 and unsupported methods are 405', async () => {

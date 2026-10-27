@@ -99,5 +99,7 @@ create table if not exists members (
 - An unexpected server or database failure gives 500 `{"error": "server_error"}`. Logs never contain
   request bodies, emails or keys.
 - `/api/*` responses send `Cache-Control: no-store`.
+- `HEAD /` returns the same status and headers as `GET /`, with no body.
+- The page sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'`.
 - The local development server answers an unknown path with 404 `not_found` and an unsupported method
   with 405 `method_not_allowed`. On Vercel those two answers come from Vercel itself.

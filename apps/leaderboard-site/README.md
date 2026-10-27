@@ -47,7 +47,11 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
 
 1. In Vercel, create a new project from this GitHub repository.
 2. Set **Root Directory** to `apps/leaderboard-site`. Leave the framework as **Other**.
-   Leave the build command empty.
+   Leave the build command empty. Leave the install command as it is:
+   `vercel.json` sets it.
+   That install command uses the repository's pnpm version (10.33.0) and skips the desktop app's packages.
+   It turns off the strict Node version check. Without that, Vercel's install fails
+   whenever its Node 22 version differs from the exact one the repository asks for.
 3. Open the project's **Storage** tab, add **Neon** from the Marketplace, and connect it to the project.
    This sets `DATABASE_URL` for the project.
 4. Create the table. Copy `DATABASE_URL` from the project's environment variables, then run from the repository root:

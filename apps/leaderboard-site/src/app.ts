@@ -14,7 +14,7 @@ export type App = {
   score: { PUT: Handler };
   me: { GET: Handler; PATCH: Handler; DELETE: Handler };
   leaderboard: { GET: Handler };
-  page: { GET: Handler };
+  page: { GET: Handler; HEAD: Handler };
 };
 
 export type AppOptions = { query: Query; clock?: Clock; log?: (message: string) => void };
@@ -128,11 +128,17 @@ export function createApp({
 
   const page: Handler = async () => pageResponse(await listedMembers(query, clock()));
 
+  // Same status and headers as GET, without the body (for uptime checks).
+  const pageHead: Handler = async (request) => {
+    const response = await guarded(page, log)(request);
+    return new Response(null, { status: response.status, headers: response.headers });
+  };
+
   return {
     join: { POST: guarded(join, log) },
     score: { PUT: guarded(score, log) },
     me: { GET: guarded(getMe, log), PATCH: guarded(renameMe, log), DELETE: guarded(deleteMe, log) },
     leaderboard: { GET: guarded(leaderboard, log) },
-    page: { GET: guarded(page, log) },
+    page: { GET: guarded(page, log), HEAD: pageHead },
   };
 }

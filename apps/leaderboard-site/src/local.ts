@@ -24,7 +24,7 @@ export async function openLocalDatabase(dataDir?: string): Promise<{ db: PGlite;
 }
 
 type Module = Record<string, unknown>;
-const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
 function rewrites(): Map<string, string> {
   const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8')) as {

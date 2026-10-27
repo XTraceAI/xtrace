@@ -166,6 +166,23 @@ describe('GET /', () => {
     assert.ok(!html.includes('No one is listed yet.'));
   });
 
+  test('strict content security policy', async () => {
+    const { response } = await page();
+    assert.equal(
+      response.headers.get('content-security-policy'),
+      "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+    );
+  });
+
+  test('HEAD gives the same status and headers as GET, with no body', async () => {
+    await score(h.app, await join(h.app, 'Header'), 10);
+    const { response: get } = await page();
+    const head = await h.app.page.HEAD(request('HEAD', '/'));
+    assert.equal(head.status, 200);
+    assert.deepEqual([...head.headers], [...get.headers]);
+    assert.equal(await head.text(), '');
+  });
+
   test('empty state', async () => {
     const { html } = await page();
     assert.match(html, /No one is listed yet\./);

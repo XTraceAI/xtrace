@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npx --yes pnpm@10.33.0 install --frozen-lockfile --config.engine-strict=false --filter @xtrace/leaderboard-site...",
   "outputDirectory": "public",
   "rewrites": [{ "source": "/", "destination": "/api/page" }]
 }
