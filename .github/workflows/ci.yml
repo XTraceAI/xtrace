@@ -110,12 +110,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-ubuntu-24.04-x64-webkit-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Remove unused Chrome package sources
-        # Playwright downloads its pinned browsers separately. The runner's
-        # preinstalled Chrome repository must not block Ubuntu dependency updates.
+      - name: Prepare Ubuntu package sources
+        # Playwright supplies its own browser; install its system packages
+        # from the standard Ubuntu archive.
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome*.list \
             /etc/apt/sources.list.d/google-chrome*.sources
+          for source in /etc/apt/apt-mirrors.txt /etc/apt/sources.list \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [[ -f "$source" ]]; then
+              sudo sed -i 's|://azure\.archive\.ubuntu\.com/|://archive.ubuntu.com/|g' "$source"
+            fi
+          done
       - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps webkit
       - run: pnpm e2e --project=webkit --shard=${{ matrix.shard }}/4
         env:
@@ -141,12 +147,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-ubuntu-24.04-x64-webkit-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Remove unused Chrome package sources
-        # Playwright downloads its pinned browsers separately. The runner's
-        # preinstalled Chrome repository must not block Ubuntu dependency updates.
+      - name: Prepare Ubuntu package sources
+        # Playwright supplies its own browser; install its system packages
+        # from the standard Ubuntu archive.
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome*.list \
             /etc/apt/sources.list.d/google-chrome*.sources
+          for source in /etc/apt/apt-mirrors.txt /etc/apt/sources.list \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [[ -f "$source" ]]; then
+              sudo sed -i 's|://azure\.archive\.ubuntu\.com/|://archive.ubuntu.com/|g' "$source"
+            fi
+          done
       - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps webkit
       - run: pnpm e2e:gallery:smoke --project=webkit
       - run: pnpm e2e:production --project=webkit
