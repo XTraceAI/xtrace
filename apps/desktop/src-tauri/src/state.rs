@@ -231,6 +231,7 @@ impl StartupOptions {
 
 pub struct AppState {
     database: Mutex<Option<Database>>,
+    warning_cache: Mutex<Option<crate::warning_cache::WarningCacheRequest>>,
     /// Live status never queues behind Dashboard work or another identity read.
     /// Open lazily on the exact live DB; fixture state never opens this reader.
     live_identity: Mutex<Option<xt_store::identity_reader::SessionIdentityReader>>,
@@ -376,6 +377,7 @@ impl AppState {
         };
         Ok(Self {
             live_identity: Mutex::new(None),
+            warning_cache: Mutex::new(None),
             database: Mutex::new(Some(Database {
                 store,
                 metrics_path: data_dir.join(DATABASE_FILE),
@@ -433,6 +435,33 @@ impl AppState {
     fn fixture(_: String, _: Option<PathBuf>) -> Result<Self, StateError> {
         Err(StateError::FixtureDisabled)
     }
+    pub(crate) fn warning_cache_path(&self) -> Result<PathBuf, StateError> {
+        Ok(self
+            .admit()?
+            .as_ref()
+            .ok_or(StateError::Closed)?
+            .metrics_path
+            .clone())
+    }
+
+    pub(crate) fn attach_warning_cache(&self, request: crate::warning_cache::WarningCacheRequest) {
+        *self
+            .warning_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(request);
+    }
+
+    pub(crate) fn request_warning_cache(&self, repairs: &[String]) {
+        if let Some(request) = self
+            .warning_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            request.request(repairs);
+        }
+    }
+
     pub fn app_info(&self) -> AppInfo {
         self.info.clone()
     }
@@ -1178,7 +1207,11 @@ impl AppState {
             },
         };
         let metrics = xt_metrics::MetricsDb::open(&path)?;
-        read(&metrics, inputs, prepared)
+        let result = read(&metrics, inputs, prepared);
+        if metrics.session_warning_refresh_needed() {
+            self.request_warning_cache(&metrics.session_warning_repairs());
+        }
+        result
     }
 
     pub fn metrics_dashboard(
@@ -1441,6 +1474,10 @@ pub fn pr_refresh_targets(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "state_warning_cache_tests.rs"]
+mod warning_cache_tests;
 
 #[cfg(test)]
 mod tests {

@@ -54,6 +54,7 @@ pub mod tray;
 pub mod typing_speed;
 mod update_config;
 mod updates;
+mod warning_cache;
 mod window_controls;
 
 /// The event carrying every native index status change to the frontend.
@@ -1124,6 +1125,9 @@ async fn purge_stored_content(app: tauri::AppHandle) -> Result<privacy::ContentP
     write_on_worker(app, move |state| {
         let purge = || {
             state.purge_stored_content(move || {
+                if let Some(state) = publisher.try_state::<state::AppState>() {
+                    state.request_warning_cache(&[]);
+                }
                 let _ = publisher.emit(CONTENT_PURGED_EVENT, ());
             })
         };
@@ -1219,9 +1223,15 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             .home_dir()
             .map_err(|_| state::StateError::InvalidOption)
     })?;
+    let warnings = warning_cache::WarningCacheWorker::start(state.warning_cache_path()?);
+    state.attach_warning_cache(warnings.requester());
     let publish: native_index::Publish = {
         let handle = app.handle().clone();
+        let warnings = warnings.requester();
         Arc::new(move |status: &dto::NativeIndexStatus| {
+            if matches!(status.phase, dto::NativeIndexPhase::Ready) {
+                warnings.request(&[]);
+            }
             // A window not open yet, or already gone, drops the event;
             // the status remains queryable.
             let _ = handle.emit(NATIVE_INDEX_EVENT, status);
@@ -1229,7 +1239,9 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     };
     let creations: native_index::PublishCreations = {
         let handle = app.handle().clone();
+        let warnings = warnings.requester();
         Arc::new(move || {
+            warnings.request(&[]);
             // A window not open yet, or already gone, drops the event;
             // the relations stay queryable.
             let _ = handle.emit(SESSION_CREATIONS_EVENT, ());
@@ -1385,6 +1397,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .telemetry_consent()
         .unwrap_or(telemetry::consent::Consent::FRESH);
     let live = state.database_path().is_some();
+    app.manage(warnings);
     app.manage(state);
     // After the state, which the sender's store calls go through.
     let telemetry = start_telemetry(app.handle(), consent, live && default_data_folder);
@@ -1491,6 +1504,9 @@ fn stop_services(app: &tauri::AppHandle) {
     }
     if let Some(grading) = grading {
         let _ = grading.join();
+    }
+    if let Some(warnings) = app.try_state::<warning_cache::WarningCacheWorker>() {
+        warnings.shutdown();
     }
     if let Some(state) = app.try_state::<state::AppState>() {
         state.shutdown();
