@@ -12,6 +12,7 @@ import { TelemetryNotice } from './telemetry/TelemetryNotice';
 import { pluginReceiver, sidebarIndexStatus } from './sidebar-index-status';
 import { pages } from './routes';
 import { useShellShortcuts } from './useShellShortcuts';
+import { usePageHistory } from './usePageHistory';
 import { INVENTORY_VIEW, PRS_VIEW } from './pr-analytics';
 import { parseRange, sessionParams } from './session-search';
 import { shortId } from './session-context';
@@ -136,7 +137,8 @@ export function Shell() {
   // The report window for the selected range; absent until that range has loaded.
   const onDashboard = current?.path === '/dashboard';
   const period = windowed && !onDashboard ? tokens.data?.window : undefined;
-  useShellShortcuts();
+  const history = usePageHistory();
+  useShellShortcuts(history);
   function onNavigate(key: SidebarKey) {
     void navigate(`/${key}`);
   }
@@ -179,6 +181,7 @@ export function Shell() {
       />
       <div className="xt-shell-main">
         <TopBar
+          history={history}
           crumb={current?.crumb ?? 'not-found'}
           subcrumb={
             location.pathname === '/rulebook/fires'
