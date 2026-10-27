@@ -153,7 +153,7 @@ pub const SANDBOX_REFUSALS: [&str; 2] = [
     "sandbox.failIfUnavailable is set",
 ];
 /// Inherited variables kept by name; `LC_*` is kept by prefix.
-const KEPT_ENV: [&str; 5] = ["HOME", "USER", "LOGNAME", "LANG", "TMPDIR"];
+pub(crate) const KEPT_ENV: [&str; 5] = ["HOME", "USER", "LOGNAME", "LANG", "TMPDIR"];
 
 /// The bounds of one run. Tests shorten them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
