@@ -1129,3 +1129,145 @@ it('offers no rule activity in browser preview', async () => {
   expect(source.grading).toBeUndefined();
   expect(invoke).not.toHaveBeenCalled();
 });
+
+it('forwards the four warning commands with exact selected identities and native answers', async () => {
+  const source = new TauriDataSource();
+  const ids = Object.freeze([' exact session ', 'another-session', ' exact session ']);
+  const report = shell.dashboards[0].window;
+  const warnings = shell.session_warnings;
+  const windowWarnings = shell.dashboard_warnings[0].warnings;
+  const dismissed = {
+    session_id: ' exact session ',
+    warning_id: 'repeated_failure: exact record#1',
+    dismissed: true,
+  };
+  const restored = { ...dismissed, dismissed: false };
+  vi.mocked(invoke)
+    .mockResolvedValueOnce(warnings)
+    .mockResolvedValueOnce(windowWarnings)
+    .mockResolvedValueOnce(dismissed)
+    .mockResolvedValueOnce(restored);
+  expect(await source.sessionWarnings(ids, 'Asia/Tokyo')).toBe(warnings);
+  expect(await source.windowWarnings(7, report.end_ms, report.timezone)).toBe(windowWarnings);
+  expect(await source.warningDismissals.dismiss(dismissed.session_id, dismissed.warning_id)).toBe(
+    dismissed,
+  );
+  expect(await source.warningDismissals.restore(dismissed.session_id, dismissed.warning_id)).toBe(
+    restored,
+  );
+  expect(invoke).toHaveBeenNthCalledWith(1, 'session_warnings', {
+    sessionIds: [...ids],
+    timezone: 'Asia/Tokyo',
+  });
+  expect(vi.mocked(invoke).mock.calls[0][1]).toHaveProperty('sessionIds', [...ids]);
+  expect((vi.mocked(invoke).mock.calls[0][1] as { sessionIds: string[] }).sessionIds).not.toBe(ids);
+  expect(invoke).toHaveBeenNthCalledWith(2, 'metrics_window_warnings', {
+    windowDays: 7,
+    windowEndMs: report.end_ms,
+    timezone: report.timezone,
+  });
+  expect(invoke).toHaveBeenNthCalledWith(3, 'dismiss_session_warning', {
+    sessionId: dismissed.session_id,
+    warningId: dismissed.warning_id,
+  });
+  expect(invoke).toHaveBeenNthCalledWith(4, 'restore_session_warning', {
+    sessionId: dismissed.session_id,
+    warningId: dismissed.warning_id,
+  });
+  expect(invoke).toHaveBeenCalledTimes(4);
+});
+
+it('preserves failures from every native warning command', async () => {
+  const source = new TauriDataSource();
+  const failed = new Error('native warning read or write failed');
+  vi.mocked(invoke).mockRejectedValue(failed);
+  await expect(source.sessionWarnings(['session'], 'UTC')).rejects.toBe(failed);
+  await expect(source.windowWarnings(7, 0, 'UTC')).rejects.toBe(failed);
+  await expect(source.warningDismissals.dismiss('session', 'correction:record')).rejects.toBe(
+    failed,
+  );
+  await expect(source.warningDismissals.restore('session', 'correction:record')).rejects.toBe(
+    failed,
+  );
+  expect(invoke).toHaveBeenCalledTimes(4);
+});
+
+it('selects distinct fixture warning answers in identifier order and keeps native missing answers', async () => {
+  const source = new FixtureDataSource(shell);
+  const entry = shell.session_warnings.sessions[0];
+  const zone = shell.session_warnings.timezone;
+  const result = await source.sessionWarnings(
+    [entry.session_id, '!absent', entry.session_id],
+    zone,
+  );
+  expect(result).toEqual({
+    timezone: zone,
+    sessions: [{ session_id: '!absent', answer: { state: 'missing' } }, entry],
+  });
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+it('returns cloned fixture warning answers so a caller cannot change the exported facts', async () => {
+  const source = new FixtureDataSource(shell);
+  const entry = shell.session_warnings.sessions[0];
+  const zone = shell.session_warnings.timezone;
+  const first = await source.sessionWarnings([entry.session_id], zone);
+  const answer = first.sessions[0].answer;
+  expect(answer.state).toBe('read');
+  if (answer.state === 'read') answer.checks[0].text = 'changed by a caller';
+  first.sessions[0].session_id = 'changed by a caller';
+  expect(await source.sessionWarnings([entry.session_id], zone)).toEqual({
+    timezone: zone,
+    sessions: [entry],
+  });
+});
+
+it('refuses fixture warning requests in another zone instead of rewriting the exported words', async () => {
+  const source = new FixtureDataSource(shell);
+  const id = shell.session_warnings.sessions[0].session_id;
+  await expect(source.sessionWarnings([id], 'Asia/Tokyo')).rejects.toThrow(
+    'The fixture export holds warnings in its own zone only.',
+  );
+});
+
+it('returns only the exact exported warning window and clones its days', async () => {
+  const source = new FixtureDataSource(shell);
+  const entry = shell.dashboard_warnings[0];
+  const read = () => source.windowWarnings(entry.window_days, entry.window_end_ms, entry.timezone);
+  const result = await read();
+  expect(result).toEqual(entry.warnings);
+  expect(result).not.toBe(entry.warnings);
+  result.days.push({
+    date: 'changed by a caller',
+    start_ms: 0,
+    end_ms: 1,
+    warnings: [],
+    listed: 0,
+    count_label: 'changed by a caller',
+    more_label: null,
+  });
+  expect(await read()).toEqual(entry.warnings);
+  await expect(
+    source.windowWarnings(entry.window_days + 1, entry.window_end_ms, entry.timezone),
+  ).rejects.toThrow('The fixture export holds no warnings for this report.');
+  await expect(
+    source.windowWarnings(entry.window_days, entry.window_end_ms + 1, entry.timezone),
+  ).rejects.toThrow('The fixture export holds no warnings for this report.');
+  await expect(
+    source.windowWarnings(entry.window_days, entry.window_end_ms, 'Asia/Tokyo'),
+  ).rejects.toThrow('The fixture export holds no warnings for this report.');
+});
+
+it('keeps warning reads optional in browser preview and dismissals absent in browser fixtures', async () => {
+  vi.mocked(isTauri).mockReturnValue(false);
+  vi.stubEnv('DEV', false);
+  const preview = await createDataSource();
+  expect(preview.sessionWarnings).toBeUndefined();
+  expect(preview.windowWarnings).toBeUndefined();
+  expect(preview.warningDismissals).toBeUndefined();
+  const fixture: DataSource = new FixtureDataSource(shell);
+  expect(fixture.sessionWarnings).toBeTypeOf('function');
+  expect(fixture.windowWarnings).toBeTypeOf('function');
+  expect(fixture.warningDismissals).toBeUndefined();
+  expect(invoke).not.toHaveBeenCalled();
+});

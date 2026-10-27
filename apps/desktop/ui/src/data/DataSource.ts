@@ -20,6 +20,9 @@ import type { TodaySummary } from './generated/TodaySummary';
 import type { SessionTitles } from './generated/SessionTitles';
 import type { SessionCompactions } from './generated/SessionCompactions';
 import type { DashboardDaySessions } from './generated/DashboardDaySessions';
+import type { DashboardWarnings } from './generated/DashboardWarnings';
+import type { SessionWarningsList } from './generated/SessionWarningsList';
+import type { SessionWarningDismissal } from './generated/SessionWarningDismissal';
 import type { DashboardSpanDetail } from './generated/DashboardSpanDetail';
 import type { RuleActivityResult } from './generated/RuleActivityResult';
 import type { ProjectList } from './generated/ProjectList';
@@ -92,6 +95,17 @@ export interface RetentionControls {
   set(mode: ContentRetention): Promise<ContentRetention>;
   /** Call only after user confirmation; resolves with the committed outcome. */
   purge(): Promise<ContentPurge>;
+}
+/**
+ * Dismissing a session warning and undoing it. The native side checks the
+ * identity, stores or deletes the dismissal, and decides from then on which
+ * warnings every mark, count and day shows; the UI re-reads the answers.
+ */
+export interface WarningDismissalControls {
+  /** Refused unless the session has that warning now. */
+  dismiss(sessionId: string, warningId: string): Promise<SessionWarningDismissal>;
+  /** Undoing one not dismissed changes nothing. */
+  restore(sessionId: string, warningId: string): Promise<SessionWarningDismissal>;
 }
 /**
  * The saved typing speed the typing estimate reads, in whole words per minute.
@@ -394,6 +408,25 @@ export interface DataSource {
     timezone: string,
     date: string,
   ): Promise<DashboardDaySessions>;
+  /**
+   * M-21 for exactly the named sessions (at most 200 distinct), each over its
+   * whole history, with every reason's clock times written in `timezone`
+   * (the zone the asking view shows). Metadata only. Present natively and in
+   * a fixture, which answers as its export read.
+   */
+  sessionWarnings?(sessionIds: readonly string[], timezone: string): Promise<SessionWarningsList>;
+  /**
+   * The warnings inside one Dashboard report's whole days, for its Effort
+   * card, named by the report's range, window end and zone as a day's
+   * sessions are. Present natively and in a fixture.
+   */
+  windowWarnings?(
+    windowDays: number,
+    windowEndMs: number,
+    timezone: string,
+  ): Promise<DashboardWarnings>;
+  /** Present only where a writable app database stores dismissals. */
+  readonly warningDismissals?: WarningDismissalControls;
   /** Present only natively, where the app checks pull requests on its own. */
   readonly prAutoCheck?: PrAutoCheckControls;
   /** Present only where a writable app database owns the policy. */

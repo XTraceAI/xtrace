@@ -1,3 +1,6 @@
+import type { DashboardWarnings } from './generated/DashboardWarnings';
+import type { SessionWarningsList } from './generated/SessionWarningsList';
+import type { SessionWarningDismissal } from './generated/SessionWarningDismissal';
 import type { CodexPageRequest } from './generated/CodexPageRequest';
 import type { CodexPageStatus } from './generated/CodexPageStatus';
 import type { DashboardMetrics } from './generated/DashboardMetrics';
@@ -172,6 +175,12 @@ export class TauriDataSource implements DataSource {
     set: (wpm: number) => invoke<number>(commands.setTypingSpeed, { wpm }),
     openTest: () => invoke<void>(commands.openTypingTest),
   };
+  readonly warningDismissals = {
+    dismiss: (sessionId: string, warningId: string) =>
+      invoke<SessionWarningDismissal>(commands.dismissSessionWarning, { sessionId, warningId }),
+    restore: (sessionId: string, warningId: string) =>
+      invoke<SessionWarningDismissal>(commands.restoreSessionWarning, { sessionId, warningId }),
+  };
   readonly humanBreak = {
     read: () => invoke<number>(commands.humanBreak),
     set: (minutes: number) => invoke<number>(commands.setHumanBreak, { minutes }),
@@ -212,6 +221,19 @@ export class TauriDataSource implements DataSource {
   }
   sessionStretches(sessionId: string, windowDays: number) {
     return invoke<MetricSessionStretches>(commands.sessionStretches, { sessionId, windowDays });
+  }
+  sessionWarnings(sessionIds: readonly string[], timezone: string) {
+    return invoke<SessionWarningsList>(commands.sessionWarnings, {
+      sessionIds: [...sessionIds],
+      timezone,
+    });
+  }
+  windowWarnings(windowDays: number, windowEndMs: number, timezone: string) {
+    return invoke<DashboardWarnings>(commands.windowWarnings, {
+      windowDays,
+      windowEndMs,
+      timezone,
+    });
   }
   codexTranscriptPage(sessionId: string, selection: CodexPageRequest, readId: string) {
     return invoke<CodexPageStatus>(commands.codexTranscriptPage, { sessionId, selection, readId });
