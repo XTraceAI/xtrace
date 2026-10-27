@@ -24,6 +24,21 @@ export const queryKeys = {
    * at all: changing the range re-reads this and never re-reads the text.
    */
   stretches: (windowDays: number, id: string) => ['sessions', 'stretches', windowDays, id] as const,
+  /**
+   * One session's M-21 warnings over its whole history, written in one zone.
+   * Under `sessions`, so every ingest event and a content purge re-read it;
+   * it does not depend on any range, so every view of the session shares it.
+   */
+  sessionWarnings: (timezone: string, id: string) =>
+    ['sessions', 'warnings', timezone, id] as const,
+  /**
+   * The warnings inside one Dashboard report's whole days, for its Effort
+   * card. Under `metrics`, like the report; keyed by the range, those days'
+   * bounds (the first day's start, the last day's end) and the zone, which
+   * decide the answer: every report of the same days shares one read.
+   */
+  windowWarnings: (windowDays: number, daysStartMs: number, daysEndMs: number, timezone: string) =>
+    ['metrics', 'window-warnings', windowDays, daysStartMs, daysEndMs, timezone] as const,
   appInfo: ['app', 'info'],
   dbCounts: ['database', 'counts'],
   nativeIndex: ['native', 'index'],
