@@ -278,7 +278,9 @@ fn fixture_mode_is_isolated_and_native_commands_match_fixture_fields() {
         assert!(
             matches!(
                 first.day_sessions(days, end, zone, date),
-                Err(StateError::InvalidDayRequest | StateError::InvalidMetricWindow)
+                Err(StateError::InvalidDayRequest
+                    | StateError::InvalidMetricWindow
+                    | StateError::InvalidTimezone)
             ),
             "{days} {end} {zone} {date}"
         );

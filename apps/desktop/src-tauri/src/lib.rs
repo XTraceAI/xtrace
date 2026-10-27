@@ -43,6 +43,7 @@ mod rule_activity_dto;
 pub mod session_compactions;
 mod session_source_dto;
 pub mod session_titles;
+pub mod session_warnings_dto;
 pub mod skill_link;
 pub mod startup_failure;
 pub mod state;
@@ -353,6 +354,66 @@ async fn session_stretches(
 ) -> Result<dto::MetricSessionStretches, String> {
     read_on_worker(app, move |state| {
         state.session_stretches(&session_id, window_days)
+    })
+    .await
+}
+
+/// M-21 for exactly the named sessions, each over its whole history, with
+/// every reason's clock times in `timezone` (the zone the view shows, as a
+/// report names it). At most one page of distinct identifiers. Metadata only:
+/// no source file is opened.
+#[tauri::command]
+async fn session_warnings(
+    app: tauri::AppHandle,
+    session_ids: Vec<String>,
+    timezone: String,
+) -> Result<dto::SessionWarningsList, String> {
+    read_on_worker(app, move |state| {
+        state.session_warnings(&session_ids, &timezone)
+    })
+    .await
+}
+
+/// The warnings inside one Dashboard report's whole days, for its Effort
+/// card: the report's range, the end of the window it was read over and the
+/// zone it was read in, as a day's sessions are asked for.
+#[tauri::command]
+async fn metrics_window_warnings(
+    app: tauri::AppHandle,
+    window_days: u32,
+    window_end_ms: i64,
+    timezone: String,
+) -> Result<dto::DashboardWarnings, String> {
+    read_on_worker(app, move |state| {
+        state.window_warnings(window_days, window_end_ms, &timezone)
+    })
+    .await
+}
+
+/// Dismisses one warning of one session: no mark, count or day shows it
+/// after this, and the session's page lists it apart with an undo. Refused
+/// unless the session has that warning now. Metadata only.
+#[tauri::command]
+async fn dismiss_session_warning(
+    app: tauri::AppHandle,
+    session_id: String,
+    warning_id: String,
+) -> Result<dto::SessionWarningDismissal, String> {
+    write_on_worker(app, move |state| {
+        state.dismiss_session_warning(&session_id, &warning_id)
+    })
+    .await
+}
+
+/// Undoes a dismissal: the warning shows again wherever it falls.
+#[tauri::command]
+async fn restore_session_warning(
+    app: tauri::AppHandle,
+    session_id: String,
+    warning_id: String,
+) -> Result<dto::SessionWarningDismissal, String> {
+    write_on_worker(app, move |state| {
+        state.restore_session_warning(&session_id, &warning_id)
     })
     .await
 }
@@ -1567,6 +1628,10 @@ pub fn run() {
             tokens_by_host,
             session_row,
             session_stretches,
+            session_warnings,
+            metrics_window_warnings,
+            dismiss_session_warning,
+            restore_session_warning,
             session_transcript,
             codex_transcript_page,
             cancel_session_transcript,

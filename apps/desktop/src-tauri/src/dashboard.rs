@@ -212,9 +212,9 @@ pub fn report_zone(
         return Ok(current.clone());
     }
     if name.is_empty() || name.len() > MAX_ZONE_NAME_BYTES || name == UNNAMED_ZONE {
-        return Err(StateError::InvalidDayRequest);
+        return Err(StateError::InvalidTimezone);
     }
-    TimeZone::get(name).map_err(|_| StateError::InvalidDayRequest)
+    TimeZone::get(name).map_err(|_| StateError::InvalidTimezone)
 }
 
 /// The returned spans of the fixed lane window, how many there were before the
@@ -1108,6 +1108,23 @@ pub fn tokens_by_host(
 /// [`Daily::read`] and [`day_sessions`] both take the days from here.
 fn whole_days(selected: Window, zone: TimeZone) -> xt_metrics::Result<Window> {
     selected.whole_local_days(zone)
+}
+
+/// The whole days of the report a request names by its range and the end of
+/// the window it was read over, in the zone it was read in: the days its
+/// Effort card draws. Refused like a day's sessions request otherwise.
+pub(crate) fn report_whole_days(
+    days: u32,
+    window_end_ms: i64,
+    zone: &TimeZone,
+) -> Result<Window, StateError> {
+    validate_window(days)?;
+    if window_end_ms.unsigned_abs() >= JSON_SAFE {
+        return Err(StateError::InvalidDayRequest);
+    }
+    let selected =
+        selected_window(days, window_end_ms).map_err(|_| StateError::InvalidDayRequest)?;
+    whole_days(selected, zone.clone()).map_err(|_| StateError::InvalidDayRequest)
 }
 
 /// The events a report's whole-day agent time is measured from: those of its

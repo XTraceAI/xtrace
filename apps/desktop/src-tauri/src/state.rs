@@ -82,6 +82,21 @@ pub enum StateError {
     #[error("a day's sessions request names one day of a Dashboard range")]
     InvalidDayRequest,
     /// Refused before storage is touched.
+    #[error("a warnings request names at most 200 distinct sessions")]
+    InvalidWarningRequest,
+    /// Refused before storage is touched.
+    #[error("a dismissal names one session and one warning of it")]
+    InvalidWarningDismissal,
+    /// The session's answer, read now, has no such warning: nothing is
+    /// stored, since no screen could have shown it.
+    #[error("this session has no such warning now")]
+    UnknownWarning,
+    /// The zone a view asked in is empty, overlong, unnamed or unknown to
+    /// this Mac. Checked once the read has been admitted, before anything is
+    /// read for it.
+    #[error("the requested time zone is not one this Mac knows")]
+    InvalidTimezone,
+    /// Refused before storage is touched.
     #[error("typing speed must be a whole number from 1 to 300 words per minute")]
     InvalidTypingSpeed,
     /// Refused before storage is touched.
@@ -1054,6 +1069,118 @@ impl AppState {
     ) -> Result<crate::dto::MetricSessionStretches, StateError> {
         self.with_metrics(window_days, |metrics, inputs| {
             crate::dto::session_stretches(metrics, window_days, inputs.now, session_id)
+        })
+    }
+
+    /// M-21 for exactly the named sessions, each over its whole history, in
+    /// one snapshot. `timezone` is the zone the asking view shows (a report's
+    /// `window.timezone`); every reason's clock times are written in it.
+    pub fn session_warnings(
+        &self,
+        session_ids: &[String],
+        timezone: &str,
+    ) -> Result<crate::dto::SessionWarningsList, StateError> {
+        let ids = crate::session_warnings_dto::validate_ids(session_ids)?;
+        self.with_metric_inputs(|metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            crate::session_warnings_dto::session_warnings(metrics, &ids, &zone, timezone.to_owned())
+        })
+    }
+
+    /// Exactly one M-21 warning of one session, by its identity
+    /// ([`xt_metrics::SessionWarning::id`]), from the same whole-session
+    /// answer every screen shows, and the zone `timezone` names (resolved as
+    /// [`AppState::session_warnings`] resolves it). `None` when the session
+    /// has no such warning now.
+    pub fn session_warning(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+        timezone: &str,
+    ) -> Result<Option<(xt_metrics::SessionWarning, jiff::tz::TimeZone)>, StateError> {
+        let named = [session_id.to_owned()];
+        let ids = crate::session_warnings_dto::validate_ids(&named)?;
+        self.with_metric_inputs(|metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            let found = metrics.saved_whole_session_warnings(&ids, &zone)?;
+            let warning = found.into_values().find_map(|answer| match answer {
+                xt_metrics::WholeSessionWarnings::Read { warnings, .. } => warnings
+                    .warnings
+                    .into_iter()
+                    .find(|warning| warning.id() == warning_id),
+                _ => None,
+            });
+            Ok(warning.map(|warning| (warning, zone)))
+        })
+    }
+
+    /// Dismisses one of a session's warnings: from now on no mark, count or
+    /// day shows it, and its session's page lists it apart with an undo.
+    /// Only a warning the session has now can be dismissed; the identity is
+    /// checked before storage is touched and against the session's whole
+    /// answer read in its own snapshot before the row is written, with the
+    /// warning's size then. A warning already dismissed at the same size
+    /// keeps its first time; one that grew since is dismissed at its new
+    /// size.
+    pub fn dismiss_session_warning(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+    ) -> Result<crate::dto::SessionWarningDismissal, StateError> {
+        crate::session_warnings_dto::validate_dismissal(session_id, warning_id)?;
+        // The zone only words a warning's reason; which warnings a session
+        // has, and their identities, are the same in every zone.
+        let Some((warning, _)) = self.session_warning(session_id, warning_id, "UTC")? else {
+            return Err(StateError::UnknownWarning);
+        };
+        let now = jiff::Timestamp::now().as_millisecond();
+        self.with_store(|store| {
+            // Its size now: once it grows past this, it shows again.
+            store.dismiss_warning(session_id, warning_id, warning.size, now)?;
+            Ok(crate::dto::SessionWarningDismissal {
+                session_id: session_id.to_owned(),
+                warning_id: warning_id.to_owned(),
+                dismissed: true,
+            })
+        })
+    }
+
+    /// Undoes a dismissal: the warning shows again wherever it falls. Undoing
+    /// one that is not dismissed (or no longer found) changes nothing.
+    pub fn restore_session_warning(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+    ) -> Result<crate::dto::SessionWarningDismissal, StateError> {
+        crate::session_warnings_dto::validate_dismissal(session_id, warning_id)?;
+        self.with_store(|store| {
+            store.restore_warning(session_id, warning_id)?;
+            Ok(crate::dto::SessionWarningDismissal {
+                session_id: session_id.to_owned(),
+                warning_id: warning_id.to_owned(),
+                dismissed: false,
+            })
+        })
+    }
+
+    /// The warnings inside one Dashboard report's whole days, pinned to the
+    /// window it was read over and the zone it was read in, as
+    /// [`AppState::day_sessions`] is.
+    pub fn window_warnings(
+        &self,
+        window_days: u32,
+        window_end_ms: i64,
+        timezone: &str,
+    ) -> Result<crate::dto::DashboardWarnings, StateError> {
+        self.with_metrics(window_days, |metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            let window = crate::dashboard::report_whole_days(window_days, window_end_ms, &zone)?;
+            crate::session_warnings_dto::window_warnings(
+                metrics,
+                window,
+                &zone,
+                timezone.to_owned(),
+            )
         })
     }
 

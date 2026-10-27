@@ -15,6 +15,11 @@ pub use crate::session_compactions::{
 };
 pub use crate::session_source_dto::*;
 pub use crate::session_titles::{SessionTitle, SessionTitles};
+pub use crate::session_warnings_dto::{
+    DashboardDayWarning, DashboardWarningDay, DashboardWarnings, SessionWarningCheck,
+    SessionWarningDismissal, SessionWarningItem, SessionWarningKind, SessionWarningsAnswer,
+    SessionWarningsEntry, SessionWarningsList,
+};
 use serde::Serialize;
 use ts_rs::TS;
 use xt_store::StoreCounts;
@@ -315,6 +320,10 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     SessionCompactions::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     DashboardSpanDetail::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     DashboardDaySessions::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionWarningsList::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    DashboardWarnings::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionWarningDismissal::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    crate::session_warnings_dto::export_text(directory.as_ref())?;
     PrList::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     PrRefreshReport::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     PrAutoCheckStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
