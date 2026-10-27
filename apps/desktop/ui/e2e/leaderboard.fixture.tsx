@@ -17,6 +17,7 @@ import '../src/index.css';
 const params = new URLSearchParams(location.search);
 const notJoined: LeaderboardStatus = {
   available: true,
+  unavailable_reason: null,
   joined: false,
   nickname: null,
   last_sent: null,
@@ -34,7 +35,8 @@ const member = (nickname: string): LeaderboardStatus => ({
 });
 let status = params.get('joined') === '1' ? member('ada') : notJoined;
 const refuseTaken = async (nickname: string) => {
-  if (nickname === 'taken') throw 'That nickname is taken. Try another one.';
+  if (nickname === 'taken')
+    throw { message: 'That nickname is taken. Try another one.', field: 'nickname' };
 };
 const leaderboard: LeaderboardControls = {
   read: async () => status,

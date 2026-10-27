@@ -15,6 +15,8 @@ struct FakeHost {
     store: Mutex<Store>,
     number: Mutex<Result<Option<u32>, ()>>,
     fail_join: bool,
+    fail_record: bool,
+    unreadable: std::sync::atomic::AtomicBool,
 }
 
 impl FakeHost {
@@ -23,6 +25,8 @@ impl FakeHost {
             store: Mutex::new(Store::open_in_memory().unwrap()),
             number: Mutex::new(Ok(number)),
             fail_join: false,
+            fail_record: false,
+            unreadable: Default::default(),
         })
     }
     fn joined(nickname: &str, number: Option<u32>) -> Arc<Self> {
@@ -43,6 +47,9 @@ impl FakeHost {
 
 impl Host for FakeHost {
     fn membership(&self) -> Result<Option<LeaderboardMembership>, StateError> {
+        if self.unreadable.load(Ordering::SeqCst) {
+            return Err(StateError::Closed);
+        }
         Ok(lock(&self.store).leaderboard_membership()?)
     }
     fn join(&self, membership: &LeaderboardMembership) -> Result<(), StateError> {
@@ -57,12 +64,15 @@ impl Host for FakeHost {
             .map(drop)?)
     }
     fn record(&self, key: &str, sent: SentScore) -> Result<(), StateError> {
+        if self.fail_record {
+            return Err(StateError::Closed);
+        }
         Ok(lock(&self.store)
             .record_leaderboard_score(key, sent)
             .map(drop)?)
     }
-    fn forget(&self, key: &str) -> Result<(), StateError> {
-        Ok(lock(&self.store).leave_leaderboard(key).map(drop)?)
+    fn forget(&self, key: &str) -> Result<bool, StateError> {
+        Ok(lock(&self.store).leave_leaderboard(key)?)
     }
     fn leverage_tenths(&self) -> Result<Option<u32>, StateError> {
         lock(&self.number).map_err(|()| StateError::Closed)
@@ -152,18 +162,23 @@ struct Rig {
     host: Arc<FakeHost>,
     transport: Arc<FakeTransport>,
     joins: Arc<AtomicUsize>,
+    changes: Arc<AtomicUsize>,
 }
 
 fn setup(host: Arc<FakeHost>, transport: Arc<FakeTransport>) -> Rig {
     let joins = Arc::new(AtomicUsize::new(0));
-    let counted = joins.clone();
+    let changes = Arc::new(AtomicUsize::new(0));
+    let (counted, changed) = (joins.clone(), changes.clone());
     let service = LeaderboardService::new(
         DEFAULT_URL,
-        Some(transport.clone() as Arc<dyn Transport>),
+        Ok(transport.clone() as Arc<dyn Transport>),
         host.clone(),
         Arc::new(|| NOW),
         Arc::new(move || {
             counted.fetch_add(1, Ordering::SeqCst);
+        }),
+        Arc::new(move || {
+            changed.fetch_add(1, Ordering::SeqCst);
         }),
     );
     Rig {
@@ -171,6 +186,7 @@ fn setup(host: Arc<FakeHost>, transport: Arc<FakeTransport>) -> Rig {
         host,
         transport,
         joins,
+        changes,
     }
 }
 
@@ -303,10 +319,13 @@ fn joining_sends_the_nickname_and_email_saves_only_key_and_nickname_then_sends_t
     // The email is in no saved field.
     assert!(!format!("{saved:?}").contains("example.com"));
     assert_eq!(rig.joins.load(Ordering::SeqCst), 1);
+    // The join's own upload is answered by the join; nothing extra is announced.
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 0);
     assert_eq!(
         status,
         LeaderboardStatus {
             available: true,
+            unavailable_reason: None,
             joined: true,
             nickname: Some("ada".into()),
             last_sent: Some(LeaderboardSent {
@@ -375,7 +394,14 @@ fn a_join_the_leaderboard_refuses_saves_nothing_and_says_why() {
             FakeHost::new(Some(1)),
             FakeTransport::new(move |_| error(status, code)),
         );
-        assert_eq!(rig.service.join("x", "y").unwrap_err(), message, "{code}");
+        let refused = rig.service.join("x", "y").unwrap_err();
+        assert_eq!(refused.message, message, "{code}");
+        let field = match code {
+            "nickname_taken" | "invalid_nickname" => Some(LeaderboardField::Nickname),
+            "invalid_email" => Some(LeaderboardField::Email),
+            _ => None,
+        };
+        assert_eq!(refused.field, field, "{code}");
         assert_eq!(rig.host.saved(), None);
         assert_eq!(rig.transport.seen().len(), 1);
         assert_eq!(rig.joins.load(Ordering::SeqCst), 0);
@@ -416,7 +442,10 @@ fn every_refusal_has_plain_words() {
         FakeTransport::new(|_| error(413, "invalid_request")),
     );
     assert_eq!(
-        rig.service.join("a", &"b".repeat(5000)).unwrap_err(),
+        rig.service
+            .join("a", &"b".repeat(5000))
+            .unwrap_err()
+            .message,
         "That nickname or email is too long."
     );
     let rig = setup(
@@ -424,7 +453,7 @@ fn every_refusal_has_plain_words() {
         FakeTransport::new(|_| error(503, "nickname_taken")),
     );
     assert_eq!(
-        rig.service.join("a", "b").unwrap_err(),
+        rig.service.join("a", "b").unwrap_err().message,
         "The leaderboard answered with an error (503). Try again later."
     );
 }
@@ -444,7 +473,7 @@ fn renaming_sends_the_new_nickname_and_saves_the_one_the_leaderboard_kept() {
     assert_eq!(rig.host.saved().unwrap().nickname, "Ada_Lovelace");
     rig.transport.reroute(|_| error(409, "nickname_taken"));
     assert_eq!(
-        rig.service.rename("bob").unwrap_err(),
+        rig.service.rename("bob").unwrap_err().message,
         "That nickname is taken. Try another one."
     );
     assert_eq!(rig.host.saved().unwrap().nickname, "Ada_Lovelace");
@@ -456,7 +485,7 @@ fn leaving_deletes_on_the_leaderboard_first_and_keeps_the_membership_when_unreac
         FakeHost::joined("ada", Some(5)),
         FakeTransport::new(|_| Err(Unreachable)),
     );
-    let refused = rig.service.leave().unwrap_err();
+    let refused = rig.service.leave().unwrap_err().message;
     assert_eq!(
         refused,
         "Could not reach the leaderboard. Check your internet connection and try again. You are still on the leaderboard."
@@ -494,9 +523,8 @@ fn an_unknown_key_from_any_call_forgets_the_membership_and_says_so() {
         assert_eq!(rig.host.saved(), None, "{name}");
         let status = rig.service.status();
         assert!(!status.joined, "{name}");
-        if name != "leave" {
-            assert_eq!(status.notice.as_deref(), Some(GONE), "{name}");
-        }
+        let expected = (name != "leave").then_some(GONE);
+        assert_eq!(status.notice.as_deref(), expected, "{name}");
         // Joining again clears the note.
         rig.transport.reroute(accepting);
         let joined = rig.service.join("ada", "a@example.com").unwrap();
@@ -550,6 +578,8 @@ fn a_join_whose_key_cannot_be_saved_is_deleted_again() {
         store: Mutex::new(Store::open_in_memory().unwrap()),
         number: Mutex::new(Ok(Some(1))),
         fail_join: true,
+        fail_record: false,
+        unreadable: Default::default(),
     });
     let rig = setup(host, FakeTransport::new(accepting));
     assert!(rig.service.join("ada", "a@example.com").is_err());
@@ -573,10 +603,11 @@ fn uploads_do_not_depend_on_the_telemetry_switch() {
     let told = telemetry.clone();
     let service = LeaderboardService::new(
         DEFAULT_URL,
-        Some(transport.clone() as Arc<dyn Transport>),
+        Ok(transport.clone() as Arc<dyn Transport>),
         host.clone(),
         Arc::new(|| NOW),
         Arc::new(move || told.leaderboard_opted_in()),
+        Arc::new(|| {}),
     );
     service.join("ada", "a@example.com").unwrap();
     service.upload();
@@ -592,17 +623,60 @@ fn uploads_do_not_depend_on_the_telemetry_switch() {
         Some(42)
     );
     assert!(!telemetry.state().can_send && !telemetry.state().preference_on);
-    // And a fixture launch, with no transport, sends nothing at all.
-    let unavailable = LeaderboardService::new(
-        DEFAULT_URL,
-        None,
-        FakeHost::joined("ada", Some(1)),
-        Arc::new(|| NOW),
-        Arc::new(|| {}),
+}
+
+/// Only the installed app on its own data sends to the real leaderboard; any
+/// copy may use a server on this Mac. The rule is telemetry's own.
+#[test]
+fn only_the_installed_app_on_its_own_data_or_a_local_server_may_send() {
+    use crate::telemetry::{INSTALLED_IDENTIFIER, installed_own_data};
+    assert!(installed_own_data(true, INSTALLED_IDENTIFIER));
+    for (own, id) in [
+        (false, INSTALLED_IDENTIFIER),
+        (true, "ai.xtrace.app.test"),
+        (true, "ai.xtrace.desktop"),
+    ] {
+        assert!(!installed_own_data(own, id), "{own} {id}");
+    }
+    assert!(may_send(true, DEFAULT_URL));
+    assert!(!may_send(false, DEFAULT_URL));
+    assert!(!may_send(false, "https://staging.example.com"));
+    for local in [
+        "http://127.0.0.1:8787",
+        "http://localhost:3000",
+        "http://[::1]:3000",
+    ] {
+        assert!(may_send(false, &base_url(Some(local))), "{local}");
+    }
+}
+
+/// A copy that may not send keeps its saved membership and says why, and
+/// sends nothing: not the upload, not the status read, not a change.
+#[test]
+fn a_blocked_copy_sends_nothing_and_says_so() {
+    for reason in [BLOCKED_COPY, NO_CLIENT] {
+        let host = FakeHost::joined("ada", Some(1));
+        let blocked = LeaderboardService::new(
+            DEFAULT_URL,
+            Err(reason.to_owned()),
+            host.clone(),
+            Arc::new(|| NOW),
+            Arc::new(|| {}),
+            Arc::new(|| panic!("nothing changed")),
+        );
+        blocked.upload();
+        let status = blocked.status();
+        assert!(!status.available);
+        assert_eq!(status.unavailable_reason.as_deref(), Some(reason));
+        assert_eq!(blocked.join("a", "b").unwrap_err().message, reason);
+        assert_eq!(blocked.rename("b").unwrap_err().message, reason);
+        assert_eq!(blocked.leave().unwrap_err().message, reason);
+        assert!(host.saved().is_some());
+    }
+    assert_eq!(
+        BLOCKED_COPY,
+        "This copy of XTrace does not send to the leaderboard."
     );
-    unavailable.upload();
-    assert!(!unavailable.status().available);
-    assert!(unavailable.join("a", "b").is_err());
 }
 
 /// The production transport against a local server: method, path, bearer
@@ -708,4 +782,92 @@ fn the_page_opens_only_the_configured_leaderboard() {
     assert_eq!(command.get_program(), "/usr/bin/open");
     let args: Vec<_> = command.get_args().collect();
     assert_eq!(args, ["https://leaderboard.xtrace.ai/"]);
+}
+
+/// A deliberate Leave, or a stale answer for a membership already gone,
+/// never says the leaderboard lost the membership.
+#[test]
+fn only_a_membership_the_app_still_had_is_reported_lost() {
+    let rig = setup(
+        FakeHost::joined("ada", Some(5)),
+        FakeTransport::new(accepting),
+    );
+    rig.service.leave().unwrap();
+    rig.service.forget_gone(KEY);
+    assert_eq!(rig.service.status().notice, None);
+}
+
+#[test]
+fn background_uploads_tell_the_page_and_error_paths_are_shown() {
+    let rig = setup(FakeHost::new(Some(5)), FakeTransport::new(accepting));
+    // Not joined: nothing is tried, nothing announced.
+    rig.service.upload();
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 0);
+    rig.service.join("ada", "a@example.com").unwrap();
+    rig.service.upload();
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 1);
+    // A saved membership that cannot be read is shown, and announced.
+    rig.host.unreadable.store(true, Ordering::SeqCst);
+    rig.service.upload();
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 2);
+    rig.host.unreadable.store(false, Ordering::SeqCst);
+    assert_eq!(
+        rig.service.status().error.as_deref(),
+        Some("The leaderboard membership saved in this app could not be read or changed.")
+    );
+    // A number sent but not recorded is shown.
+    let host = Arc::new(FakeHost {
+        store: Mutex::new(Store::open_in_memory().unwrap()),
+        number: Mutex::new(Ok(Some(9))),
+        fail_join: false,
+        fail_record: true,
+        unreadable: Default::default(),
+    });
+    lock(&host.store)
+        .join_leaderboard(&LeaderboardMembership {
+            key: KEY.into(),
+            nickname: "ada".into(),
+            last_sent: None,
+        })
+        .unwrap();
+    let rig = setup(host, FakeTransport::new(accepting));
+    rig.service.upload();
+    assert_eq!(
+        rig.service.status().error.as_deref(),
+        Some("Your number was sent, but XTrace could not save when it was sent.")
+    );
+}
+
+#[test]
+fn a_join_answer_that_cannot_be_read_says_so() {
+    for body in [
+        json!({ "nope": 1 }),
+        json!({ "key": "", "nickname": "ada" }),
+    ] {
+        let rig = setup(
+            FakeHost::new(None),
+            FakeTransport::new(move |_| answer(201, body.clone())),
+        );
+        assert_eq!(
+            rig.service
+                .join("ada", "a@example.com")
+                .unwrap_err()
+                .message,
+            "The leaderboard answered in a way XTrace could not read."
+        );
+        assert_eq!(rig.host.saved(), None);
+    }
+}
+
+#[test]
+fn a_request_never_shows_its_key_or_email_when_printed() {
+    let request = Request {
+        method: Method::Post,
+        path: "/api/join",
+        key: Some(KEY.into()),
+        body: Some(json!({ "nickname": "ada", "email": "ada@example.com" })),
+    };
+    let text = format!("{request:?}");
+    assert!(!text.contains(KEY) && !text.contains("example.com") && !text.contains("ada\""));
+    assert!(text.contains("/api/join") && text.contains("email"));
 }

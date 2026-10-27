@@ -23,6 +23,8 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.getByLabel('Email').fill('ada@example.com');
     await page.getByLabel('Email').press('Enter');
     await expect(page.getByRole('alert')).toHaveText('That nickname is taken. Try another one.');
+    await expect(nickname).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByLabel('Email')).not.toHaveAttribute('aria-invalid', 'true');
     await page.locator('.xt-shell-main').screenshot({
       path: info.outputPath(`leaderboard-join-${scheme}.png`),
     });
@@ -30,6 +32,8 @@ for (const scheme of ['light', 'dark'] as const) {
     await nickname.press('Enter');
     const summary = page.getByTestId('leaderboard-summary');
     await expect(summary).toContainText('12.3×');
+    const heading = page.getByRole('heading', { level: 1 });
+    await expect(heading).toBeFocused();
     await expect(summary).toContainText('#2 on the public page');
     await page.locator('.xt-shell-main').screenshot({
       path: info.outputPath(`leaderboard-joined-${scheme}.png`),
@@ -53,6 +57,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await dialog.getByRole('button', { name: 'Leave leaderboard' }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Join' })).toBeVisible();
+    await expect(heading).toBeFocused();
     expect(errors).toEqual([]);
   });
 }

@@ -111,14 +111,18 @@ the app's **Leaderboard** page.
 - **While you are joined**, the app sends one number: your leverage for the
   last 7 days, as the Dashboard shows it for the 7-day range, to one decimal
   (or no number when it has none). It is sent right after you join, when the
-  app starts, and once an hour while it runs. Nothing else is sent: no
-  sessions, projects, prompts or other data.
+  app starts, and once an hour while it runs. No sessions, projects, prompts
+  or other data from your history are sent. Like any web request, each one
+  also lets the leaderboard see your IP address and the app's version.
 - **Change nickname** sends the new nickname.
 - **Leave leaderboard** deletes your nickname, email and number from the
-  leaderboard.
+  leaderboard. The database host's backups can keep a copy for a limited time
+  after that, until they expire.
 
 The app keeps the key the leaderboard gave it when you joined, your nickname
-and the last number it sent in its own database on this Mac.
+and the last number it sent in its own database on this Mac. Only the app
+built with its own identifier and using its own data folder sends to the
+leaderboard; other copies, such as a test copy of the database, send nothing.
 
 Turning telemetry off does not stop leaderboard updates, and leaving the
 leaderboard does not change telemetry. When you join with telemetry on, the

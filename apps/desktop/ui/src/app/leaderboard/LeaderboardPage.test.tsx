@@ -7,10 +7,11 @@ import type { LeaderboardControls } from '../../data/DataSource';
 import { FixtureDataSource } from '../../data/FixtureDataSource';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { LeaderboardStatus } from '../../data/generated/LeaderboardStatus';
+import { events } from '../../data/ipc-names';
 import { clock } from '../../kit/clock';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
-import { JOIN_TEXT, LEAVE_TEXT } from './leaderboard';
+import { JOIN_TEXT, LEAVE_BACKUPS, LEAVE_TEXT } from './leaderboard';
 
 const exported = fixture as FixtureExport;
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
@@ -22,6 +23,7 @@ afterEach(() => {
 const SENT_AT = 1_800_000_000_000;
 const notJoined: LeaderboardStatus = {
   available: true,
+  unavailable_reason: null,
   joined: false,
   nickname: null,
   last_sent: null,
@@ -60,8 +62,7 @@ function controls(initial: LeaderboardStatus) {
   } satisfies LeaderboardControls;
 }
 
-async function mount(leaderboard?: LeaderboardControls) {
-  const source = new FixtureDataSource(exported);
+async function mount(leaderboard?: LeaderboardControls, source = new FixtureDataSource(exported)) {
   if (leaderboard) Object.defineProperty(source, 'leaderboard', { value: leaderboard });
   render(
     <ThemeProvider>
@@ -99,11 +100,18 @@ it('explains what joining sends and joins with exactly what was typed', async ()
   await waitFor(() => expect(leaderboard.join).toHaveBeenCalledWith(' ada ', 'ada@example.com'));
   expect(await screen.findByText('You are on the leaderboard')).toBeTruthy();
   expect(summary()['Nickname']).toBe(' ada ');
+  // The form is gone, so focus moves to the page heading.
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 })),
+  );
 });
 
 it('shows the leaderboard’s refusal under the form and keeps what was typed', async () => {
   const leaderboard = controls(notJoined);
-  leaderboard.join.mockRejectedValue('That nickname is taken. Try another one.');
+  leaderboard.join.mockRejectedValue({
+    message: 'That nickname is taken. Try another one.',
+    field: 'nickname',
+  });
   await mount(leaderboard);
   const nickname = await screen.findByLabelText('Nickname');
   fireEvent.change(nickname, { target: { value: 'ada' } });
@@ -114,6 +122,9 @@ it('shows the leaderboard’s refusal under the form and keeps what was typed', 
   expect(leaderboard.join).toHaveBeenCalledWith('ada', '');
   expect((nickname as HTMLInputElement).value).toBe('ada');
   expect(nickname.getAttribute('aria-describedby')).toBe(alert.id);
+  // Only the field the refusal names is marked.
+  expect(nickname.getAttribute('aria-invalid')).toBe('true');
+  expect(screen.getByLabelText('Email').getAttribute('aria-invalid')).toBeNull();
   expect(screen.queryByText('You are on the leaderboard')).toBeNull();
 });
 
@@ -174,13 +185,17 @@ it('changes the nickname, and shows a refusal without changing it', async () => 
   const input = screen.getByLabelText('New nickname') as HTMLInputElement;
   expect(input.value).toBe('ada');
   expect(document.activeElement).toBe(input);
-  leaderboard.rename.mockRejectedValueOnce('That nickname is taken. Try another one.');
+  leaderboard.rename.mockRejectedValueOnce({
+    message: 'That nickname is taken. Try another one.',
+    field: 'nickname',
+  });
   fireEvent.change(input, { target: { value: 'bob' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save nickname' }));
   expect((await screen.findByRole('alert')).textContent).toBe(
     'That nickname is taken. Try another one.',
   );
   expect(summary()['Nickname']).toBe('ada');
+  expect(input.getAttribute('aria-invalid')).toBe('true');
   fireEvent.change(input, { target: { value: 'Ada_2' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save nickname' }));
   await waitFor(() => expect(summary()['Nickname']).toBe('Ada_2'));
@@ -200,13 +215,16 @@ it('asks before leaving, and leaves only on confirmation', async () => {
   fireEvent.click(leaveButton);
   let dialog = await screen.findByRole('dialog', { name: 'Leave the leaderboard?' });
   expect(within(dialog).getByText(LEAVE_TEXT)).toBeTruthy();
+  expect(within(dialog).getByText(LEAVE_BACKUPS)).toBeTruthy();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(leaderboard.leave).not.toHaveBeenCalled();
   // A refusal stays in the dialog; nothing changes.
-  leaderboard.leave.mockRejectedValueOnce(
-    'Could not reach the leaderboard. Check your internet connection and try again. You are still on the leaderboard.',
-  );
+  leaderboard.leave.mockRejectedValueOnce({
+    message:
+      'Could not reach the leaderboard. Check your internet connection and try again. You are still on the leaderboard.',
+    field: null,
+  });
   fireEvent.click(screen.getByRole('button', { name: 'Leave leaderboard' }));
   dialog = await screen.findByRole('dialog', { name: 'Leave the leaderboard?' });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Leave leaderboard' }));
@@ -227,7 +245,30 @@ it('joins nothing in the preview or in a copy that shows test data', async () =>
   expect(within(page()).getByText(/This preview sends nothing/)).toBeTruthy();
   expect(within(page()).queryByRole('button', { name: 'Join' })).toBeNull();
   cleanup();
-  await mount(controls({ ...notJoined, available: false }));
-  expect(await screen.findByTestId('leaderboard-unavailable')).toBeTruthy();
+  await mount(
+    controls({
+      ...notJoined,
+      available: false,
+      unavailable_reason: 'This copy of XTrace does not send to the leaderboard.',
+    }),
+  );
+  expect((await screen.findByTestId('leaderboard-unavailable')).textContent).toBe(
+    'This copy of XTrace does not send to the leaderboard.',
+  );
   expect(screen.queryByRole('button', { name: 'Join' })).toBeNull();
+});
+
+it('reads the status again after a background upload', async () => {
+  const leaderboard = controls(joined);
+  const source = new FixtureDataSource(exported);
+  await mount(leaderboard, source);
+  await screen.findByText('You are on the leaderboard');
+  leaderboard.read.mockResolvedValue({
+    ...joined,
+    last_sent: { leverage_tenths: 150, at_ms: SENT_AT },
+  });
+  const before = leaderboard.read.mock.calls.length;
+  act(() => source.emit(events.leaderboardChanged));
+  await waitFor(() => expect(summary()['Leverage, 7 days']).toBe('15×'));
+  expect(leaderboard.read.mock.calls.length).toBeGreaterThan(before);
 });

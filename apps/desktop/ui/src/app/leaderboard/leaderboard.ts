@@ -1,14 +1,18 @@
+import type { LeaderboardField } from '../../data/generated/LeaderboardField';
 import type { LeaderboardStanding } from '../../data/generated/LeaderboardStanding';
 import { leverageText } from '../metric-format';
 
 /** What the page says before anyone joins, word for word. */
 export const JOIN_TEXT =
-  'Join the public XTrace leaderboard. It shows your nickname and your leverage for the last 7 days at leaderboard.xtrace.ai. We also keep your email so we can reach you; it is never shown. Nothing else is sent.';
+  "Join the public XTrace leaderboard. It shows your nickname and your leverage for the last 7 days at leaderboard.xtrace.ai. We also keep your email so we can reach you; it is never shown. Like any web request, the leaderboard also sees your IP address and this app's version.";
 
 /** The confirmation Leave asks for. */
 export const LEAVE_QUESTION = 'Leave the leaderboard?';
 export const LEAVE_TEXT =
   'This removes you from the public page and deletes your nickname and email from it.';
+/** Said with the confirmation: deletion is not instant everywhere. */
+export const LEAVE_BACKUPS =
+  "The leaderboard's database host can keep a copy in its backups for a limited time before it is gone.";
 
 /**
  * The number the leaderboard holds (tenths, as the app sent it), written the
@@ -30,10 +34,23 @@ export function standingText(standing: LeaderboardStanding): string {
   }
 }
 
-/** A refused change's words: the native side rejects with plain text. */
+/** A refused change's words: the native side rejects with a `LeaderboardRefusal`. */
 export const refusalText = (error: unknown): string =>
   typeof error === 'string'
     ? error
-    : error instanceof Error && error.message
+    : typeof error === 'object' &&
+        error !== null &&
+        'message' in error &&
+        typeof error.message === 'string' &&
+        error.message
       ? error.message
       : 'The leaderboard could not be reached.';
+
+/** The form field a refusal names, if any. */
+export const refusalField = (error: unknown): LeaderboardField | null =>
+  typeof error === 'object' &&
+  error !== null &&
+  'field' in error &&
+  (error.field === 'nickname' || error.field === 'email')
+    ? error.field
+    : null;

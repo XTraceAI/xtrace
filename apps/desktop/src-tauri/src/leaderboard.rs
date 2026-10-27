@@ -3,8 +3,8 @@
 //!
 //! * **What is sent.** Joining sends the nickname and the email. After that
 //!   only the 7-day leverage number ([`leaderboard_tenths`]) is sent, right
-//!   after joining, when the app starts and every hour while it runs
-//!   ([`UPLOAD_INTERVAL`]); a failed upload is tried again at the next hour,
+//!   after joining, when the app starts, when its index is first ready and
+//!   every hour while it runs ([`UPLOAD_INTERVAL`]); a failed upload is tried again at the next hour,
 //!   with no pop-up. Renaming sends the new nickname; Leave asks the
 //!   leaderboard to delete everything it has.
 //! * **What is saved.** The key the leaderboard answers a join with, the
@@ -20,8 +20,11 @@
 //!   A join only tells the telemetry service, which sends its own
 //!   `leaderboard_opted_in` event only when telemetry may send.
 //!
-//! Fixture mode's service is not available: it never sends a fixture's
-//! numbers to the public page.
+//! * **Which copies send.** Only the installed app on its own live data
+//!   ([`crate::telemetry::installed_own_data`], the rule telemetry uses), or
+//!   any copy whose [`URL_ENV`] names a server on this Mac. A test copy of a
+//!   database keeps the saved key, so any other copy sends nothing
+//!   ([`may_send`]).
 use crate::dashboard_dto::MetricTile;
 use crate::state::{AppState, StateError};
 use serde::{Deserialize, Serialize};
@@ -69,12 +72,7 @@ pub fn leaderboard_tenths(leverage: &MetricTile) -> Option<u32> {
 pub fn base_url(env: Option<&str>) -> String {
     env.and_then(|text| {
         let url = url::Url::parse(text.trim()).ok()?;
-        let local = matches!(
-            url.host(),
-            Some(url::Host::Ipv4(ip)) if ip.is_loopback()
-        ) || matches!(url.host(), Some(url::Host::Ipv6(ip)) if ip.is_loopback())
-            || url.host_str() == Some("localhost");
-        let scheme_ok = url.scheme() == "https" || (url.scheme() == "http" && local);
+        let scheme_ok = url.scheme() == "https" || (url.scheme() == "http" && on_this_mac(&url));
         let plain = url.username().is_empty()
             && url.password().is_none()
             && url.query().is_none()
@@ -86,14 +84,57 @@ pub fn base_url(env: Option<&str>) -> String {
     .unwrap_or_else(|| DEFAULT_URL.to_owned())
 }
 
-/// One request to the leaderboard.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Whether an address names a server on this Mac (`127.0.0.1` and the rest
+/// of the loopback range, `[::1]` or `localhost`).
+fn on_this_mac(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(name)) => name == "localhost",
+        None => false,
+    }
+}
+
+/// Whether this launch may send anything to the leaderboard at `base` (from
+/// [`base_url`]): the installed app on its own live data
+/// (`installed_own_data`, from [`crate::telemetry::installed_own_data`]), or
+/// any copy pointed at a server on this Mac.
+pub fn may_send(installed_own_data: bool, base: &str) -> bool {
+    installed_own_data || url::Url::parse(base).is_ok_and(|url| on_this_mac(&url))
+}
+
+/// Shown, and nothing is sent, in a copy [`may_send`] refuses.
+pub const BLOCKED_COPY: &str = "This copy of XTrace does not send to the leaderboard.";
+/// Shown when the app's network client could not start.
+pub const NO_CLIENT: &str =
+    "XTrace could not start its connection to the leaderboard. Restart the app to try again.";
+
+/// One request to the leaderboard. Its `Debug` hides the key and every
+/// value of the body (the email among them).
+#[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     pub method: Method,
     pub path: &'static str,
     /// Sent as `Authorization: Bearer <key>`.
     pub key: Option<String>,
     pub body: Option<Value>,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fields: Vec<&str> = self
+            .body
+            .as_ref()
+            .and_then(Value::as_object)
+            .map(|body| body.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        f.debug_struct("Request")
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("key", &self.key.as_ref().map(|_| "<hidden>"))
+            .field("body_fields", &fields)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,8 +233,10 @@ pub enum Refusal {
     Unreachable,
     /// The leaderboard refused with one of its error codes.
     Code(String),
-    /// Any other answer: an unexpected status or a body this build cannot read.
+    /// Any other answer status.
     Status(u16),
+    /// The expected status with a body this build cannot read.
+    Unreadable,
 }
 
 impl Refusal {
@@ -220,8 +263,51 @@ pub fn refusal_message(refusal: &Refusal) -> String {
             _ => "The leaderboard did not accept the request.".into(),
         },
         Refusal::Status(413) => "That nickname or email is too long.".into(),
+        Refusal::Unreadable => "The leaderboard answered in a way XTrace could not read.".into(),
         Refusal::Status(status) => {
             format!("The leaderboard answered with an error ({status}). Try again later.")
+        }
+    }
+}
+
+/// The form field a refusal is about, so the page can mark it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaderboardField {
+    Nickname,
+    Email,
+}
+
+/// A refused change, as the page shows it: the words, and the field they
+/// are about when there is one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct LeaderboardRefusal {
+    pub message: String,
+    pub field: Option<LeaderboardField>,
+}
+
+impl From<String> for LeaderboardRefusal {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            field: None,
+        }
+    }
+}
+
+impl From<&Refusal> for LeaderboardRefusal {
+    fn from(refusal: &Refusal) -> Self {
+        let field = match refusal {
+            Refusal::Code(code) => match code.as_str() {
+                "nickname_taken" | "invalid_nickname" => Some(LeaderboardField::Nickname),
+                "invalid_email" => Some(LeaderboardField::Email),
+                _ => None,
+            },
+            _ => None,
+        };
+        Self {
+            message: refusal_message(refusal),
+            field,
         }
     }
 }
@@ -232,6 +318,8 @@ pub const GONE: &str =
 /// Shown when the number could not be read from the app's own data.
 const NUMBER_UNREADABLE: &str =
     "Your 7-day leverage could not be read. It will be tried again within the hour.";
+/// Shown when the number was accepted but its record could not be saved.
+const RECORD_FAILED: &str = "Your number was sent, but XTrace could not save when it was sent.";
 /// Shown when an upload could not reach the leaderboard.
 const UPLOAD_UNREACHABLE: &str =
     "Could not reach the leaderboard. Your number will be sent again within the hour.";
@@ -277,8 +365,8 @@ impl Api<'_> {
         }
     }
 
-    fn parse<T: for<'de> Deserialize<'de>>(body: &[u8], status: u16) -> Result<T, Refusal> {
-        serde_json::from_slice(body).map_err(|_| Refusal::Status(status))
+    fn parse<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, Refusal> {
+        serde_json::from_slice(body).map_err(|_| Refusal::Unreadable)
     }
 
     fn join(&self, nickname: &str, email: &str) -> Result<Joined, Refusal> {
@@ -291,9 +379,9 @@ impl Api<'_> {
             },
             201,
         )?;
-        let joined: Joined = Self::parse(&body, 201)?;
+        let joined: Joined = Self::parse(&body)?;
         if joined.key.is_empty() || joined.key.len() > 256 || joined.nickname.is_empty() {
-            return Err(Refusal::Status(201));
+            return Err(Refusal::Unreadable);
         }
         Ok(joined)
     }
@@ -321,7 +409,7 @@ impl Api<'_> {
             },
             200,
         )?;
-        Self::parse(&body, 200)
+        Self::parse(&body)
     }
 
     fn rename(&self, key: &str, nickname: &str) -> Result<Renamed, Refusal> {
@@ -334,7 +422,7 @@ impl Api<'_> {
             },
             200,
         )?;
-        Self::parse(&body, 200)
+        Self::parse(&body)
     }
 
     fn delete(&self, key: &str) -> Result<(), Refusal> {
@@ -358,7 +446,8 @@ pub trait Host: Send + Sync {
     fn join(&self, membership: &LeaderboardMembership) -> Result<(), StateError>;
     fn rename(&self, key: &str, nickname: &str) -> Result<(), StateError>;
     fn record(&self, key: &str, sent: SentScore) -> Result<(), StateError>;
-    fn forget(&self, key: &str) -> Result<(), StateError>;
+    /// Whether the membership `key` names was the saved one, now removed.
+    fn forget(&self, key: &str) -> Result<bool, StateError>;
     /// [`leaderboard_tenths`] of the Dashboard's 7-day report, read now.
     fn leverage_tenths(&self) -> Result<Option<u32>, StateError>;
 }
@@ -397,8 +486,8 @@ impl<R: tauri::Runtime> Host for AppHost<R> {
             state.with_store(|store| Ok(store.record_leaderboard_score(key, sent).map(drop)?))
         })
     }
-    fn forget(&self, key: &str) -> Result<(), StateError> {
-        self.with(|state| state.with_store(|store| Ok(store.leave_leaderboard(key).map(drop)?)))
+    fn forget(&self, key: &str) -> Result<bool, StateError> {
+        self.with(|state| state.with_store(|store| Ok(store.leave_leaderboard(key)?)))
     }
     fn leverage_tenths(&self) -> Result<Option<u32>, StateError> {
         self.with(|state| {
@@ -435,8 +524,10 @@ pub enum LeaderboardStanding {
 /// never works any of them out again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct LeaderboardStatus {
-    /// Whether this copy of the app can join (not in fixture mode).
+    /// Whether this copy of the app may talk to the leaderboard.
     pub available: bool,
+    /// Why not, in plain words, when it may not.
+    pub unavailable_reason: Option<String>,
     pub joined: bool,
     pub nickname: Option<String>,
     pub last_sent: Option<LeaderboardSent>,
@@ -460,16 +551,20 @@ struct Notes {
 
 /// Wall time in Unix milliseconds.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
-/// Called after a successful join.
-pub type OnJoined = Arc<dyn Fn() + Send + Sync>;
+/// Called after a successful join, or after a background upload changed
+/// what the page shows.
+pub type Hook = Arc<dyn Fn() + Send + Sync>;
 
 /// The leaderboard service of one launch.
 pub struct LeaderboardService {
-    /// None when this launch cannot join (fixture mode, or no client).
-    transport: Option<Arc<dyn Transport>>,
+    /// The transport, or why this launch sends nothing ([`BLOCKED_COPY`],
+    /// [`NO_CLIENT`]).
+    transport: Result<Arc<dyn Transport>, String>,
     host: Arc<dyn Host>,
     clock: Clock,
-    on_joined: OnJoined,
+    on_joined: Hook,
+    /// Tells the page to read the status again.
+    on_changed: Hook,
     page_url: String,
     /// One join, rename, leave or upload at a time, so their saved results
     /// apply in the order they were asked for.
@@ -489,16 +584,18 @@ fn saved_state_failed(_: StateError) -> String {
 impl LeaderboardService {
     pub fn new(
         base: &str,
-        transport: Option<Arc<dyn Transport>>,
+        transport: Result<Arc<dyn Transport>, String>,
         host: Arc<dyn Host>,
         clock: Clock,
-        on_joined: OnJoined,
+        on_joined: Hook,
+        on_changed: Hook,
     ) -> Self {
         Self {
             transport,
             host,
             clock,
             on_joined,
+            on_changed,
             page_url: format!("{base}/"),
             work: Mutex::new(()),
             notes: Mutex::new(Notes::default()),
@@ -512,19 +609,21 @@ impl LeaderboardService {
     }
 
     fn api(&self) -> Result<Api<'_>, String> {
-        self.transport
-            .as_deref()
-            .map(Api)
-            .ok_or_else(|| "The leaderboard is not available in this copy of the app.".into())
+        match &self.transport {
+            Ok(transport) => Ok(Api(transport.as_ref())),
+            Err(reason) => Err(reason.clone()),
+        }
     }
 
     /// Forgets the membership `key` names after the leaderboard said it no
-    /// longer has it.
+    /// longer has it; the page says so only when that removed it.
     fn forget_gone(&self, key: &str) {
-        let _ = self.host.forget(key);
+        let removed = self.host.forget(key).unwrap_or(false);
         let mut notes = lock(&self.notes);
-        notes.gone = true;
         notes.upload_error = None;
+        if removed {
+            notes.gone = true;
+        }
     }
 
     /// Where things stand, asking the leaderboard for the rank when joined.
@@ -572,7 +671,8 @@ impl LeaderboardService {
         let notes = lock(&self.notes);
         let joined = membership.is_some();
         LeaderboardStatus {
-            available: self.transport.is_some(),
+            available: self.transport.is_ok(),
+            unavailable_reason: self.transport.as_ref().err().cloned(),
             joined,
             last_sent: membership
                 .as_ref()
@@ -591,7 +691,11 @@ impl LeaderboardService {
 
     /// Joins with the nickname and email as typed (the leaderboard checks
     /// them), saves the key and nickname, then sends the number.
-    pub fn join(&self, nickname: &str, email: &str) -> Result<LeaderboardStatus, String> {
+    pub fn join(
+        &self,
+        nickname: &str,
+        email: &str,
+    ) -> Result<LeaderboardStatus, LeaderboardRefusal> {
         let api = self.api()?;
         {
             let _work = lock(&self.work);
@@ -601,11 +705,11 @@ impl LeaderboardService {
                 .map_err(saved_state_failed)?
                 .is_some()
             {
-                return Err("You have already joined the leaderboard.".into());
+                return Err(String::from("You have already joined the leaderboard.").into());
             }
             let joined = api
                 .join(nickname, email)
-                .map_err(|refusal| refusal_message(&refusal))?;
+                .map_err(|refusal| LeaderboardRefusal::from(&refusal))?;
             let membership = LeaderboardMembership {
                 key: joined.key,
                 nickname: joined.nickname,
@@ -615,17 +719,17 @@ impl LeaderboardService {
                 // Without the saved key the member could never leave, so the
                 // new row is removed again.
                 let _ = api.delete(&membership.key);
-                return Err(saved_state_failed(error));
+                return Err(saved_state_failed(error).into());
             }
             *lock(&self.notes) = Notes::default();
         }
         (self.on_joined)();
-        self.upload();
+        self.send_number();
         Ok(self.status())
     }
 
     /// Changes the nickname; the leaderboard checks it.
-    pub fn rename(&self, nickname: &str) -> Result<LeaderboardStatus, String> {
+    pub fn rename(&self, nickname: &str) -> Result<LeaderboardStatus, LeaderboardRefusal> {
         let api = self.api()?;
         {
             let _work = lock(&self.work);
@@ -636,7 +740,7 @@ impl LeaderboardService {
                     .rename(&membership.key, &renamed.nickname)
                     .map_err(saved_state_failed)?,
                 Err(refusal) if refusal.gone() => self.forget_gone(&membership.key),
-                Err(refusal) => return Err(refusal_message(&refusal)),
+                Err(refusal) => return Err(LeaderboardRefusal::from(&refusal)),
             }
         }
         Ok(self.status())
@@ -645,7 +749,7 @@ impl LeaderboardService {
     /// Asks the leaderboard to delete the member, then forgets the saved
     /// membership. When the leaderboard cannot be reached nothing is
     /// forgotten, so Leave can be tried again.
-    pub fn leave(&self) -> Result<LeaderboardStatus, String> {
+    pub fn leave(&self) -> Result<LeaderboardStatus, LeaderboardRefusal> {
         let api = self.api()?;
         {
             let _work = lock(&self.work);
@@ -657,7 +761,8 @@ impl LeaderboardService {
                     return Err(format!(
                         "{} You are still on the leaderboard.",
                         refusal_message(&refusal)
-                    ));
+                    )
+                    .into());
                 }
             }
             self.host
@@ -675,36 +780,54 @@ impl LeaderboardService {
             .ok_or_else(|| "You have not joined the leaderboard.".into())
     }
 
-    /// Sends the current number when joined; does nothing otherwise. A
-    /// failure is kept for the page and the next hour tries again.
+    /// The background upload: sends the current number when joined, then
+    /// tells the page to read the status again. Does nothing when not joined.
     pub fn upload(&self) {
-        let Ok(api) = self.api() else { return };
+        if self.send_number() {
+            (self.on_changed)();
+        }
+    }
+
+    /// Sends the current number when joined; returns whether anything was
+    /// tried. A failure is kept for the page and the next hour tries again.
+    fn send_number(&self) -> bool {
+        let Ok(api) = self.api() else { return false };
         let _work = lock(&self.work);
-        let Ok(Some(membership)) = self.host.membership() else {
-            return;
+        let membership = match self.host.membership() {
+            Ok(Some(membership)) => membership,
+            Ok(None) => return false,
+            Err(error) => {
+                lock(&self.notes).upload_error = Some(saved_state_failed(error));
+                return true;
+            }
         };
         let tenths = match self.host.leverage_tenths() {
             Ok(tenths) => tenths,
             Err(_) => {
                 lock(&self.notes).upload_error = Some(NUMBER_UNREADABLE.into());
-                return;
+                return true;
             }
         };
-        match api.put_score(&membership.key, tenths) {
+        let failed = match api.put_score(&membership.key, tenths) {
             Ok(()) => {
                 let sent = SentScore {
                     leverage_tenths: tenths,
                     at_ms: (self.clock)(),
                 };
-                let _ = self.host.record(&membership.key, sent);
-                lock(&self.notes).upload_error = None;
+                self.host
+                    .record(&membership.key, sent)
+                    .err()
+                    .map(|_| RECORD_FAILED.to_owned())
             }
-            Err(refusal) if refusal.gone() => self.forget_gone(&membership.key),
-            Err(Refusal::Unreachable) => {
-                lock(&self.notes).upload_error = Some(UPLOAD_UNREACHABLE.into());
+            Err(refusal) if refusal.gone() => {
+                self.forget_gone(&membership.key);
+                return true;
             }
-            Err(refusal) => lock(&self.notes).upload_error = Some(refusal_message(&refusal)),
-        }
+            Err(Refusal::Unreachable) => Some(UPLOAD_UNREACHABLE.into()),
+            Err(refusal) => Some(refusal_message(&refusal)),
+        };
+        lock(&self.notes).upload_error = failed;
+        true
     }
 }
 

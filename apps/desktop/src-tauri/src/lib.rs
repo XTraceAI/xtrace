@@ -1264,13 +1264,13 @@ async fn leaderboard_status(
 }
 
 /// Joins with the nickname and email as typed; the leaderboard checks them
-/// and its answer is returned in plain words.
+/// and a refusal is returned in plain words, with the field it is about.
 #[tauri::command]
 async fn leaderboard_join(
     app: tauri::AppHandle,
     nickname: String,
     email: String,
-) -> Result<leaderboard::LeaderboardStatus, String> {
+) -> Result<leaderboard::LeaderboardStatus, leaderboard::LeaderboardRefusal> {
     on_leaderboard(app, move |service| service.join(&nickname, &email)).await
 }
 
@@ -1278,7 +1278,7 @@ async fn leaderboard_join(
 async fn leaderboard_rename(
     app: tauri::AppHandle,
     nickname: String,
-) -> Result<leaderboard::LeaderboardStatus, String> {
+) -> Result<leaderboard::LeaderboardStatus, leaderboard::LeaderboardRefusal> {
     on_leaderboard(app, move |service| service.rename(&nickname)).await
 }
 
@@ -1286,7 +1286,7 @@ async fn leaderboard_rename(
 #[tauri::command]
 async fn leaderboard_leave(
     app: tauri::AppHandle,
-) -> Result<leaderboard::LeaderboardStatus, String> {
+) -> Result<leaderboard::LeaderboardStatus, leaderboard::LeaderboardRefusal> {
     on_leaderboard(app, |service| service.leave()).await
 }
 
@@ -1311,36 +1311,47 @@ async fn leaderboard_open_page(webview_window: tauri::WebviewWindow) -> Result<(
 
 /// The leaderboard's calls make network requests, so they run on the
 /// blocking pool.
-async fn on_leaderboard<T: Send + 'static>(
+async fn on_leaderboard<T: Send + 'static, E: From<String> + Send + 'static>(
     app: tauri::AppHandle,
-    run: impl FnOnce(&leaderboard::LeaderboardService) -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
+    run: impl FnOnce(&leaderboard::LeaderboardService) -> Result<T, E> + Send + 'static,
+) -> Result<T, E> {
     match tauri::async_runtime::spawn_blocking(move || {
         let service = app
             .try_state::<leaderboard::LeaderboardService>()
-            .ok_or_else(|| state::StateError::Closed.to_string())?;
+            .ok_or_else(|| E::from(state::StateError::Closed.to_string()))?;
         run(&service)
     })
     .await
     {
         Ok(result) => result,
-        Err(_) => Err("the leaderboard request did not complete".into()),
+        Err(_) => Err(E::from(String::from(
+            "the leaderboard request did not complete",
+        ))),
     }
 }
 
-/// The leaderboard service for this launch and its hourly upload. Fixture
-/// startup's service is not available: it never sends a fixture's numbers.
+/// Sent after a background upload changed what the Leaderboard page shows.
+const LEADERBOARD_CHANGED_EVENT: &str = "leaderboard://changed";
+
+/// The leaderboard service for this launch and its hourly upload.
+/// `installed_own_data` is [`telemetry::installed_own_data`] for this launch:
+/// any other copy sends nothing unless pointed at a server on this Mac
+/// ([`leaderboard::may_send`]).
 fn start_leaderboard<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    fixture: bool,
+    installed_own_data: bool,
 ) -> (leaderboard::LeaderboardService, pr_refresh::AutoCheckWorker) {
     let base = leaderboard::base_url(std::env::var(leaderboard::URL_ENV).ok().as_deref());
-    let transport = (!fixture)
-        .then(|| leaderboard::HttpTransport::new(&base))
-        .flatten()
-        .map(|transport| Arc::new(transport) as Arc<dyn leaderboard::Transport>);
-    let available = transport.is_some();
+    let transport = if leaderboard::may_send(installed_own_data, &base) {
+        leaderboard::HttpTransport::new(&base)
+            .map(|transport| Arc::new(transport) as Arc<dyn leaderboard::Transport>)
+            .ok_or_else(|| leaderboard::NO_CLIENT.to_owned())
+    } else {
+        Err(leaderboard::BLOCKED_COPY.to_owned())
+    };
+    let available = transport.is_ok();
     let told = app.clone();
+    let changed = app.clone();
     let service = leaderboard::LeaderboardService::new(
         &base,
         transport,
@@ -1351,6 +1362,10 @@ fn start_leaderboard<R: tauri::Runtime>(
             if let Some(telemetry) = told.try_state::<telemetry::Telemetry>() {
                 telemetry.leaderboard_opted_in();
             }
+        }),
+        // A window not open yet, or already gone, drops the event.
+        Arc::new(move || {
+            let _ = changed.emit(LEADERBOARD_CHANGED_EVENT, ());
         }),
     );
     if !available {
@@ -1532,9 +1547,19 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let publish: native_index::Publish = {
         let handle = app.handle().clone();
         let warnings = warnings.requester();
+        // The first Ready sends the leaderboard number again, so the number
+        // after the first scan is the one the Dashboard shows. Marked only
+        // once the upload worker was there to wake.
+        let first_ready_sent = std::sync::atomic::AtomicBool::new(false);
         Arc::new(move |status: &dto::NativeIndexStatus| {
             if matches!(status.phase, dto::NativeIndexPhase::Ready) {
                 warnings.request(&[]);
+                if !first_ready_sent.load(std::sync::atomic::Ordering::SeqCst)
+                    && let Some(uploads) = handle.try_state::<LeaderboardUploads>()
+                {
+                    first_ready_sent.store(true, std::sync::atomic::Ordering::SeqCst);
+                    uploads.0.wake();
+                }
             }
             // A window not open yet, or already gone, drops the event;
             // the status remains queryable.
@@ -1701,7 +1726,6 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .telemetry_consent()
         .unwrap_or(telemetry::consent::Consent::FRESH);
     let live = state.database_path().is_some();
-    let state_fixture = state.app_info().fixture.is_some();
     app.manage(warnings);
     app.manage(state);
     // After the state, which the sender's store calls go through.
@@ -1724,7 +1748,10 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(grading);
     // Uploads are their own: they never read the telemetry switch. The first
     // one runs now (it sends only when joined), then one every hour.
-    let (leaderboard, uploads) = start_leaderboard(app.handle(), state_fixture);
+    let (leaderboard, uploads) = start_leaderboard(
+        app.handle(),
+        telemetry::installed_own_data(live && default_data_folder, &app.config().identifier),
+    );
     app.manage(leaderboard);
     uploads.wake();
     app.manage(LeaderboardUploads(uploads));

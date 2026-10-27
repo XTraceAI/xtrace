@@ -1,11 +1,12 @@
 import { expect, it } from 'vitest';
 import { leverageText } from '../metric-format';
-import { leaderboardNumber, refusalText, standingText } from './leaderboard';
+import { leaderboardNumber, refusalField, refusalText, standingText } from './leaderboard';
 
 // The tenths Rust sends for these 7-day leverage values
-// (`written_tenths_round_the_stored_value_half_up` in dashboard.rs). The
-// leaderboard's number, written back, must read exactly as the Dashboard
-// writes the value itself.
+// (`written_tenths_round_the_stored_value_half_up` in dashboard.rs). From
+// 0.05 up, the leaderboard's number, written back, reads exactly as the
+// Dashboard writes the value itself. Below 0.05 the Dashboard writes `<0.1×`
+// while 0 tenths is sent and written `0×` (checked below).
 const PAIRS: [number, number][] = [
   [0.05, 1],
   [0.15, 2],
@@ -26,6 +27,8 @@ it('writes the number the app sent exactly as the Dashboard writes the leverage'
   }
   expect(leaderboardNumber(123)).toBe('12.3×');
   expect(leaderboardNumber(0)).toBe('0×');
+  // The one exception: a positive value under 0.05 is sent as 0.
+  expect(leverageText(0.04)).toBe('<0.1×');
   expect(leaderboardNumber(null)).toBe('No 7-day number');
 });
 
@@ -45,5 +48,8 @@ it('shows the native answer as given', () => {
     'That nickname is taken. Try another one.',
   );
   expect(refusalText(new Error('No connection'))).toBe('No connection');
+  expect(refusalText({ message: 'Too long.', field: null })).toBe('Too long.');
+  expect(refusalField({ message: 'Taken.', field: 'nickname' })).toBe('nickname');
+  expect(refusalField('plain words')).toBeNull();
   expect(refusalText(undefined)).toBe('The leaderboard could not be reached.');
 });

@@ -8,9 +8,13 @@ import type { LeaderboardStanding } from "./LeaderboardStanding";
  */
 export type LeaderboardStatus = { 
 /**
- * Whether this copy of the app can join (not in fixture mode).
+ * Whether this copy of the app may talk to the leaderboard.
  */
-available: boolean, joined: boolean, nickname: string | null, last_sent: LeaderboardSent | null, 
+available: boolean, 
+/**
+ * Why not, in plain words, when it may not.
+ */
+unavailable_reason: string | null, joined: boolean, nickname: string | null, last_sent: LeaderboardSent | null, 
 /**
  * Only while joined.
  */

@@ -92,6 +92,7 @@ export const events = {
   gradingChanged: 'grading://changed',
   gradingRubricProgress: 'grading://rubric-progress',
   claudeSignInEnded: 'account-usage://sign-in-ended',
+  leaderboardChanged: 'leaderboard://changed',
   contentPurged: 'store://content-purged',
 } as const;
 export type DataEvent = (typeof events)[keyof typeof events];

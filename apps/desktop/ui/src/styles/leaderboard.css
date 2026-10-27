@@ -1,3 +1,7 @@
+/* Focus lands on the heading after a change; it is a target, not a control. */
+.xt-leaderboard h1:focus {
+  outline: none;
+}
 /* The Leaderboard page's forms, laid out like the Settings controls. */
 .xt-leaderboard-form {
   display: grid;

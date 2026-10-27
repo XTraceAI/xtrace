@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useId, useRef, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { useData } from '../../data/DataProvider';
 import type { LeaderboardControls } from '../../data/DataSource';
 import type { LeaderboardStatus } from '../../data/generated/LeaderboardStatus';
@@ -10,9 +10,11 @@ import { Modal, ModalClose } from '../../kit/Modal';
 import { SectionCard } from '../../kit/SectionCard';
 import {
   JOIN_TEXT,
+  LEAVE_BACKUPS,
   LEAVE_QUESTION,
   LEAVE_TEXT,
   leaderboardNumber,
+  refusalField,
   refusalText,
   standingText,
 } from './leaderboard';
@@ -21,11 +23,16 @@ import '../../styles/leaderboard.css';
 
 export function LeaderboardPage() {
   const { source } = useData();
+  // A finished change moves focus here: the form or button that started it
+  // is gone or replaced.
+  const heading = useRef<HTMLHeadingElement>(null);
   return (
     <section className="xt-placeholder xt-settings xt-leaderboard">
-      <h1>Leaderboard</h1>
+      <h1 ref={heading} tabIndex={-1}>
+        Leaderboard
+      </h1>
       {source.leaderboard ? (
-        <Leaderboard controls={source.leaderboard} />
+        <Leaderboard controls={source.leaderboard} heading={heading} />
       ) : (
         <SectionCard title="Public leaderboard">
           <p className="xt-settings-note">{JOIN_TEXT}</p>
@@ -42,10 +49,17 @@ export function LeaderboardPage() {
  * The status and its changes. Every change shows only the status the app read
  * back afterwards; a refused one shows the leaderboard's answer and re-reads.
  */
-function useLeaderboard(controls: LeaderboardControls) {
+function useLeaderboard(
+  controls: LeaderboardControls,
+  heading: RefObject<HTMLHeadingElement | null>,
+) {
   const client = useQueryClient();
   const status = useQuery({ queryKey: queryKeys.leaderboard, queryFn: () => controls.read() });
-  const saved = (next: LeaderboardStatus) => client.setQueryData(queryKeys.leaderboard, next);
+  const saved = (next: LeaderboardStatus) => {
+    client.setQueryData(queryKeys.leaderboard, next);
+    // After the new state renders.
+    requestAnimationFrame(() => heading.current?.focus());
+  };
   const reread = () => void client.invalidateQueries({ queryKey: queryKeys.leaderboard });
   const change = <T,>(run: (input: T) => Promise<LeaderboardStatus>) => ({
     mutationFn: run,
@@ -62,8 +76,14 @@ function useLeaderboard(controls: LeaderboardControls) {
   return { status, join, rename, leave };
 }
 
-function Leaderboard({ controls }: { controls: LeaderboardControls }) {
-  const { status, join, rename, leave } = useLeaderboard(controls);
+function Leaderboard({
+  controls,
+  heading,
+}: {
+  controls: LeaderboardControls;
+  heading: RefObject<HTMLHeadingElement | null>;
+}) {
+  const { status, join, rename, leave } = useLeaderboard(controls, heading);
   const current = status.data;
   if (!current)
     return (
@@ -80,12 +100,18 @@ function Leaderboard({ controls }: { controls: LeaderboardControls }) {
       <SectionCard title="Public leaderboard">
         <p className="xt-settings-note">{JOIN_TEXT}</p>
         <p className="xt-settings-note" data-testid="leaderboard-unavailable">
-          This copy of the app shows test data, so it cannot join the leaderboard.
+          {current.unavailable_reason}
         </p>
       </SectionCard>
     );
   return current.joined ? (
-    <Membership status={current} controls={controls} rename={rename} leave={leave} />
+    <Membership
+      status={current}
+      controls={controls}
+      rename={rename}
+      leave={leave}
+      heading={heading}
+    />
   ) : (
     <JoinForm status={current} join={join} />
   );
@@ -100,6 +126,7 @@ function JoinForm({ status, join }: { status: LeaderboardStatus; join: Changes['
   const emailId = useId();
   const errorId = useId();
   const failed = join.isError ? refusalText(join.error) : null;
+  const field = join.isError ? refusalField(join.error) : null;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!join.isPending) join.mutate({ nickname, email });
@@ -121,6 +148,7 @@ function JoinForm({ status, join }: { status: LeaderboardStatus; join: Changes['
           autoComplete="nickname"
           spellCheck={false}
           value={nickname}
+          aria-invalid={field === 'nickname' || undefined}
           aria-describedby={failed ? errorId : undefined}
           onChange={(event) => setNickname(event.target.value)}
         />
@@ -131,6 +159,7 @@ function JoinForm({ status, join }: { status: LeaderboardStatus; join: Changes['
           autoComplete="email"
           spellCheck={false}
           value={email}
+          aria-invalid={field === 'email' || undefined}
           aria-describedby={failed ? errorId : undefined}
           onChange={(event) => setEmail(event.target.value)}
         />
@@ -154,11 +183,13 @@ function Membership({
   controls,
   rename,
   leave,
+  heading,
 }: {
   status: LeaderboardStatus;
   controls: LeaderboardControls;
   rename: Changes['rename'];
   leave: Changes['leave'];
+  heading: RefObject<HTMLHeadingElement | null>;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [openFailed, setOpenFailed] = useState(false);
@@ -214,7 +245,7 @@ function Membership({
           >
             Change nickname
           </Button>
-          <LeaveButton leave={leave} />
+          <LeaveButton leave={leave} heading={heading} />
         </div>
       )}
     </SectionCard>
@@ -234,6 +265,7 @@ function RenameForm({
   const inputId = useId();
   const errorId = useId();
   const failed = rename.isError ? refusalText(rename.error) : null;
+  const invalid = rename.isError && refusalField(rename.error) === 'nickname';
   return (
     <>
       <form
@@ -253,6 +285,7 @@ function RenameForm({
           value={nickname}
           // Opened by its own button, so the field takes the focus.
           autoFocus
+          aria-invalid={invalid || undefined}
           aria-describedby={failed ? errorId : undefined}
           onChange={(event) => setNickname(event.target.value)}
         />
@@ -274,8 +307,16 @@ function RenameForm({
   );
 }
 
-function LeaveButton({ leave }: { leave: Changes['leave'] }) {
+function LeaveButton({
+  leave,
+  heading,
+}: {
+  leave: Changes['leave'];
+  heading: RefObject<HTMLHeadingElement | null>;
+}) {
   const [open, setOpen] = useState(false);
+  // Cancel returns to Leave; leaving replaces it, so focus goes to the heading.
+  const [left, setLeft] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const title = useId();
   return (
@@ -296,12 +337,13 @@ function LeaveButton({ leave }: { leave: Changes['leave'] }) {
         onOpenChange={(next) => {
           if (!leave.isPending) setOpen(next);
         }}
-        returnFocusRef={trigger}
+        returnFocusRef={left ? heading : trigger}
         aria-labelledby={title}
         className="xt-settings-modal"
       >
         <h2 id={title}>{LEAVE_QUESTION}</h2>
         <p>{LEAVE_TEXT}</p>
+        <p>{LEAVE_BACKUPS}</p>
         {leave.isError && <p role="alert">{refusalText(leave.error)}</p>}
         <div className="xt-settings-actions">
           <ModalClose
@@ -316,7 +358,14 @@ function LeaveButton({ leave }: { leave: Changes['leave'] }) {
             variant="primary"
             height={28}
             disabled={leave.isPending}
-            onClick={() => leave.mutate(undefined, { onSuccess: () => setOpen(false) })}
+            onClick={() =>
+              leave.mutate(undefined, {
+                onSuccess: () => {
+                  setLeft(true);
+                  setOpen(false);
+                },
+              })
+            }
           >
             {leave.isPending ? 'Leaving…' : 'Leave leaderboard'}
           </Button>

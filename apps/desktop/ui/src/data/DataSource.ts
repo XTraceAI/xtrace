@@ -170,7 +170,9 @@ export interface TelemetryControls {
  * The public leaderboard, which a person joins on purpose. The Rust core
  * talks to it, keeps the saved membership and decides every field of the
  * status; the leaderboard itself checks nicknames and emails. A refused
- * change rejects with the leaderboard's answer in plain words.
+ * change rejects with a `LeaderboardRefusal`: the leaderboard's answer in
+ * plain words and the field it is about. `leaderboard://changed` announces a
+ * background upload.
  */
 export interface LeaderboardControls {
   /** Asks the leaderboard for the rank when joined. */
