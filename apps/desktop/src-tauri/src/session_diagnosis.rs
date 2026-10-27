@@ -562,12 +562,12 @@ pub fn write_skill(
 }
 
 #[cfg(test)]
-type SaveTestWrite = fn(&mut std::fs::File, &[u8]) -> std::io::Result<()>;
+type SaveTestWrite = fn(&Path, &mut std::fs::File, &[u8]) -> std::io::Result<()>;
 
 #[cfg(test)]
 #[derive(Default)]
 struct SaveTestHooks {
-    before_open: Option<fn(&Path)>,
+    before_publish: Option<fn(&Path)>,
     write: Option<SaveTestWrite>,
 }
 
@@ -648,17 +648,8 @@ fn write_skill_inner(
         return Err(SaveSkillRefusal::UnsafeFolder);
     }
     let path = skill.join("SKILL.md");
-    #[cfg(test)]
-    if let Some(before_open) = hooks.and_then(|hooks| hooks.before_open) {
-        before_open(&path);
-    }
-    // `create_new` never follows or replaces a link at the file's own name.
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(file) => file,
+    let mut staged = match tempfile::NamedTempFile::new_in(&skill) {
+        Ok(staged) => staged,
         Err(_) => {
             undo(&created);
             return Err(SaveSkillRefusal::WriteFailed);
@@ -668,14 +659,22 @@ fn write_skill_inner(
         use std::io::Write;
         #[cfg(test)]
         if let Some(write) = hooks.and_then(|hooks| hooks.write) {
-            return write(&mut file, draft.as_bytes());
+            return write(&path, staged.as_file_mut(), draft.as_bytes());
         }
-        file.write_all(draft.as_bytes())?;
-        file.sync_all()
+        staged.write_all(draft.as_bytes())?;
+        staged.as_file().sync_all()
     })();
-    drop(file);
     if written.is_err() {
-        let _ = std::fs::remove_file(&path);
+        drop(staged);
+        undo(&created);
+        return Err(SaveSkillRefusal::WriteFailed);
+    }
+    #[cfg(test)]
+    if let Some(before_publish) = hooks.and_then(|hooks| hooks.before_publish) {
+        before_publish(&path);
+    }
+    if let Err(error) = staged.persist_noclobber(&path) {
+        drop(error.file);
         undo(&created);
         return Err(SaveSkillRefusal::WriteFailed);
     }

@@ -709,6 +709,16 @@ fn a_suggested_skill_is_saved_in_the_project_once() {
     );
     let written = saved(SKILL);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let entries: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [std::ffi::OsString::from("SKILL.md")]);
     // Never over an existing one, and the existing one is untouched.
     let other = SKILL.replace("Start the database", "Something else");
     assert_eq!(
@@ -861,10 +871,10 @@ fn save_regression_rechecks_the_quoted_draft_at_the_byte_boundary() {
 }
 
 #[test]
-fn save_regression_failed_create_new_preserves_a_competing_file() {
+fn save_regression_failed_publish_preserves_a_competing_file() {
     let (_dir, project) = project();
     let hooks = SaveTestHooks {
-        before_open: Some(|path| std::fs::write(path, "competing writer's skill").unwrap()),
+        before_publish: Some(|path| std::fs::write(path, "competing writer's skill").unwrap()),
         ..Default::default()
     };
     assert_eq!(
@@ -875,6 +885,12 @@ fn save_regression_failed_create_new_preserves_a_competing_file() {
     assert_eq!(
         std::fs::read_to_string(path).unwrap(),
         "competing writer's skill"
+    );
+    assert_eq!(
+        std::fs::read_dir(project.join(".claude/skills/shop-api-tests"))
+            .unwrap()
+            .count(),
+        1
     );
 }
 
@@ -891,19 +907,24 @@ fn an_owned_partial_write_removes_only_owned_files_and_new_empty_folders() {
             std::fs::create_dir_all(&parent).unwrap();
             std::fs::write(parent.join("existing.txt"), "keep existing").unwrap();
         }
+        fn fail_write(_: &Path, file: &mut std::fs::File, _: &[u8]) -> std::io::Result<()> {
+            use std::io::Write;
+            file.write_all(b"owned partial skill")?;
+            Err(std::io::Error::other("injected write failure"))
+        }
         let hooks = SaveTestHooks {
-            before_open: (setup == "unrelated file in new folder").then_some(|path: &Path| {
-                std::fs::write(
-                    path.parent().unwrap().join("unrelated.txt"),
-                    "keep unrelated",
-                )
-                .unwrap();
+            write: Some(if setup == "unrelated file in new folder" {
+                |path, file, draft| {
+                    std::fs::write(
+                        path.parent().unwrap().join("unrelated.txt"),
+                        "keep unrelated",
+                    )?;
+                    fail_write(path, file, draft)
+                }
+            } else {
+                fail_write
             }),
-            write: Some(|file, _| {
-                use std::io::Write;
-                file.write_all(b"owned partial skill")?;
-                Err(std::io::Error::other("injected write failure"))
-            }),
+            ..Default::default()
         };
         assert_eq!(
             write_skill_inner(&project, None, "shop-api-tests", SKILL, Some(&hooks)),
@@ -921,10 +942,13 @@ fn an_owned_partial_write_removes_only_owned_files_and_new_empty_folders() {
                     "keep existing"
                 );
             }
-            _ => assert_eq!(
-                std::fs::read_to_string(skill.join("unrelated.txt")).unwrap(),
-                "keep unrelated"
-            ),
+            _ => {
+                assert_eq!(
+                    std::fs::read_to_string(skill.join("unrelated.txt")).unwrap(),
+                    "keep unrelated"
+                );
+                assert_eq!(std::fs::read_dir(skill).unwrap().count(), 1);
+            }
         }
     }
 }
@@ -991,4 +1015,61 @@ fn saving_uses_the_indexed_sessions_project_and_returns_typed_refusals() {
     assert_eq!(std::fs::read_to_string(path).unwrap(), self::saved(SKILL));
     assert!(!home.join(".claude").exists());
     state.shutdown();
+}
+
+#[test]
+fn a_failed_staging_write_preserves_a_competing_final_file() {
+    let (_dir, project) = project();
+    let hooks = SaveTestHooks {
+        write: Some(|path, file, _| {
+            use std::io::Write;
+            use std::os::unix::fs::MetadataExt;
+            let owned_inode = file.metadata()?.ino();
+            assert!(!path.exists(), "the checked bytes are still staged");
+            file.write_all(b"owned partial skill")?;
+            std::fs::write(path, "replacement skill from another writer")?;
+            assert_ne!(std::fs::metadata(path)?.ino(), owned_inode);
+            Err(std::io::Error::other("injected staging write failure"))
+        }),
+        ..Default::default()
+    };
+    let outcome = write_skill_inner(&project, None, "shop-api-tests", SKILL, Some(&hooks));
+    assert_eq!(outcome, Err(SaveSkillRefusal::WriteFailed));
+    let path = skill_path(project.to_str().unwrap(), "shop-api-tests");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "replacement skill from another writer"
+    );
+    assert_eq!(
+        std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+        1
+    );
+}
+
+#[test]
+fn a_competing_final_file_created_during_staging_prevents_publication() {
+    let (_dir, project) = project();
+    let hooks = SaveTestHooks {
+        write: Some(|path, file, draft| {
+            use std::io::Write;
+            assert!(!path.exists());
+            std::fs::write(path, "competing complete skill")?;
+            file.write_all(draft)?;
+            file.sync_all()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        write_skill_inner(&project, None, "shop-api-tests", SKILL, Some(&hooks)),
+        Err(SaveSkillRefusal::WriteFailed)
+    );
+    let path = skill_path(project.to_str().unwrap(), "shop-api-tests");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "competing complete skill"
+    );
+    assert_eq!(
+        std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+        1
+    );
 }
