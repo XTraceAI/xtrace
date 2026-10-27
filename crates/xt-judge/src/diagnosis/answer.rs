@@ -192,7 +192,9 @@ pub fn parse(text: &str) -> Result<Answer, AnswerError> {
         Suggestion::MakeSkill => {
             let draft = normalise_draft(&draft);
             check_skill_draft(&draft).map_err(AnswerError::Skill)?;
-            quote_description(&draft).map_err(AnswerError::Skill)?
+            let draft = quote_description(&draft).map_err(AnswerError::Skill)?;
+            check_skill_draft(&draft).map_err(AnswerError::Skill)?;
+            draft
         }
     };
     if has_secret(&draft) {
@@ -746,6 +748,28 @@ mod tests {
             let raw_long = format!("{SKILL}\n{}", format!("x{brk}").repeat(MAX_SKILL_LINES));
             assert_eq!(check_skill_draft(&raw_long), Err(SkillDraftError::TooLong));
         }
+    }
+
+    #[test]
+    fn quoting_a_description_keeps_the_finished_skill_within_the_byte_limit() {
+        let prefix = format!(
+            "---\nname: boundary\ndescription: {}\n---\n# Boundary\n\n1. ",
+            "\\".repeat(MAX_DESCRIPTION_CHARS)
+        );
+        let draft = |bytes: usize| format!("{prefix}{}\n", "x".repeat(bytes - prefix.len() - 1));
+        let raw = draft(MAX_SKILL_BYTES);
+        assert_eq!(raw.len(), MAX_SKILL_BYTES);
+        assert_eq!(check_skill_draft(&raw), Ok(()));
+        assert_eq!(
+            parse(&answer("make_skill", "yes", &raw)),
+            Err(AnswerError::Skill(SkillDraftError::TooLong))
+        );
+
+        // Quoting doubles each backslash and adds the two quote marks.
+        let fitting = draft(MAX_SKILL_BYTES - MAX_DESCRIPTION_CHARS - 2);
+        let parsed = parse(&answer("make_skill", "yes", &fitting)).unwrap();
+        assert_eq!(parsed.draft.len(), MAX_SKILL_BYTES);
+        assert_eq!(check_skill_draft(&parsed.draft), Ok(()));
     }
 
     /// The `description:` value of a draft's header, read as YAML reads a
