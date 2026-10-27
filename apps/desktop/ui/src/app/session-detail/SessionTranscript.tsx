@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, type RefObject } from 'react';
 import { ConversationRecords, type ConversationMarker } from './ConversationActivity';
 import { TranscriptRecordView } from './TranscriptRecordView';
 import {
   type RevealChannel,
   RevealContext,
+  revealInTranscript,
   type RevealOutcome,
   type RevealRequest,
 } from './transcript-reveal';
@@ -46,10 +47,12 @@ export function SessionTranscript({
   state = { kind: 'ready' },
   reveal = null,
   onReveal = NO_REPORT,
+  revealOwner,
   conversation = false,
   markers = [],
   groupAdjacentActivity = false,
 }: {
+  revealOwner?: RefObject<HTMLElement | null>;
   records: readonly TranscriptRecord[];
   conversation?: boolean;
   markers?: readonly ConversationMarker[];
@@ -61,9 +64,13 @@ export function SessionTranscript({
   /** Told once per request whether its card was shown. Keep it stable across renders. */
   onReveal?: (token: number, outcome: RevealOutcome) => void;
 }) {
+  const scroll = useCallback(
+    (target: HTMLElement) => revealInTranscript(revealOwner?.current ?? null, target),
+    [revealOwner],
+  );
   const channel = useMemo<RevealChannel>(
-    () => ({ request: reveal, report: onReveal }),
-    [reveal, onReveal],
+    () => ({ request: reveal, report: onReveal, scroll }),
+    [reveal, onReveal, scroll],
   );
   if (state.kind === 'loading') {
     return (
