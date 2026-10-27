@@ -167,9 +167,17 @@ See the [setup guide](docs/SETUP.md) for first launch and troubleshooting.
 - **Metrics, not full transcripts.** By default the local database keeps metrics,
   repository paths, IDs and a preview (up to 280 characters) of each message you
   sent and of each recognized Claude Code background-task summary. Previews can't
-  be turned off. Full transcripts are saved only if you turn that on. Settings
-  can delete saved text; anything imported afterwards, including older messages,
-  gets new previews.
+  be turned off. Saved warning decisions can also keep a few matched message words
+  in either storage mode. Full transcripts are saved only if you turn that on.
+  **Delete stored content** clears saved text and warning decisions, even when no
+  other saved text remains. Later imports, including older messages, can create
+  new previews and warning decisions.
+- **Diagnose sends selected messages.** Only after you confirm **Send and
+  diagnose**, selected messages around a warning go to Claude Code's hosted model,
+  or Codex's if Claude Code is unavailable before receiving the messages. Cursor
+  is not tried automatically. XTrace keeps the result in the window's cache and
+  does not save it in the database. **Save as skill** is a separate click that
+  writes the suggested skill to the conversation's project.
 - **Scoring uses Claude.** When you start a grade, Claude Code reads the selected
   project and skill; that content can be sent to Claude on your account. Making a
   rubric similarly uses the selected skill's content. Grading keeps the project

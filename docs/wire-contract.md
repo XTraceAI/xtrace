@@ -75,11 +75,14 @@ JSON-RPC errors; oversized bodies receive HTTP 413.
 An absent retention setting defaults to metrics and indexing (metadata-only).
 Full-content archival requires an explicitly saved opt-in; transport arguments
 cannot enable it. Existing content and saved preferences remain unchanged.
-The metadata-only policy prevents new transcript content, tool input and
-titles from being retained, including on enrichment and retry. The one
-exception, in either mode, is the short preview (at most 280 characters) the
-store keeps of a person's message or a proven Claude Code task notification's
-summary; see `docs/DATA-SOURCE.md`. Namespaces,
+For canonical imports, the metadata-only policy prevents new full transcript
+content, tool input and titles from being retained, including on enrichment and
+retry. Imports still keep a short preview (at most 280 characters) of a person's
+message or a proven Claude Code task notification's summary in either mode.
+The separate saved warning decisions can also keep a few matched message words
+in either mode. Delete stored content clears previews and saved warning decisions,
+even when no other saved text remains; later imports can create them again.
+See `docs/DATA-SOURCE.md`. Namespaces,
 structural measurements and content-free receipt evidence remain available.
 Change events are published by the commit worker, so a disconnected HTTP caller
 cannot cancel them after a successful commit. A missing event subscriber does

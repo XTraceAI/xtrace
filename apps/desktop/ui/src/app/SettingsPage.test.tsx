@@ -118,12 +118,18 @@ it('reads the saved mode, defaults to metrics and indexing, and states what the 
   expect(
     screen.getByText('Applies to future imports and enrichment. Existing saved content remains.'),
   ).toBeTruthy();
-  // The one text kept whatever the mode is disclosed beside it.
+  // Text kept in either mode is disclosed beside it.
   expect(screen.getByTestId('retention-previews').textContent).toContain(
     'a short preview (up to 280 characters) of each message you typed',
   );
   expect(screen.getByTestId('retention-previews').textContent).toContain(
     'previews cannot be turned off',
+  );
+  expect(screen.getByTestId('retention-previews').textContent).toContain(
+    'Saved warning decisions can also keep a few matched message words in either mode.',
+  );
+  expect(screen.getByTestId('retention-previews').textContent).toContain(
+    'Delete stored content removes previews and saved warning decisions, even if there is no other saved text.',
   );
   // Grades are kept in every mode; the purge removes their text, not the score.
   expect(screen.getByTestId('retention-grades').textContent).toBe(
@@ -204,7 +210,10 @@ it('cancels the deletion by button or Escape without purging, returning focus', 
   );
   expect(dialog.textContent).toContain('the short message previews');
   expect(dialog.textContent).toContain(
-    'Messages indexed after the delete get new previews; previews cannot be turned off.',
+    'Saved warning decisions are cleared even if there is no other saved text.',
+  );
+  expect(dialog.textContent).toContain(
+    'Later imports can create new previews and warning decisions; previews cannot be turned off.',
   );
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());

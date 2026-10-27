@@ -346,15 +346,17 @@ function StoredContent({ controls }: { controls: RetentionControls }) {
         Applies to future imports and enrichment. Existing saved content remains.
       </p>
       <p className="xt-settings-note">
-        Off by default. Metrics and indexing keep counts, usage, tool names, identifiers and source
-        provenance, and discard transcript text, tool results, session titles and tool input before
-        saving. Turning the archive on saves that content for later imports.
+        Off by default. Imports in Metrics and indexing keep counts, usage, tool names, identifiers
+        and source provenance, and discard full transcripts, tool results, session titles and tool
+        input before saving. Turning the archive on saves that content for later imports.
       </p>
       <p className="xt-settings-note" data-testid="retention-previews">
         Either way, XTrace keeps a short preview (up to 280 characters) of each message you typed
         and of each Claude Code background-task summary, so the Dashboard can show them without
-        reopening your session files. Delete stored content removes these previews too; messages
-        indexed after that get new ones, and previews cannot be turned off.
+        reopening your session files. Saved warning decisions can also keep a few matched message
+        words in either mode. Delete stored content removes previews and saved warning decisions,
+        even if there is no other saved text. Later imports can create new previews and warning
+        decisions; previews cannot be turned off.
       </p>
       <p className="xt-settings-note" data-testid="retention-grades">
         {/* The number of reports kept is the app's KEEP_FOLDERS (grading.rs). */}
@@ -432,14 +434,17 @@ function PurgeContent({
       >
         <h2 id={title}>Delete stored content?</h2>
         <p>
-          This clears saved transcript text, tool results, session titles, tool input and the short
-          message previews from the XTrace database, and removes each grade’s summary, findings and
-          saved HTML report and the reasons Claude gave for not making a rubric for a skill. Counts,
-          usage, tool names, identifiers, source provenance and grade scores stay. Original host
-          transcripts and your projects’ files are not touched. Deleted text is not securely erased
-          from database free space or backups. This cannot be undone.
+          This clears saved transcript text, tool results, session titles, tool input, the short
+          message previews and saved warning decisions from the XTrace database, and removes each
+          grade’s summary, findings and saved HTML report and the reasons Claude gave for not making
+          a rubric for a skill. Counts, usage, tool names, identifiers, source provenance and grade
+          scores stay. Original host transcripts and your projects’ files are not touched. Deleted
+          text is not securely erased from database free space or backups. This cannot be undone.
         </p>
-        <p>Messages indexed after the delete get new previews; previews cannot be turned off.</p>
+        <p>
+          Saved warning decisions are cleared even if there is no other saved text. Later imports
+          can create new previews and warning decisions; previews cannot be turned off.
+        </p>
         {archiving && <p>Full-content archive is on, so later imports can save content again.</p>}
         {purge.isError && <p role="alert">Stored content could not be deleted.</p>}
         <div className="xt-settings-actions">

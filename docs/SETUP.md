@@ -90,17 +90,28 @@ repository paths, timestamps, counts, usage and short text previews. It is not a
 text-free or anonymous database. Previews are at most 280 characters for each
 message classified as yours and each recognized Claude Code background-task
 summary, in either storage mode, and cannot be switched off separately.
+Saved warning decisions can also keep a few matched message words in either mode.
 
 **Archive full transcript content** is off by default and affects future imports
 and enrichment. Turning it off does not erase content already saved.
 **Delete stored content** removes saved transcript content, tool input, saved
 session titles and previews after confirmation, and the reasons Claude gave
-for not making a rubric for a skill. It preserves metric/index
-records and original host files; later imports can create new previews.
+for not making a rubric for a skill. It also clears saved warning decisions, even
+when no other saved text remains. It preserves metric/index records and original
+host files; later imports can create new previews and warning decisions.
 Viewing a supported transcript reads the original local source on demand without
 enabling archival. Account-usage history is stored separately from the database.
 
-There is no cloud transcript upload in this build. Network activity occurs for
+Choosing **Diagnose** opens a confirmation. Only after you confirm with **Send and
+diagnose** does XTrace send selected messages around the warning to Claude Code's
+hosted model, or Codex's if Claude Code is unavailable before receiving the
+messages. Once a tool has received the messages, its failure does not send them
+to another tool. Cursor
+is not tried automatically. XTrace keeps the diagnosis result in the window's
+cache and does not save it in the database. **Save as skill** is a separate click
+that writes the suggested skill to the conversation's project.
+
+Other network activity includes
 anonymous usage telemetry (on by default after a first notice; see
 [TELEMETRY.md](../TELEMETRY.md) for every event and how to turn it off),
 account limits, GitHub PR facts, public release checks/downloads, and the public GitHub repository look-ups and downloads you start with **Add from a link** in Scores (GitHub's API and `codeload.github.com`, without signing in). Claude usage checks run the installed Claude Code CLI
