@@ -353,6 +353,7 @@ mod tests {
                 path: PathBuf::from("/home/user/.claude/projects/-repo/session.jsonl"),
                 role: SourceRole::Primary,
                 bytes: 512,
+                record_count: 1,
             }],
             records: vec![parsed(serde_json::json!({
                 "uuid": "11111111-1111-4111-8111-111111111111",
@@ -542,6 +543,7 @@ mod tests {
                 path: PathBuf::from("/home/user/.claude/projects/-repo/session.jsonl"),
                 role: SourceRole::Primary,
                 bytes: 1024,
+                record_count: 0,
             }],
             records: Vec::new(),
             other_lines: 3,

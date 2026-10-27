@@ -49,7 +49,10 @@
 //! starts no process and writes no file.
 
 mod codex_page;
+mod excerpt;
+mod streaming;
 pub use codex_page::*;
+pub use excerpt::*;
 
 use super::checkpoint::{self, FileIdentity, ResumeBasis};
 use super::claude_fs::{self, ClaudeFile};
@@ -153,6 +156,8 @@ pub struct ReadSource {
     pub path: PathBuf,
     pub role: SourceRole,
     pub bytes: u64,
+    /// Accepted records this source contributed, excluding dropped/unidentified lines.
+    pub record_count: usize,
 }
 
 /// How the read relates to the generation the index measured, over every file
@@ -612,6 +617,7 @@ fn session_from_stream_mode(
             // The verified stream's length: the reader reads the session's
             // files, and this process reads only what it wrote.
             bytes: stream.len() as u64,
+            record_count: records.len(),
         }],
         records,
         other_lines: 0,
@@ -751,6 +757,18 @@ struct Discovery {
 /// target could file a foreign tree's transcripts under this session. What
 /// could not be listed is remembered rather than passed over.
 fn discover_claude(projects: &Path, session_id: &str) -> std::io::Result<Discovery> {
+    discover_claude_checked(
+        projects,
+        session_id,
+        &mut |_, _| Ok::<_, std::io::Error>(()),
+    )
+}
+
+fn discover_claude_checked<E: From<std::io::Error>>(
+    projects: &Path,
+    session_id: &str,
+    check: &mut dyn FnMut(usize, bool) -> Result<(), E>,
+) -> Result<Discovery, E> {
     let mut found = Discovery {
         primary: Vec::new(),
         sidechains: Vec::new(),
@@ -758,6 +776,7 @@ fn discover_claude(projects: &Path, session_id: &str) -> std::io::Result<Discove
         sidechain_uncertain: false,
     };
     for entry in fs::read_dir(projects)? {
+        check(0, false)?;
         let project = match entry {
             Ok(entry) => entry.path(),
             // A directory entry that cannot even be named could be a project
@@ -786,14 +805,17 @@ fn discover_claude(projects: &Path, session_id: &str) -> std::io::Result<Discove
             session_id.to_owned(),
             false,
         ) {
-            Ok(file) => found.primary.push(file),
+            Ok(file) => {
+                check(0, true)?;
+                found.primary.push(file);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             // Present but not observable as a regular file: an alias, a
             // device, or an entry this process cannot stat. Something there
             // bears this session's name and could not be ruled in or out.
             Err(_) => found.primary_uncertain = true,
         }
-        collect_sidechains(&project.join(session_id), session_id, &mut found);
+        collect_sidechains_checked(&project.join(session_id), session_id, &mut found, check)?;
     }
     found.sidechains.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(found)
@@ -804,50 +826,49 @@ fn discover_claude(projects: &Path, session_id: &str) -> std::io::Result<Discove
 /// The session directory itself must be a real directory: an alias there would
 /// let another tree's transcripts be read as this session's subagents, which
 /// is the same mistake as following an alias to a transcript.
-fn collect_sidechains(session_directory: &Path, session_id: &str, found: &mut Discovery) {
+fn collect_sidechains_checked<E>(
+    session_directory: &Path,
+    session_id: &str,
+    found: &mut Discovery,
+    check: &mut dyn FnMut(usize, bool) -> Result<(), E>,
+) -> Result<(), E> {
     for step in [session_directory, &session_directory.join("subagents")] {
         match fs::symlink_metadata(step) {
             Ok(meta) if meta.file_type().is_symlink() => {
                 found.sidechain_uncertain = true;
-                return;
+                return Ok(());
             }
             Ok(meta) if meta.is_dir() => {}
             // No subagent tree for this session is ordinary.
-            Ok(_) => return,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(_) => {
                 found.sidechain_uncertain = true;
-                return;
+                return Ok(());
             }
         }
     }
     let mut diagnostics: Vec<ReaderDiagnostic> = Vec::new();
-    claude_fs::collect_jsonl(
+    claude_fs::collect_jsonl_checked(
         &session_directory.join("subagents"),
         session_id,
         &mut found.sidechains,
         &mut diagnostics,
-    );
+        0,
+        check,
+    )?;
     // The enumeration reports what it could not list or would not follow; a
     // session whose subagent tree is partly unreadable is not a complete one.
     found.sidechain_uncertain |= !diagnostics.is_empty();
+    Ok(())
 }
 
-fn load_claude(request: &SessionSourceRequest<'_>) -> SessionSourceOutcome {
-    let projects = request.home.join(".claude").join("projects");
-    let mut found = match discover_claude(&projects, request.native_session_id) {
-        Ok(found) => found,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return SessionSourceOutcome::unavailable(SourceUnavailable::Missing);
-        }
-        Err(error) => {
-            return SessionSourceOutcome::unavailable(SourceUnavailable::Unreadable {
-                detail: format!("Claude history could not be listed: {}", error.kind()),
-            });
-        }
-    };
+fn resolve_claude(
+    request: &SessionSourceRequest<'_>,
+    mut found: Discovery,
+) -> Result<(ClaudeFile, Discovery), SourceUnavailable> {
     if found.primary.len() > 1 {
-        return SessionSourceOutcome::unavailable(SourceUnavailable::Ambiguous {
+        return Err(SourceUnavailable::Ambiguous {
             candidates: found.primary.len(),
         });
     }
@@ -857,12 +878,12 @@ fn load_claude(request: &SessionSourceRequest<'_>) -> SessionSourceOutcome {
     // a twin is the ambiguity rule with the ambiguity merely unseen. Neither
     // question is answered by reading, so neither is answered at all.
     if found.primary_uncertain {
-        return SessionSourceOutcome::unavailable(SourceUnavailable::Unreadable {
+        return Err(SourceUnavailable::Unreadable {
             detail: "part of the local history could not be listed".to_owned(),
         });
     }
     let Some(primary) = found.primary.pop() else {
-        return SessionSourceOutcome::unavailable(SourceUnavailable::Missing);
+        return Err(SourceUnavailable::Missing);
     };
     // The locators the index recorded for this session's own transcript. A
     // rescan after a move records the new place beside the old one, so any
@@ -882,11 +903,31 @@ fn load_claude(request: &SessionSourceRequest<'_>) -> SessionSourceOutcome {
             .iter()
             .any(|path| same_transcript(path, &primary.path))
     {
-        return SessionSourceOutcome::unavailable(SourceUnavailable::Moved {
+        return Err(SourceUnavailable::Moved {
             from: recorded[0].clone(),
             found: primary.path.clone(),
         });
     }
+    Ok((primary, found))
+}
+
+fn load_claude(request: &SessionSourceRequest<'_>) -> SessionSourceOutcome {
+    let projects = request.home.join(".claude").join("projects");
+    let found = match discover_claude(&projects, request.native_session_id) {
+        Ok(found) => found,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return SessionSourceOutcome::unavailable(SourceUnavailable::Missing);
+        }
+        Err(error) => {
+            return SessionSourceOutcome::unavailable(SourceUnavailable::Unreadable {
+                detail: format!("Claude history could not be listed: {}", error.kind()),
+            });
+        }
+    };
+    let (primary, found) = match resolve_claude(request, found) {
+        Ok(found) => found,
+        Err(reason) => return SessionSourceOutcome::unavailable(reason),
+    };
     let mut budget = Budget::new(request.limits);
     let read = match read_claude_file(
         &primary,
@@ -907,6 +948,7 @@ fn load_claude(request: &SessionSourceRequest<'_>) -> SessionSourceOutcome {
             path: primary.path.clone(),
             role: SourceRole::Primary,
             bytes: read.bytes,
+            record_count: read.records.len(),
         }],
         records: read.records,
         other_lines: read.other_lines,
@@ -970,6 +1012,7 @@ fn load_claude(request: &SessionSourceRequest<'_>) -> SessionSourceOutcome {
                     path: file.path.clone(),
                     role: SourceRole::Sidechain,
                     bytes: read.bytes,
+                    record_count: read.records.len(),
                 });
                 loaded.records.extend(read.records);
                 loaded.other_lines += read.other_lines;
