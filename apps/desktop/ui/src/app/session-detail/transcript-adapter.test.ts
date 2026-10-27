@@ -417,6 +417,7 @@ it('has a sentence for every reason the read can give, and diagnoses none of the
     ).map((limit): SessionSourceReason => ({ reason: 'reader_limit', limit })),
     { reason: 'reader_deadline' },
     { reason: 'store_unsupported' },
+    { reason: 'unsupported_history' },
     { reason: 'reader_protocol' },
   ];
   for (const reason of reasons) {

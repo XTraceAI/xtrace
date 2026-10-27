@@ -144,6 +144,8 @@ pub enum SessionSourceReason {
     /// pinned reader does not read for a transcript. Its other files are never
     /// read in its place.
     StoreUnsupported,
+    /// The selected history representation is not supported by the page reader.
+    UnsupportedHistory,
     /// The pinned reader's answer was not exactly this session, whole; none
     /// of it was kept.
     ReaderProtocol,
@@ -301,6 +303,9 @@ impl TryFrom<&SessionSourceOutcome> for SessionSourceStatus {
                     SourceUnavailable::InvalidIdentifier => SessionSourceReason::InvalidIdentifier,
                     SourceUnavailable::PrerequisiteUnavailable => {
                         SessionSourceReason::PrerequisiteUnavailable
+                    }
+                    SourceUnavailable::UnsupportedHistory => {
+                        SessionSourceReason::UnsupportedHistory
                     }
                     SourceUnavailable::UnsupportedHost => SessionSourceReason::UnsupportedHost,
                     SourceUnavailable::Reader(failure) => reader_reason(*failure),
@@ -492,6 +497,10 @@ mod tests {
     fn every_unavailable_reason_reaches_the_view_as_its_own_state() {
         for (outcome, expected) in [
             (SourceUnavailable::Missing, SessionSourceReason::Missing),
+            (
+                SourceUnavailable::UnsupportedHistory,
+                SessionSourceReason::UnsupportedHistory,
+            ),
             (
                 SourceUnavailable::Replaced {
                     basis: ResumeBasis::Truncated,

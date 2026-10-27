@@ -50,9 +50,11 @@
 
 mod codex_page;
 mod excerpt;
+mod page;
 mod streaming;
 pub use codex_page::*;
 pub use excerpt::*;
+pub use page::*;
 
 use super::checkpoint::{self, FileIdentity, ResumeBasis};
 use super::claude_fs::{self, ClaudeFile};
@@ -285,6 +287,8 @@ pub enum SourceUnavailable {
     Reader(DetailFailure),
     /// No native reader exists for this host at all.
     UnsupportedHost,
+    /// This session history representation is not supported by the page reader.
+    UnsupportedHistory,
 }
 
 /// The whole result of opening one session's source.

@@ -411,6 +411,17 @@ mod tests {
         )
         .unwrap();
         for (block, expected) in [(0, false), (1, true), (2, true), (3, false)] {
+            let page = load_session_page_with(
+                &f.request(),
+                &PageSelection::Anchor {
+                    record_uuid: "target".into(),
+                    block: Some(block),
+                    kind: PageTargetKind::ToolBlock,
+                    generation: None,
+                },
+                ExcerptLimits::default(),
+            );
+            assert_eq!(page.is_ok(), expected);
             let result = load_session_excerpt_with(
                 &f.request(),
                 "target",
@@ -686,5 +697,265 @@ mod tests {
         .unwrap();
         assert_eq!(f.read("target"), Err(ExcerptUnavailable::TargetMissing));
         assert_eq!(ids(&f.read("before").unwrap()), ["before"]);
+    }
+    #[test]
+    fn paged_read_refuses_mutation_at_its_final_reopen_without_returning_records() {
+        let f = Fixture::new();
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let observed = fired.clone();
+        SETTLED.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |path| {
+                observed.set(true);
+                let original = fs::read_to_string(path).unwrap();
+                let rewritten = original.replace("trigger", "CHANGED");
+                assert_eq!(original.len(), rewritten.len());
+                fs::write(path, rewritten).unwrap();
+            }))
+        });
+        let result = load_session_page_with(
+            &f.request(),
+            &PageSelection::Anchor {
+                record_uuid: "target".into(),
+                block: None,
+                kind: PageTargetKind::Message,
+                generation: None,
+            },
+            ExcerptLimits::default(),
+        );
+        SETTLED.with(|hook| *hook.borrow_mut() = None);
+        assert!(
+            fired.get(),
+            "the page-specific final reopen seam must execute"
+        );
+        assert!(
+            matches!(result, Err(PageUnavailable::Changed)),
+            "{result:?}"
+        );
+    }
+    fn page_anchor(id: &str) -> PageSelection {
+        PageSelection::Anchor {
+            record_uuid: id.into(),
+            block: None,
+            kind: PageTargetKind::Message,
+            generation: None,
+        }
+    }
+    #[test]
+    fn claude_pages_keep_one_or_twelve_preceding_records_and_stable_cursors() {
+        let f = Fixture::new();
+        fs::write(
+            &f.path,
+            (0..230)
+                .map(|n| line(&format!("r{n}"), "synthetic"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let read = |selection: &PageSelection| {
+            load_session_page_with(&f.request(), selection, ExcerptLimits::default()).unwrap()
+        };
+        let page = read(&page_anchor("r20"));
+        assert_eq!(page.records[0].ordinal, 19);
+        assert_eq!(page.target, Some(20));
+        assert_eq!(page.records.len(), 200);
+        let context = load_session_context_with_reader(
+            &f.request(),
+            &page_anchor("r20"),
+            None,
+            ExcerptLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(context.records[0].ordinal, 8);
+        assert_eq!(context.records.len(), 200);
+        let first = read(&PageSelection::First);
+        assert_eq!(first.records[0].ordinal, 0);
+        let next = read(&PageSelection::Cursor(first.cursor(false, 200)));
+        assert_eq!(next.records.len(), 30);
+        assert_eq!(next.records[0].ordinal, 200);
+        let before = read(&PageSelection::Cursor(next.cursor(true, 200)));
+        assert_eq!(before.records[0].ordinal, 0);
+        assert!(before.backwards);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&f.path)
+            .unwrap()
+            .write_all(line("extra", "synthetic").as_bytes())
+            .unwrap();
+        assert!(matches!(
+            load_session_page_with(
+                &f.request(),
+                &PageSelection::Cursor(first.cursor(false, 200)),
+                ExcerptLimits::default()
+            ),
+            Err(PageUnavailable::Changed)
+        ));
+    }
+    #[test]
+    fn claude_pages_refuse_global_duplicates_and_wrong_blocks() {
+        for sidechain in [false, true] {
+            let f = Fixture::new();
+            if sidechain {
+                f.sidechain(&line("target", "duplicate"));
+            } else {
+                fs::OpenOptions::new()
+                    .append(true)
+                    .open(&f.path)
+                    .unwrap()
+                    .write_all(line("target", "duplicate").as_bytes())
+                    .unwrap();
+            }
+            assert!(matches!(
+                load_session_page_with(
+                    &f.request(),
+                    &page_anchor("target"),
+                    ExcerptLimits::default()
+                ),
+                Err(PageUnavailable::Read(ExcerptUnavailable::TargetAmbiguous))
+            ));
+        }
+        let f = Fixture::new();
+        let mut anchor = page_anchor("target");
+        if let PageSelection::Anchor { kind, block, .. } = &mut anchor {
+            *kind = PageTargetKind::ToolBlock;
+            *block = Some(0);
+        }
+        assert!(matches!(
+            load_session_page_with(&f.request(), &anchor, ExcerptLimits::default()),
+            Err(PageUnavailable::Read(ExcerptUnavailable::BlockMissing))
+        ));
+        if let PageSelection::Anchor {
+            kind,
+            block,
+            generation,
+            ..
+        } = &mut anchor
+        {
+            *kind = PageTargetKind::Message;
+            *block = None;
+            *generation = Some("A".repeat(64));
+        }
+        assert!(matches!(
+            load_session_page_with(&f.request(), &anchor, ExcerptLimits::default()),
+            Err(PageUnavailable::InvalidCursor)
+        ));
+    }
+    #[test]
+    fn claude_page_limits_and_cancellation_cover_the_whole_scan() {
+        let f = Fixture::new();
+        f.sidechain(&line("agent", "synthetic"));
+        for limits in [
+            ExcerptLimits {
+                records: 3,
+                ..ExcerptLimits::default()
+            },
+            ExcerptLimits {
+                scan_bytes: fs::metadata(&f.path).unwrap().len(),
+                ..ExcerptLimits::default()
+            },
+            ExcerptLimits {
+                raw_lines: 3,
+                ..ExcerptLimits::default()
+            },
+            ExcerptLimits {
+                deadline: std::time::Duration::ZERO,
+                ..ExcerptLimits::default()
+            },
+        ] {
+            assert!(load_session_page_with(&f.request(), &PageSelection::First, limits).is_err());
+        }
+        let cancel = CancelToken::new();
+        let copy = cancel.clone();
+        let mut request = f.request();
+        request.cancel = Some(&cancel);
+        OBSERVED.with(|hook| *hook.borrow_mut() = Some(Box::new(move |_| copy.cancel())));
+        assert!(matches!(
+            load_session_page_with(&request, &PageSelection::First, ExcerptLimits::default()),
+            Err(PageUnavailable::Read(ExcerptUnavailable::Source(
+                SourceUnavailable::Cancelled
+            )))
+        ));
+    }
+    #[test]
+    fn claude_pages_refuse_changes_during_scan_or_rediscovery() {
+        for duplicate in [false, true] {
+            let f = Fixture::new();
+            let directory = f.path.parent().unwrap().join(SESSION).join("subagents");
+            OBSERVED.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move |path| {
+                    if duplicate {
+                        fs::create_dir_all(&directory).unwrap();
+                        fs::write(directory.join("added.jsonl"), line("target", "duplicate"))
+                            .unwrap();
+                    } else {
+                        fs::write(path, line("target", "rewritten")).unwrap();
+                    }
+                }))
+            });
+            assert!(
+                load_session_page_with(
+                    &f.request(),
+                    &page_anchor("target"),
+                    ExcerptLimits::default()
+                )
+                .is_err()
+            );
+            OBSERVED.with(|hook| *hook.borrow_mut() = None);
+        }
+    }
+    #[test]
+    fn claude_page_windows_cross_files_with_explicit_source_ordinals() {
+        let f = Fixture::new();
+        f.sidechain(
+            &[
+                line("agent-first", "synthetic"),
+                line("agent-last", "synthetic"),
+            ]
+            .concat(),
+        );
+        let read = load_session_page_with(
+            &f.request(),
+            &page_anchor("after"),
+            ExcerptLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            read.records
+                .iter()
+                .map(|r| (r.ordinal, r.source))
+                .collect::<Vec<_>>(),
+            [(1, 0), (2, 0), (3, 1), (4, 1)]
+        );
+        assert_eq!(read.target, Some(2));
+        let read = load_session_page_with(
+            &f.request(),
+            &page_anchor("agent-first"),
+            ExcerptLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            read.records
+                .iter()
+                .map(|r| (r.ordinal, r.source))
+                .collect::<Vec<_>>(),
+            [(2, 0), (3, 1), (4, 1)]
+        );
+        let context = load_session_context_with_reader(
+            &f.request(),
+            &page_anchor("agent-first"),
+            None,
+            ExcerptLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            context
+                .records
+                .iter()
+                .map(|r| (r.ordinal, r.source))
+                .collect::<Vec<_>>(),
+            [(0, 0), (1, 0), (2, 0), (3, 1), (4, 1)]
+        );
+        assert_eq!(
+            ids(&f.read("agent-first").unwrap()),
+            ["agent-first", "agent-last"]
+        );
     }
 }
