@@ -215,6 +215,193 @@ fn a_record_indexed_before_the_mark_gains_it_when_read_again() {
     assert!(call_ids(&path).iter().all(|row| row.2.is_some()));
 }
 
+fn result_observation(kind: &str) -> CanonicalRecord {
+    let block = |id| json!({"type":"tool_result","tool_use_id":id,"is_error":true,"content":""});
+    let content = match kind {
+        "unknown" => Value::Null,
+        "empty" => json!([]),
+        "one" => json!([block("t1")]),
+        "two" => json!([block("t1"), block("t2")]),
+        "replaced" => json!([block("t1"), {"type":"text","text":""}]),
+        _ => unreachable!(),
+    };
+    record(
+        json!({"uuid":"r","type":"user","timestamp":"2026-09-07T12:00:01Z",
+        "message":{"role":"user","content":content}}),
+    )
+}
+
+#[test]
+fn complete_result_position_changes_are_sticky_in_both_orders() {
+    for (first, second) in [
+        ("two", "one"),
+        ("one", "two"),
+        ("two", "replaced"),
+        ("replaced", "two"),
+    ] {
+        for same_batch in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut store, path) = store(&directory, "claude", false);
+            let observations = [result_observation(first), result_observation(second)];
+            if same_batch {
+                store.upsert_records("s", &observations, false).unwrap();
+            } else {
+                for observation in &observations {
+                    store
+                        .upsert_records("s", std::slice::from_ref(observation), false)
+                        .unwrap();
+                }
+            }
+            let expected = vec![
+                (
+                    "r".into(),
+                    0,
+                    Some("t1".into()),
+                    Some(true),
+                    "other".into(),
+                    false,
+                ),
+                (
+                    "r".into(),
+                    1,
+                    Some("t2".into()),
+                    Some(true),
+                    "other".into(),
+                    true,
+                ),
+            ];
+            assert_eq!(
+                results(&path),
+                expected,
+                "{first} -> {second}, same batch: {same_batch}"
+            );
+            let parent_conflict: bool = Connection::open(&path)
+                .unwrap()
+                .query_row(
+                    "SELECT has_conflict FROM records WHERE uuid='r'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                !parent_conflict,
+                "only the changed result position is contradicted"
+            );
+            store.upsert_records("s", &observations, false).unwrap();
+            assert_eq!(
+                results(&path),
+                expected,
+                "reappearance cannot clear a conflict"
+            );
+        }
+    }
+}
+
+#[test]
+fn unknown_content_and_unchanged_arrays_do_not_dispute_results() {
+    for (first, second) in [("unknown", "two"), ("two", "unknown"), ("two", "two")] {
+        for same_batch in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut store, path) = store(&directory, "claude", false);
+            let observations = [result_observation(first), result_observation(second)];
+            if same_batch {
+                store.upsert_records("s", &observations, false).unwrap();
+            } else {
+                for observation in &observations {
+                    store
+                        .upsert_records("s", std::slice::from_ref(observation), false)
+                        .unwrap();
+                }
+            }
+            let rows = results(&path);
+            assert_eq!(rows.len(), 2);
+            assert!(
+                rows.iter().all(|row| !row.5),
+                "{first} -> {second}, same batch: {same_batch}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_older_derivation_does_not_change_a_newer_missing_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, path) = store(&directory, "claude", false);
+    store
+        .upsert_records("s", &[result_observation("two")], false)
+        .unwrap();
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE tool_results SET fact_version=?1 WHERE block_index=1",
+            [xt_store::tool_result::FACT_VERSION + 1],
+        )
+        .unwrap();
+    let before = results(&path);
+    store
+        .upsert_records("s", &[result_observation("one")], false)
+        .unwrap();
+    assert_eq!(results(&path), before);
+}
+
+#[test]
+fn a_foreign_session_cannot_remove_owned_result_positions() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, path) = store(&directory, "claude", false);
+    store
+        .upsert_records("s", &[result_observation("two")], false)
+        .unwrap();
+    let before = results(&path);
+    store
+        .upsert_session(
+            &SessionMeta::new("other", "claude", SessionSource::Transcript),
+            false,
+        )
+        .unwrap();
+    store
+        .upsert_records("other", &[result_observation("empty")], false)
+        .unwrap();
+    assert_eq!(results(&path), before);
+}
+
+#[test]
+fn result_position_conflicts_roll_back_when_a_later_result_write_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, path) = store(&directory, "claude", false);
+    store
+        .upsert_records("s", &[result_observation("two")], false)
+        .unwrap();
+    let before = results(&path);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_late_result BEFORE INSERT ON tool_results
+         WHEN NEW.record_uuid='late' BEGIN SELECT RAISE(ABORT,'expected rollback'); END;",
+        )
+        .unwrap();
+    assert!(
+        store
+            .upsert_records(
+                "s",
+                &[
+                    result_observation("one"),
+                    result("late", "t1", Some(true), ""),
+                ],
+                false
+            )
+            .is_err()
+    );
+    assert_eq!(results(&path), before);
+    let late: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM records WHERE uuid='late'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(late, 0);
+}
+
 #[test]
 fn a_missing_flag_is_kept_as_absent_and_another_session_writes_nothing() {
     let directory = tempfile::tempdir().unwrap();
