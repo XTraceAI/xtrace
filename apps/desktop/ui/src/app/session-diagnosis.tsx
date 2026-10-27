@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useKept, type Diagnose, type Kept } from './useSessionDiagnosis';
+import { isRunFor } from '../data/diagnosis-runs';
 import type { DiagnosisToolTried } from '../data/generated/DiagnosisToolTried';
 import type { SavedSkill } from '../data/generated/SavedSkill';
 import type { SessionDiagnosis } from '../data/generated/SessionDiagnosis';
@@ -48,7 +49,7 @@ export function DiagnoseButton({
           : WORDS.button_name.replace('{label}', warning.label)
       }
       aria-disabled={(!shown && waiting) || undefined}
-      aria-expanded={diagnose.stage?.warningId === warning.id || kept !== undefined}
+      aria-expanded={isRunFor(diagnose.stage, diagnose.sessionId, warning.id) || kept !== undefined}
       // WebKit leaves buttons out of the Tab order unless told.
       tabIndex={0}
       onClick={
@@ -103,11 +104,7 @@ function refocusRow(from: Element | null, now: boolean) {
 export function usePanelShown(diagnose: Diagnose | null, warning: SessionWarningItem) {
   const kept = useKept(diagnose?.sessionId ?? '', warning.id);
   if (!diagnose) return false;
-  const stage = diagnose.stage;
-  return (
-    (stage?.sessionId === diagnose.sessionId && stage.warningId === warning.id) ||
-    kept !== undefined
-  );
+  return isRunFor(diagnose.stage, diagnose.sessionId, warning.id) || kept !== undefined;
 }
 
 /**
@@ -122,10 +119,7 @@ export function DiagnosisPanel({
   warning: SessionWarningItem;
 }) {
   const kept = useKept(diagnose.sessionId, warning.id);
-  const stage =
-    diagnose.stage?.sessionId === diagnose.sessionId && diagnose.stage.warningId === warning.id
-      ? diagnose.stage
-      : null;
+  const stage = isRunFor(diagnose.stage, diagnose.sessionId, warning.id) ? diagnose.stage : null;
   if (stage?.kind === 'confirm') return <Confirm diagnose={diagnose} warningId={warning.id} />;
   if (stage?.kind === 'running') return <Running diagnose={diagnose} readId={stage.readId} />;
   if (!kept) return null;
@@ -146,7 +140,12 @@ export function DiagnosisPanel({
   );
 }
 
-/** Keep Stop available when navigation or a dismissal removes the running row. */
+/**
+ * Keeps Stop available for a running diagnosis whose row this view does not
+ * show. Another warning's run (another session's, or another of this
+ * session's) says one runs at a time, with Stop; this session's own warning
+ * whose row a dismissal removed, or `only`'s, shows its run as it would.
+ */
 export function DetachedDiagnosis({
   diagnose,
   warnings,
@@ -160,13 +159,62 @@ export function DetachedDiagnosis({
   only?: { sessionId: string; warningId: string };
 }) {
   const stage = diagnose.stage;
-  return stage?.kind === 'running' &&
-    (!only || (stage.sessionId === only.sessionId && stage.warningId === only.warningId)) &&
-    (stage.sessionId !== diagnose.sessionId ||
-      (visibleWarningId !== undefined && stage.warningId !== visibleWarningId) ||
-      !warnings?.some((warning) => warning.id === stage.warningId)) ? (
+  if (stage?.kind !== 'running') return null;
+  if (only)
+    return isRunFor(stage, only.sessionId, only.warningId) ? (
+      <Running diagnose={diagnose} readId={stage.readId} key={stage.readId} />
+    ) : null;
+  const listed = warnings?.some((warning) => isRunFor(stage, diagnose.sessionId, warning.id));
+  if (listed && (visibleWarningId === undefined || stage.warningId === visibleWarningId))
+    return null;
+  return listed || stage.sessionId !== diagnose.sessionId ? (
+    <BusyDiagnosis diagnose={diagnose} key={stage.readId} />
+  ) : (
     <Running diagnose={diagnose} readId={stage.readId} key={stage.readId} />
-  ) : null;
+  );
+}
+
+/**
+ * Another warning is being diagnosed: one runs at a time, said the same way
+ * wherever it shows, with its Stop.
+ */
+export function BusyDiagnosis({ diagnose }: { diagnose: Diagnose }) {
+  return (
+    <div className="xt-diagnosis" data-testid="diagnosis-busy">
+      <p className="xt-diagnosis-busy">{WORDS.busy}</p>
+      <span className="xt-diagnosis-buttons">
+        <StopButton diagnose={diagnose} />
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Stop for the running diagnosis. It waits in every view once Stop was asked,
+ * and stays waiting once accepted until the run ends (`DiagnosisRun.stop`).
+ */
+function StopButton({
+  diagnose,
+  buttonRef,
+}: {
+  diagnose: Diagnose;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+}) {
+  const stage = diagnose.stage;
+  const waiting = stage?.kind !== 'running' || stage.stop !== 'none';
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      className="xt-warning-action"
+      data-action="stop"
+      tabIndex={0}
+      aria-disabled={waiting || undefined}
+      onClick={waiting ? undefined : () => void diagnose.stop()}
+    >
+      {WORDS.stop}
+    </button>
+  );
 }
 
 function Confirm({ diagnose, warningId }: { diagnose: Diagnose; warningId: string }) {
@@ -214,7 +262,6 @@ function Confirm({ diagnose, warningId }: { diagnose: Diagnose; warningId: strin
 
 function Running({ diagnose, readId }: { diagnose: Diagnose; readId: string }) {
   const stop = useRef<HTMLButtonElement>(null);
-  const [stopping, setStopping] = useState(false);
   // Stop takes focus right after this view's own send; a view opened while
   // the diagnosis runs leaves focus where it is.
   const sentHere = diagnose.sentHere === readId;
@@ -228,25 +275,7 @@ function Running({ diagnose, readId }: { diagnose: Diagnose; readId: string }) {
         {WORDS.running}
       </p>
       <span className="xt-diagnosis-buttons">
-        <button
-          ref={stop}
-          type="button"
-          className="xt-warning-action"
-          tabIndex={0}
-          aria-disabled={stopping || undefined}
-          onClick={
-            stopping
-              ? undefined
-              : () => {
-                  setStopping(true);
-                  void diagnose.stop().then((cancelled) => {
-                    if (!cancelled) setStopping(false);
-                  });
-                }
-          }
-        >
-          {WORDS.stop}
-        </button>
+        <StopButton diagnose={diagnose} buttonRef={stop} />
       </span>
     </div>
   );

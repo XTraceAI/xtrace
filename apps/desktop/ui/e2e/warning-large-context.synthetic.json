@@ -20,7 +20,8 @@
       },
       "target": false,
       "omitted_blocks": false,
-      "only_tool_results": false
+      "only_tool_results": false,
+      "person": null
     },
     {
       "record": {
@@ -37,7 +38,8 @@
       },
       "target": true,
       "omitted_blocks": false,
-      "only_tool_results": false
+      "only_tool_results": false,
+      "person": true
     },
     {
       "record": {
@@ -54,7 +56,8 @@
       },
       "target": false,
       "omitted_blocks": false,
-      "only_tool_results": false
+      "only_tool_results": false,
+      "person": null
     }
   ]
 }

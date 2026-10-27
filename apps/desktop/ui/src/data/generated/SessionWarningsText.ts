@@ -50,13 +50,12 @@ export const SESSION_WARNINGS_TEXT = {
     "failed": "The diagnosis could not be run. Try again.",
     "dot_running": "Diagnosing… {elapsed}",
     "dot_running_name": "Diagnosing",
-    "dot_ready": "Diagnosis ready",
+    "dot_finished": "Diagnosis finished",
     "busy": "Another warning is being diagnosed. One diagnosis runs at a time."
   },
   "modal_heading": "Session warning",
   "conversation_heading": "Conversation",
   "you": "You",
-  "agent": "Agent",
   "flagged_label": "Why this was flagged",
   "flagged_headings": {
     "correction": "You corrected the agent.",

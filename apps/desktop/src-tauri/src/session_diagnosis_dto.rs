@@ -507,8 +507,9 @@ pub struct DiagnoseText {
     /// Added to a warning dot's name while its diagnosis runs.
     pub dot_running_name: &'static str,
     /// A warning dot's hint, and an addition to its name, once its answer is
-    /// kept.
-    pub dot_ready: &'static str,
+    /// kept: whatever it says, the diagnosis has finished (a run you stopped
+    /// is not shown).
+    pub dot_finished: &'static str,
     /// Beside a waiting Diagnose button while another warning's diagnosis
     /// runs: one runs at a time.
     pub busy: &'static str,
@@ -546,7 +547,7 @@ pub const DIAGNOSE_TEXT: DiagnoseText = DiagnoseText {
     failed: "The diagnosis could not be run. Try again.",
     dot_running: "Diagnosing… {elapsed}",
     dot_running_name: "Diagnosing",
-    dot_ready: "Diagnosis ready",
+    dot_finished: "Diagnosis finished",
     busy: "Another warning is being diagnosed. One diagnosis runs at a time.",
 };
 

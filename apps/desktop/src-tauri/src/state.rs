@@ -842,7 +842,15 @@ impl AppState {
                 Err(reason) => unavailable(reason),
             }
         };
-        Ok(settled_excerpt(status, cancel))
+        // Who sent each message is M-02's answer from the index, as the
+        // diagnosis evidence reads it; the excerpt's saved role never is.
+        let ids = status.record_ids();
+        let persons = if ids.is_empty() {
+            Default::default()
+        } else {
+            self.with_store(|store| Ok(store.record_persons(session_id, &ids)?))?
+        };
+        Ok(settled_excerpt(status.with_persons(&persons), cancel))
     }
 
     fn bounded_warning_context(
@@ -2955,6 +2963,7 @@ mod tests {
                 target: true,
                 omitted_blocks: false,
                 only_tool_results: false,
+                person: None,
             }],
         };
         assert!(

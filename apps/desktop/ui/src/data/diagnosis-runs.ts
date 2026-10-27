@@ -1,6 +1,15 @@
 import type { QueryClient } from '@tanstack/react-query';
+import { purgeEpoch } from './content-purges';
 import type { DataSource, DiagnosisControls } from './DataSource';
 import type { SessionDiagnosis } from './generated/SessionDiagnosis';
+import { diagnosisAnswersPrefix } from './query-client';
+
+/**
+ * Where a running diagnosis stands with Stop: not asked, asked and not yet
+ * answered, or accepted. Stop waits in every view once it has been asked, and
+ * stays waiting once accepted until the run ends.
+ */
+export type StopState = 'none' | 'asking' | 'accepted';
 
 /** The one diagnosis running in this app, and when it was sent. */
 export type DiagnosisRun = {
@@ -9,6 +18,7 @@ export type DiagnosisRun = {
   readonly readId: string;
   /** When it was sent, in this window's clock (`Date.now()`). */
   readonly startedAt: number;
+  readonly stop: StopState;
 };
 
 /** A kept answer, or that the diagnosis could not be asked for at all. */
@@ -18,7 +28,18 @@ export type Kept = { readonly readId: string } & (
 
 /** Where one warning's kept answer lives in the query cache. */
 export const keptKey = (sessionId: string, warningId: string) =>
-  ['session-diagnosis', sessionId, warningId] as const;
+  [...diagnosisAnswersPrefix, sessionId, warningId] as const;
+
+/**
+ * Whether `run` is the diagnosis of this session's warning: the one rule
+ * every view uses to tell its own warning's run from another one. A warning
+ * ID is unique only within its session.
+ */
+export const isRunFor = (
+  run: Pick<DiagnosisRun, 'sessionId' | 'warningId'> | null | undefined,
+  sessionId: string,
+  warningId: string,
+) => run != null && run.sessionId === sessionId && run.warningId === warningId;
 
 export interface DiagnosisRuns {
   getRun(): DiagnosisRun | null;
@@ -28,7 +49,11 @@ export interface DiagnosisRuns {
    * running or where no coding tool can be run.
    */
   start(sessionId: string, warningId: string, timezone: string): boolean;
-  /** Asks the running diagnosis to stop; false when none runs or it was refused. */
+  /**
+   * Asks the running diagnosis to stop: true once accepted. False, and
+   * nothing is asked, when none runs or Stop was already asked; false too
+   * when it was refused or could not be asked, and Stop may be asked again.
+   */
   stop(): Promise<boolean>;
   /** While detached (after its runtime unmounts), late answers change nothing. */
   attach(): void;
@@ -50,20 +75,51 @@ function nextReadId(): string {
  * leaves it running, and every view (both kinds of warning dot, the window,
  * the session page) reads the same run. One runs at a time. Its answer is
  * kept in the runtime's query cache under {@link keptKey}, outside every key
- * an ingest re-reads; nothing is stored.
+ * an ingest re-reads, until it is put away; nothing is stored.
  *
- * Only the runtime ending (its source replaced, or the app closing) stops
- * it, through the controls it was sent with, and drops its late answer.
+ * The runtime ending (its source replaced, or the app closing) stops it,
+ * through the controls it was sent with, and drops its late answer. So does
+ * a committed "Delete stored content" (the purge epoch rising): the answer
+ * could quote deleted words.
  */
 export function createDiagnosisRuns(source: DataSource, client: QueryClient): DiagnosisRuns {
+  // An answer can arrive while no view shows its warning: it is kept until
+  // it is put away or its content purged, not dropped once unwatched.
+  client.setQueryDefaults(diagnosisAnswersPrefix, { gcTime: Infinity });
   let run: DiagnosisRun | null = null;
   /** The controls the running diagnosis was sent with: Stop goes to them. */
   let sentWith: DiagnosisControls | null = null;
+  /** The purge epoch the running diagnosis was sent in. */
+  let sentInEpoch = 0;
+  /** The purge epoch a Stop was last asked for on its own, once per purge. */
+  let purgeStopEpoch = -1;
   let live = true;
+  let unwatch: (() => void) | null = null;
   const listeners = new Set<() => void>();
   const set = (next: DiagnosisRun | null) => {
     run = next;
+    if (!next) sentWith = null;
     listeners.forEach((listener) => listener());
+  };
+  /** Changes the Stop state of `current` while it is still the running one. */
+  const stopState = (current: DiagnosisRun, stop: StopState) => {
+    if (run?.readId === current.readId && run.stop !== stop) set({ ...run, stop });
+  };
+  const stop = (): Promise<boolean> => {
+    const current = run;
+    const controls = sentWith;
+    if (!current || !controls || current.stop !== 'none') return Promise.resolve(false);
+    stopState(current, 'asking');
+    return controls.cancel(current.readId).then(
+      (accepted) => {
+        stopState(current, accepted ? 'accepted' : 'none');
+        return accepted;
+      },
+      () => {
+        stopState(current, 'none');
+        return false;
+      },
+    );
   };
   return {
     getRun: () => run,
@@ -75,8 +131,16 @@ export function createDiagnosisRuns(source: DataSource, client: QueryClient): Di
       const controls = source.diagnosis;
       if (!controls || run || !live) return false;
       const readId = nextReadId();
-      const started: DiagnosisRun = { sessionId, warningId, readId, startedAt: Date.now() };
+      const started: DiagnosisRun = {
+        sessionId,
+        warningId,
+        readId,
+        startedAt: Date.now(),
+        stop: 'none',
+      };
       sentWith = controls;
+      sentInEpoch = purgeEpoch(client);
+      const epoch = sentInEpoch;
       set(started);
       let request: Promise<SessionDiagnosis>;
       try {
@@ -90,26 +154,30 @@ export function createDiagnosisRuns(source: DataSource, client: QueryClient): Di
           (): Kept => ({ readId, failed: true }),
         )
         .then((kept) => {
-          if (!live || run !== started) return;
-          client.setQueryData(keptKey(sessionId, warningId), kept);
-          sentWith = null;
+          if (!live || run?.readId !== readId) return;
+          // Sent before a purge: its answer may quote deleted words.
+          if (purgeEpoch(client) === epoch)
+            client.setQueryData(keptKey(sessionId, warningId), kept);
           set(null);
         });
       return true;
     },
-    stop() {
-      const current = run;
-      return current && sentWith
-        ? sentWith.cancel(current.readId).catch(() => false)
-        : Promise.resolve(false);
-    },
+    stop,
     attach() {
       live = true;
+      unwatch ??= client.getQueryCache().subscribe(() => {
+        const epoch = purgeEpoch(client);
+        if (!run || epoch === sentInEpoch || epoch === purgeStopEpoch) return;
+        purgeStopEpoch = epoch;
+        void stop();
+      });
     },
     detach() {
       const current = run;
       const controls = sentWith;
       live = false;
+      unwatch?.();
+      unwatch = null;
       if (!current || !controls) return;
       run = null;
       sentWith = null;

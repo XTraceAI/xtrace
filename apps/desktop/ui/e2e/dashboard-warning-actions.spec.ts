@@ -103,7 +103,7 @@ for (const theme of ['light', 'dark'] as const) {
     });
 
     // Closing the window leaves the diagnosis running: the dot circles with
-    // an arc and its hint says how long it has run, then that it is ready.
+    // an arc and its hint says how long it has run, then that it finished.
     test(`Dashboard ${surface} modal asks first, keeps running after Close and shows it on the dot, ${theme}`, async ({
       page,
     }) => {
@@ -184,18 +184,18 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(stop).not.toBeFocused();
       await close(page).click();
       await expect(target).toBeFocused();
-      // The answer arrives while the window is closed: the dot says it is ready.
+      // The answer arrives while the window is closed: the dot says it finished.
       await answer(page, 'make_skill');
-      await expect(target).toHaveAttribute('data-diagnosis', 'ready');
-      await expect(target).toHaveAccessibleName(new RegExp(`; ${words.dot_ready}$`));
+      await expect(target).toHaveAttribute('data-diagnosis', 'finished');
+      await expect(target).toHaveAccessibleName(new RegExp(`; ${words.dot_finished}$`));
       if (surface === 'lane') {
         await page.mouse.move(0, 0);
         await target.hover({ position: { x: 1, y: 5 } });
       }
-      await expect(hint.getByTestId('diagnosis-status')).toHaveText(words.dot_ready);
+      await expect(hint.getByTestId('diagnosis-status')).toHaveText(words.dot_finished);
       if (process.env.WARNING_SHOTS)
         await page.screenshot({
-          path: `${process.env.WARNING_SHOTS}/${surface}-dot-ready-${theme}.png`,
+          path: `${process.env.WARNING_SHOTS}/${surface}-dot-finished-${theme}.png`,
         });
       await page.keyboard.press('Enter');
       await expect(modal(page).getByTestId('diagnosis-result')).toBeVisible();
@@ -295,6 +295,11 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(context).toContainText('Synthetic subagent correction.');
     await expect(context).toContainText('Synthetic subagent reply.');
     await expect(context).not.toContainText('The sample build is ready.');
+    // A sub-agent's messages are saved under the user role but are not a
+    // person's (M-02): the neutral caption, never "You" on the right.
+    await expect(context.locator('[data-own]')).toHaveCount(0);
+    await expect(context).not.toContainText(SESSION_WARNINGS_TEXT.you);
+    await expect(context.locator('.xt-chat-who').first()).toContainText('User');
     if (process.env.WARNING_SHOTS)
       await page.screenshot({
         path: `${process.env.WARNING_SHOTS}/subagent-neighbours-${theme}.png`,

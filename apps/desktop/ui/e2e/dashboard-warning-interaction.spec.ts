@@ -37,7 +37,8 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(tip.getByTestId('day-warning-tip-line')).toHaveText([
       'Rename the config moduleCorrectionAfter an agent reply',
     ]);
-    // The hint is hidden from the accessibility tree (the dot's name says it all).
+    // The host mark is found by its element, not its role: the hint is
+    // aria-hidden (the dot's own name says everything), so it has no image role.
     await expect(tip.locator('.xt-host-glyph-mark')).toHaveAttribute(
       'data-host',
       /^(claude|codex|cursor)$/,

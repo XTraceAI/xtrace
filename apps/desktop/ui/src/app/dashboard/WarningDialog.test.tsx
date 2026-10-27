@@ -251,7 +251,10 @@ for (const replace of [false, true])
           .getByRole('button', { name: /^Diagnose this warning:/ })
           .getAttribute('aria-disabled'),
       ).toBe('true');
-      expect(screen.queryByRole('button', { name: words.stop })).toBeNull();
+      // The same sentence and Stop as a session page shows for another
+      // warning's run.
+      expect(screen.getByTestId('diagnosis-busy').textContent).toContain(words.busy);
+      expect(screen.getByRole('button', { name: words.stop })).toBeTruthy();
     } else test.show(false);
     expect(test.controls.cancel).not.toHaveBeenCalled();
     await test.answer(answers.make_skill!);
@@ -519,4 +522,25 @@ it('keeps a dismissed issue link, and opens the full session while a diagnosis r
   expect(test.onClose).toHaveBeenCalledOnce();
   expect(screen.getByTestId('current-location').textContent).toContain('/sessions/s-warned');
   expect(test.controls.cancel).not.toHaveBeenCalled();
+});
+
+// Once Stop is accepted it waits in every view, a reopened window included,
+// until the run actually ends.
+it('keeps Stop waiting after an accepted Stop, in a reopened window too, until the run ends', async () => {
+  const test = setup();
+  await run(test);
+  fireEvent.click(screen.getByRole('button', { name: words.stop }));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: words.stop }).getAttribute('aria-disabled')).toBe(
+      'true',
+    ),
+  );
+  fireEvent.click(close());
+  test.select(selected);
+  const stop = await screen.findByRole('button', { name: words.stop });
+  expect(stop.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(stop);
+  expect(test.controls.cancel).toHaveBeenCalledOnce();
+  await test.answer(answers.cancelled!);
+  expect((await screen.findByTestId('diagnosis-result')).dataset.state).toBe('cancelled');
 });

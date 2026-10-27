@@ -173,3 +173,20 @@ fn human_origins_and_input_adjustments_invalidate_saved_warnings_on_change() {
     store.apply_human_input_adjustments(&[adjustment]).unwrap();
     assert_eq!(Some(revision()), Some(changed_again));
 }
+
+#[test]
+fn record_persons_reads_the_same_m02_answer_as_records() {
+    let (_dir, store) = setup();
+    let persons = store
+        .record_persons("codex-child", &["input", "missing"])
+        .unwrap();
+    let stored = store.records("codex-child").unwrap().remove(0);
+    assert_eq!(persons.get("input").copied(), stored.human_is_eligible);
+    assert!(!persons.contains_key("missing"));
+    assert!(
+        store
+            .record_persons("another-session", &["input"])
+            .unwrap()
+            .is_empty()
+    );
+}

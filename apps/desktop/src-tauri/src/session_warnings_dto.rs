@@ -81,10 +81,8 @@ pub struct WarningsText {
     pub modal_heading: &'static str,
     /// Over the messages around a warning in that window.
     pub conversation_heading: &'static str,
-    /// Who sent a message saved under the user role, in that conversation.
+    /// Who sent a message M-02 counts as a person's, in that conversation.
     pub you: &'static str,
-    /// Who sent a message saved under the assistant role.
-    pub agent: &'static str,
     /// Over the reason in that window.
     pub flagged_label: &'static str,
     /// A short heading over the reason, by the warning's kind.
@@ -128,7 +126,6 @@ pub const TEXT: WarningsText = WarningsText {
     modal_heading: "Session warning",
     conversation_heading: "Conversation",
     you: "You",
-    agent: "Agent",
     flagged_label: "Why this was flagged",
     flagged_headings: KindWords {
         correction: "You corrected the agent.",

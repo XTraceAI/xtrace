@@ -27,6 +27,11 @@ pub struct SessionExcerptRecord {
     /// Computed before filtering, so a selected result never turns a mixed
     /// human message into a tool-only message in the view.
     pub only_tool_results: bool,
+    /// M-02: whether the index counts this record as a person's message
+    /// (`Store::record_persons`, the answer the diagnosis evidence uses).
+    /// `null` where the index has no answer for it. Only `true` is shown as
+    /// "You"; the saved role alone never decides it.
+    pub person: Option<bool>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "reason", rename_all = "snake_case")]
@@ -69,6 +74,25 @@ impl From<ExcerptLimit> for SessionExcerptLimit {
 impl SessionExcerptStatus {
     pub fn unavailable(reason: SessionExcerptReason) -> Self {
         Self::Unavailable { reason }
+    }
+    /// The saved record IDs a loaded excerpt shows, for M-02's lookup.
+    pub fn record_ids(&self) -> Vec<&str> {
+        match self {
+            Self::Loaded { records, .. } => records
+                .iter()
+                .map(|entry| entry.record.id.as_str())
+                .collect(),
+            Self::Unavailable { .. } => Vec::new(),
+        }
+    }
+    /// Sets each record's M-02 answer from the index's, by record ID.
+    pub fn with_persons(mut self, persons: &std::collections::BTreeMap<String, bool>) -> Self {
+        if let Self::Loaded { records, .. } = &mut self {
+            for entry in records {
+                entry.person = persons.get(&entry.record.id).copied();
+            }
+        }
+        self
     }
     pub fn from_read(
         result: Result<LoadedExcerpt, ExcerptUnavailable>,
@@ -115,6 +139,7 @@ impl SessionExcerptStatus {
                     record,
                     target,
                     only_tool_results,
+                    person: None,
                 })
             })
             .collect::<Result<Vec<_>, &'static str>>()?;
@@ -190,6 +215,23 @@ mod tests {
         assert!(records[0].omitted_blocks);
         assert_eq!(records[0].record.blocks.len(), 1);
         assert_eq!(records[0].record.blocks[0].index(), 1);
+    }
+    #[test]
+    fn person_comes_only_from_the_index_answer() {
+        let record = record(json!([{"type":"text","text":"words"}]));
+        let loaded = status(record, None);
+        assert_eq!(loaded.record_ids(), vec!["target"]);
+        let SessionExcerptStatus::Loaded { records, .. } = &loaded else {
+            panic!("loaded");
+        };
+        // A user-role record is not a person's message until M-02 says so.
+        assert_eq!(records[0].person, None);
+        let mut persons = std::collections::BTreeMap::new();
+        persons.insert("target".to_owned(), false);
+        let SessionExcerptStatus::Loaded { records, .. } = loaded.with_persons(&persons) else {
+            panic!("loaded");
+        };
+        assert_eq!(records[0].person, Some(false));
     }
     #[test]
     fn oversized_serialized_payload_is_refused_without_truncating_text() {

@@ -97,6 +97,13 @@ export function contextExcerpt(
         omitted_blocks: blocks.length < source.blocks.length,
         only_tool_results:
           source.blocks.length > 0 && source.blocks.every((part) => part.kind === 'tool_result'),
+        // Synthetic M-02 answers: the main conversation's user-role messages
+        // are a person's; another source's (a sub-agent's) are not.
+        person:
+          source.role !== 'user'
+            ? null
+            : start + index >= status.record_ranges[0]!.start &&
+              start + index < status.record_ranges[0]!.end,
       };
     }),
   };

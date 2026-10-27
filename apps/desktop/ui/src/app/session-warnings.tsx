@@ -735,6 +735,35 @@ export function SessionWarningsDetail({
 }
 
 /**
+ * Under a warning: that it was shown again after growing past its
+ * dismissal, and that the last Dismiss or Undo press was refused.
+ */
+export function WarningNotes({
+  warning,
+  undo,
+  refused,
+}: {
+  warning: SessionWarningItem;
+  undo: boolean;
+  refused: boolean;
+}) {
+  return (
+    <>
+      {warning.returned && (
+        <span className="xt-warning-returned" data-testid="warning-returned">
+          {warning.returned}
+        </span>
+      )}
+      {refused && (
+        <span className="xt-warning-refused" role="alert" data-testid="warning-refused">
+          {undo ? SESSION_WARNINGS_TEXT.restore_failed : SESSION_WARNINGS_TEXT.dismiss_failed}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * A warning's Dismiss button, or Undo for a dismissed one: it waits while
  * its press is stored and read back.
  */
@@ -780,7 +809,6 @@ export function WarningRow({
   actions,
   below,
   summary,
-  context,
 }: {
   warning: SessionWarningItem;
   undo: boolean;
@@ -790,8 +818,8 @@ export function WarningRow({
   onPress?: () => void;
   actions?: ReactNode;
   below?: ReactNode;
+  /** What stands for the warning's line (the session page's selected warning). */
   summary?: ReactNode;
-  context?: ReactNode;
 }) {
   const line = useId();
   return (
@@ -805,7 +833,6 @@ export function WarningRow({
       tabIndex={-1}
     >
       {summary ? <div id={line}>{summary}</div> : <WarningLine warning={warning} id={line} />}
-      {context}
       {(onPress || actions) && (
         <span className="xt-warning-actions">
           {actions}
@@ -814,16 +841,7 @@ export function WarningRow({
           )}
         </span>
       )}
-      {warning.returned && (
-        <span className="xt-warning-returned" data-testid="warning-returned">
-          {warning.returned}
-        </span>
-      )}
-      {refused && (
-        <span className="xt-warning-refused" role="alert" data-testid="warning-refused">
-          {undo ? SESSION_WARNINGS_TEXT.restore_failed : SESSION_WARNINGS_TEXT.dismiss_failed}
-        </span>
-      )}
+      <WarningNotes warning={warning} undo={undo} refused={refused} />
       {below}
     </li>
   );

@@ -937,6 +937,17 @@ fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
     assert!(records[1].target);
     assert_eq!(records[1].record.id, uuid(2));
     assert_eq!(records[1].record.blocks[0].index(), 0);
+    // Who sent each message is M-02's answer from the index, the same one the
+    // diagnosis evidence reads (`StoredRecord::human_is_eligible`).
+    let stored = Store::open(&db).unwrap().records(&id).unwrap();
+    for entry in &records {
+        let indexed = stored
+            .iter()
+            .find(|record| record.uuid == entry.record.id)
+            .and_then(|record| record.human_is_eligible);
+        assert_eq!(entry.person, indexed, "{}", entry.record.id);
+    }
+    assert!(records.iter().any(|entry| entry.person.is_some()));
     assert!(!marker.exists());
     assert_eq!(counts(&db), before);
 }

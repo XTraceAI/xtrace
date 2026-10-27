@@ -5,6 +5,11 @@ export function createQueryClient() {
     defaultOptions: { queries: { staleTime: 1000, refetchOnWindowFocus: false, retry: false } },
   });
 }
+/**
+ * Every kept diagnosis answer (`diagnosis-runs.ts`): outside every key an
+ * ingest re-reads, and put away by a content purge (`content-purges.ts`).
+ */
+export const diagnosisAnswersPrefix = ['session-diagnosis'] as const;
 /** The prefix of every run's details (`queryKeys.gradingRunDetails`). */
 export const gradingRunDetailsPrefix = ['grading', 'run-details'] as const;
 

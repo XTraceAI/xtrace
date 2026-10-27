@@ -6,4 +6,11 @@ export type SessionExcerptRecord = { record: SourceRecord, target: boolean, omit
  * Computed before filtering, so a selected result never turns a mixed
  * human message into a tool-only message in the view.
  */
-only_tool_results: boolean, };
+only_tool_results: boolean, 
+/**
+ * M-02: whether the index counts this record as a person's message
+ * (`Store::record_persons`, the answer the diagnosis evidence uses).
+ * `null` where the index has no answer for it. Only `true` is shown as
+ * "You"; the saved role alone never decides it.
+ */
+person: boolean | null, };

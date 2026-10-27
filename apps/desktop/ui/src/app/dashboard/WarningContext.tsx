@@ -5,6 +5,7 @@ import { HostGlyph } from '../../kit/HostGlyph';
 import { hostName } from '../../kit/hosts';
 import { ToolCallCard } from '../session-detail/ToolStrip';
 import { TranscriptMarkdown } from '../session-detail/TranscriptMarkdown';
+import { ROLE_LABEL } from '../session-detail/TranscriptRecordView';
 import { CodeSurface, TranscriptText } from '../session-detail/TranscriptText';
 import { generationNote } from '../session-detail/transcript-adapter';
 import {
@@ -86,7 +87,7 @@ export function WarningContext({
             </p>
           )}
           <div className="xt-chat">
-            {excerpt.records.map(({ record, target, omitted }, index) => (
+            {excerpt.records.map(({ record, target, omitted, person }, index) => (
               <div
                 className="xt-warning-context-message"
                 data-trigger={target || undefined}
@@ -94,6 +95,7 @@ export function WarningContext({
               >
                 <ChatRecord
                   record={record}
+                  person={person}
                   host={host}
                   flagged={target ? { tag, block: flaggedBlock(record, warning) } : null}
                 />
@@ -162,25 +164,22 @@ function FlagTag({ tag }: { tag: string }) {
  */
 function ChatRecord({
   record,
+  person,
   host,
   flagged,
 }: {
   record: TranscriptRecord;
+  /** M-02 counts it as a person's message: the only "You". */
+  person: boolean;
   host?: string;
   flagged: { tag: string; block: 'tool' | null } | null;
 }) {
   const segments = recordSegments(record);
-  // Your own words sit on the right; a record with only tool work in it is
-  // drawn as cards on the left, whoever it was saved under.
-  const own = record.role === 'user' && segments.some((segment) => segment.kind === 'block');
-  const who =
-    record.role === 'user'
-      ? SESSION_WARNINGS_TEXT.you
-      : record.role === 'assistant'
-        ? SESSION_WARNINGS_TEXT.agent
-        : record.role === 'system'
-          ? 'System'
-          : 'Tool';
+  // Only a message M-02 counts as a person's is "You", on the right. Any
+  // other record (an agent's, a sub-agent's prompt, a reminder, tool work)
+  // keeps the transcript's neutral caption for its saved role, on the left.
+  const own = person && segments.some((segment) => segment.kind === 'block');
+  const who = own ? SESSION_WARNINGS_TEXT.you : ROLE_LABEL[record.role];
   const flaggedMessage = flagged !== null && flagged.block === null;
   const body =
     segments.length === 0 ? (
@@ -197,8 +196,11 @@ function ChatRecord({
                   key={`${index}:${block.id}`}
                   data-flagged={flaggedTool || undefined}
                 >
-                  {flaggedTool && <FlagTag tag={flagged.tag} />}
-                  <ToolCallCard block={block} highlighted={flaggedTool} />
+                  <ToolCallCard
+                    block={block}
+                    highlighted={flaggedTool}
+                    tag={flaggedTool ? <FlagTag tag={flagged.tag} /> : undefined}
+                  />
                 </div>
               );
             })}

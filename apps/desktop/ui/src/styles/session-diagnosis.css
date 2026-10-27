@@ -34,6 +34,9 @@
   background: var(--accent-tint);
   color: var(--ink);
 }
+.xt-diagnosis-busy {
+  color: var(--secondary);
+}
 .xt-diagnosis-running {
   display: flex;
   align-items: center;

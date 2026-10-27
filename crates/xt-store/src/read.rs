@@ -112,6 +112,33 @@ impl Store {
         Ok(keyed.into_iter().map(|(_, record)| record).collect())
     }
 
+    /// M-02's answer for a few of one session's records, by UUID: whether
+    /// each is a person's message. The same column [`Store::records`] reads
+    /// as [`StoredRecord::human_is_eligible`]; a UUID the session does not
+    /// hold, or one M-02 has no answer for, is left out.
+    pub fn record_persons(
+        &self,
+        session_id: &str,
+        uuids: &[&str],
+    ) -> Result<BTreeMap<String, bool>> {
+        let mut statement = self.connection.prepare(
+            "SELECT r.uuid,(SELECT human_is_eligible FROM v_human_inputs WHERE uuid=r.uuid)
+             FROM records r WHERE r.session_id=?1 AND r.uuid=?2",
+        )?;
+        let mut persons = BTreeMap::new();
+        for uuid in uuids {
+            let found = statement
+                .query_row([session_id, uuid], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<bool>>(1)?))
+                })
+                .optional()?;
+            if let Some((uuid, Some(person))) = found {
+                persons.insert(uuid, person);
+            }
+        }
+        Ok(persons)
+    }
+
     pub fn counts(&self) -> Result<StoreCounts> {
         Ok(self.connection.query_row(
             "SELECT (SELECT count(*) FROM sessions), (SELECT count(*) FROM records),

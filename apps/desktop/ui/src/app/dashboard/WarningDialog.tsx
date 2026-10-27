@@ -7,15 +7,18 @@ import type { SessionWarningItem } from '../../data/generated/SessionWarningItem
 import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
 import { Modal } from '../../kit/Modal';
 import {
+  BusyDiagnosis,
   DetachedDiagnosis,
   DiagnoseButton,
   DiagnosisPanel,
   usePanelShown,
 } from '../session-diagnosis';
 import { useDiagnose } from '../useSessionDiagnosis';
+import { isRunFor } from '../../data/diagnosis-runs';
 import {
   DismissButton,
   WarningLine,
+  WarningNotes,
   pointsAt,
   useSessionWarning,
   useWarningDismissals,
@@ -112,9 +115,7 @@ function SelectedIssue({
   const panel = usePanelShown(diagnose, shown);
   const stage = diagnose?.stage;
   // One diagnosis runs at a time: another warning's keeps this one waiting.
-  const elsewhere =
-    stage?.kind === 'running' &&
-    (stage.sessionId !== selected.sessionId || stage.warningId !== shown.id);
+  const elsewhere = stage?.kind === 'running' && !isRunFor(stage, selected.sessionId, shown.id);
   const close = () => {
     diagnose?.notNow();
     onClose();
@@ -202,25 +203,14 @@ function SelectedIssue({
                       )}
                     </span>
                   )}
-                  {active && elsewhere && (
-                    <p className="xt-warning-modal-busy" data-testid="diagnosis-busy">
-                      {SESSION_WARNINGS_TEXT.diagnose.busy}
-                    </p>
-                  )}
+                  {active && elsewhere && diagnose && <BusyDiagnosis diagnose={diagnose} />}
                 </>
               )}
-              {warning.returned && (
-                <p className="xt-warning-returned" data-testid="warning-returned">
-                  {warning.returned}
-                </p>
-              )}
-              {press?.refused && (
-                <p className="xt-warning-refused" role="alert" data-testid="warning-refused">
-                  {dismissed
-                    ? SESSION_WARNINGS_TEXT.restore_failed
-                    : SESSION_WARNINGS_TEXT.dismiss_failed}
-                </p>
-              )}
+              <WarningNotes
+                warning={warning}
+                undo={Boolean(dismissed)}
+                refused={Boolean(press?.refused)}
+              />
             </section>
           </div>
         ) : (

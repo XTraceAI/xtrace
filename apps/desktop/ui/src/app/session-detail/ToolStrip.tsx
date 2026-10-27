@@ -1,4 +1,4 @@
-import { useContext, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { RepeatNotice, type ConversationMarker } from './ConversationActivity';
 import { StatePill } from '../../kit';
 import { CodeSurface } from './TranscriptText';
@@ -81,8 +81,11 @@ export function ToolCallCard({
   block,
   cardRef,
   highlighted = false,
+  tag,
 }: {
   block: ToolBlock;
+  /** Drawn at the end of the card's header: the warning window's flag. */
+  tag?: ReactNode;
   /** Where the owning row keeps this card, so a reveal takes it by position. */
   cardRef?: (element: HTMLDivElement | null) => void;
   /** This card is the one a reveal was asked for and landed on. */
@@ -119,6 +122,7 @@ export function ToolCallCard({
             failed
           </StatePill>
         ) : null}
+        {tag}
       </div>
 
       {failed && outcome.error?.trim() ? (

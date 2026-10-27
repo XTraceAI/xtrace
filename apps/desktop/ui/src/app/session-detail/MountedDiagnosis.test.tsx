@@ -153,9 +153,11 @@ it('keeps detached Stop until the run settles and retries false or rejected canc
   }
   fireEvent.click(stop);
   await waitFor(() => expect(stop.getAttribute('aria-disabled')).toBe('true'));
-  expect(screen.getByTestId('diagnosis-running')).toBeTruthy();
+  // Another warning of this session is shown: its run says one runs at a time,
+  // the same words the Dashboard window uses, with Stop waiting once accepted.
+  expect(screen.getByTestId('diagnosis-busy').textContent).toContain(words.busy);
   await h.answer(answers.cancelled!);
-  expect(screen.queryByTestId('diagnosis-running')).toBeNull();
+  expect(screen.queryByTestId('diagnosis-busy')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: warning.name }));
   await screen.findByTestId('diagnosis-result');
 });

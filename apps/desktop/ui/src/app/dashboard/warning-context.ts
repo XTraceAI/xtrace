@@ -4,7 +4,13 @@ export type WarningContext =
   | { kind: 'unavailable'; reason: string }
   | {
       kind: 'excerpt';
-      records: { record: TranscriptRecord; target: boolean; omitted: boolean }[];
+      records: {
+        record: TranscriptRecord;
+        target: boolean;
+        omitted: boolean;
+        /** M-02: a person's message (`true`), or not known to be one. */
+        person: boolean;
+      }[];
       state: TranscriptState;
       neighborsAvailable: boolean;
     };
@@ -42,6 +48,7 @@ export function warningExcerpt(
     records: read.status.records.map((entry) => ({
       record: excerptRecord(entry.record, entry.only_tool_results),
       target: entry.target,
+      person: entry.person === true,
       omitted: entry.omitted_blocks,
     })),
   };

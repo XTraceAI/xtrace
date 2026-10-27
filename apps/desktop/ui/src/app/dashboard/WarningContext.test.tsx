@@ -161,3 +161,21 @@ it('shows the exact generation note and unavailable-history sentence without ren
     0,
   );
 });
+
+it('says "You" only for a message M-02 counts as a person\'s, and the neutral role caption otherwise', async () => {
+  const h = mount();
+  await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
+  const status = excerpt();
+  if (status.state !== 'loaded') throw Error('Missing fixture');
+  // A sub-agent prompt, a reminder or command output is saved under the user
+  // role too: without M-02's yes it is not "You".
+  status.records = status.records.map((entry) => ({ ...entry, person: null }));
+  await act(async () => h.calls[0]!.resolve(status));
+  expect(screen.queryByText(SESSION_WARNINGS_TEXT.you)).toBeNull();
+  const target = screen
+    .getByTestId('warning-context')
+    .querySelector<HTMLElement>('[data-record-id="target"]')!;
+  expect(target.dataset.own).toBeUndefined();
+  expect(target.querySelector('.xt-chat-who')!.textContent).toContain('User');
+  expect(target.querySelector('.xt-chat-bubble')).toBeNull();
+});
