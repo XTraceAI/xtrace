@@ -79,6 +79,7 @@ const loaded = (list: SourceRecord[] = records()): SessionSourceStatus => ({
   state: 'loaded',
   generation: { generation: 'indexed', appended: false },
   sources: 1,
+  record_ranges: [{ start: 0, end: list.length }],
   dropped_records: 0,
   gaps: [],
   records: list,
@@ -861,7 +862,7 @@ it('keeps one active announcement when Agent activity measurements are open', as
 
 it('enables adjacent record groups only for one native source, never for unknown legacy source boundaries', async () => {
   const single = loaded([records()[1]!, { ...records()[1]!, id: 'another' }]);
-  const multiple = { ...single, sources: 2 };
+  const multiple = { ...single, sources: 2, record_ranges: [] };
   const { data } = source({ transcripts: { [SESSION]: single, [OTHER_SESSION]: multiple } });
   const other = `/sessions/${OTHER_SESSION}`;
   mount(data, `/sessions/${SESSION}`, other);

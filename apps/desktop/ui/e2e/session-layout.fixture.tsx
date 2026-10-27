@@ -73,6 +73,7 @@ source.sessionTranscript = async () =>
         state: 'loaded',
         generation: { generation: 'indexed', appended: true },
         sources: 1,
+        record_ranges: [{ start: 0, end: records.length }],
         dropped_records: 0,
         gaps: [{ gap: 'missing' }],
         records,

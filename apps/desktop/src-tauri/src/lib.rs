@@ -43,6 +43,8 @@ mod rule_activity_dto;
 pub mod session_compactions;
 pub mod session_diagnosis;
 mod session_diagnosis_dto;
+mod session_excerpt_dto;
+mod session_page_dto;
 mod session_source_dto;
 pub mod session_titles;
 pub mod session_warnings_dto;
@@ -514,6 +516,70 @@ async fn codex_transcript_page(
         state.codex_transcript_page(
             &session_id,
             &selection,
+            read.token(),
+            index.detail_readers(),
+        )
+    })
+    .await
+}
+
+/// One bounded page, read on the worker and cancelled by the view's read ID.
+#[tauri::command]
+async fn session_transcript_page(
+    app: tauri::AppHandle,
+    session_id: String,
+    selection: dto::SessionPageSelection,
+    read_id: String,
+) -> Result<dto::SessionPageStatus, String> {
+    on_worker(READ_WORKER_FAILED, move || {
+        let reads = app
+            .try_state::<transcript_reads::TranscriptReads>()
+            .ok_or(state::StateError::Closed)?;
+        let read = reads
+            .begin(&read_id)
+            .map_err(|_| state::StateError::ReadRefused)?;
+        let state = app
+            .try_state::<state::AppState>()
+            .ok_or(state::StateError::Closed)?;
+        let index = app
+            .try_state::<native_index::NativeIndex>()
+            .ok_or(state::StateError::Closed)?;
+        state.session_transcript_page(
+            &session_id,
+            &selection,
+            read.token(),
+            index.detail_readers(),
+        )
+    })
+    .await
+}
+
+/// Original messages around one warning, read under this view's cancel token.
+#[tauri::command]
+async fn session_warning_context(
+    app: tauri::AppHandle,
+    session_id: String,
+    record_uuid: String,
+    block: Option<u32>,
+    read_id: String,
+) -> Result<dto::SessionExcerptStatus, String> {
+    on_worker(READ_WORKER_FAILED, move || {
+        let reads = app
+            .try_state::<transcript_reads::TranscriptReads>()
+            .ok_or(state::StateError::Closed)?;
+        let read = reads
+            .begin(&read_id)
+            .map_err(|_| state::StateError::ReadRefused)?;
+        let state = app
+            .try_state::<state::AppState>()
+            .ok_or(state::StateError::Closed)?;
+        let index = app
+            .try_state::<native_index::NativeIndex>()
+            .ok_or(state::StateError::Closed)?;
+        state.session_warning_context(
+            &session_id,
+            &record_uuid,
+            block,
             read.token(),
             index.detail_readers(),
         )
@@ -1636,6 +1702,8 @@ pub fn run() {
             restore_session_warning,
             session_transcript,
             codex_transcript_page,
+            session_transcript_page,
+            session_warning_context,
             cancel_session_transcript,
             session_titles,
             cancel_session_titles,

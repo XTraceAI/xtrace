@@ -109,6 +109,7 @@ export function CodexPagedTranscript({
       state: 'loaded',
       generation: { generation: 'unrecorded' },
       sources: 1,
+      record_ranges: [{ start: 0, end: page.records.length }],
       records: page.records,
       gaps: [],
       dropped_records: 0,

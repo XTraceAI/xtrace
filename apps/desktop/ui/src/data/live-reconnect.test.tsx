@@ -770,6 +770,7 @@ const transcript: SessionSourceStatus = {
   state: 'loaded',
   generation: { generation: 'indexed', appended: false },
   sources: 1,
+  record_ranges: [{ start: 0, end: 1 }],
   dropped_records: 0,
   gaps: [],
   records: [

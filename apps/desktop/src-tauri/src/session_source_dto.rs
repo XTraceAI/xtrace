@@ -35,6 +35,8 @@ pub enum SessionSourceStatus {
         /// This session's records, in the order they were read: its own
         /// transcript, then each subagent transcript filed under it.
         records: Vec<crate::transcript_dto::SourceRecord>,
+        /// Half-open ranges into records, one per source, including empty sources.
+        record_ranges: Vec<SessionSourceRange>,
         /// Records the canonical parser accepted but could not identify. They
         /// are counted, never shown as turns.
         dropped_records: u32,
@@ -45,6 +47,37 @@ pub enum SessionSourceStatus {
     /// The text may not be shown. The session's measurements are unaffected:
     /// this says nothing about whether the work happened.
     Unavailable { reason: SessionSourceReason },
+}
+
+/// One source’s accepted records in the flattened transcript, as [start, end).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct SessionSourceRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+fn record_ranges(
+    session: &xt_ingest::native::session_source::LoadedSession,
+) -> Result<Vec<SessionSourceRange>, &'static str> {
+    let mut end = 0usize;
+    let ranges = session
+        .sources
+        .iter()
+        .map(|source| {
+            let start = end;
+            end = end
+                .checked_add(source.record_count)
+                .ok_or("transcript source record count overflow")?;
+            Ok(SessionSourceRange {
+                start: count(start)?,
+                end: count(end)?,
+            })
+        })
+        .collect::<Result<Vec<_>, &'static str>>()?;
+    if end != session.records.len() {
+        return Err("transcript source ranges do not cover its records");
+    }
+    Ok(ranges)
 }
 
 /// How the text relates to the generation the saved measurements were taken
@@ -243,20 +276,58 @@ fn limit(ceiling: SourceCeiling) -> SessionSourceLimit {
     }
 }
 
+pub(crate) fn source_reason(
+    reason: &SourceUnavailable,
+) -> Result<SessionSourceReason, &'static str> {
+    Ok(match reason {
+        SourceUnavailable::Missing => SessionSourceReason::Missing,
+        // The place a moved source was found is local history
+        // metadata; the view is told that it moved, not where to.
+        SourceUnavailable::Moved { .. } => SessionSourceReason::Moved,
+        SourceUnavailable::Replaced { .. } => SessionSourceReason::Replaced,
+        // The failure kind stays local: it is a diagnostic, and a
+        // diagnostic is exactly the kind of free text that must
+        // not carry a path or a fragment of a transcript.
+        SourceUnavailable::Unreadable { .. } => SessionSourceReason::Unreadable,
+        SourceUnavailable::Ambiguous { candidates } => SessionSourceReason::Ambiguous {
+            candidates: count(*candidates)?,
+        },
+        SourceUnavailable::TooLarge {
+            limit: ceiling,
+            reached,
+            ceiling: bound,
+        } => SessionSourceReason::TooLarge {
+            limit: limit(*ceiling),
+            reached: *reached,
+            ceiling: *bound,
+        },
+        SourceUnavailable::Cancelled => SessionSourceReason::Cancelled,
+        SourceUnavailable::InvalidIdentifier => SessionSourceReason::InvalidIdentifier,
+        SourceUnavailable::PrerequisiteUnavailable => SessionSourceReason::PrerequisiteUnavailable,
+        SourceUnavailable::UnsupportedHistory => SessionSourceReason::UnsupportedHistory,
+        SourceUnavailable::UnsupportedHost => SessionSourceReason::UnsupportedHost,
+        SourceUnavailable::Reader(failure) => reader_reason(*failure),
+    })
+}
+impl From<GenerationBasis> for SessionGeneration {
+    fn from(basis: GenerationBasis) -> Self {
+        match basis {
+            GenerationBasis::Indexed { appended } => Self::Indexed { appended },
+            GenerationBasis::Unrecorded => Self::Unrecorded,
+        }
+    }
+}
+
 impl TryFrom<&SessionSourceOutcome> for SessionSourceStatus {
     type Error = &'static str;
 
     fn try_from(outcome: &SessionSourceOutcome) -> Result<Self, Self::Error> {
         Ok(match outcome {
             SessionSourceOutcome::Loaded(session) => Self::Loaded {
-                generation: match session.generation {
-                    GenerationBasis::Indexed { appended } => {
-                        SessionGeneration::Indexed { appended }
-                    }
-                    GenerationBasis::Unrecorded => SessionGeneration::Unrecorded,
-                },
+                generation: session.generation.into(),
                 sources: count(session.sources.len())?,
                 records: crate::transcript_dto::records(&session.records)?,
+                record_ranges: record_ranges(session)?,
                 dropped_records: count(
                     usize::try_from(session.dropped_records).unwrap_or(usize::MAX),
                 )?,
@@ -277,39 +348,7 @@ impl TryFrom<&SessionSourceOutcome> for SessionSourceStatus {
                     .collect(),
             },
             SessionSourceOutcome::Unavailable(reason) => Self::Unavailable {
-                reason: match reason {
-                    SourceUnavailable::Missing => SessionSourceReason::Missing,
-                    // The place a moved source was found is local history
-                    // metadata; the view is told that it moved, not where to.
-                    SourceUnavailable::Moved { .. } => SessionSourceReason::Moved,
-                    SourceUnavailable::Replaced { .. } => SessionSourceReason::Replaced,
-                    // The failure kind stays local: it is a diagnostic, and a
-                    // diagnostic is exactly the kind of free text that must
-                    // not carry a path or a fragment of a transcript.
-                    SourceUnavailable::Unreadable { .. } => SessionSourceReason::Unreadable,
-                    SourceUnavailable::Ambiguous { candidates } => SessionSourceReason::Ambiguous {
-                        candidates: count(*candidates)?,
-                    },
-                    SourceUnavailable::TooLarge {
-                        limit: ceiling,
-                        reached,
-                        ceiling: bound,
-                    } => SessionSourceReason::TooLarge {
-                        limit: limit(*ceiling),
-                        reached: *reached,
-                        ceiling: *bound,
-                    },
-                    SourceUnavailable::Cancelled => SessionSourceReason::Cancelled,
-                    SourceUnavailable::InvalidIdentifier => SessionSourceReason::InvalidIdentifier,
-                    SourceUnavailable::PrerequisiteUnavailable => {
-                        SessionSourceReason::PrerequisiteUnavailable
-                    }
-                    SourceUnavailable::UnsupportedHistory => {
-                        SessionSourceReason::UnsupportedHistory
-                    }
-                    SourceUnavailable::UnsupportedHost => SessionSourceReason::UnsupportedHost,
-                    SourceUnavailable::Reader(failure) => reader_reason(*failure),
-                },
+                reason: source_reason(reason)?,
             },
         })
     }
@@ -376,10 +415,57 @@ mod tests {
         })));
         assert_eq!(
             wire,
-            r#"{"state":"loaded","generation":{"generation":"unrecorded"},"sources":1,"records":[{"id":"11111111-1111-4111-8111-111111111111","role":"assistant","at":"2026-09-07T12:00:00.000Z","blocks":[{"kind":"text","index":0,"text":"reading it"},{"kind":"tool_call","index":1,"name":"Read","call_id":"toolu_1","input":{"kind":"json","value":{"file_path":"/repo/a.txt"}}}]}],"dropped_records":0,"gaps":[]}"#
+            r#"{"state":"loaded","generation":{"generation":"unrecorded"},"sources":1,"records":[{"id":"11111111-1111-4111-8111-111111111111","role":"assistant","at":"2026-09-07T12:00:00.000Z","blocks":[{"kind":"text","index":0,"text":"reading it"},{"kind":"tool_call","index":1,"name":"Read","call_id":"toolu_1","input":{"kind":"json","value":{"file_path":"/repo/a.txt"}}}]}],"record_ranges":[{"start":0,"end":1}],"dropped_records":0,"gaps":[]}"#
         );
         // The transcript crosses; where it lives does not.
         assert!(!wire.contains(".claude"), "{wire}");
+    }
+
+    #[test]
+    fn source_ranges_cover_retained_records_including_empty_sources_without_paths() {
+        let record = parsed(
+            serde_json::json!({"uuid":"record", "type":"user", "message":{"role":"user","content":"synthetic"}}),
+        );
+        let mut session = LoadedSession {
+            native_session_id: "synthetic".into(),
+            host: Host::Claude,
+            generation: GenerationBasis::Unrecorded,
+            sources: [2usize, 0, 3]
+                .into_iter()
+                .enumerate()
+                .map(|(index, record_count)| ReadSource {
+                    path: PathBuf::from(format!("/private/source-{index}.jsonl")),
+                    role: if index == 0 {
+                        SourceRole::Primary
+                    } else {
+                        SourceRole::Sidechain
+                    },
+                    bytes: 1,
+                    record_count,
+                })
+                .collect(),
+            records: vec![record; 5],
+            other_lines: 0,
+            dropped_records: 3,
+            gaps: vec![],
+        };
+        let wire = serde_json::to_value(
+            SessionSourceStatus::try_from(&SessionSourceOutcome::Loaded(Box::new(session.clone())))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            wire["record_ranges"],
+            serde_json::json!([{"start":0,"end":2},{"start":2,"end":2},{"start":2,"end":5}])
+        );
+        assert!(!wire.to_string().contains("/private/"));
+        session.sources[2].record_count = 2;
+        assert!(record_ranges(&session).is_err());
+        session.sources[0].record_count = usize::MAX;
+        assert!(record_ranges(&session).is_err());
+        session.sources[0].record_count = u32::MAX as usize;
+        session.sources[1].record_count = 1;
+        assert!(record_ranges(&session).is_err());
     }
 
     /// Every way the pinned reader can refuse crosses as one closed reason:
@@ -571,7 +657,7 @@ mod tests {
         })));
         assert_eq!(
             wire,
-            r#"{"state":"loaded","generation":{"generation":"indexed","appended":true},"sources":1,"records":[],"dropped_records":2,"gaps":[{"gap":"discovery_incomplete"},{"gap":"missing"},{"gap":"stopped","line":41}]}"#
+            r#"{"state":"loaded","generation":{"generation":"indexed","appended":true},"sources":1,"records":[],"record_ranges":[{"start":0,"end":0}],"dropped_records":2,"gaps":[{"gap":"discovery_incomplete"},{"gap":"missing"},{"gap":"stopped","line":41}]}"#
         );
         // A gap names that something is missing, never the file it is in.
         assert!(!wire.contains(".claude"), "{wire}");
