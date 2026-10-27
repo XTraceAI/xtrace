@@ -249,4 +249,5 @@ reuses the existing supervised process and canonical parser, opts into the
 page header only for this read, and checks identity, roots, interval, digest,
 anchor and cursor boundary. A changed generation, missing/ambiguous target,
 invalid cursor, oversized required record, unsupported history or other reader
-refusal returns no records.
+refusal returns no records. The DTO independently bounds encoded output,
+trimming only an edge while preserving the target and advancing cursors.

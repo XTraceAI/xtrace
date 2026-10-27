@@ -14,6 +14,7 @@ mod account_usage_dto;
 mod account_usage_history;
 mod account_usage_process;
 mod bundle_rename;
+mod codex_page_dto;
 pub mod dashboard;
 mod dashboard_dto;
 pub mod dto;
