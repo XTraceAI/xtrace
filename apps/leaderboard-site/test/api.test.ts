@@ -268,9 +268,9 @@ describe('PUT /api/score', () => {
     assert.deepEqual(rows, [{ leverage_tenths: 123, at_clock: true }]);
   });
 
-  test('accepts 0, 100000 and null', async () => {
+  test('accepts 0, 1000000000 and null', async () => {
     const key = await join(h.app, 'bounds');
-    for (const value of [0, 100000, null]) {
+    for (const value of [0, 100000, 1000000000, null]) {
       await score(h.app, key, value);
       const rows = await h.query('select leverage_tenths from members');
       assert.equal(rows[0]!.leverage_tenths, value);
@@ -281,7 +281,9 @@ describe('PUT /api/score', () => {
     const key = await join(h.app, 'invalid');
     for (const body of [
       { leverage_tenths: -1 },
-      { leverage_tenths: 100001 },
+      { leverage_tenths: 1000000001 },
+      { leverage_tenths: 2 ** 31 },
+      { leverage_tenths: Number.MAX_SAFE_INTEGER + 2 },
       { leverage_tenths: 12.3 },
       { leverage_tenths: '123' },
       { leverage_tenths: true },

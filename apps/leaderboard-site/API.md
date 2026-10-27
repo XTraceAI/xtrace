@@ -36,7 +36,7 @@ Body `{"nickname": string, "email": string}`.
 
 Body `{"leverage_tenths": integer | null}` — the 7-day leverage times ten, as the app writes it to one decimal
 (e.g. 12.3× → 123). `null` means the app has no 7-day number; the member is then not listed.
-Integer 0…100000 inclusive, else 400 `invalid_leverage`. Sets `score_updated_at = now()`.
+Integer 0…1000000000 inclusive (changed 2026-10-27 from 100000: a few seconds of your own time against long agent runs can exceed 10,000×), else 400 `invalid_leverage`. Sets `score_updated_at = now()`.
 
 - 204 (no body)
 - 401 `unknown_key`
@@ -82,7 +82,7 @@ create table if not exists members (
   nickname_key text not null unique,      -- lower(nickname)
   email text not null,
   key_hash bytea not null unique,         -- sha256(key)
-  leverage_tenths integer check (leverage_tenths between 0 and 100000),
+  leverage_tenths integer check (leverage_tenths between 0 and 1000000000),
   score_updated_at timestamptz,
   created_at timestamptz not null default now()
 );

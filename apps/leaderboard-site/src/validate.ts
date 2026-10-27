@@ -2,7 +2,7 @@
 // are the only copies of these rules.
 
 const NICKNAME = /^[A-Za-z0-9_-]{3,20}$/;
-export const MAX_LEVERAGE_TENTHS = 100000;
+export const MAX_LEVERAGE_TENTHS = 1_000_000_000;
 const MAX_EMAIL_LENGTH = 254;
 
 export type Nickname = { nickname: string; nicknameKey: string };

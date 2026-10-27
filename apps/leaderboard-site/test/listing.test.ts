@@ -183,6 +183,11 @@ describe('GET /', () => {
     assert.equal(await head.text(), '');
   });
 
+  test('the largest allowed number fits on the page', async () => {
+    await score(h.app, await join(h.app, 'a_twenty_char_name_1'), 1000000000);
+    assert.deepEqual(pageNames((await page()).html), [['a_twenty_char_name_1', '100000000.0×']]);
+  });
+
   test('empty state', async () => {
     const { html } = await page();
     assert.match(html, /No one is listed yet\./);
@@ -210,6 +215,8 @@ describe('GET /', () => {
     assert.equal(formatLeverage(10), '1.0×');
     assert.equal(formatLeverage(123), '12.3×');
     assert.equal(formatLeverage(100000), '10000.0×');
+    assert.equal(formatLeverage(1234567890), '123456789.0×');
+    assert.equal(formatLeverage(1000000000), '100000000.0×');
     assert.equal(escapeHtml(`a&b<c>d"e'f`), 'a&amp;b&lt;c&gt;d&quot;e&#39;f');
   });
 });

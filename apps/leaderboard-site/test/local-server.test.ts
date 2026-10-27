@@ -46,8 +46,12 @@ test('schema.sql can be applied again without changes', async () => {
   );
   await assert.rejects(
     query(
-      `insert into members (nickname, nickname_key, email, key_hash, leverage_tenths) values ('a','a','a',decode('01','hex'),100001)`,
+      `insert into members (nickname, nickname_key, email, key_hash, leverage_tenths) values ('a','a','a',decode('01','hex'),1000000001)`,
     ),
+    /check constraint/,
+  );
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, leverage_tenths) values ('b','b','b',decode('02','hex'),1000000000)`,
   );
   await db.close();
 });
