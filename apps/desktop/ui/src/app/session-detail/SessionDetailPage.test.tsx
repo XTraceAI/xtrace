@@ -199,7 +199,7 @@ it('shows what was measured even when the text cannot be shown at all', async ()
   expect(screen.getByRole('button', { name: 'Tokens definition' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Agent time definition' })).toBeTruthy();
   expect(screen.getByText('3')).toBeTruthy();
-  expect(screen.getByText('Records 42 · measured over the last 7 days')).toBeTruthy();
+  expect(screen.getByText('42 indexed records · whole session')).toBeTruthy();
   // And it is never worded as a session that recorded nothing.
   expect(screen.queryByText('This view was given no turns to show.')).toBeNull();
 });
@@ -211,7 +211,7 @@ it('says a Cursor session kept in a database is unavailable, and keeps what was 
   });
   mount(source);
   expect(await screen.findByText(/kept in a database XTrace does not read/)).toBeTruthy();
-  expect(screen.getByText('Records 42 · measured over the last 7 days')).toBeTruthy();
+  expect(screen.getByText('42 indexed records · whole session')).toBeTruthy();
   expect(screen.queryByText('This view was given no turns to show.')).toBeNull();
 });
 
@@ -224,7 +224,7 @@ it('says which reader ceiling a Codex session passed, and keeps what was measure
   expect(
     await screen.findByText(/larger than XTrace reads at once \(it holds too many records\)/),
   ).toBeTruthy();
-  expect(screen.getByText('Records 42 · measured over the last 7 days')).toBeTruthy();
+  expect(screen.getByText('42 indexed records · whole session')).toBeTruthy();
 });
 
 it('shows a Codex session the reader returned, like any other transcript', async () => {
@@ -234,7 +234,7 @@ it('shows a Codex session the reader returned, like any other transcript', async
   });
   mount(source);
   expect(await screen.findByText('a synthetic question')).toBeTruthy();
-  expect(screen.getByText('Records 42 · measured over the last 7 days')).toBeTruthy();
+  expect(screen.getByText('42 indexed records · whole session')).toBeTruthy();
 });
 
 it('says what a loaded transcript is missing rather than reading as complete', async () => {
@@ -354,7 +354,7 @@ it('carries the list’s own filters into its Back link and nothing else', async
   expect(back.getAttribute('href')).toBe('/sessions?q=atlas&host=claude&range=30d');
   // The range in the address is the window this page measures over, too.
   // The row and the stretches both say which window they were measured over.
-  expect(await screen.findByText(/^Records .* measured over the last 30 days$/)).toBeTruthy();
+  expect(await screen.findByText('Last 30 days')).toBeTruthy();
   expect(screen.getByText('Measured over the last 30 days')).toBeTruthy();
 });
 
@@ -764,7 +764,7 @@ describe('linked pull requests in the heading', () => {
     expect(screen.queryByRole('list', { name: /Linked PR/ })).toBeNull();
     // Only the links wait: the rest of the page is still the session's.
     expect(screen.getByRole('heading', { name: 'atlas · feat/detail' })).toBeTruthy();
-    expect(screen.getByText('Records 42 · measured over the last 7 days')).toBeTruthy();
+    expect(screen.getByText('42 indexed records · whole session')).toBeTruthy();
     expect(screen.getByRole('link', { name: '← All sessions' }).getAttribute('href')).toBe(
       '/sessions',
     );

@@ -37,12 +37,14 @@ export type RevealOutcome = 'revealed' | 'not_found';
 
 export interface RevealChannel {
   readonly request: RevealRequest | null;
+  readonly scroll: (target: HTMLElement) => void;
   readonly report: (token: number, outcome: RevealOutcome) => void;
 }
 
 export const RevealContext = createContext<RevealChannel>({
   request: null,
   report: () => {},
+  scroll: (target) => revealInTranscript(null, target),
 });
 
 /** Whether the reader asked for less motion. Absent support means no preference. */
@@ -52,4 +54,24 @@ export function prefersReducedMotion(): boolean {
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
+}
+
+/** Scroll only the explicit reading area; ordinary transcript callers keep page scrolling. */
+export function revealInTranscript(owner: HTMLElement | null, target: HTMLElement): void {
+  const behavior = prefersReducedMotion() ? 'auto' : 'smooth';
+  if (
+    owner?.isConnected &&
+    owner.contains(target) &&
+    /^(auto|scroll)$/.test(getComputedStyle(owner).overflowY)
+  ) {
+    owner.scrollIntoView?.({ block: 'nearest', behavior });
+    const item = target.getBoundingClientRect();
+    const currentBox = owner.getBoundingClientRect();
+    const start = owner.scrollTop + item.top - currentBox.top - owner.clientTop;
+    const top =
+      item.height > owner.clientHeight ? start : start - (owner.clientHeight - item.height) / 2;
+    owner.scrollTo?.({ top: Math.max(0, top), behavior });
+  } else {
+    target.scrollIntoView?.({ block: 'center', behavior });
+  }
 }

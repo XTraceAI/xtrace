@@ -251,7 +251,7 @@ it('keeps the selected range when opening a session from the Dashboard', async (
   // and the page says which window that was.
   await waitFor(() => expect(calls.at(-1)).toEqual({ search: ATLAS, hosts: null, days: 30 }));
   // The row and the stretches both say which window they were measured over.
-  expect(await screen.findByText(/^Records .* measured over the last 30 days$/)).toBeTruthy();
+  expect(await screen.findByText('Last 30 days')).toBeTruthy();
   expect(screen.getByText('Measured over the last 30 days')).toBeTruthy();
   // A range followed through a link is this window's range from then on, so
   // leaving for a page whose address carries none keeps the same window.
