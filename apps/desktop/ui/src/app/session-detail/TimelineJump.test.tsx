@@ -1,3 +1,9 @@
+import {
+  answer as warningAnswer,
+  dismissedAnswer,
+  warning as suppliedWarning,
+  second as suppliedSecond,
+} from '../../../e2e/session-warnings.data';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { queryKeys } from '../../data/query-client';
@@ -1383,3 +1389,44 @@ it.each(['later', 'changed'] as const)(
     expect(rowReads).toBe(1);
   },
 );
+
+// Warning navigation shares this mounted bounded reader; it never requests a page.
+it('keeps the bounded portion through warning selection, Dismiss and Undo', async () => {
+  const h = codexSource();
+  let current = warningAnswer;
+  h.data.sessionWarnings = async (ids, timezone) => ({
+    timezone,
+    sessions: ids.map((session_id) => ({ session_id, answer: current })),
+  });
+  Object.defineProperty(h.data, 'warningDismissals', {
+    value: {
+      dismiss: async (session_id: string, warning_id: string) => {
+        current = dismissedAnswer;
+        return { session_id, warning_id, dismissed: true };
+      },
+      restore: async (session_id: string, warning_id: string) => {
+        current = warningAnswer;
+        return { session_id, warning_id, dismissed: false };
+      },
+    },
+  });
+  mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(suppliedWarning.id)}`);
+  await screen.findByText('synthetic beginning');
+  fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+  await screen.findByText('synthetic later portion');
+  const activeRead = h.reads.at(-1)!.id;
+  fireEvent.click(await screen.findByRole('button', { name: suppliedSecond.name }));
+  const selected = screen.getByRole('list', { name: 'Selected warning' });
+  expect(selected.textContent).toContain(suppliedSecond.reason);
+  fireEvent.click(screen.getByRole('button', { name: suppliedWarning.name }));
+  fireEvent.click(within(selected).getByRole('button', { name: 'Dismiss' }));
+  const undo = await within(selected).findByRole('button', { name: 'Undo' });
+  await waitFor(() => expect(document.activeElement).toBe(undo));
+  fireEvent.click(undo);
+  await waitFor(() =>
+    expect(document.activeElement).toBe(within(selected).getByRole('button', { name: 'Dismiss' })),
+  );
+  expect(screen.getByText('synthetic later portion')).toBeTruthy();
+  expect(h.cancelled).not.toContain(activeRead);
+  expect(h.reads.map((read) => read.selection.kind)).toEqual(['first', 'cursor']);
+});

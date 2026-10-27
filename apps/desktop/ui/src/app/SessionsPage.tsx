@@ -62,6 +62,12 @@ import { SessionsSummary, SUMMARY_SCOPE, SUMMARY_SCOPE_SHORT } from './SessionsS
 import { GroupToggle, ParentMarker, parentName, verifiedParent } from './session-parent';
 import { useSessionTitles, useVisibleIds, type TitleRow } from './session-titles';
 import {
+  SessionWarningMarker,
+  useSessionWarnings,
+  warningHref,
+  type WarningsLookup,
+} from './session-warnings';
+import {
   isLiveSessionHost,
   useLiveSessionStatus,
   type LiveSessionStatus,
@@ -256,6 +262,7 @@ const buildColumns = (
   observe: ReturnType<typeof useVisibleIds>['observe'],
   liveStatus: (id: string) => LiveSessionStatus | undefined,
   onToggle: (group: string) => void,
+  warnings: WarningsLookup,
 ): Column<TableRow>[] => [
   {
     key: 'host',
@@ -342,6 +349,7 @@ const buildColumns = (
             {isLiveSessionHost(row.host) && liveStatus(row.id) !== 'running' && (
               <LiveSessionBadge host={row.host} status={liveStatus(row.id)} />
             )}
+            <SessionWarningMarker answer={warnings(row.id)} to={warningHref(row.id, '', address)} />
           </span>
           {parent ? (
             // The parent leads the second line, where the row's other
@@ -884,10 +892,28 @@ export function SessionsPage() {
     JSON.stringify(['sessions', days, search, hostKey, withPrs, sort]),
     shownRows.filter((row) => !verifiedParent(row)).map((row) => row.id),
   );
+  // M-21 over each drawn session's whole history, in the list's zone: the
+  // same answer the Dashboard and the session's page show.
+  const warnings = useSessionWarnings(
+    supportedList && !query.isError
+      ? shownRows.filter((row) => visible.has(row.id)).map((row) => row.id)
+      : [],
+    pages?.[0]?.window.timezone,
+  );
   // Each cell shares this view's title, parent-name and live-state lookups.
   const columns = useMemo(
-    () => buildColumns(params, hostTitle, nameParent, compaction, observe, liveStatus, toggleGroup),
-    [params, hostTitle, nameParent, compaction, observe, liveStatus, toggleGroup],
+    () =>
+      buildColumns(
+        params,
+        hostTitle,
+        nameParent,
+        compaction,
+        observe,
+        liveStatus,
+        toggleGroup,
+        warnings,
+      ),
+    [params, hostTitle, nameParent, compaction, observe, liveStatus, toggleGroup, warnings],
   );
   // Whether a host's scan is a problem is the app's one answer, shared with
   // the sidebar, Welcome and Settings; a host waiting on the running scan is not.
