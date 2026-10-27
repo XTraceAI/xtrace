@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { MAX_BODY_BYTES } from '../src/http.js';
-import { harness, join, me, readJson, request, score, START, type Harness } from './support.js';
+import {
+  harness,
+  join,
+  me,
+  nextIp,
+  readJson,
+  request,
+  score,
+  START,
+  TEST_IP_SECRET,
+  type Harness,
+} from './support.js';
 
 let h: Harness;
 before(async () => {
@@ -16,8 +26,8 @@ after(async () => {
   await h.db.close();
 });
 
-const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
-const post = (body: unknown) => h.app.join.POST(request('POST', '/api/join', { body }));
+const post = (body: unknown) =>
+  h.app.join.POST(request('POST', '/api/join', { body, ip: nextIp() }));
 
 async function expectError(response: Response, status: number, code: string) {
   assert.equal(response.status, status);
@@ -25,41 +35,7 @@ async function expectError(response: Response, status: number, code: string) {
   assert.deepEqual(await readJson(response), { error: code });
 }
 
-describe('POST /api/join', () => {
-  test('returns a 43-character key and stores only its hash', async () => {
-    const response = await post({ nickname: '  Ada_01 ', email: '  Ada@Example.COM ' });
-    assert.equal(response.status, 201);
-    const body = (await readJson(response)) as { key: string; nickname: string };
-    assert.deepEqual(Object.keys(body).sort(), ['key', 'nickname']);
-    assert.equal(body.nickname, 'Ada_01');
-    assert.match(body.key, /^[A-Za-z0-9_-]{43}$/);
-    assert.equal(Buffer.from(body.key, 'base64url').length, 32);
-
-    const rows = await h.query(
-      `select nickname, nickname_key, email, encode(key_hash, 'hex') as key_hash,
-              leverage_tenths, score_updated_at, row_to_json(members)::text as whole
-       from members`,
-    );
-    assert.equal(rows.length, 1);
-    const row = rows[0]!;
-    assert.equal(row.nickname, 'Ada_01');
-    assert.equal(row.nickname_key, 'ada_01');
-    assert.equal(row.email, 'ada@example.com');
-    assert.equal(row.key_hash, sha256(body.key));
-    assert.equal(row.leverage_tenths, null);
-    assert.equal(row.score_updated_at, null);
-    // The key itself appears nowhere in the stored row, in any encoding.
-    const whole = String(row.whole);
-    assert.ok(!whole.includes(body.key));
-    assert.ok(!whole.includes(Buffer.from(body.key, 'base64url').toString('hex')));
-  });
-
-  test('gives every member a different key', async () => {
-    const a = await join(h.app, 'alpha');
-    const b = await join(h.app, 'bravo');
-    assert.notEqual(a, b);
-  });
-
+describe('POST /api/join checks the body first', () => {
   test('refuses bodies that are not a JSON object with string fields', async () => {
     const raw = (text: string) => h.app.join.POST(request('POST', '/api/join', { raw: text }));
     await expectError(await raw('not json'), 400, 'invalid_request');
@@ -90,8 +66,8 @@ describe('POST /api/join', () => {
       '   ',
     ])
       await expectError(await post({ nickname, email: 'a@b.co' }), 400, 'invalid_nickname');
-    for (const nickname of ['abc', 'a'.repeat(20), 'A-b_9', ' trimmed '])
-      assert.equal((await post({ nickname, email: 'a@b.co' })).status, 201, nickname);
+    for (const [index, nickname] of ['abc', 'a'.repeat(20), 'A-b_9', ' trimmed '].entries())
+      assert.equal((await post({ nickname, email: `n${index}@b.co` })).status, 202, nickname);
   });
 
   test('checks emails', async () => {
@@ -112,28 +88,11 @@ describe('POST /api/join', () => {
       await expectError(await post({ nickname: `bad${index}`, email }), 400, 'invalid_email');
     const good = ['a@b.co', 'first.last+tag@sub.example.org', `${'a'.repeat(249)}@b.co`];
     for (const [index, email] of good.entries())
-      assert.equal((await post({ nickname: `good${index}`, email })).status, 201, email);
+      assert.equal((await post({ nickname: `good${index}`, email })).status, 202, email);
   });
 
   test('nickname is checked before email', async () => {
     await expectError(await post({ nickname: 'x', email: 'bad' }), 400, 'invalid_nickname');
-  });
-
-  test('nicknames are unique ignoring case; emails are not unique', async () => {
-    assert.equal((await post({ nickname: 'Taken', email: 'same@example.com' })).status, 201);
-    await expectError(
-      await post({ nickname: 'taken', email: 'x@example.com' }),
-      409,
-      'nickname_taken',
-    );
-    await expectError(
-      await post({ nickname: ' TAKEN ', email: 'x@example.com' }),
-      409,
-      'nickname_taken',
-    );
-    assert.equal((await post({ nickname: 'Other', email: 'SAME@example.com' })).status, 201);
-    const rows = await h.query('select count(*)::int as n from members');
-    assert.equal(rows[0]!.n, 2);
   });
 });
 
@@ -151,7 +110,7 @@ describe('request body size', () => {
     assert.equal(Buffer.byteLength(padded(MAX_BODY_BYTES)), 4096);
     assert.equal(
       (await h.app.join.POST(request('POST', '/api/join', { raw: padded(4096) }))).status,
-      201,
+      202,
     );
     await h.reset();
     await expectError(
@@ -187,7 +146,7 @@ describe('request body size', () => {
   });
 
   test('applies to PUT /api/score and PATCH /api/me too', async () => {
-    const key = await join(h.app, 'limits');
+    const key = await join(h, 'limits');
     const huge = JSON.stringify({ leverage_tenths: 1, pad: 'x'.repeat(5000) });
     await expectError(
       await h.app.score.PUT(request('PUT', '/api/score', { key, raw: huge })),
@@ -204,7 +163,7 @@ describe('request body size', () => {
 
 describe('keys', () => {
   test('missing, malformed and unknown keys get 401 unknown_key on every "me" endpoint', async () => {
-    await join(h.app, 'someone');
+    await join(h, 'someone');
     const unknown = Buffer.alloc(32, 7).toString('base64url');
     const variants: Record<string, string>[] = [
       {},
@@ -245,7 +204,7 @@ describe('keys', () => {
   });
 
   test('the Bearer scheme name is case-insensitive', async () => {
-    const key = await join(h.app, 'scheme');
+    const key = await join(h, 'scheme');
     const response = await h.app.me.GET(
       request('GET', '/api/me', { headers: { authorization: `bearer ${key}` } }),
     );
@@ -255,7 +214,7 @@ describe('keys', () => {
 
 describe('PUT /api/score', () => {
   test('stores the number and the time, and returns 204 with no body', async () => {
-    const key = await join(h.app, 'scorer');
+    const key = await join(h, 'scorer');
     const response = await h.app.score.PUT(
       request('PUT', '/api/score', { key, body: { leverage_tenths: 123 } }),
     );
@@ -269,7 +228,7 @@ describe('PUT /api/score', () => {
   });
 
   test('accepts 0, 1000000000 and null', async () => {
-    const key = await join(h.app, 'bounds');
+    const key = await join(h, 'bounds');
     for (const value of [0, 100000, 1000000000, null]) {
       await score(h.app, key, value);
       const rows = await h.query('select leverage_tenths from members');
@@ -278,7 +237,7 @@ describe('PUT /api/score', () => {
   });
 
   test('refuses anything else with 400 invalid_leverage', async () => {
-    const key = await join(h.app, 'invalid');
+    const key = await join(h, 'invalid');
     for (const body of [
       { leverage_tenths: -1 },
       { leverage_tenths: 1000000001 },
@@ -305,7 +264,7 @@ describe('PUT /api/score', () => {
 
 describe('GET /api/me', () => {
   test('before any score: no number, not listed, no rank, no time', async () => {
-    const key = await join(h.app, 'Fresh', 'fresh@example.com');
+    const key = await join(h, 'Fresh', 'fresh@example.com');
     const response = await me(h.app, key);
     assert.equal(response.status, 200);
     const text = await response.text();
@@ -320,7 +279,7 @@ describe('GET /api/me', () => {
   });
 
   test('after a score: listed with rank and an ISO 8601 UTC time', async () => {
-    const key = await join(h.app, 'Scored');
+    const key = await join(h, 'Scored');
     h.setNow(new Date('2026-10-27T08:09:10.123Z'));
     await score(h.app, key, 57);
     assert.deepEqual(await readJson(await me(h.app, key)), {
@@ -333,7 +292,7 @@ describe('GET /api/me', () => {
   });
 
   test('a null score keeps the time but is not listed', async () => {
-    const key = await join(h.app, 'Nulled');
+    const key = await join(h, 'Nulled');
     await score(h.app, key, 40);
     await score(h.app, key, null);
     assert.deepEqual(await readJson(await me(h.app, key)), {
@@ -351,7 +310,7 @@ describe('PATCH /api/me', () => {
     h.app.me.PATCH(request('PATCH', '/api/me', { key, body }));
 
   test('renames, trimming the new nickname', async () => {
-    const key = await join(h.app, 'before');
+    const key = await join(h, 'before');
     const response = await patch(key, { nickname: ' after_1 ' });
     assert.equal(response.status, 200);
     assert.deepEqual(await readJson(response), { nickname: 'after_1' });
@@ -359,11 +318,11 @@ describe('PATCH /api/me', () => {
       { nickname: 'after_1', nickname_key: 'after_1' },
     ]);
     // The old nickname is free again.
-    assert.equal(typeof (await join(h.app, 'Before')), 'string');
+    assert.equal(typeof (await join(h, 'Before')), 'string');
   });
 
   test('renaming to your own nickname in another case is allowed and stored as typed', async () => {
-    const key = await join(h.app, 'casey');
+    const key = await join(h, 'casey');
     const response = await patch(key, { nickname: 'CaSeY' });
     assert.equal(response.status, 200);
     assert.deepEqual(await readJson(response), { nickname: 'CaSeY' });
@@ -376,8 +335,8 @@ describe('PATCH /api/me', () => {
   });
 
   test("someone else's nickname in any case is taken", async () => {
-    await join(h.app, 'Owner');
-    const key = await join(h.app, 'renamer');
+    await join(h, 'Owner');
+    const key = await join(h, 'renamer');
     await expectError(await patch(key, { nickname: 'owner' }), 409, 'nickname_taken');
     await expectError(await patch(key, { nickname: 'OWNER' }), 409, 'nickname_taken');
     assert.equal(
@@ -387,7 +346,7 @@ describe('PATCH /api/me', () => {
   });
 
   test('bad requests and bad nicknames', async () => {
-    const key = await join(h.app, 'patcher');
+    const key = await join(h, 'patcher');
     await expectError(await patch(key, {}), 400, 'invalid_request');
     await expectError(await patch(key, { nickname: 5 }), 400, 'invalid_request');
     await expectError(
@@ -402,8 +361,8 @@ describe('PATCH /api/me', () => {
 
 describe('DELETE /api/me', () => {
   test('removes the whole row; the key stops working and the nickname is free', async () => {
-    const key = await join(h.app, 'Leaver', 'leaver@example.com');
-    const stay = await join(h.app, 'stayer');
+    const key = await join(h, 'Leaver', 'leaver@example.com');
+    const stay = await join(h, 'stayer');
     await score(h.app, key, 99);
     const response = await h.app.me.DELETE(request('DELETE', '/api/me', { key }));
     assert.equal(response.status, 204);
@@ -420,13 +379,13 @@ describe('DELETE /api/me', () => {
       'unknown_key',
     );
     assert.equal((await me(h.app, stay)).status, 200);
-    assert.equal(typeof (await join(h.app, 'leaver')), 'string');
+    assert.equal(typeof (await join(h, 'leaver')), 'string');
   });
 });
 
 describe('emails and keys stay private', () => {
   test('no endpoint returns an email', async () => {
-    const key = await join(h.app, 'Private', 'secret.person@example.com');
+    const key = await join(h, 'Private', 'secret.person@example.com');
     await score(h.app, key, 10);
     const responses = [
       await me(h.app, key),
@@ -438,12 +397,13 @@ describe('emails and keys stay private', () => {
   });
 
   test('a database failure gives 500 server_error and logs no email or key', async () => {
-    const key = await join(h.app, 'logger');
+    const key = await join(h, 'logger');
     const failing = createApp({
       query: async () => {
         throw Object.assign(new Error('Key (email)=(leak@example.com) broke'), { code: 'XX000' });
       },
       log: (message) => h.logs.push(message),
+      ipHashSecret: TEST_IP_SECRET,
     });
     await expectError(
       await failing.join.POST(

@@ -2,7 +2,9 @@
 
 This folder is the public leaderboard website and its JSON API.
 People join from the XTrace app with a nickname and an email.
+The site emails them a 6-digit code, and they type it into the app to finish joining.
 The app then sends their 7-day leverage, and the site lists it next to their nickname.
+Joining again with the same email (for example on a new Mac) signs you back in to the same entry.
 The page shows only the nickname and the number. Emails are never shown or returned.
 
 The exact API is in [API.md](API.md).
@@ -16,7 +18,12 @@ The exact API is in [API.md](API.md).
 - The rule for who is listed (a number updated in the last 48 hours) lives only in `src/listing.ts`.
   The page, `/api/leaderboard` and `/api/me` all use it.
 - Nickname and email rules live only in `src/validate.ts`.
-- The database table is in `schema.sql`.
+- Joining in two steps (code by email, then verify) is in `src/joining.ts`.
+- Email goes through a small `Mailer` in `src/mail.ts`: Resend over plain `fetch` in production,
+  a fake in tests, and a printout on the local server.
+- Every rate limit is in `src/limits.ts`. Counts live in Postgres, so all Vercel instances share them.
+  IP addresses are stored only as a keyed hash (HMAC with `IP_HASH_SECRET`).
+- The database tables are in `schema.sql`.
 
 ## Run the tests
 
@@ -38,6 +45,10 @@ pnpm --dir apps/leaderboard-site dev:local -- --port 8787
 
 This serves the same `api/` files at `http://127.0.0.1:8787`.
 It needs no network and no Vercel login.
+It never sends email. When someone joins, it prints `code for <email>: <code>` in its own window.
+Type that code into the app.
+The rate limits work as in production, and every request counts as coming from `127.0.0.1`.
+So after 5 joins in one hour, restart the server (with the in-memory database) to join again.
 The database is in memory and is gone when you stop the server.
 To keep it, add `--data <folder>`.
 
@@ -54,19 +65,37 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
    whenever its Node 22 version differs from the exact one the repository asks for.
 3. Open the project's **Storage** tab, add **Neon** from the Marketplace, and connect it to the project.
    This sets `DATABASE_URL` for the project.
-4. Create the table. Copy `DATABASE_URL` from the project's environment variables, then run from the repository root:
+4. Set up email with Resend. MemHub already sends from the domain `emails.xtrace.ai` through Resend,
+   so you can reuse that Resend account and domain.
+   In Resend, create an API key that can send email. Then, in the Vercel project's
+   **Settings → Environment Variables**, add:
+   - `RESEND_API_KEY`: that key.
+   - `LEADERBOARD_FROM_EMAIL` (optional): the sender. It defaults to
+     `XTrace Leaderboard <noreply@emails.xtrace.ai>`.
+   - `IP_HASH_SECRET`: a random value of 32 bytes or more. One way to make it:
+     `openssl rand -base64 48`. Keep it secret. Changing it later only resets the rate-limit counts.
+
+   Without `RESEND_API_KEY`, joining answers "email unavailable".
+   Without `IP_HASH_SECRET`, everything except the page and `/api/leaderboard` answers "server misconfigured".
+
+5. Create the tables. Copy `DATABASE_URL` from the project's environment variables, then run from the repository root:
 
    ```sh
    DATABASE_URL='<the Neon connection string>' pnpm --dir apps/leaderboard-site db:migrate
    ```
 
-   It prints `Schema applied: 1 statement(s).` Running it again is safe.
+   It prints `Schema applied: 3 statement(s).` Running it again is safe.
 
-5. Deploy. Open the deployment's address and check that the page says "No one is listed yet."
-6. In the project's **Domains** settings, add `leaderboard.xtrace.ai`, then add the DNS record Vercel shows you.
+6. Deploy. Open the deployment's address and check that the page says "No one is listed yet."
+7. In the project's **Domains** settings, add `leaderboard.xtrace.ai`, then add the DNS record Vercel shows you.
+8. Add an outer layer against floods. In the project's **Firewall**, add a rate-limit rule for the path
+   `/api/join` (for example 10 requests per minute per IP). The site has its own limits too;
+   this rule stops a flood before it reaches the functions and the database.
+9. In the Vercel team's **Settings → Billing**, set a spend limit, so a flood cannot run up a bill.
+   In Resend, check the plan's sending limit too.
 
 ## Later changes
 
 - Code changes deploy when they reach the branch Vercel watches.
-- If `schema.sql` changes, run step 4 again before deploying the code that needs it.
+- If `schema.sql` changes, run step 5 again before deploying the code that needs it.
 - To remove someone by hand, delete their row from `members` in the Neon console.

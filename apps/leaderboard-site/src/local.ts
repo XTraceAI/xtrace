@@ -10,6 +10,9 @@ import { fail } from './http.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
+/** The fixed IP hash key for the local server (never used in production). */
+export const LOCAL_IP_HASH_SECRET = 'xtrace-leaderboard-local-development-only';
+
 export function readSchema(): string {
   return readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 }
@@ -33,14 +36,17 @@ function rewrites(): Map<string, string> {
   return new Map((config.rewrites ?? []).map((rule) => [rule.source, rule.destination]));
 }
 
-/** The api/ module for a path: `/api/<name>` maps to `api/<name>.ts`, as on Vercel. */
+/**
+ * The api/ module for a path, as on Vercel: `/api/a/b` maps to `api/a/b.ts`,
+ * or to `api/a/b/index.ts`.
+ */
 async function routeModule(pathname: string): Promise<Module | null> {
   const target = rewrites().get(pathname) ?? pathname;
-  const match = /^\/api\/([a-z][a-z0-9-]*)$/.exec(target);
+  const match = /^\/api((?:\/[a-z][a-z0-9-]*)+)$/.exec(target);
   if (!match) return null;
-  const file = `${root}api/${match[1]}.ts`;
-  if (!existsSync(file)) return null;
-  return (await import(pathToFileURL(file).href)) as Module;
+  for (const file of [`${root}api${match[1]}.ts`, `${root}api${match[1]}/index.ts`])
+    if (existsSync(file)) return (await import(pathToFileURL(file).href)) as Module;
+  return null;
 }
 
 function toRequest(incoming: IncomingMessage, origin: string): Request {
@@ -49,6 +55,9 @@ function toRequest(incoming: IncomingMessage, origin: string): Request {
     if (Array.isArray(value)) for (const item of value) headers.append(name, item);
     else if (value !== undefined) headers.set(name, value);
   }
+  // Like Vercel's proxy, the server, not the client, says who is calling.
+  headers.delete('x-forwarded-for');
+  headers.set('x-real-ip', incoming.socket.remoteAddress ?? 'unknown');
   const method = incoming.method ?? 'GET';
   const hasBody = method !== 'GET' && method !== 'HEAD';
   return new Request(new URL(incoming.url ?? '/', origin), {

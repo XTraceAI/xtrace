@@ -42,7 +42,7 @@ const pageNames = (html: string) =>
 
 describe('the 48-hour rule', () => {
   test('listed through exactly 48 hours, hidden after; page, list and me agree', async () => {
-    const key = await join(h.app, 'clocked');
+    const key = await join(h, 'clocked');
     await score(h.app, key, 20);
 
     h.advance(48 * HOUR);
@@ -65,18 +65,18 @@ describe('the 48-hour rule', () => {
   });
 
   test('members with no number are never listed, however fresh', async () => {
-    const none = await join(h.app, 'nothing');
+    const none = await join(h, 'nothing');
     await score(h.app, none, null);
-    await join(h.app, 'never');
+    await join(h, 'never');
     assert.deepEqual(await board(), []);
     assert.equal((await standing(none)).listed, false);
   });
 
   test('a stale member does not take up a rank', async () => {
-    const old = await join(h.app, 'old');
+    const old = await join(h, 'old');
     await score(h.app, old, 999);
     h.advance(49 * HOUR);
-    const fresh = await join(h.app, 'fresh');
+    const fresh = await join(h, 'fresh');
     await score(h.app, fresh, 5);
     assert.deepEqual(await board(), [{ rank: 1, nickname: 'fresh', leverage_tenths: 5 }]);
     assert.equal((await standing(fresh)).rank, 1);
@@ -96,7 +96,7 @@ describe('ranking', () => {
     ];
     const keys = new Map<string, string>();
     for (const [nickname, tenths] of entries) {
-      const key = await join(h.app, nickname);
+      const key = await join(h, nickname);
       keys.set(nickname, key);
       await score(h.app, key, tenths);
     }
@@ -125,7 +125,7 @@ describe('ranking', () => {
       ['ccc', 30],
       ['ddd', 10],
     ] as const)
-      await score(h.app, await join(h.app, nickname), tenths);
+      await score(h.app, await join(h, nickname), tenths);
     assert.deepEqual(
       (await board()).map((row) => row.rank),
       [1, 2, 2, 4],
@@ -144,7 +144,7 @@ describe('GET /api/leaderboard', () => {
 
 describe('GET /', () => {
   test('title, line, two columns, cache header', async () => {
-    await score(h.app, await join(h.app, 'Ada'), 123);
+    await score(h.app, await join(h, 'Ada'), 123);
     const { response, html } = await page();
     assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8');
     assert.equal(
@@ -175,7 +175,7 @@ describe('GET /', () => {
   });
 
   test('HEAD gives the same status and headers as GET, with no body', async () => {
-    await score(h.app, await join(h.app, 'Header'), 10);
+    await score(h.app, await join(h, 'Header'), 10);
     const { response: get } = await page();
     const head = await h.app.page.HEAD(request('HEAD', '/'));
     assert.equal(head.status, 200);
@@ -184,7 +184,7 @@ describe('GET /', () => {
   });
 
   test('the largest allowed number fits on the page', async () => {
-    await score(h.app, await join(h.app, 'a_twenty_char_name_1'), 1000000000);
+    await score(h.app, await join(h, 'a_twenty_char_name_1'), 1000000000);
     assert.deepEqual(pageNames((await page()).html), [['a_twenty_char_name_1', '100000000.0×']]);
   });
 

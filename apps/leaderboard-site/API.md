@@ -88,16 +88,131 @@ create table if not exists members (
 );
 ```
 
+---
+
+# v2 changes (2026-10-27): email code check and rate limits
+
+Tristan asked for both. Everything above still holds unless replaced here.
+
+## Joining now takes two steps
+
+### POST /api/join (replaces the v1 response)
+
+Body `{"nickname": string, "email": string}` (same validation as v1).
+
+- If the email already belongs to a member, the nickname is validated but otherwise ignored (see "Signing back in").
+- Otherwise, if the nickname belongs to another member: 409 `nickname_taken` (nicknames are public, so this reveals nothing private).
+- Creates a _pending join_: random id (16 bytes, base64url, no padding), nickname, email (lowercased), SHA-256 of a
+  6-digit code (000000–999999, from a CSPRNG), `expires_at = now() + 15 minutes`, `attempts = 0`.
+  Any earlier pending join for the same email is deleted (only the newest code works).
+- Emails the code (see "Email"). If sending fails or email is not configured: delete the pending join, 503 `email_unavailable`.
+- 202 `{"pending_id": string}`
+- The response never says whether the email is already a member.
+
+### POST /api/join/verify
+
+Body `{"pending_id": string, "code": string}` (code: exactly 6 ASCII digits, else 400 `invalid_code` without counting an attempt).
+
+- Unknown pending id, expired, or already 5 wrong attempts: 410 `code_expired` (and the pending join is deleted).
+- Wrong code: attempts += 1; 400 `invalid_code`. The 5th wrong attempt deletes the pending join.
+- Right code: delete the pending join, then
+  - email already a member → _signing back in_: give that member a new key (old key stops working), keep their nickname
+    and score. 201 `{"key", "nickname", "rejoined": true}`.
+  - otherwise create the member (as v1 join did). 201 `{"key", "nickname", "rejoined": false}`.
+    If the nickname was taken meanwhile: 409 `nickname_taken` (pending join deleted; the person starts again).
+- Codes are compared by hash; only the hash is stored.
+
+### Signing back in
+
+Because the email is now proven, one email = one member: `members.email` is unique. Joining again with the same email
+(for example on a new Mac) signs you back in to your existing entry instead of creating a second one.
+
+## Email
+
+Sent with Resend's HTTP API (`POST https://api.resend.com/emails`, `Authorization: Bearer $RESEND_API_KEY`) using plain
+`fetch` — no SDK. From `$LEADERBOARD_FROM_EMAIL`, default `XTrace Leaderboard <noreply@emails.xtrace.ai>`
+(the team already sends from emails.xtrace.ai through Resend). Subject: `Your XTrace leaderboard code: 123456`.
+Plain text body:
+"Your code is 123456. It expires in 15 minutes.
+Enter it in the XTrace app to join the leaderboard.
+If you did not ask to join the XTrace leaderboard, you can ignore this email."
+Production with no RESEND_API_KEY → 503 `email_unavailable`. Codes and emails are never logged.
+The local dev server never sends real email: it prints `code for <email>: <code>` to its own console.
+
+## Rate limits (server side, stored in Postgres so they work across Vercel instances)
+
+429 `{"error": "rate_limited", "retry_after_seconds": N}` with a `Retry-After: N` header.
+Fixed windows; the one rule lives in one module.
+
+- POST /api/join: 5 per hour per IP, and 3 per hour per email.
+- POST /api/join/verify: 20 per hour per IP (on top of the 5-attempts-per-code rule).
+- PUT /api/score: 12 per hour per member.
+- PATCH /api/me: 10 per day per member.
+- Every /api/* request except GET /api/leaderboard: 600 per hour per IP.
+  Client IP: on Vercel the `x-real-ip` header (Vercel sets it), else the first `x-forwarded-for` entry, else the socket
+  address (local server). The IP is never stored in clear: only HMAC-SHA256(IP, `$IP_HASH_SECRET`). Production with no
+  IP_HASH_SECRET → 503 `server_misconfigured` on rate-limited endpoints (fail closed). Local server uses a fixed dev secret.
+  Counter rows and expired pending joins older than a day are deleted opportunistically.
+
+## Schema additions
+
+```sql
+-- members.email becomes unique (nothing is deployed yet, so the table definition is simply changed)
+create table if not exists pending_joins (
+  id text primary key,
+  nickname text not null,
+  nickname_key text not null,
+  email text not null,
+  code_hash bytea not null,
+  attempts integer not null default 0,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create table if not exists rate_counters (
+  bucket text not null,          -- e.g. 'join:ip:<hmac hex>' / 'join:email:<sha256 hex>' / 'score:member:<id>'
+  window_start timestamptz not null,
+  count integer not null,
+  primary key (bucket, window_start)
+);
+```
+
+(Email buckets use SHA-256 of the lowercased email, not the email itself.)
+
+## README (deploy) additions
+
+Env vars RESEND_API_KEY, LEADERBOARD_FROM_EMAIL (optional), IP_HASH_SECRET (random 32+ bytes).
+Also recommend a Vercel Firewall rate-limit rule on `/api/join` as an outer layer, and a spend limit.
+
 ## Details the contract above leaves open (as built)
 
 - A body over 4 KB means more than 4096 bytes. The 413 body is `{"error": "body_too_large"}`.
-- The body is checked before the key. A bad body gets its 400 or 413 even when the key is unknown.
+- Order of checks in a rate-limited endpoint: the per-IP API limit (600 per hour), then the body
+  (413 / 400), then the key (401), then the endpoint's own limit, then the work.
+  - `POST /api/join`: the per-IP and per-email join limits count only requests whose body passed the
+    checks. Invalid bodies use up only the 600-per-hour API limit.
+  - `POST /api/join/verify`: the 20-per-hour limit counts only requests whose code is 6 digits.
+  - `PUT /api/score` and `PATCH /api/me` count against the member only when the key is known.
+- A refused (429) request still counts. The window resets on its fixed boundary: the hour, or the UTC
+  day for `PATCH /api/me`. `retry_after_seconds` is the whole seconds until then (at least 1).
+- The 600-per-hour API limit covers `POST /api/join`, `POST /api/join/verify`, `PUT /api/score` and
+  `GET`/`PATCH`/`DELETE /api/me`. `GET /api/leaderboard` and the public page (`GET`/`HEAD /`, served by
+  `/api/page`) are not limited.
+- A request without `x-real-ip` or `x-forwarded-for` is counted under the IP `unknown`. The local server
+  sets `x-real-ip` from the socket address and drops any client-sent `x-real-ip` / `x-forwarded-for`,
+  as Vercel's proxy does.
+- An empty `IP_HASH_SECRET` counts as missing.
+- `POST /api/join/verify` with `pending_id` or `code` missing or not a string gets 400 `invalid_request`.
+- A code is expired from `expires_at` on: exactly 15 minutes after the join it no longer works.
+- Each `/api/join/verify` with a 6-digit code takes one attempt before the code is compared, so the
+  5-attempt rule holds for concurrent requests. A right code deletes the pending join, so it works once.
+- Opportunistic cleanup runs on each `POST /api/join`: counter rows whose window started more than a day
+  ago, and pending joins that expired more than a day ago, are deleted.
 - `PUT /api/score`: a body that is not a JSON object gets 400 `invalid_request`. A JSON object whose
   `leverage_tenths` is missing, not an integer or out of range gets 400 `invalid_leverage`.
 - "Within the last 48 hours" includes exactly 48 hours: a score written 48 h ago is still listed; 48 h and
   1 ms ago is not.
 - An unexpected server or database failure gives 500 `{"error": "server_error"}`. Logs never contain
-  request bodies, emails or keys.
+  request bodies, emails, keys or codes. A failed email send logs only `email not sent (<error kind>)`.
 - `/api/*` responses send `Cache-Control: no-store`.
 - `HEAD /` returns the same status and headers as `GET /`, with no body.
 - The page sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'`.

@@ -3,18 +3,35 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import type { Server } from 'node:http';
 import { createApp } from '../src/app.js';
-import { applySchema } from '../src/db.js';
-import { openLocalDatabase, readSchema, startLocalServer } from '../src/local.js';
+import { createHmac } from 'node:crypto';
+import { applySchema, type Query } from '../src/db.js';
+import {
+  LOCAL_IP_HASH_SECRET,
+  openLocalDatabase,
+  readSchema,
+  startLocalServer,
+} from '../src/local.js';
+import { consoleMailer } from '../src/mail.js';
 import { installApp } from '../src/runtime.js';
 import { readFileSync } from 'node:fs';
 
 let server: Server;
 let origin: string;
 let close: () => Promise<void>;
+let localQuery: Query;
+/** What the local server's mailer printed. */
+const printed: string[] = [];
 
 before(async () => {
   const { db, query } = await openLocalDatabase();
-  installApp(createApp({ query }));
+  localQuery = query;
+  installApp(
+    createApp({
+      query,
+      mailer: consoleMailer((line) => printed.push(line)),
+      ipHashSecret: LOCAL_IP_HASH_SECRET,
+    }),
+  );
   ({ server, origin } = await startLocalServer(0));
   close = async () => {
     await new Promise((resolve) => server.close(resolve));
@@ -27,7 +44,7 @@ after(async () => {
 
 test('schema.sql can be applied again without changes', async () => {
   const { db, query } = await openLocalDatabase();
-  assert.equal(await applySchema(query, readSchema()), 1);
+  assert.equal(await applySchema(query, readSchema()), 3);
   const columns = await query(
     `select column_name from information_schema.columns where table_name = 'members' order by ordinal_position`,
   );
@@ -56,14 +73,24 @@ test('schema.sql can be applied again without changes', async () => {
   await db.close();
 });
 
-test('join, score, me, leaderboard and page over HTTP', async () => {
+test('join, verify, score, me, leaderboard and page over HTTP', async () => {
   const joined = await fetch(`${origin}/api/join`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ nickname: 'Http_User', email: 'http@example.com' }),
+    body: JSON.stringify({ nickname: 'Http_User', email: 'HTTP@example.com' }),
   });
-  assert.equal(joined.status, 201);
-  const { key } = (await joined.json()) as { key: string };
+  assert.equal(joined.status, 202);
+  const { pending_id } = (await joined.json()) as { pending_id: string };
+  const line = printed.at(-1) ?? '';
+  const match = /^code for http@example\.com: ([0-9]{6})$/.exec(line);
+  assert.ok(match, 'the local server prints the code');
+  const verified = await fetch(`${origin}/api/join/verify`, {
+    method: 'POST',
+    body: JSON.stringify({ pending_id, code: match[1] }),
+  });
+  assert.equal(verified.status, 201);
+  const { key, rejoined } = (await verified.json()) as { key: string; rejoined: boolean };
+  assert.equal(rejoined, false);
   const auth = { authorization: `Bearer ${key}` };
 
   const scored = await fetch(`${origin}/api/score`, {
@@ -121,6 +148,19 @@ test('Vercel installs this package with the pinned pnpm and no strict Node check
     vercel.installCommand,
     `npx --yes pnpm@${version} install --frozen-lockfile --config.engine-strict=false --filter ${site.name}...`,
   );
+});
+
+test('the client IP is the socket address, whatever the client claims', async () => {
+  await fetch(`${origin}/api/me`, {
+    headers: { 'x-real-ip': '192.0.2.50', 'x-forwarded-for': '192.0.2.60' },
+  });
+  const hmac = (ip: string) => createHmac('sha256', LOCAL_IP_HASH_SECRET).update(ip).digest('hex');
+  const buckets = (await localQuery('select bucket from rate_counters')).map((row) =>
+    String(row.bucket),
+  );
+  assert.ok(buckets.includes(`api:ip:${hmac('127.0.0.1')}`));
+  assert.ok(!buckets.includes(`api:ip:${hmac('192.0.2.50')}`));
+  assert.ok(!buckets.includes(`api:ip:${hmac('192.0.2.60')}`));
 });
 
 test('unknown paths are 404 and unsupported methods are 405', async () => {
