@@ -1,3 +1,5 @@
+import type { DataSource } from '../../data/DataSource';
+import type { SessionWarningPoint } from '../../data/generated/SessionWarningPoint';
 import { RepeatNavigation, type ConversationMarker } from './ConversationActivity';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,18 +23,28 @@ import { useSelectedRange } from '../dashboard/range';
 import { agentTime } from '../agent-duration';
 import { evidenceWords } from '../session-cells';
 import { contextLead, contextTitle, modelLabel, shortId } from '../session-context';
-import { listState } from '../session-search';
+import { WARNING_PARAM, listState } from '../session-search';
+import { localZone, useSessionWarning } from '../session-warnings';
+import { SessionReview } from './SessionReview';
+import { DiagnoseButton, DiagnosisPanel, DetachedDiagnosis } from '../session-diagnosis';
+import { useDiagnose } from '../useSessionDiagnosis';
 import { SessionTimeline, type TimelineQuery } from './SessionTimeline';
 import { SessionTranscript } from './SessionTranscript';
 import {
-  CodexPagedTranscript,
-  type CodexPageIntent,
-  type CodexPageFeedback,
-  type CodexRepeatCandidate,
-} from './CodexPagedTranscript';
-import { type TranscriptProps, transcriptProps } from './transcript-adapter';
-import { jumpUnavailableText, type JumpUnavailable, resolveJump } from './timeline-jump';
-import type { RevealOutcome, RevealRequest } from './transcript-reveal';
+  PagedSessionTranscript,
+  type PageIntent,
+  type PageFeedback,
+  type PageRepeatCandidate,
+} from './PagedSessionTranscript';
+import { type TranscriptProps, transcriptProps, generationNote } from './transcript-adapter';
+import {
+  jumpUnavailableText,
+  type JumpUnavailable,
+  resolveJump,
+  resolveWarningJump,
+  warningUnavailableText,
+} from './timeline-jump';
+import type { RevealOutcome, RevealRequest, RevealTarget } from './transcript-reveal';
 import { type TranscriptRead, useSessionTranscript } from './useSessionTranscript';
 import '../../styles/sessions.css';
 import './session-detail.css';
@@ -46,18 +58,6 @@ import './session-detail.css';
  */
 /** The read itself failed, which is this app's problem and not the file's. */
 const FAILED = 'This session’s text could not be read just now.';
-
-const GENERATION = {
-  // Says what is true of the *measurements*, and nothing about whether the
-  // text is whole. Whether it is whole is the transcript's own statement, made
-  // beside this one — and a session can perfectly well have grown since it was
-  // indexed *and* be missing part of itself, in which case a sentence here
-  // calling the text complete would contradict the notice underneath it.
-  appended:
-    'This session has been written to since it was last indexed. The measurements beside it describe the part that was indexed.',
-  unrecorded:
-    'This text is not tied to a measurement: at least one of this session’s files has no recorded reading.',
-} as const;
 
 /** The measured columns, with the same definitions the list states (S2). */
 const MEASURES: {
@@ -95,7 +95,7 @@ const MEASURES: {
 ];
 
 /**
- * The reader's last press on a stretch, and everything it was made against.
+ * The current warning or activity selection, and what it was made against.
  *
  * A press means "the stretch at this index, in this list". It is only that
  * while all four still hold: the session, the window, the read of the
@@ -111,6 +111,12 @@ const MEASURES: {
  * now sits at that index.
  */
 type Press =
+  | {
+      readonly kind: 'warning';
+      readonly token: number;
+      readonly point: SessionWarningPoint;
+      readonly owner: { readonly identity: string; readonly source: DataSource };
+    }
   | {
       readonly kind: 'reveal';
       readonly index: number;
@@ -136,7 +142,7 @@ type PressedCall = 'first' | 'repeated';
 
 /** What a press on one call of one stretch did, in words, or nothing yet. */
 function pressText(
-  pressed: Press,
+  pressed: Exclude<Press, { kind: 'warning' }>,
   result: { token: number; outcome: RevealOutcome } | null,
 ): string | null {
   const stretch = `activity period ${pressed.index + 1}`;
@@ -154,8 +160,10 @@ function pressText(
     : `Showing the earliest matching call${tool}.`;
 }
 
-function pageFeedbackText(feedback: CodexPageFeedback | null): string | null {
+function pageFeedbackText(feedback: PageFeedback | null): string | null {
   if (!feedback) return null;
+  if (feedback.kind === 'warning')
+    return warningFeedbackText(feedback.target, feedback.outcome, feedback.unavailable);
   const { intent, target, outcome, unavailable } = feedback;
   const which = intent.call === 'first' ? 'The first tool call' : 'The repeated call';
   if (unavailable)
@@ -165,6 +173,20 @@ function pageFeedbackText(feedback: CodexPageFeedback | null): string | null {
   return intent.call === 'first'
     ? `Showing the first tool call of activity period ${intent.index + 1}: ${target.tool}.`
     : `Showing the earliest matching call: ${target.tool}.`;
+}
+
+function warningFeedbackText(
+  target: RevealTarget | null,
+  outcome: RevealOutcome | null,
+  unavailable: string | null,
+): string | null {
+  if (unavailable) return `The original warning message cannot be shown. ${unavailable}`;
+  if (!target || !outcome) return null;
+  if (outcome !== 'revealed')
+    return 'The original warning message could not be revealed in the conversation.';
+  return target.kind === 'record'
+    ? 'Showing the original warning message.'
+    : 'Showing the warning’s original tool block.';
 }
 
 /** What a press was made against. Replace any of it and the press is void. */
@@ -247,8 +269,15 @@ export function SessionDetailPage() {
   const days = rangeDays[range];
   // The list's filters travel in this page's own address, so going back
   // restores the list the reader left — the same search, hosts, pull-request
-  // filter and range — rather than an unfiltered one. Nothing else is read.
-  const [params] = useSearchParams();
+  // filter and range — rather than an unfiltered one. Warning selection stays here.
+  const [params, setParams] = useSearchParams();
+  const warningNavigation = useRef({ warning: params.get(WARNING_PARAM), generation: 0 });
+  if (warningNavigation.current.warning !== params.get(WARNING_PARAM)) {
+    warningNavigation.current = {
+      warning: params.get(WARNING_PARAM),
+      generation: warningNavigation.current.generation + 1,
+    };
+  }
   const back = listState(params);
   const backHref = back.size > 0 ? `/sessions?${back}` : '/sessions';
 
@@ -287,24 +316,76 @@ export function SessionDetailPage() {
   // its title, so the cached answer's links are not shown while it is out.
   const prLinks = listed.isSuccess && !listed.isFetching && row ? row.pr_links : [];
   const { read, retry } = useSessionTranscript(sessionId);
+  // Whole-session warnings use this Mac's zone, as the page's times do.
+  const zone = useMemo(localZone, []);
+  const warnings = useSessionWarning(sessionId, zone);
+  const activeWarnings = warnings.data?.state === 'read' ? warnings.data.warnings : undefined;
+  const warningId = params.get(WARNING_PARAM) ?? activeWarnings?.[0]?.id ?? null;
+  const diagnose = useDiagnose(sessionId ?? '', zone, activeWarnings, warningId);
+  const warningPoint =
+    warnings.data?.state === 'read'
+      ? [...warnings.data.warnings, ...warnings.data.dismissed].find(
+          (warning) => warning.id === warningId,
+        )?.points_at
+      : undefined;
+  const warningRecord = warningPoint?.record_uuid ?? null;
+  const warningBlock = warningPoint?.block ?? null;
+  const warningIdentity =
+    warningId === null
+      ? null
+      : JSON.stringify([
+          sessionId,
+          warningId,
+          warningRecord,
+          warningBlock,
+          warningNavigation.current.generation,
+        ]);
+
+  const selectWarning = useCallback(
+    (id: string) => {
+      warningNavigation.current = {
+        warning: id,
+        generation: warningNavigation.current.generation + 1,
+      };
+      setParams((previous) => {
+        const next = new URLSearchParams(previous);
+        next.set(WARNING_PARAM, id);
+        return next;
+      });
+    },
+    [setParams],
+  );
+  const readbackSelectWarning = useCallback(
+    (id: string) => {
+      warningNavigation.current.warning = id;
+      setParams((previous) => {
+        const next = new URLSearchParams(previous);
+        next.set(WARNING_PARAM, id);
+        return next;
+      });
+    },
+    [setParams],
+  );
   const paged =
-    host === 'codex' &&
-    !!source.codexTranscriptPage &&
+    (host === 'codex' || host === 'claude') &&
+    !!source.sessionTranscriptPage &&
     read.phase === 'read' &&
     read.status.state === 'unavailable' &&
-    ((read.status.reason.reason === 'reader_limit' &&
+    ((host === 'codex' &&
+      read.status.reason.reason === 'reader_limit' &&
       ['source_bytes', 'output_bytes'].includes(read.status.reason.limit)) ||
       (read.status.reason.reason === 'too_large' && read.status.reason.limit === 'bytes'));
   const [pageIntent, setPageIntent] = useState<{
-    intent: CodexPageIntent;
+    intent: Extract<PageIntent, { kind: 'timeline' }>;
     scope: PressScope;
   } | null>(null);
-  const [pageFeedback, setPageFeedback] = useState<CodexPageFeedback | null>(null);
+  const [pageFeedback, setPageFeedback] = useState<PageFeedback | null>(null);
   const onPageFeedback = useCallback(
-    (feedback: CodexPageFeedback | null) => setPageFeedback(feedback),
+    (feedback: PageFeedback | null) => setPageFeedback(feedback),
     [],
   );
   const clearPageSelection = useCallback(() => {
+    setPress(null);
     setPageIntent(null);
     setPageFeedback(null);
   }, []);
@@ -355,27 +436,77 @@ export function SessionDetailPage() {
   const [press, setPress] = useState<Press | null>(null);
   const [result, setResult] = useState<{ token: number; outcome: RevealOutcome } | null>(null);
   const answer = stretchesQuery.data;
-  // Read during render, so a press whose scope has been replaced is never
-  // painted, not even for the frame before the effect below runs.
-  const pressed = holds(press, { sessionId, days, read, stretches: answer }) ? press : null;
-  const ownedPageIntent =
-    paged && holds(pageIntent, { sessionId, days, read, stretches: answer }) ? pageIntent : null;
-  const selected = ownedPageIntent?.intent.index ?? pressed?.index ?? null;
-  const selectedCall = ownedPageIntent?.intent.call ?? pressed?.call;
-  const reveal = pressed?.kind === 'reveal' ? pressed.request : null;
+  useEffect(() => {
+    setPageIntent(null);
+    setPageFeedback(null);
+    setResult(null);
+    if (warningIdentity !== null && warningRecord !== null) {
+      tokens.current += 1;
+      setPress({
+        kind: 'warning',
+        token: tokens.current,
+        point: { record_uuid: warningRecord, block: warningBlock },
+        owner: { identity: warningIdentity, source },
+      });
+    } else setPress((current) => (current?.kind === 'warning' ? null : current));
+  }, [source, warningIdentity, warningRecord, warningBlock]);
+  const pressed =
+    press?.kind === 'warning'
+      ? press.owner.identity === warningIdentity && press.owner.source === source
+        ? press
+        : null
+      : holds(press, { sessionId, days, read, stretches: answer })
+        ? press
+        : null;
+  const ownedTimelineIntent =
+    paged && holds(pageIntent, { sessionId, days, read, stretches: answer })
+      ? pageIntent!.intent
+      : null;
+  const ownedPageIntent = useMemo<PageIntent | null>(
+    () =>
+      paged && pressed?.kind === 'warning'
+        ? { kind: 'warning', token: pressed.token, point: pressed.point }
+        : ownedTimelineIntent,
+    [paged, pressed, ownedTimelineIntent],
+  );
+  const selected =
+    ownedPageIntent?.kind === 'timeline'
+      ? ownedPageIntent.index
+      : pressed && pressed.kind !== 'warning'
+        ? pressed.index
+        : null;
+  const selectedCall =
+    ownedPageIntent?.kind === 'timeline'
+      ? ownedPageIntent.call
+      : pressed && pressed.kind !== 'warning'
+        ? pressed.call
+        : undefined;
+  const warningJump = useMemo(
+    () => (pressed?.kind === 'warning' ? resolveWarningJump(pressed.point, read) : null),
+    [pressed, read],
+  );
+  const reveal = useMemo<RevealRequest | null>(
+    () =>
+      pressed?.kind === 'reveal'
+        ? pressed.request
+        : !paged && pressed?.kind === 'warning' && warningJump?.kind === 'target'
+          ? { token: pressed.token, ...warningJump.target }
+          : null,
+    [pressed, paged, warningJump],
+  );
   // And destroyed, so it cannot come back. Returning `current` unchanged when
   // it still holds leaves the state identical and re-renders nothing.
   useEffect(() => {
     setPress((current) =>
-      holds(current, { sessionId, days, read, stretches: answer }) ? current : null,
+      current?.kind === 'warning' || holds(current, { sessionId, days, read, stretches: answer })
+        ? current
+        : null,
     );
-    // A result is only ever read beside a live press of the same token; with
-    // the scope replaced there is none, so it goes with it.
+    // Results are displayed only beside a live selection with the same token.
     setPageIntent((current) =>
       holds(current, { sessionId, days, read, stretches: answer }) ? current : null,
     );
-    setPageFeedback(null);
-    setResult(null);
+    setPageFeedback((current) => (current?.kind === 'warning' ? current : null));
   }, [sessionId, days, read, answer]);
   const pressCall = useCallback(
     (index: number, call: PressedCall) => {
@@ -393,7 +524,7 @@ export function SessionDetailPage() {
         setPageFeedback(null);
         setPageIntent({
           scope: { sessionId, days, read, stretches: answer },
-          intent: { token: tokens.current, locator, index, call },
+          intent: { kind: 'timeline', token: tokens.current, locator, index, call },
         });
         return;
       }
@@ -410,7 +541,7 @@ export function SessionDetailPage() {
               index,
               call,
               tool: jump.tool,
-              request: { token: tokens.current, blockId: jump.blockId },
+              request: { kind: 'block', token: tokens.current, blockId: jump.blockId },
               scope,
             }
           : { kind: 'unavailable', index, call, reason: jump.reason, scope },
@@ -427,12 +558,18 @@ export function SessionDetailPage() {
     [],
   );
   const ownedFeedback =
-    ownedPageIntent && pageFeedback?.intent === ownedPageIntent.intent ? pageFeedback : null;
+    ownedPageIntent && pageFeedback?.intent === ownedPageIntent ? pageFeedback : null;
   const announcement = ownedPageIntent
     ? pageFeedbackText(ownedFeedback)
-    : pressed
-      ? pressText(pressed, result)
-      : null;
+    : pressed?.kind === 'warning'
+      ? warningFeedbackText(
+          warningJump?.kind === 'target' ? warningJump.target : null,
+          result?.token === pressed.token ? result.outcome : null,
+          warningJump?.kind === 'unavailable' ? warningUnavailableText(warningJump.reason) : null,
+        )
+      : pressed
+        ? pressText(pressed, result)
+        : null;
   // A command that failed is not a session that cannot be shown, but it looks
   // the same to a reader, so it is said in the same place — with its own
   // sentence, and with the one thing a reader can do about it beside it.
@@ -442,16 +579,9 @@ export function SessionDetailPage() {
       : read.phase === 'failed'
         ? { records: [], state: { kind: 'unavailable', note: FAILED } }
         : { records: [], state: { kind: 'loading' } };
-  const generation =
-    read.phase === 'read' && read.status.state === 'loaded'
-      ? read.status.generation.generation === 'unrecorded'
-        ? GENERATION.unrecorded
-        : read.status.generation.appended
-          ? GENERATION.appended
-          : null
-      : null;
+  const generation = read.phase === 'read' ? generationNote(read.status) : null;
 
-  const repeatCandidates = useMemo<CodexRepeatCandidate[]>(
+  const repeatCandidates = useMemo<PageRepeatCandidate[]>(
     () =>
       stretches.flatMap((stretch, index) =>
         stretch.repeats.state === 'measured' && stretch.repeats.worst
@@ -493,6 +623,75 @@ export function SessionDetailPage() {
       </section>
     );
   }
+
+  const conversation = (
+    <div className="xt-session-conversation">
+      <SectionCard
+        title="Conversation"
+        meta="Read-only history from this session’s own files. Nothing is stored."
+        right={
+          read.phase === 'failed' ? (
+            <Button variant="outline" height={28} onClick={retry}>
+              Try again
+            </Button>
+          ) : timeline.phase === 'ready' && timeline.stretches.state === 'measured' ? (
+            <RepeatNavigation
+              indexes={repeatedIndexes}
+              selected={selectedCall === 'repeated' ? selected : null}
+              onSelect={onShowRepeat}
+            />
+          ) : undefined
+        }
+      >
+        <p
+          className="xt-timeline-note"
+          role="status"
+          aria-live="polite"
+          data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+        >
+          {announcement ?? ''}
+        </p>
+        <div
+          ref={conversationBody}
+          className="xt-conversation-body"
+          role="region"
+          aria-label="Conversation content"
+          tabIndex={0}
+        >
+          {!paged && generation && (
+            <p className="xt-session-detail-notice" role="note">
+              {generation}
+            </p>
+          )}
+          {paged && sessionId ? (
+            <PagedSessionTranscript
+              key={`${sessionId}:${host}`}
+              sessionId={sessionId}
+              host={host === 'claude' ? 'claude' : 'codex'}
+              intent={ownedPageIntent}
+              repeatCandidates={repeatCandidates}
+              onFeedback={onPageFeedback}
+              onReset={clearPageSelection}
+              revealOwner={conversationBody}
+            />
+          ) : (
+            <SessionTranscript
+              revealOwner={conversationBody}
+              conversation
+              markers={markers}
+              groupAdjacentActivity={
+                read.phase === 'read' && read.status.state === 'loaded' && read.status.sources === 1
+              }
+              records={transcript.records}
+              state={transcript.state}
+              reveal={reveal}
+              onReveal={onReveal}
+            />
+          )}
+        </div>
+      </SectionCard>
+    </div>
+  );
 
   return (
     <section className="xt-session-detail">
@@ -596,73 +795,36 @@ export function SessionDetailPage() {
           />
         </SectionCard>
       </details>
-      <div className="xt-session-conversation">
-        <SectionCard
-          title="Conversation"
-          meta="Read-only history from this session’s own files. Nothing is stored."
-          right={
-            read.phase === 'failed' ? (
-              <Button variant="outline" height={28} onClick={retry}>
-                Try again
-              </Button>
-            ) : timeline.phase === 'ready' && timeline.stretches.state === 'measured' ? (
-              <RepeatNavigation
-                indexes={repeatedIndexes}
-                selected={selectedCall === 'repeated' ? selected : null}
-                onSelect={onShowRepeat}
-              />
-            ) : undefined
-          }
-        >
-          <p
-            className="xt-timeline-note"
-            role="status"
-            aria-live="polite"
-            data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
-          >
-            {announcement ?? ''}
-          </p>
-          <div
-            ref={conversationBody}
-            className="xt-conversation-body"
-            role="region"
-            aria-label="Conversation content"
-            tabIndex={0}
-          >
-            {!paged && generation && (
-              <p className="xt-session-detail-notice" role="note">
-                {generation}
-              </p>
-            )}
-            {paged && sessionId ? (
-              <CodexPagedTranscript
-                key={sessionId}
-                sessionId={sessionId}
-                intent={ownedPageIntent?.intent ?? null}
-                repeatCandidates={repeatCandidates}
-                onFeedback={onPageFeedback}
-                onReset={clearPageSelection}
-                revealOwner={conversationBody}
-              />
-            ) : (
-              <SessionTranscript
-                revealOwner={conversationBody}
-                conversation
-                markers={markers}
-                groupAdjacentActivity={
-                  read.phase === 'read' &&
-                  read.status.state === 'loaded' &&
-                  read.status.sources === 1
-                }
-                records={transcript.records}
-                state={transcript.state}
-                reveal={reveal}
-                onReveal={onReveal}
-              />
-            )}
-          </div>
-        </SectionCard>
-      </div>
+      {diagnose && (
+        <DetachedDiagnosis
+          diagnose={diagnose}
+          warnings={activeWarnings}
+          visibleWarningId={warningId}
+        />
+      )}
+      <SessionReview
+        key={sessionId}
+        sessionId={sessionId ?? ''}
+        answer={warnings.data}
+        pending={warnings.isPending && warnings.fetchStatus !== 'idle'}
+        failed={warnings.isError}
+        selection={warningId}
+        onSelect={selectWarning}
+        onReadbackSelect={readbackSelectWarning}
+        navigationGeneration={warningNavigation.current.generation}
+        actions={
+          diagnose
+            ? (warning) => <DiagnoseButton diagnose={diagnose} warning={warning} />
+            : undefined
+        }
+        below={
+          diagnose
+            ? (warning) => <DiagnosisPanel diagnose={diagnose} warning={warning} />
+            : undefined
+        }
+      >
+        {conversation}
+      </SessionReview>
     </section>
   );
 }

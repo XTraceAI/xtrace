@@ -98,6 +98,10 @@ function nativeSource(read: () => Promise<NativeIndexStatus>, listening = false)
     nativeIndexStatus: vi.fn(read),
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' as const }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({
       state: 'unavailable' as const,
       reason: { reason: 'not_indexed' as const },

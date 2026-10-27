@@ -1,4 +1,4 @@
-//! Finding the command-line executables XTrace runs (`gh`, `claude`).
+//! Finding the command-line executables XTrace runs (`gh`, `claude`, `codex`).
 //!
 //! This is the one resolver. A probe or judge that runs a program takes an
 //! already resolved absolute path; this module names it, from inputs the
@@ -11,6 +11,8 @@
 //!   relative entry would resolve against this process's working directory,
 //!   which is not a place an executable may come from);
 //! * otherwise the first match in the caller's known install directories.
+//!
+//! Codex checks its fixed ChatGPT bundle before `PATH`, after any override.
 //!
 //! Nothing else is consulted. It never runs a login shell, never starts a
 //! process, never reads a configuration file or credential. A candidate is
@@ -111,6 +113,41 @@ pub fn resolve_claude(
     resolve_within(CLAUDE, explicit, search, &known)
 }
 
+/// The Codex executable's name.
+pub const CODEX: &str = "codex";
+/// The Codex command-line tool bundled with the ChatGPT desktop app.
+pub const CHATGPT_BUNDLED_CODEX: &str =
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+
+/// Resolve the Codex executable: the override; then the one bundled with
+/// the ChatGPT app; then `PATH`, `~/.local/bin` and Homebrew's folders.
+pub fn resolve_codex(
+    explicit: Option<&OsStr>,
+    search: Option<&OsStr>,
+    home: Option<&Path>,
+) -> Result<PathBuf, Unavailable> {
+    let mut known = Vec::new();
+    if let Some(home) = home {
+        known.push(home.join(".local/bin"));
+    }
+    known.push(PathBuf::from("/opt/homebrew/bin"));
+    known.push(PathBuf::from("/usr/local/bin"));
+    let known: Vec<&Path> = known.iter().map(PathBuf::as_path).collect();
+    resolve_codex_within(explicit, search, Path::new(CHATGPT_BUNDLED_CODEX), &known)
+}
+
+fn resolve_codex_within(
+    explicit: Option<&OsStr>,
+    search: Option<&OsStr>,
+    bundled: &Path,
+    known: &[&Path],
+) -> Result<PathBuf, Unavailable> {
+    if explicit.is_none() && is_executable(bundled) {
+        return Ok(bundled.to_path_buf());
+    }
+    resolve_within(CODEX, explicit, search, known)
+}
+
 /// The `PATH` entries for a Claude Code child: the executable's own
 /// directory, then the inherited entries, then any of
 /// [`CLAUDE_CHILD_PATH_EXTRAS`] not already listed.
@@ -159,7 +196,7 @@ mod tests {
 
     fn executable_file(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(path, "").unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
@@ -210,6 +247,105 @@ mod tests {
         assert_eq!(
             resolve_within(CLAUDE, Some(root.path().as_os_str()), None, &known_dirs),
             Err(Unavailable::OverrideNotExecutable)
+        );
+    }
+
+    #[test]
+    fn codex_prefers_override_then_bundle_path_home_and_homebrew() {
+        let root = scratch();
+        let bundled = root.path().join("ChatGPT/codex");
+        let named = root.path().join("named/codex");
+        let missing = root.path().join("missing");
+        let on_path = root.path().join("path");
+        let home = root.path().join("home/.local/bin");
+        let brew = root.path().join("homebrew/bin");
+        let local = root.path().join("local/bin");
+        let candidates = [
+            bundled.clone(),
+            named.clone(),
+            on_path.join(CODEX),
+            home.join(CODEX),
+            brew.join(CODEX),
+            local.join(CODEX),
+        ];
+        for candidate in &candidates {
+            executable_file(candidate);
+        }
+        let search = std::env::join_paths([Path::new("relative"), &on_path]).unwrap();
+        let known = [home.as_path(), brew.as_path(), local.as_path()];
+        let select = |explicit| resolve_codex_within(explicit, Some(&search), &bundled, &known);
+        assert_eq!(select(None), Ok(bundled.clone()));
+        assert_eq!(select(Some(named.as_os_str())), Ok(named.clone()));
+        assert_eq!(
+            select(Some(OsStr::new(""))),
+            Err(Unavailable::OverrideNotAbsolute)
+        );
+        assert_eq!(
+            select(Some(OsStr::new("relative/codex"))),
+            Err(Unavailable::OverrideNotAbsolute)
+        );
+        assert_eq!(
+            select(Some(missing.as_os_str())),
+            Err(Unavailable::OverrideNotExecutable)
+        );
+        std::fs::set_permissions(&named, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            select(Some(named.as_os_str())),
+            Err(Unavailable::OverrideNotExecutable)
+        );
+        std::fs::remove_file(&bundled).unwrap();
+        std::fs::create_dir(&bundled).unwrap();
+        assert_eq!(select(None), Ok(on_path.join(CODEX)));
+        for (current, next) in [(&on_path, &home), (&home, &brew), (&brew, &local)] {
+            std::fs::remove_file(current.join(CODEX)).unwrap();
+            assert_eq!(select(None), Ok(next.join(CODEX)));
+        }
+        std::fs::remove_file(local.join(CODEX)).unwrap();
+        assert_eq!(select(None), Err(Unavailable::NotFound));
+    }
+
+    #[test]
+    fn codex_ignores_relative_and_non_executable_candidates() {
+        let root = scratch();
+        let bundled = root.path().join("bundle/codex");
+        let known = root.path().join("known");
+        executable_file(&bundled);
+        executable_file(&known.join(CODEX));
+        for candidate in [&bundled, &known.join(CODEX)] {
+            std::fs::set_permissions(candidate, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        assert_eq!(
+            resolve_codex_within(
+                None,
+                Some(OsStr::new("relative")),
+                &bundled,
+                &[Path::new("relative/home/.local/bin"), &known],
+            ),
+            Err(Unavailable::NotFound)
+        );
+        assert_eq!(
+            resolve_codex_within(Some(bundled.as_os_str()), None, &bundled, &[]),
+            Err(Unavailable::OverrideNotExecutable)
+        );
+    }
+
+    #[test]
+    fn codex_keeps_the_selected_executable_symlink_spelling() {
+        let root = scratch();
+        let target = root.path().join("installed/codex");
+        executable_file(&target);
+        let alias_dir = root.path().join("linked");
+        std::fs::create_dir(&alias_dir).unwrap();
+        let alias = alias_dir.join(CODEX);
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        assert_eq!(
+            resolve_codex_within(
+                None,
+                Some(alias_dir.as_os_str()),
+                &root.path().join("missing-bundle"),
+                &[],
+            ),
+            Ok(alias)
         );
     }
 

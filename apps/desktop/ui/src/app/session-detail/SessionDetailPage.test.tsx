@@ -52,6 +52,7 @@ const readable: SessionSourceStatus = {
   state: 'loaded',
   generation: { generation: 'indexed', appended: false },
   sources: 1,
+  record_ranges: [{ start: 0, end: 1 }],
   dropped_records: 0,
   gaps: [],
   records: [
@@ -131,6 +132,10 @@ function harness(
       };
       return typeof given === 'function' ? given(days) : given;
     },
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: (sessionId, readId) => {
       opened.push({ sessionId, readId });
       if (options.auto !== undefined && options.auto !== null) {
@@ -389,6 +394,7 @@ it('captions a user-role prompt by its saved role, not as a person, and counts i
     rows: [{ ...row, metrics: { ...row.metrics, human_messages: 0 } as SessionRow['metrics'] }],
     auto: {
       ...readable,
+      record_ranges: [{ start: 0, end: 3 }],
       records: [
         {
           id: 'r-user',
@@ -561,6 +567,7 @@ it('says the appended source has grown without calling the text complete', async
 it('shows a call whose identifier is used twice as neither answered nor unanswered', async () => {
   const transcript: SessionSourceStatus = {
     ...readable,
+    record_ranges: [{ start: 0, end: 2 }],
     records: [
       {
         id: 'aaaaaaaa-0000-4000-8000-00000000000a',

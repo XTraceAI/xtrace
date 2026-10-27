@@ -236,9 +236,10 @@ function ToolStripRow({ blocks }: { blocks: ToolBlock[] }) {
   const answered = useRef<number | null>(null);
   const [revealed, setRevealed] = useState<number | null>(null);
   // Where the requested block sits in this row, if it is here exactly once.
-  const places = request
-    ? blocks.flatMap((block, index) => (block.id === request.blockId ? [index] : []))
-    : [];
+  const places =
+    request?.kind === 'block'
+      ? blocks.flatMap((block, index) => (block.id === request.blockId ? [index] : []))
+      : [];
   const place = places.length === 1 ? places[0] : null;
 
   useLayoutEffect(() => {

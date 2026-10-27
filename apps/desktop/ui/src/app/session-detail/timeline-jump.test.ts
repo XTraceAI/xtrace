@@ -30,6 +30,7 @@ function loaded(records: SourceRecord[]): TranscriptRead {
     state: 'loaded',
     generation: { generation: 'indexed', appended: false },
     sources: 1,
+    record_ranges: [{ start: 0, end: records.length }],
     dropped_records: 0,
     gaps: [],
     records,

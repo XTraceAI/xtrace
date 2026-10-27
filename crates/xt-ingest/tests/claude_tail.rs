@@ -1943,7 +1943,7 @@ fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classif
     assert_eq!(legacy_checkpoint.1, file_len(&path));
     drop(store);
     sql.execute_batch(
-        "DROP TABLE grading_added_skills; DROP TABLE grades; DROP TABLE telemetry_events; ALTER TABLE pull_requests DROP COLUMN manual_failed_at; DELETE FROM schema_version WHERE version>=5;
+        concat!(include_str!("../../xt-store/tests/fixtures/undo_saved_session_warnings.sql"), "DROP TABLE dismissed_warnings; DROP INDEX tool_results_session; DROP TABLE tool_results; DROP INDEX tool_uses_call_id; ALTER TABLE tool_uses DROP COLUMN call_id_conflict; ALTER TABLE tool_uses DROP COLUMN call_id; DROP TABLE grading_added_skills; DROP TABLE grades; DROP TABLE telemetry_events; ALTER TABLE pull_requests DROP COLUMN manual_failed_at; DELETE FROM schema_version WHERE version>=5;
          ALTER TABLE pull_requests DROP COLUMN refresh_error; ALTER TABLE pull_requests DROP COLUMN last_attempted_at;
          ALTER TABLE tool_uses DROP COLUMN group_key;
          ALTER TABLE tool_uses DROP COLUMN group_version;
@@ -1953,7 +1953,7 @@ fn claude_tail_v4_upgrade_replays_unchanged_history_once_to_enrich_human_classif
          DROP TABLE injected_context_inputs; DROP TABLE IF EXISTS tool_sent_inputs; DROP TABLE IF EXISTS task_notification_inputs; DROP TABLE IF EXISTS record_previews; DROP TABLE IF EXISTS session_child_checks; DROP TABLE IF EXISTS session_child_facts; DROP TABLE IF EXISTS human_input_adjustments; DROP TABLE IF EXISTS human_session_origins;
          DROP TABLE session_creation_relations;
          DROP TABLE session_creation_bootstrap; DROP TABLE cli_artifact_launch_owners; DROP TABLE claude_launch_groups; DROP TABLE claude_launch_group_members; DROP TABLE claude_launch_candidates; DROP TABLE claude_launch_staged_candidates;
-         DROP INDEX sessions_host_native; DROP INDEX source_cursors_tail;",
+         DROP INDEX sessions_host_native; DROP INDEX source_cursors_tail;"),
     )
         .unwrap();
     let evidence = || {

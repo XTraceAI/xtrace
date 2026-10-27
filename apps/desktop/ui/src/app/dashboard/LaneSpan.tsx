@@ -65,6 +65,7 @@ const unreadable: Record<SessionSourceReason['reason'], string> = {
   unsupported_host: 'no reader exists for this host',
   reader_limit: 'the session file is too large to read',
   reader_deadline: 'the session reader ran out of time',
+  unsupported_history: 'this history format is not supported',
   store_unsupported: 'this session is not stored in a readable file',
   reader_protocol: 'the session reader gave no usable answer',
 };

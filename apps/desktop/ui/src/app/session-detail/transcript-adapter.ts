@@ -110,6 +110,8 @@ export function unavailableNote(reason: SessionSourceReason): string {
         : `This session is larger than XTrace reads at once (${bodyLimit[reason.limit]}), so none of its text is shown.`;
     case 'reader_deadline':
       return 'Reading this transcript took longer than XTrace allows, so it was stopped and none of it was kept.';
+    case 'unsupported_history':
+      return 'XTrace cannot read this session’s history format.';
     case 'store_unsupported':
       return 'This Cursor session is kept in a database XTrace does not read transcripts from, so only what was measured is shown.';
     case 'reader_protocol':
@@ -407,5 +409,44 @@ export function transcriptProps(status: SessionSourceStatus, complete = true): T
   return {
     records: status.records.map((source) => record(source, paired)),
     state: note ? { kind: 'incomplete', note } : { kind: 'ready' },
+  };
+}
+
+const GENERATION = {
+  // Says what is true of the *measurements*, and nothing about whether the
+  // text is whole. Whether it is whole is the transcript's own statement, made
+  // beside this one — and a session can perfectly well have grown since it was
+  // indexed *and* be missing part of itself, in which case a sentence here
+  // calling the text complete would contradict the notice underneath it.
+  appended:
+    'This session has been written to since it was last indexed. The measurements beside it describe the part that was indexed.',
+  unrecorded:
+    'This text is not tied to a measurement: at least one of this session’s files has no recorded reading.',
+} as const;
+
+export function generationNote(
+  status:
+    | {
+        state: 'loaded';
+        generation: Extract<SessionSourceStatus, { state: 'loaded' }>['generation'];
+      }
+    | { state: 'unavailable' },
+): string | null {
+  if (status.state !== 'loaded') return null;
+  return status.generation.generation === 'unrecorded'
+    ? GENERATION.unrecorded
+    : status.generation.appended
+      ? GENERATION.appended
+      : null;
+}
+
+/** An excerpt cannot establish call/result uniqueness outside its window. */
+export function excerptRecord(source: SourceRecord, onlyToolResults: boolean): TranscriptRecord {
+  const paired = pairs([], false);
+  return {
+    id: source.id,
+    role: source.role === 'user' && onlyToolResults ? 'tool' : source.role,
+    at: at(source.at),
+    blocks: source.blocks.map((part) => block(source, part, paired)),
   };
 }

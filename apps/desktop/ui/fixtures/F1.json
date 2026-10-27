@@ -1,10 +1,10 @@
 {
   "app_info": {
     "name": "XTrace",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "data_dir": "fixture://F1",
     "fixture": "F1",
-    "schema_version": 26,
+    "schema_version": 29,
     "listening": false,
     "had_indexed_history_at_startup": true
   },
@@ -1549,6 +1549,85 @@
           }
         ],
         "referenced_parents": []
+      }
+    }
+  ],
+  "session_warnings": {
+    "timezone": "UTC",
+    "sessions": [
+      {
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "answer": {
+          "state": "read",
+          "warnings": [],
+          "count_label": null,
+          "summary": "No warnings. Every check read everything it needed.",
+          "checks_summary": "Checks · all 5 complete",
+          "dismissed": [],
+          "checks": [
+            {
+              "kind": "correction",
+              "complete": true,
+              "text": "Checked: corrections"
+            },
+            {
+              "kind": "interruption",
+              "complete": true,
+              "text": "Checked: interruptions"
+            },
+            {
+              "kind": "repeated_calls",
+              "complete": true,
+              "text": "Checked: repeated calls"
+            },
+            {
+              "kind": "repeated_prompt",
+              "complete": true,
+              "text": "Checked: repeated prompts"
+            },
+            {
+              "kind": "repeated_failure",
+              "complete": true,
+              "text": "Checked: repeated failures"
+            }
+          ],
+          "incomplete_checks": 0
+        }
+      }
+    ]
+  },
+  "dashboard_warnings": [
+    {
+      "window_days": 7,
+      "window_end_ms": 1788825600000,
+      "timezone": "UTC",
+      "warnings": {
+        "start_ms": 1788220800000,
+        "end_ms": 1788825600000,
+        "timezone": "UTC",
+        "days": []
+      }
+    },
+    {
+      "window_days": 14,
+      "window_end_ms": 1788825600000,
+      "timezone": "UTC",
+      "warnings": {
+        "start_ms": 1787616000000,
+        "end_ms": 1788825600000,
+        "timezone": "UTC",
+        "days": []
+      }
+    },
+    {
+      "window_days": 30,
+      "window_end_ms": 1788825600000,
+      "timezone": "UTC",
+      "warnings": {
+        "start_ms": 1786233600000,
+        "end_ms": 1788825600000,
+        "timezone": "UTC",
+        "days": []
       }
     }
   ],

@@ -51,6 +51,7 @@ export function SessionTranscript({
   conversation = false,
   markers = [],
   groupAdjacentActivity = false,
+  sourceStarts = [],
 }: {
   revealOwner?: RefObject<HTMLElement | null>;
   records: readonly TranscriptRecord[];
@@ -58,6 +59,7 @@ export function SessionTranscript({
   markers?: readonly ConversationMarker[];
   /** Enable only when the caller knows these records belong to one source. */
   groupAdjacentActivity?: boolean;
+  sourceStarts?: readonly number[];
   state?: TranscriptState;
   /** Show one tool call — see `transcript-reveal.ts`. Absent means none is asked for. */
   reveal?: RevealRequest | null;
@@ -130,6 +132,7 @@ export function SessionTranscript({
             records={records}
             markers={markers}
             groupAdjacent={groupAdjacentActivity}
+            sourceStarts={sourceStarts}
           />
         ) : (
           records.map((record, index) => (

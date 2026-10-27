@@ -1,3 +1,4 @@
+import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
 import type { GradingStart } from './generated/GradingStart';
 import type { GradingInstalledSkills } from './generated/GradingInstalledSkills';
 import type { GradingSkillAdd } from './generated/GradingSkillAdd';
@@ -222,6 +223,39 @@ export class FixtureDataSource implements DataSource {
     cancel: async () => {},
   };
   /**
+   * The warnings the export read through the native command for every
+   * session it lists, in the fixture's zone: only those named are answered,
+   * an identity it does not list is `missing` as natively, and another zone
+   * fails rather than being rewritten here.
+   */
+  async sessionWarnings(sessionIds: readonly string[], timezone: string) {
+    const all = this.fixture.session_warnings;
+    if (timezone !== all.timezone)
+      throw new Error('The fixture export holds warnings in its own zone only.');
+    const named = [...new Set(sessionIds)].sort();
+    return structuredClone({
+      timezone,
+      sessions: named.map(
+        (id) =>
+          all.sessions.find((entry) => entry.session_id === id) ?? {
+            session_id: id,
+            answer: { state: 'missing' as const },
+          },
+      ),
+    });
+  }
+  /** The Effort warnings the export read for exactly this report. */
+  async windowWarnings(windowDays: number, windowEndMs: number, timezone: string) {
+    const entry = this.fixture.dashboard_warnings.find(
+      (candidate) =>
+        candidate.window_days === windowDays &&
+        candidate.window_end_ms === windowEndMs &&
+        candidate.timezone === timezone,
+    );
+    if (!entry) throw new Error('The fixture export holds no warnings for this report.');
+    return structuredClone(entry.warnings);
+  }
+  /**
    * The sessions the export read through the native command for exactly this
    * day of exactly this range's report, in its zone. A request the export did
    * not read fails rather than being worked out here.
@@ -367,6 +401,12 @@ export class FixtureDataSource implements DataSource {
    * app gives when it has no native home — not an empty transcript, which
    * would say the session recorded nothing.
    */
+  async sessionWarningContext(): Promise<SessionExcerptStatus> {
+    return {
+      state: 'unavailable',
+      reason: { reason: 'source', source: { reason: 'not_indexed' } },
+    };
+  }
   async sessionTranscript(): Promise<SessionSourceStatus> {
     return { state: 'unavailable', reason: { reason: 'not_indexed' } };
   }

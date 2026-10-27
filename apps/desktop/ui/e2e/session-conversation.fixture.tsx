@@ -1,5 +1,7 @@
+import { answer as warningAnswer, warning, second } from './session-warnings.data';
+import type { SessionPageSelection } from '../src/data/generated/SessionPageSelection';
 import type { DataSource } from '../src/data/DataSource';
-import type { CodexPageStatus } from '../src/data/generated/CodexPageStatus';
+import type { SessionPageStatus } from '../src/data/generated/SessionPageStatus';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -16,6 +18,11 @@ import type { SourceRecord } from '../src/data/generated/SourceRecord';
 
 /** Authored synthetic conversation, using the same data boundary as the native page. */
 function conversationFixture(source: FixtureDataSource, row: SessionRow) {
+  const parameters = new URLSearchParams(location.search);
+  const warningTargets = parameters.has('warning-targets');
+  const pageSelections: SessionPageSelection[] = [];
+  if (warningTargets) Object.assign(window, { __warningPageSelections: pageSelections });
+
   const text = (id: string, role: 'user' | 'assistant', content: string): SourceRecord => ({
     id,
     role,
@@ -64,6 +71,60 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
       ],
     },
   ];
+  if (warningTargets) {
+    records[0]!.blocks = [
+      {
+        kind: 'text',
+        index: 0,
+        text: 'Original warning message. ' + 'Long original message '.repeat(1000),
+      },
+    ];
+    records[3]!.blocks = [
+      {
+        kind: 'tool_result',
+        index: 128,
+        call_id: 'call-0',
+        failed: true,
+        parts: [
+          {
+            kind: 'text',
+            text: 'Original warning result. ' + 'Long original returned text '.repeat(1000),
+          },
+        ],
+      },
+    ];
+    const items = [
+      { ...warning, points_at: { record_uuid: 'prompt', block: null } },
+      { ...second, points_at: { record_uuid: 'result', block: 128 } },
+    ];
+    let current = { ...warningAnswer, warnings: items, dismissed: [] as typeof items };
+    source.sessionWarnings = async (ids, timezone) => ({
+      timezone,
+      sessions: ids.map((session_id) => ({ session_id, answer: current })),
+    });
+    Object.defineProperty(source, 'warningDismissals', {
+      value: {
+        dismiss: async (session_id: string, warning_id: string) => {
+          const item = current.warnings.find((item) => item.id === warning_id)!;
+          current = {
+            ...current,
+            warnings: current.warnings.filter((item) => item.id !== warning_id),
+            dismissed: [...current.dismissed, item],
+          };
+          return { session_id, warning_id, dismissed: true };
+        },
+        restore: async (session_id: string, warning_id: string) => {
+          const item = current.dismissed.find((item) => item.id === warning_id)!;
+          current = {
+            ...current,
+            warnings: [...current.warnings, item],
+            dismissed: current.dismissed.filter((item) => item.id !== warning_id),
+          };
+          return { session_id, warning_id, dismissed: false };
+        },
+      },
+    });
+  }
   const repeated = (
     record_uuid: string,
     block_index: number,
@@ -85,11 +146,18 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
     },
     circling,
   });
-  source.sessionRow = async (id) => ({ ...row, id, repo: 'sample-project', branch: 'rename-app' });
+  source.sessionRow = async (id) => ({
+    ...row,
+    id,
+    host: parameters.get('host') ?? row.host,
+    repo: 'sample-project',
+    branch: 'rename-app',
+  });
   source.sessionTranscript = async () => ({
     state: 'loaded',
     generation: { generation: 'indexed', appended: false },
     sources: 1,
+    record_ranges: [{ start: 0, end: records.length }],
     records,
     dropped_records: 0,
     gaps: [],
@@ -103,15 +171,20 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
     ],
   });
   if (new URLSearchParams(location.search).has('paged')) {
+    const pagedHost =
+      new URLSearchParams(location.search).get('host') === 'claude' ? 'claude' : 'codex';
     const data: DataSource = source;
     const rowRead = source.sessionRow;
     source.sessionRow = async (...args) => {
       const found = await rowRead(...args);
-      return found ? { ...found, host: 'codex' } : null;
+      return found ? { ...found, host: pagedHost } : null;
     };
     source.sessionTranscript = async () => ({
       state: 'unavailable',
-      reason: { reason: 'reader_limit', limit: 'source_bytes' },
+      reason:
+        pagedHost === 'claude'
+          ? { reason: 'too_large', limit: 'bytes', reached: 99, ceiling: 10 }
+          : { reason: 'reader_limit', limit: 'source_bytes' },
     });
     const stretchesRead = source.sessionStretches;
     source.sessionStretches = async (...args) => {
@@ -127,10 +200,12 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
         : answer;
     };
     const digest = 'a'.repeat(64);
-    data.codexTranscriptPage = async (_id, selection): Promise<CodexPageStatus> => {
+    data.sessionTranscriptPage = async (_id, selection): Promise<SessionPageStatus> => {
+      pageSelections.push(selection);
       if (
-        selection.kind === 'tool_call' &&
-        new URLSearchParams(location.search).has('paged-changed')
+        selection.kind === 'anchor' &&
+        (parameters.has('paged-changed') ||
+          (parameters.has('warning-changed') && selection.record_uuid === 'result'))
       )
         return { state: 'unavailable', reason: { reason: 'changed' } };
       let start = 0,
@@ -140,15 +215,28 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
         start = 2;
         end = records.length;
       }
-      if (selection.kind === 'tool_call') {
+      if (selection.kind === 'anchor') {
         const found = records.findIndex((record) => record.id === selection.record_uuid);
-        if (found < 0) return { state: 'unavailable', reason: { reason: 'target_missing' } };
+        if (found < 0)
+          return {
+            state: 'unavailable',
+            reason: { reason: 'read', detail: { reason: 'target_missing' } },
+          };
         if (
-          !records[found]?.blocks.some(
-            (block) => block.index === selection.block && block.kind === 'tool_call',
-          )
+          selection.expected === 'message'
+            ? selection.block !== null
+            : !records[found]?.blocks.some(
+                (block) =>
+                  block.index === selection.block &&
+                  (selection.expected === 'tool_call'
+                    ? block.kind === 'tool_call'
+                    : block.kind === 'tool_call' || block.kind === 'tool_result'),
+              )
         )
-          return { state: 'unavailable', reason: { reason: 'block_missing' } };
+          return {
+            state: 'unavailable',
+            reason: { reason: 'read', detail: { reason: 'block_missing' } },
+          };
         start = Math.max(0, found - 1);
         end = Math.min(records.length, found + 2);
         target = found - start;
@@ -159,10 +247,19 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
         records: records.slice(start, end),
         start,
         end,
-        total: records.length,
+        generation:
+          pagedHost === 'claude'
+            ? { generation: 'indexed', appended: false }
+            : { generation: 'unrecorded' },
+        record_ranges: [{ start: 0, end: end - start }],
+        dropped_records: 0,
+        total_records: records.length,
         previous: start > 0 ? `v1:before:${start}:${digest}` : null,
         next: end < records.length ? `v1:after:${end}:${digest}` : null,
-        target,
+        target:
+          target === null
+            ? null
+            : { record: target, block: selection.kind === 'anchor' ? selection.block : null },
       };
     };
   }
@@ -183,7 +280,14 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider>
       <DataProvider source={source}>
-        <MemoryRouter initialEntries={['/sessions/synthetic-conversation']}>
+        <MemoryRouter
+          initialEntries={[
+            '/sessions/synthetic-conversation' +
+              (new URLSearchParams(location.search).has('warning-targets')
+                ? '?warning=' + encodeURIComponent(warning.id)
+                : ''),
+          ]}
+        >
           <AppRoutes />
         </MemoryRouter>
       </DataProvider>

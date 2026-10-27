@@ -36,7 +36,10 @@ impl Store {
 
     /// Explicit deletion boundary. The caller owns user confirmation and publishes
     /// content invalidation only from the returned, committed outcome. Original
-    /// host files are never opened. This clears logical fields, not backup bytes.
+    /// host files are never opened. Saved warning answers can hold a matched
+    /// correction span, so every saved answer is deleted in this transaction
+    /// too, including when all original content fields were already empty.
+    /// This clears logical fields and rows, not backup bytes.
     pub fn purge_content(&mut self, registry: &ContentRegistry) -> Result<PurgeOutcome> {
         let transaction = self
             .connection
@@ -95,6 +98,11 @@ impl Store {
                 rows,
             });
         }
+        let rows = transaction.execute("DELETE FROM saved_session_warnings", [])?;
+        tables.push(PurgedTable {
+            table: "saved_session_warnings".to_owned(),
+            rows,
+        });
         transaction.commit()?;
         Ok(PurgeOutcome {
             invalidate_content: tables.iter().any(|table| table.rows > 0),

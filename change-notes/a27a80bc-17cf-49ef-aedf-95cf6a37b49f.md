@@ -1,0 +1,1 @@
+- Open large Codex conversations when local history contains many other sessions.

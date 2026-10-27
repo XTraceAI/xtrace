@@ -14,7 +14,6 @@ mod account_usage_dto;
 mod account_usage_history;
 mod account_usage_process;
 mod bundle_rename;
-mod codex_page_dto;
 pub mod dashboard;
 mod dashboard_dto;
 pub mod dto;
@@ -41,8 +40,13 @@ mod projects_dto;
 pub mod rule_activity;
 mod rule_activity_dto;
 pub mod session_compactions;
+pub mod session_diagnosis;
+mod session_diagnosis_dto;
+mod session_excerpt_dto;
+mod session_page_dto;
 mod session_source_dto;
 pub mod session_titles;
+pub mod session_warnings_dto;
 pub mod skill_link;
 pub mod startup_failure;
 pub mod state;
@@ -54,6 +58,7 @@ pub mod tray;
 pub mod typing_speed;
 mod update_config;
 mod updates;
+mod warning_cache;
 mod window_controls;
 
 /// The event carrying every native index status change to the frontend.
@@ -356,6 +361,66 @@ async fn session_stretches(
     .await
 }
 
+/// M-21 for exactly the named sessions, each over its whole history, with
+/// every reason's clock times in `timezone` (the zone the view shows, as a
+/// report names it). At most one page of distinct identifiers. Metadata only:
+/// no source file is opened.
+#[tauri::command]
+async fn session_warnings(
+    app: tauri::AppHandle,
+    session_ids: Vec<String>,
+    timezone: String,
+) -> Result<dto::SessionWarningsList, String> {
+    read_on_worker(app, move |state| {
+        state.session_warnings(&session_ids, &timezone)
+    })
+    .await
+}
+
+/// The warnings inside one Dashboard report's whole days, for its Effort
+/// card: the report's range, the end of the window it was read over and the
+/// zone it was read in, as a day's sessions are asked for.
+#[tauri::command]
+async fn metrics_window_warnings(
+    app: tauri::AppHandle,
+    window_days: u32,
+    window_end_ms: i64,
+    timezone: String,
+) -> Result<dto::DashboardWarnings, String> {
+    read_on_worker(app, move |state| {
+        state.window_warnings(window_days, window_end_ms, &timezone)
+    })
+    .await
+}
+
+/// Dismisses one warning of one session: no mark, count or day shows it
+/// after this, and the session's page lists it apart with an undo. Refused
+/// unless the session has that warning now. Metadata only.
+#[tauri::command]
+async fn dismiss_session_warning(
+    app: tauri::AppHandle,
+    session_id: String,
+    warning_id: String,
+) -> Result<dto::SessionWarningDismissal, String> {
+    write_on_worker(app, move |state| {
+        state.dismiss_session_warning(&session_id, &warning_id)
+    })
+    .await
+}
+
+/// Undoes a dismissal: the warning shows again wherever it falls.
+#[tauri::command]
+async fn restore_session_warning(
+    app: tauri::AppHandle,
+    session_id: String,
+    warning_id: String,
+) -> Result<dto::SessionWarningDismissal, String> {
+    write_on_worker(app, move |state| {
+        state.restore_session_warning(&session_id, &warning_id)
+    })
+    .await
+}
+
 /// One activity-lane span's detail, read when its bar is pointed at or
 /// focused: the most-used tool, output tokens and the last message a person
 /// typed in or before it. Metadata from the index; the message's words are the
@@ -426,14 +491,14 @@ async fn session_transcript(
         .map_err(|error| error.to_string())
 }
 
-/// One bounded portion of a Codex conversation, under this open's cancel token.
+/// One bounded page, read on the worker and cancelled by the view's read ID.
 #[tauri::command]
-async fn codex_transcript_page(
+async fn session_transcript_page(
     app: tauri::AppHandle,
     session_id: String,
+    selection: dto::SessionPageSelection,
     read_id: String,
-    selection: dto::CodexPageRequest,
-) -> Result<dto::CodexPageStatus, String> {
+) -> Result<dto::SessionPageStatus, String> {
     on_worker(READ_WORKER_FAILED, move || {
         let reads = app
             .try_state::<transcript_reads::TranscriptReads>()
@@ -447,9 +512,42 @@ async fn codex_transcript_page(
         let index = app
             .try_state::<native_index::NativeIndex>()
             .ok_or(state::StateError::Closed)?;
-        state.codex_transcript_page(
+        state.session_transcript_page(
             &session_id,
             &selection,
+            read.token(),
+            index.detail_readers(),
+        )
+    })
+    .await
+}
+
+/// Original messages around one warning, read under this view's cancel token.
+#[tauri::command]
+async fn session_warning_context(
+    app: tauri::AppHandle,
+    session_id: String,
+    record_uuid: String,
+    block: Option<u32>,
+    read_id: String,
+) -> Result<dto::SessionExcerptStatus, String> {
+    on_worker(READ_WORKER_FAILED, move || {
+        let reads = app
+            .try_state::<transcript_reads::TranscriptReads>()
+            .ok_or(state::StateError::Closed)?;
+        let read = reads
+            .begin(&read_id)
+            .map_err(|_| state::StateError::ReadRefused)?;
+        let state = app
+            .try_state::<state::AppState>()
+            .ok_or(state::StateError::Closed)?;
+        let index = app
+            .try_state::<native_index::NativeIndex>()
+            .ok_or(state::StateError::Closed)?;
+        state.session_warning_context(
+            &session_id,
+            &record_uuid,
+            block,
             read.token(),
             index.detail_readers(),
         )
@@ -528,6 +626,91 @@ fn cancel_session_transcript(
     read_id: String,
 ) {
     reads.cancel(&read_id);
+}
+
+/// Diagnose one warning of one session with a small hosted model, on the
+/// person's click: about 20 messages around the flagged one are read from
+/// the session's original source and sent to Claude Code (Haiku), or to
+/// Codex when Claude Code cannot be used before it is given them; the
+/// messages never go to a second tool. The answer says which tool and model
+/// ran and which messages were sent. Nothing is stored.
+/// `timezone` is the zone the view shows (for the warning's identity and the
+/// sent messages' times); `read_id` names this run for
+/// `cancel_session_diagnosis`. One runs at a time; another answers `busy`.
+#[tauri::command]
+async fn diagnose_session_warning(
+    app: tauri::AppHandle,
+    session_id: String,
+    warning_id: String,
+    timezone: String,
+    read_id: String,
+) -> Result<dto::SessionDiagnosis, String> {
+    // Reserve before dispatch so Stop can cancel a run waiting for a worker.
+    let runs = app
+        .try_state::<std::sync::Arc<session_diagnosis::DiagnosisRuns>>()
+        .ok_or_else(|| state::StateError::Closed.to_string())?;
+    let slot = session_diagnosis::reserve(
+        &runs,
+        &session_diagnosis::Request {
+            session_id: &session_id,
+            warning_id: &warning_id,
+            timezone: &timezone,
+            read_id: &read_id,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let Some(slot) = slot else {
+        return Ok(dto::SessionDiagnosis::Busy {
+            text: session_diagnosis_dto::BUSY.to_owned(),
+        });
+    };
+    on_worker(READ_WORKER_FAILED, move || {
+        let index = app
+            .try_state::<native_index::NativeIndex>()
+            .ok_or(state::StateError::Closed)?;
+        let state = app
+            .try_state::<state::AppState>()
+            .ok_or(state::StateError::Closed)?;
+        session_diagnosis::diagnose(
+            &state,
+            slot,
+            index.detail_readers(),
+            &session_diagnosis::RunEnvironment::process(),
+            &session_diagnosis::Request {
+                session_id: &session_id,
+                warning_id: &warning_id,
+                timezone: &timezone,
+                read_id: &read_id,
+            },
+        )
+    })
+    .await
+}
+
+/// Stop the diagnosis `read_id` names, if it is running.
+#[tauri::command]
+fn cancel_session_diagnosis(
+    runs: tauri::State<'_, std::sync::Arc<session_diagnosis::DiagnosisRuns>>,
+    read_id: String,
+) -> bool {
+    runs.cancel(&read_id)
+}
+
+/// Save a skill a diagnosis suggested, on the person's explicit click, as
+/// `<project>/.claude/skills/<name>/SKILL.md` in the session's own project
+/// folder: the name and draft are checked first, an existing skill is never
+/// replaced, and the answer says where it was written or why not.
+#[tauri::command]
+async fn save_suggested_skill(
+    app: tauri::AppHandle,
+    session_id: String,
+    name: String,
+    draft: String,
+) -> Result<dto::SavedSkill, String> {
+    write_on_worker(app, move |state| {
+        session_diagnosis::save_suggested_skill(state, &session_id, &name, &draft)
+    })
+    .await
 }
 
 /// One bounded snapshot of the default local rulebook's recorded activity
@@ -1124,6 +1307,9 @@ async fn purge_stored_content(app: tauri::AppHandle) -> Result<privacy::ContentP
     write_on_worker(app, move |state| {
         let purge = || {
             state.purge_stored_content(move || {
+                if let Some(state) = publisher.try_state::<state::AppState>() {
+                    state.request_warning_cache(&[]);
+                }
                 let _ = publisher.emit(CONTENT_PURGED_EVENT, ());
             })
         };
@@ -1219,9 +1405,15 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             .home_dir()
             .map_err(|_| state::StateError::InvalidOption)
     })?;
+    let warnings = warning_cache::WarningCacheWorker::start(state.warning_cache_path()?);
+    state.attach_warning_cache(warnings.requester());
     let publish: native_index::Publish = {
         let handle = app.handle().clone();
+        let warnings = warnings.requester();
         Arc::new(move |status: &dto::NativeIndexStatus| {
+            if matches!(status.phase, dto::NativeIndexPhase::Ready) {
+                warnings.request(&[]);
+            }
             // A window not open yet, or already gone, drops the event;
             // the status remains queryable.
             let _ = handle.emit(NATIVE_INDEX_EVENT, status);
@@ -1229,7 +1421,9 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     };
     let creations: native_index::PublishCreations = {
         let handle = app.handle().clone();
+        let warnings = warnings.requester();
         Arc::new(move || {
+            warnings.request(&[]);
             // A window not open yet, or already gone, drops the event;
             // the relations stay queryable.
             let _ = handle.emit(SESSION_CREATIONS_EVENT, ());
@@ -1385,6 +1579,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .telemetry_consent()
         .unwrap_or(telemetry::consent::Consent::FRESH);
     let live = state.database_path().is_some();
+    app.manage(warnings);
     app.manage(state);
     // After the state, which the sender's store calls go through.
     let telemetry = start_telemetry(app.handle(), consent, live && default_data_folder);
@@ -1395,6 +1590,9 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(session_titles::TitleReads::default());
     app.manage(session_compactions::CompactionReads::default());
     app.manage(dashboard::SpanDetailReads::default());
+    app.manage(std::sync::Arc::new(
+        session_diagnosis::DiagnosisRuns::default(),
+    ));
     app.manage(refresh);
     app.manage(auto_worker);
     // With the state managed: runs a crash left `running` are saved
@@ -1464,6 +1662,11 @@ fn stop_services(app: &tauri::AppHandle) {
     if let Some(reads) = app.try_state::<dashboard::SpanDetailReads>() {
         reads.shutdown();
     }
+    // A diagnosis may be reading a source or running a coding tool: both
+    // are cancelled, and its tool's group ended, within its bound.
+    if let Some(runs) = app.try_state::<std::sync::Arc<session_diagnosis::DiagnosisRuns>>() {
+        runs.shutdown();
+    }
     // A rule activity read starts no process and holds no
     // database; it is cancelled and waited for within its bound.
     if let Some(service) = app.try_state::<rule_activity::RuleActivityService>() {
@@ -1491,6 +1694,9 @@ fn stop_services(app: &tauri::AppHandle) {
     }
     if let Some(grading) = grading {
         let _ = grading.join();
+    }
+    if let Some(warnings) = app.try_state::<warning_cache::WarningCacheWorker>() {
+        warnings.shutdown();
     }
     if let Some(state) = app.try_state::<state::AppState>() {
         state.shutdown();
@@ -1551,8 +1757,16 @@ pub fn run() {
             tokens_by_host,
             session_row,
             session_stretches,
+            session_warnings,
+            metrics_window_warnings,
+            dismiss_session_warning,
+            restore_session_warning,
+            diagnose_session_warning,
+            cancel_session_diagnosis,
+            save_suggested_skill,
             session_transcript,
-            codex_transcript_page,
+            session_transcript_page,
+            session_warning_context,
             cancel_session_transcript,
             session_titles,
             cancel_session_titles,

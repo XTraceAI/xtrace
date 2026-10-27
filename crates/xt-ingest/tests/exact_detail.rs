@@ -1486,12 +1486,52 @@ fn bounded_codex_pages_validate_positions_exact_tool_blocks_and_cancellation() {
         read(&python, &selection, Some(&cancelled)),
         Err(CodexPageError::Source(SourceUnavailable::Cancelled))
     ));
+    let python = make(metadata.clone(), vec![record(0), tool.clone()]);
+    assert!(matches!(
+        load_codex_page(
+            &SessionSourceRequest {
+                home: &scene.home,
+                host: Host::Codex,
+                native_session_id: CODEX,
+                indexed: &[],
+                cancel: None,
+                limits: SourceLimits::default()
+            },
+            &selection,
+            Some(&DetailReader {
+                python: &python,
+                producer: &producer,
+                bounds: DetailBounds {
+                    deadline: Duration::ZERO,
+                    ..DetailBounds::default()
+                }
+            }),
+        ),
+        Err(CodexPageError::Source(SourceUnavailable::Reader(
+            DetailFailure::Deadline
+        )))
+    ));
     let wrong = make(metadata.clone(), vec![record(0), record(2)]);
     assert!(read(&wrong, &selection, None).is_err());
     let mut foreign = tool.clone();
     foreign["sessionId"] = json!("other");
     let wrong = make(metadata, vec![record(0), foreign]);
     assert!(read(&wrong, &selection, None).is_err());
+    let python = make(
+        json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":11}),
+        vec![record(0), tool.clone()],
+    );
+    for generation in ["A".repeat(64), "bad".into(), "b".repeat(64)] {
+        let altered = CodexPageSelection::ToolCall {
+            record_uuid: match &selection {
+                CodexPageSelection::ToolCall { record_uuid, .. } => record_uuid.clone(),
+                _ => unreachable!(),
+            },
+            block: 0,
+            generation: Some(generation),
+        };
+        assert!(read(&python, &altered, None).is_err());
+    }
     let duplicate_meta =
         json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":11});
     let duplicate = make(duplicate_meta, vec![tool.clone(), tool.clone()]);
@@ -1505,4 +1545,166 @@ fn bounded_codex_pages_validate_positions_exact_tool_blocks_and_cancellation() {
         json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":null});
     let wrong = make(meta, vec![record(0), tool]);
     assert!(read(&wrong, &cursor, None).is_err());
+}
+
+#[test]
+fn generic_codex_pages_share_the_validated_legacy_reader() {
+    use xt_ingest::native::session_source::{
+        ExcerptLimits, ExcerptUnavailable, PageSelection as S, PageTargetKind as K,
+        PageUnavailable as U, load_session_page_with_reader,
+    };
+    let scene = scene();
+    let producer = producer();
+    let make = |metadata: serde_json::Value, body: Vec<serde_json::Value>| {
+        let mut header = header_for(CODEX, &scene.home);
+        header["context_page"] = metadata;
+        let mut lines = vec![header];
+        lines.extend(body);
+        fake(&scene, &prints(&lines))
+    };
+    let read = |python: &OsString, selection: &S, limits, cancel| {
+        load_session_page_with_reader(
+            &SessionSourceRequest {
+                home: &scene.home,
+                host: Host::Codex,
+                native_session_id: CODEX,
+                indexed: &[],
+                cancel,
+                limits: SourceLimits::default(),
+            },
+            selection,
+            Some(&DetailReader {
+                python,
+                producer: &producer,
+                bounds: DetailBounds::default(),
+            }),
+            limits,
+        )
+    };
+    let mut target = record(1);
+    target["message"]["content"] = json!([
+        {"type":"text","text":"synthetic"},
+        {"type":"tool_use","id":"call","name":"Read","input":{}},
+        {"type":"tool_result","tool_use_id":"call","content":"synthetic"}
+    ]);
+    let anchor = |block, kind, generation| S::Anchor {
+        record_uuid: target["uuid"].as_str().unwrap().into(),
+        block,
+        kind,
+        generation,
+    };
+    let meta =
+        json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":11});
+    let python = make(meta.clone(), vec![record(0), target.clone()]);
+    for (block, kind) in [
+        (None, K::Message),
+        (Some(1), K::ToolCall),
+        (Some(1), K::ToolBlock),
+        (Some(2), K::ToolBlock),
+    ] {
+        let page = read(
+            &python,
+            &anchor(block, kind, Some("a".repeat(64))),
+            ExcerptLimits::default(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(page.target, Some(11));
+        assert_eq!(page.records[0].ordinal, 10);
+        assert_eq!(page.total_records, 30);
+    }
+    for (block, kind) in [
+        (Some(0), K::ToolBlock),
+        (Some(2), K::ToolCall),
+        (Some(0), K::Message),
+        (None, K::ToolCall),
+    ] {
+        assert!(
+            read(
+                &python,
+                &anchor(block, kind, None),
+                ExcerptLimits::default(),
+                None
+            )
+            .is_err()
+        );
+    }
+    for generation in ["A".repeat(64), "broken".into(), "b".repeat(64)] {
+        assert!(
+            read(
+                &python,
+                &anchor(None, K::Message, Some(generation)),
+                ExcerptLimits::default(),
+                None
+            )
+            .is_err()
+        );
+    }
+    let duplicate = make(meta.clone(), vec![target.clone(), target.clone()]);
+    assert!(
+        read(
+            &duplicate,
+            &anchor(None, K::Message, None),
+            ExcerptLimits::default(),
+            None
+        )
+        .is_err()
+    );
+    let first_meta =
+        json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":null});
+    let first = make(first_meta, vec![record(0), target.clone()]);
+    assert!(read(&first, &S::First, ExcerptLimits::default(), None).is_err());
+    for cursor in [
+        format!("v1:after:9:{}", "a".repeat(64)),
+        format!("v1:after:10:{}", "b".repeat(64)),
+        "v1:after:-1:bad".into(),
+    ] {
+        assert!(read(&first, &S::Cursor(cursor), ExcerptLimits::default(), None).is_err());
+    }
+    let cursor = S::Cursor(format!("v1:after:10:{}", "a".repeat(64)));
+    assert_eq!(
+        read(&first, &cursor, ExcerptLimits::default(), None)
+            .unwrap()
+            .records
+            .len(),
+        2
+    );
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        read(
+            &python,
+            &anchor(None, K::Message, None),
+            ExcerptLimits::default(),
+            Some(&cancel)
+        ),
+        Err(U::Read(ExcerptUnavailable::Source(
+            SourceUnavailable::Cancelled
+        )))
+    ));
+    assert!(
+        read(
+            &python,
+            &anchor(None, K::Message, None),
+            ExcerptLimits {
+                deadline: Duration::ZERO,
+                ..ExcerptLimits::default()
+            },
+            None
+        )
+        .is_err()
+    );
+    let unsupported = fake(
+        &scene,
+        &format!(
+            "printf '%s\\n' '{}' >&2\nexit 2\n",
+            json!({"type":"diagnostic","host":"codex","code":"detail_prerequisite_unsupported","path":null})
+        ),
+    );
+    assert!(matches!(
+        read(&unsupported, &S::First, ExcerptLimits::default(), None),
+        Err(U::Read(ExcerptUnavailable::Source(
+            SourceUnavailable::UnsupportedHistory
+        )))
+    ));
 }

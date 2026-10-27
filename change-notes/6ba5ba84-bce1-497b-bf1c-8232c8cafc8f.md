@@ -1,0 +1,1 @@
+- Keep each warning action waiting for the current saved answer when another Dismiss or Undo replaces its read.

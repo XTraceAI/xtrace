@@ -1,5 +1,5 @@
 import type { DataSource } from '../src/data/DataSource';
-import type { CodexPageStatus } from '../src/data/generated/CodexPageStatus';
+import type { SessionPageStatus } from '../src/data/generated/SessionPageStatus';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import fixture from '../fixtures/F1.json';
@@ -16,6 +16,7 @@ const source = new FixtureDataSource(fixture as FixtureExport);
 const parameters = new URLSearchParams(location.search);
 const mode = parameters.get('mode');
 const paged = parameters.has('paged');
+const pagedHost = parameters.get('host') === 'claude' ? 'claude' : 'codex';
 const row = {
   ...(fixture as FixtureExport).sessions[0].rows[0],
   id: 'synthetic-layout',
@@ -65,7 +66,7 @@ records.push({
   at: null,
   blocks: [{ kind: 'tool_call', index: 0, name: 'Bash', call_id: 'adjacent-call', input: null }],
 });
-source.sessionRow = async () => ({ ...row, host: paged ? 'codex' : row.host });
+source.sessionRow = async () => ({ ...row, host: paged ? pagedHost : row.host });
 source.sessionTranscript = async () =>
   mode === 'failed'
     ? { state: 'unavailable', reason: { reason: 'replaced' } }
@@ -73,6 +74,7 @@ source.sessionTranscript = async () =>
         state: 'loaded',
         generation: { generation: 'indexed', appended: true },
         sources: 1,
+        record_ranges: [{ start: 0, end: records.length }],
         dropped_records: 0,
         gaps: [{ gap: 'missing' }],
         records,
@@ -109,11 +111,14 @@ source.sessionStretches = async () => ({
 if (paged) {
   source.sessionTranscript = async () => ({
     state: 'unavailable',
-    reason: { reason: 'reader_limit', limit: 'source_bytes' },
+    reason:
+      pagedHost === 'claude'
+        ? { reason: 'too_large', limit: 'bytes', reached: 99, ceiling: 10 }
+        : { reason: 'reader_limit', limit: 'source_bytes' },
   });
   const data: DataSource = source;
   const digest = 'b'.repeat(64);
-  data.codexTranscriptPage = async (_id, selection): Promise<CodexPageStatus> => {
+  data.sessionTranscriptPage = async (_id, selection): Promise<SessionPageStatus> => {
     let start = 0,
       end = Math.min(31, records.length),
       target: number | null = null;
@@ -121,15 +126,22 @@ if (paged) {
       const boundary = Number(selection.cursor.split(':')[2]);
       start = selection.cursor.includes(':after:') ? boundary : Math.max(0, boundary - 31);
       end = selection.cursor.includes(':after:') ? Math.min(records.length, start + 31) : boundary;
-    } else if (selection.kind === 'tool_call') {
+    } else if (selection.kind === 'anchor') {
       const found = records.findIndex((record) => record.id === selection.record_uuid);
-      if (found < 0) return { state: 'unavailable', reason: { reason: 'target_missing' } };
+      if (found < 0)
+        return {
+          state: 'unavailable',
+          reason: { reason: 'read', detail: { reason: 'target_missing' } },
+        };
       if (
         !records[found]!.blocks.some(
           (block) => block.kind === 'tool_call' && block.index === selection.block,
         )
       )
-        return { state: 'unavailable', reason: { reason: 'block_missing' } };
+        return {
+          state: 'unavailable',
+          reason: { reason: 'read', detail: { reason: 'block_missing' } },
+        };
       start = Math.max(0, found - 16);
       end = Math.min(records.length, found + 2);
       target = found - start;
@@ -140,10 +152,19 @@ if (paged) {
       records: records.slice(start, end),
       start,
       end,
-      total: records.length,
+      generation:
+        pagedHost === 'claude'
+          ? { generation: 'indexed', appended: false }
+          : { generation: 'unrecorded' },
+      record_ranges: [{ start: 0, end: end - start }],
+      dropped_records: 0,
+      total_records: records.length,
       previous: start > 0 ? `v1:before:${start}:${digest}` : null,
       next: end < records.length ? `v1:after:${end}:${digest}` : null,
-      target,
+      target:
+        target === null
+          ? null
+          : { record: target, block: selection.kind === 'anchor' ? selection.block : null },
     };
   };
 }

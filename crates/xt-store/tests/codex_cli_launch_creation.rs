@@ -616,6 +616,9 @@ fn a_schema_19_index_upgrades_with_every_row_unchanged() {
             "session_creation_relations_immutable_update",
             "session_creation_relations_launch",
             "session_creation_relations_parent",
+            "session_warnings_session_creation_relations_delete",
+            "session_warnings_session_creation_relations_insert",
+            "session_warnings_session_creation_relations_update",
         ]
     );
     for statement in [

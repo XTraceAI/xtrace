@@ -843,13 +843,13 @@ fn upgrading_an_existing_index_adds_an_empty_relation_store() {
     let connection = sql(&directory);
     connection
         .execute_batch(
-            "DROP TABLE grading_added_skills; DROP TABLE grades; DROP TABLE telemetry_events; ALTER TABLE pull_requests DROP COLUMN manual_failed_at; DELETE FROM schema_version WHERE version>=11;
+            concat!(include_str!("fixtures/undo_saved_session_warnings.sql"), "DROP TABLE dismissed_warnings; DROP INDEX tool_results_session; DROP TABLE tool_results; DROP INDEX tool_uses_call_id; ALTER TABLE tool_uses DROP COLUMN call_id_conflict; ALTER TABLE tool_uses DROP COLUMN call_id; DROP TABLE grading_added_skills; DROP TABLE grades; DROP TABLE telemetry_events; ALTER TABLE pull_requests DROP COLUMN manual_failed_at; DELETE FROM schema_version WHERE version>=11;
              DROP TABLE guardian_turn_inputs;
              DROP TABLE injected_context_inputs; DROP TABLE IF EXISTS tool_sent_inputs; DROP TABLE IF EXISTS task_notification_inputs; DROP TABLE IF EXISTS record_previews; DROP TABLE IF EXISTS session_child_checks; DROP TABLE IF EXISTS session_child_facts; DROP TABLE IF EXISTS human_input_adjustments; DROP TABLE IF EXISTS human_session_origins;
              DROP TABLE session_creation_relations;
              DROP TABLE session_creation_bootstrap; DROP TABLE cli_artifact_launch_owners; DROP TABLE claude_launch_groups; DROP TABLE claude_launch_group_members; DROP TABLE claude_launch_candidates; DROP TABLE claude_launch_staged_candidates;
              DROP INDEX sessions_host_native;
-             DROP INDEX source_cursors_tail;",
+             DROP INDEX source_cursors_tail;"),
         )
         .unwrap();
     let sessions = |connection: &Connection| -> Vec<String> {
@@ -994,4 +994,28 @@ fn a_root_locator_lookup_seeks_its_tail_instead_of_scanning_every_locator() {
     );
     assert!(seek < 200, "the seek took {seek} steps");
     assert!(scan > LOCATORS as i32, "the pattern took {scan} steps");
+}
+
+#[test]
+fn accepted_and_conflicted_child_relations_invalidate_saved_warnings() {
+    let directory = TempDir::new().unwrap();
+    let mut store = open(&directory);
+    session(&mut store, CHILD, T, None);
+    let sql = sql(&directory);
+    let revision = || {
+        sql.query_row(
+            "SELECT revision FROM session_warning_inputs WHERE session_id=?1",
+            [&id(CHILD)],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let before = revision();
+    record(&mut store, &[spawn(CHILD, PARENT)]);
+    let accepted = revision();
+    assert!(accepted > before);
+    record(&mut store, &[spawn(CHILD, PARENT)]);
+    assert_eq!(Some(revision()), Some(accepted));
+    record(&mut store, &[spawn(CHILD, OTHER)]);
+    assert!(revision() > accepted);
 }

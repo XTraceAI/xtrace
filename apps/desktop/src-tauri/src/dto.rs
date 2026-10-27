@@ -1,6 +1,5 @@
 //! Serialized IPC and fixture contracts. Integer constructors enforce JSON precision.
 pub use crate::account_usage_dto::*;
-pub use crate::codex_page_dto::*;
 pub use crate::dashboard_dto::*;
 pub use crate::grading_dto::*;
 pub use crate::grading_link_dto::*;
@@ -13,8 +12,24 @@ pub use crate::session_compactions::{
     CompactionCount, CompactionEvent, CompactionReason, CompactionTrigger, InheritedCompactions,
     SessionCompaction, SessionCompactions,
 };
+pub use crate::session_diagnosis_dto::{
+    DiagnosisDraftKind, DiagnosisLimit, DiagnosisLimitKind, DiagnosisRealProblem, DiagnosisSent,
+    DiagnosisSkip, DiagnosisSuggestion, DiagnosisTool, DiagnosisToolTried, SaveSkillRefusal,
+    SavedSkill, SessionDiagnosis,
+};
+pub use crate::session_excerpt_dto::{
+    SessionExcerptLimit, SessionExcerptReason, SessionExcerptStatus,
+};
+pub use crate::session_page_dto::{
+    SessionPageReason, SessionPageSelection, SessionPageStatus, SessionPageTargetKind,
+};
 pub use crate::session_source_dto::*;
 pub use crate::session_titles::{SessionTitle, SessionTitles};
+pub use crate::session_warnings_dto::{
+    DashboardDayWarning, DashboardWarningDay, DashboardWarnings, FixtureDashboardWarnings,
+    SessionWarningCheck, SessionWarningDismissal, SessionWarningItem, SessionWarningKind,
+    SessionWarningsAnswer, SessionWarningsEntry, SessionWarningsList,
+};
 use serde::Serialize;
 use ts_rs::TS;
 use xt_store::StoreCounts;
@@ -265,6 +280,12 @@ pub struct FixtureExport {
     /// The sessions behind every day of every range's report, as the day
     /// sessions command answers them for that report's window.
     pub day_sessions: Vec<FixtureDaySessions>,
+    /// M-21 for every session the pages and lanes name, each over its whole
+    /// history, as the warnings command answers it in the fixture's zone.
+    pub session_warnings: SessionWarningsList,
+    /// Each range's Effort warnings, as the window warnings command answers
+    /// them for that report's window.
+    pub dashboard_warnings: Vec<FixtureDashboardWarnings>,
     pub dashboards: Vec<DashboardMetrics>,
     /// The stored pull requests this fixture's sessions link, before anything
     /// refreshed them.
@@ -308,13 +329,20 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     TokensByHost::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionPage::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     MetricSessionStretches::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
-    CodexPageStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
-    CodexPageRequest::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionPageStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionPageSelection::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionExcerptStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionSourceStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionTitles::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionCompactions::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     DashboardSpanDetail::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     DashboardDaySessions::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionWarningsList::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    DashboardWarnings::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionWarningDismissal::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionDiagnosis::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SavedSkill::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    crate::session_warnings_dto::export_text(directory.as_ref())?;
     PrList::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     PrRefreshReport::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     PrAutoCheckStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;

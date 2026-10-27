@@ -434,7 +434,8 @@
 
 /* The card a reveal landed on. An outline rather than a fill, so the card's own content and
    its failure colouring read exactly as they do unhighlighted. */
-.xt-tool-card[data-highlighted] {
+.xt-tool-card[data-highlighted],
+.xt-turn[data-highlighted] {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

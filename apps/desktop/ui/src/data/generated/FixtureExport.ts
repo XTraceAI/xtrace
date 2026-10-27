@@ -2,6 +2,7 @@
 import type { AppInfo } from "./AppInfo";
 import type { DashboardMetrics } from "./DashboardMetrics";
 import type { DbCounts } from "./DbCounts";
+import type { FixtureDashboardWarnings } from "./FixtureDashboardWarnings";
 import type { FixtureDaySessions } from "./FixtureDaySessions";
 import type { FixturePrEffortState } from "./FixturePrEffortState";
 import type { FixturePrSessions } from "./FixturePrSessions";
@@ -18,6 +19,7 @@ import type { PrRefreshReport } from "./PrRefreshReport";
 import type { ProjectList } from "./ProjectList";
 import type { RuleActivityResult } from "./RuleActivityResult";
 import type { SessionPage } from "./SessionPage";
+import type { SessionWarningsList } from "./SessionWarningsList";
 import type { TodaySummary } from "./TodaySummary";
 
 export type FixtureExport = { app_info: AppInfo, db_counts: DbCounts, native_index: NativeIndexStatus, sessions: Array<SessionPage>, sessions_summaries: Array<FixtureSessionsSummary>, 
@@ -34,7 +36,17 @@ span_details: Array<FixtureSpanDetail>,
  * The sessions behind every day of every range's report, as the day
  * sessions command answers them for that report's window.
  */
-day_sessions: Array<FixtureDaySessions>, dashboards: Array<DashboardMetrics>, 
+day_sessions: Array<FixtureDaySessions>, 
+/**
+ * M-21 for every session the pages and lanes name, each over its whole
+ * history, as the warnings command answers it in the fixture's zone.
+ */
+session_warnings: SessionWarningsList, 
+/**
+ * Each range's Effort warnings, as the window warnings command answers
+ * them for that report's window.
+ */
+dashboard_warnings: Array<FixtureDashboardWarnings>, dashboards: Array<DashboardMetrics>, 
 /**
  * The stored pull requests this fixture's sessions link, before anything
  * refreshed them.

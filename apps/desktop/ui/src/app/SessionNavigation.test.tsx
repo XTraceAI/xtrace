@@ -119,6 +119,10 @@ function navigationSource() {
       calls.push({ search: sessionId, hosts: null, days });
       return rows.find((row) => row.id === sessionId) ?? null;
     },
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async (sessionId) => {
       opened.push(sessionId);
       return sessionId === ATLAS
@@ -126,6 +130,7 @@ function navigationSource() {
             state: 'loaded',
             generation: { generation: 'indexed', appended: false },
             sources: 1,
+            record_ranges: [{ start: 0, end: 1 }],
             dropped_records: 0,
             gaps: [],
             records: [

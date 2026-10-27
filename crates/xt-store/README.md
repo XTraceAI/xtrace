@@ -90,9 +90,10 @@ results), `tool_uses.input_json`, `record_previews.text` and a grading run's
 result (`grades.summary`, `grades.insights_json`, `grades.report_file`). The
 skills added to Scores (`grading_added_skills`, migration 26: rubric id, folder
 path or plugin skill name, rubric name, description and version, time added) hold no conversation
-content and are not registered. Compiled table owners register additional
-nullable content fields through `register(table, columns)`; no SQL callback or
-raw connection is exposed. All registrations are validated, then cleared in one
+content and are not registered. Dismissed session warnings (`dismissed_warnings`, migration 28: session and warning identifiers, size and time dismissed) also remain. Saved warning decisions (`saved_session_warnings`, migration 29) keep rule facts, counts and times, including a correction's matched span. That span can contain message words between `still` and a nearby negative word; tool arguments and comparison keys are not saved. Purge deletes every saved warning row in the same transaction, even when the registered source fields are already empty. Deleted cache rows are reported in `PurgeOutcome` and request content-view invalidation too. Warning input revisions and bounds remain; clearing retained source text advances the affected revisions, so an older candidate cannot restore that text.
+Compiled table owners register additional nullable content fields through
+`register(table, columns)`; no SQL callback or raw connection is exposed. All
+registrations are validated, then cleared with the saved warning rows in one
 transaction. Only a committed result can request content-view invalidation.
 IDs, counts, usage, source facts, receipt evidence and original host files survive.
 The caller owns user confirmation; no Settings action is connected by this API.
