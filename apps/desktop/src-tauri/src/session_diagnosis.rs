@@ -535,6 +535,12 @@ pub fn conversation(
             continue;
         };
         let is_flagged = source.id == flag.record_uuid && flagged.is_none();
+        if is_flagged
+            && flag.block.is_none()
+            && source.role != crate::transcript_dto::RecordRole::User
+        {
+            return None;
+        }
         if is_flagged && let Some(index) = flag.block {
             let mut blocks = source.blocks.iter().filter(|block| block.index() == index);
             if !matches!(
