@@ -1,12 +1,19 @@
-//! Translate a diagnosis outcome into the app's result and message details.
+//! Translate a diagnosis outcome and select its exact conversation as messages.
 
 use crate::session_diagnosis_dto::{self as dto, DiagnosisSent, SessionDiagnosis};
+use crate::transcript_dto::{SourceBlock, SourcePayload, SourceRecord, SourceResultPart};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use xt_ingest::canonical::ParsedRecord;
 use xt_judge::diagnosis::{
     agents::{self, DiagnoseError, Tool, Tried},
     answer,
-    input::{self, HostName},
+    input::{self, HostName, Message, Sender},
 };
+use xt_metrics::WarningPoint;
+
+/// Characters of a tool call's input shown in `(ran <tool>: <input>)`.
+pub const MAX_CALL_INPUT_CHARS: usize = 200;
 
 /// What a diagnosis answer's wording needs about its session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,6 +180,309 @@ fn sent_dto(sent: &input::Sent, zone: &jiff::tz::TimeZone, tools: &[Tool]) -> Di
         last_at_ms: sent.last_at_ms,
         tools: tools.iter().copied().map(Into::into).collect(),
         text: dto::sent_text(sent.messages, span, tools),
+    }
+}
+
+/// The index's facts about one record.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecordFacts {
+    /// M-02: whether it is a person's message.
+    pub person: Option<bool>,
+    pub agent_id: Option<String>,
+}
+
+/// The flagged record's conversation as messages, and the flagged one's
+/// position. `None` when its record or explicit tool call/result block cannot be
+/// selected exactly, or a flagged subagent record has no saved subagent ID.
+pub fn conversation(
+    records: &[ParsedRecord],
+    facts: &HashMap<String, RecordFacts>,
+    flag: &WarningPoint,
+) -> Option<(Vec<Message>, usize)> {
+    let mut anchors = records
+        .iter()
+        .filter(|record| record.canonical.uuid.as_deref() == Some(flag.record_uuid.as_str()));
+    let anchor = anchors.next()?;
+    if anchors.next().is_some() {
+        return None;
+    }
+    let agent_of = |record: &ParsedRecord| {
+        record
+            .canonical
+            .uuid
+            .as_deref()
+            .and_then(|uuid| facts.get(uuid))
+            .and_then(|facts| facts.agent_id.clone())
+    };
+    let sidechain = anchor.canonical.is_sidechain;
+    let agent = if sidechain {
+        Some(agent_of(anchor).filter(|id| !id.trim().is_empty())?)
+    } else {
+        None
+    };
+    let mut messages: Vec<Message> = Vec::new();
+    let mut flagged: Option<usize> = None;
+    let mut calls: HashMap<String, String> = HashMap::new();
+    let mut last_agent_message: Option<String> = None;
+    for record in records.iter().filter(|record| {
+        record.canonical.is_sidechain == sidechain && (!sidechain || agent_of(record) == agent)
+    }) {
+        let Ok(source) = SourceRecord::try_from(record) else {
+            continue;
+        };
+        let is_flagged = source.id == flag.record_uuid && flagged.is_none();
+        if is_flagged && let Some(index) = flag.block {
+            let mut blocks = source.blocks.iter().filter(|block| block.index() == index);
+            if !matches!(
+                (source.role, blocks.next()),
+                (
+                    crate::transcript_dto::RecordRole::User,
+                    Some(SourceBlock::ToolResult { .. })
+                ) | (
+                    crate::transcript_dto::RecordRole::Assistant,
+                    Some(SourceBlock::ToolCall { .. })
+                )
+            ) || blocks.next().is_some()
+            {
+                return None;
+            }
+        }
+        let at_ms = source
+            .at
+            .as_deref()
+            .and_then(|at| xt_store::timestamp::parse(at).ok())
+            .map(|(_, ms)| ms);
+        let start = messages.len();
+        let mut flagged_block: Option<usize> = None;
+        match source.role {
+            crate::transcript_dto::RecordRole::Assistant => {
+                if is_flagged && let Some(index) = flag.block {
+                    let mut parts = Vec::new();
+                    let flush = |parts: &mut Vec<String>, messages: &mut Vec<Message>| {
+                        if !parts.is_empty() {
+                            messages.push(Message {
+                                sender: Sender::Agent,
+                                text: std::mem::take(parts).join("\n"),
+                                at_ms,
+                            });
+                        }
+                    };
+                    for block in &source.blocks {
+                        match block {
+                            SourceBlock::Text { text, .. } => parts.push(text.clone()),
+                            SourceBlock::ToolCall {
+                                index: block_index,
+                                name,
+                                call_id,
+                                input,
+                            } => {
+                                if let Some(id) = call_id {
+                                    calls.insert(id.clone(), name.clone());
+                                }
+                                let line = call_line(name, input.as_ref());
+                                if *block_index == index {
+                                    flush(&mut parts, &mut messages);
+                                    flagged = Some(messages.len());
+                                    messages.push(Message {
+                                        sender: Sender::Agent,
+                                        text: line,
+                                        at_ms,
+                                    });
+                                } else {
+                                    parts.push(line);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    flush(&mut parts, &mut messages);
+                    last_agent_message = None;
+                    continue;
+                }
+                let mut parts = Vec::new();
+                for block in &source.blocks {
+                    match block {
+                        SourceBlock::Text { text, .. } => parts.push(text.clone()),
+                        SourceBlock::ToolCall {
+                            name,
+                            call_id,
+                            input,
+                            ..
+                        } => {
+                            if let Some(id) = call_id {
+                                calls.insert(id.clone(), name.clone());
+                            }
+                            parts.push(call_line(name, input.as_ref()));
+                        }
+                        SourceBlock::Thinking { .. }
+                        | SourceBlock::ToolResult { .. }
+                        | SourceBlock::Unsupported { .. } => {}
+                    }
+                }
+                let message_id = record.canonical.message.id.clone();
+                let text = parts.join("\n");
+                let same_reply = message_id.is_some() && message_id == last_agent_message;
+                match messages.last_mut() {
+                    Some(previous)
+                        if same_reply && previous.sender == Sender::Agent && !text.is_empty() =>
+                    {
+                        previous.text.push('\n');
+                        previous.text.push_str(&text);
+                    }
+                    _ if !text.is_empty() || is_flagged => messages.push(Message {
+                        sender: Sender::Agent,
+                        text,
+                        at_ms,
+                    }),
+                    _ => {}
+                }
+                last_agent_message = message_id;
+                if is_flagged {
+                    flagged = Some(messages.len() - 1);
+                }
+                continue;
+            }
+            crate::transcript_dto::RecordRole::User => {
+                last_agent_message = None;
+                let person = facts
+                    .get(&source.id)
+                    .and_then(|facts| facts.person)
+                    .unwrap_or(false);
+                let mut text = String::new();
+                let flush = |text: &mut String, messages: &mut Vec<Message>| {
+                    if text.trim().is_empty() {
+                        text.clear();
+                        return;
+                    }
+                    let sender = if person && !xt_metrics::tool_written(text) {
+                        Sender::Person
+                    } else {
+                        Sender::Automatic
+                    };
+                    messages.push(Message {
+                        sender,
+                        text: std::mem::take(text),
+                        at_ms,
+                    });
+                };
+                for block in &source.blocks {
+                    match block {
+                        SourceBlock::Text { text: words, .. } => {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(words);
+                        }
+                        SourceBlock::ToolResult {
+                            index,
+                            call_id,
+                            failed,
+                            parts,
+                        } => {
+                            flush(&mut text, &mut messages);
+                            let tool = call_id.as_ref().and_then(|id| calls.get(id)).cloned();
+                            let mut body: Vec<String> = parts
+                                .iter()
+                                .map(|part| match part {
+                                    SourceResultPart::Text { text } => text.clone(),
+                                    SourceResultPart::Unshown { .. } => "(not shown)".to_owned(),
+                                })
+                                .collect();
+                            if *failed {
+                                body.insert(0, "(the tool reported a failure)".to_owned());
+                            }
+                            if is_flagged && flag.block == Some(*index) {
+                                flagged_block = Some(messages.len());
+                            }
+                            messages.push(Message {
+                                sender: Sender::ToolResult { tool },
+                                text: body.join("\n"),
+                                at_ms,
+                            });
+                        }
+                        SourceBlock::Unsupported { .. } => {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str("(not shown)");
+                        }
+                        SourceBlock::Thinking { .. } | SourceBlock::ToolCall { .. } => {}
+                    }
+                }
+                flush(&mut text, &mut messages);
+                if is_flagged && messages.len() == start {
+                    messages.push(Message {
+                        sender: if person {
+                            Sender::Person
+                        } else {
+                            Sender::Automatic
+                        },
+                        text: String::new(),
+                        at_ms,
+                    });
+                }
+            }
+        }
+        if is_flagged {
+            flagged = Some(match flag.block {
+                Some(_) => flagged_block?,
+                None => start,
+            });
+        }
+    }
+    flagged.map(|index| (messages, index))
+}
+
+/// `(ran <tool>: <short input>)`.
+fn call_line(name: &str, input: Option<&SourcePayload>) -> String {
+    let name: String = name.chars().take(input::MAX_TOOL_LABEL_CHARS).collect();
+    match input.map(short_input).filter(|text| !text.is_empty()) {
+        Some(short) => format!("(ran {name}: {short})"),
+        None => format!("(ran {name})"),
+    }
+}
+
+/// A call's input in one short line: the command, file, path, pattern or
+/// address it names when it names one, else its arguments as compact JSON;
+/// at most [`MAX_CALL_INPUT_CHARS`] characters.
+fn short_input(payload: &SourcePayload) -> String {
+    use serde_json::Value;
+    let text = match payload {
+        SourcePayload::Text { text } => text.clone(),
+        SourcePayload::Json { value } => {
+            let named = value.as_object().and_then(|object| {
+                [
+                    "command",
+                    "cmd",
+                    "file_path",
+                    "path",
+                    "pattern",
+                    "url",
+                    "query",
+                    "description",
+                ]
+                .iter()
+                .find_map(|key| match object.get(*key) {
+                    Some(Value::String(text)) => Some(text.clone()),
+                    Some(Value::Array(parts)) if parts.iter().all(Value::is_string) => Some(
+                        parts
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    ),
+                    _ => None,
+                })
+            });
+            named.unwrap_or_else(|| value.to_string())
+        }
+    };
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= MAX_CALL_INPUT_CHARS {
+        line
+    } else {
+        let cut: String = line.chars().take(MAX_CALL_INPUT_CHARS - 1).collect();
+        format!("{}…", cut.trim_end())
     }
 }
 
