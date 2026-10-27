@@ -728,13 +728,19 @@
 }
 .xt-warning-modal-body {
   display: grid;
-  flex: 1 1 auto;
+  /* One bounded row: the columns get the window's height, not their
+     content's, so each scrolls inside it. */
+  grid-template-rows: minmax(0, 1fr);
+  /* A zero basis: the body's height is the window's leftover space, never
+     its content's, in every engine. */
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
 }
 .xt-warning-modal-item {
   display: grid;
   grid-template-columns: minmax(0, 47fr) minmax(0, 53fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
 }
@@ -846,9 +852,11 @@
   }
   .xt-warning-modal-body {
     flex: 0 0 auto;
+    grid-template-rows: none;
   }
   .xt-warning-modal-item {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
   }
   .xt-warning-modal-item > .xt-warning-context,
   .xt-warning-modal-side {

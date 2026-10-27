@@ -79,6 +79,22 @@ source.sessionWarningContext = async () => {
     subagent ? 'main-target' : warning.points_at.record_uuid,
   );
   if (subagent) status.records[6]!.id = warning.points_at.record_uuid;
+  // A long agent reply (Markdown with a table) before the flagged message.
+  if (params.has('longreply'))
+    status.records[1]!.blocks = [
+      {
+        kind: 'text',
+        index: 0,
+        text: [
+          'Synthetic long reply.',
+          '',
+          ...Array.from({ length: 16 }, (_, line) => `Synthetic paragraph ${line + 1}.\n`),
+          '| Step | Result |',
+          '| --- | --- |',
+          ...Array.from({ length: 22 }, (_, row) => `| Synthetic step ${row + 1} | passed |`),
+        ].join('\n'),
+      },
+    ];
   if (params.has('long'))
     status.records[2]!.blocks = [
       { kind: 'text', index: 0, text: 'Synthetic long content. '.repeat(500) },

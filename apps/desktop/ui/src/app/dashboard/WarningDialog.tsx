@@ -103,8 +103,13 @@ function SelectedIssue({
   const query = useSessionWarning(selected.sessionId, selected.timezone, {
     refetchOnMount: 'always',
   });
+  // Only an answer read after this window opened is acted on (the read on
+  // opening is forced, `refetchOnMount: 'always'`). A later re-read, which
+  // every ingest starts, keeps that finished answer shown until it lands, so
+  // the conversation and a confirm step are not thrown away while it runs. A
+  // failed read drops the actions.
   const read =
-    !query.isFetching && !query.isError && query.data?.state === 'read' ? query.data : null;
+    query.isFetchedAfterMount && !query.isError && query.data?.state === 'read' ? query.data : null;
   const active = read?.warnings.find((warning) => warning.id === selected.warning.id);
   const dismissed = read?.dismissed.find((warning) => warning.id === selected.warning.id);
   const warning = active ?? dismissed;

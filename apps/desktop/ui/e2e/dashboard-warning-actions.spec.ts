@@ -394,3 +394,57 @@ for (const theme of ['light', 'dark'] as const) {
     });
   }
 }
+
+// The conversation column scrolls inside the window: a long reply before the
+// flagged message must not push it out of reach, and the right column stays.
+for (const theme of ['light', 'dark'] as const)
+  test(`the conversation scrolls on its own to the flagged message, ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 640 });
+    await page.emulateMedia({ colorScheme: theme });
+    await page.goto(
+      '/e2e/dashboard-warning.html?diagnosis&context&longreply&path=/dashboard?range=7d',
+    );
+    await page.evaluate(() => document.fonts.ready);
+    const target = await dot(page, 'lane');
+    await target.focus();
+    await page.keyboard.press('Enter');
+    const context = modal(page).getByTestId('warning-context');
+    await expect(context).toContainText('Synthetic long reply.');
+    await context.getByRole('button', { name: 'Show the rest of this block' }).click();
+    await expect(context).toContainText('Synthetic step 22');
+    await context.evaluate((node) => {
+      node.scrollTop = 0;
+    });
+    const side = modal(page).locator('.xt-warning-modal-side');
+    const before = (await side.boundingBox())!;
+    const sizes = await context.evaluate((node) => ({
+      scroll: node.scrollHeight,
+      client: node.clientHeight,
+      top: node.scrollTop,
+    }));
+    expect(sizes.scroll).toBeGreaterThan(sizes.client + 1);
+    expect(sizes.top).toBe(0);
+    const flagged = context.locator('[data-trigger]');
+    /** Whether the flagged message lies wholly inside the column's visible box. */
+    const shown = () =>
+      flagged.evaluate((node) => {
+        const column = node.closest('[data-testid="warning-context"]')!.getBoundingClientRect();
+        const own = node.getBoundingClientRect();
+        return own.top >= column.top - 1 && own.bottom <= column.bottom + 1;
+      });
+    expect(await shown()).toBe(false);
+    // The wheel scrolls the column itself.
+    const box = (await context.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 2000);
+    await expect.poll(() => context.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await expect.poll(shown).toBe(true);
+    expect(await side.boundingBox()).toEqual(before);
+    await expect(
+      modal(page).getByRole('button', { name: /^Diagnose this warning:/ }),
+    ).toBeInViewport();
+    if (process.env.WARNING_SHOTS)
+      await page.screenshot({
+        path: `${process.env.WARNING_SHOTS}/context-scrolled-${theme}.png`,
+      });
+  });

@@ -544,3 +544,83 @@ it('keeps Stop waiting after an accepted Stop, in a reopened window too, until t
   await test.answer(answers.cancelled!);
   expect((await screen.findByTestId('diagnosis-result')).dataset.state).toBe('cancelled');
 });
+
+// An ingest re-reads the session's warnings. While that re-read is in
+// flight the window keeps the last finished answer: the conversation is not
+// read again, the confirm step stays and Send still works.
+it('keeps the window, its conversation and the confirm step while a re-read is in flight', async () => {
+  const test = setup();
+  await ask(test);
+  await screen.findByText(/Still not fixed/);
+  expect(test.transcript).toHaveBeenCalledOnce();
+  test.warnings.mockImplementationOnce(() => new Promise(() => {}));
+  act(() => {
+    void test.client().invalidateQueries({
+      queryKey: queryKeys.sessionWarnings(selected.timezone, selected.sessionId),
+    });
+  });
+  await waitFor(() => expect(test.warnings).toHaveBeenCalledTimes(2));
+  expect(screen.queryByTestId('warnings-state')).toBeNull();
+  expect(screen.getByTestId('warning-item')).toBeTruthy();
+  expect(screen.getByTestId('warning-context').textContent).toContain('Still not fixed');
+  expect(screen.getByTestId('diagnosis-confirm')).toBeTruthy();
+  expect(test.transcript).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: words.confirm }));
+  expect(test.controls.diagnose).toHaveBeenCalledOnce();
+  expect(await screen.findByTestId('diagnosis-running')).toBeTruthy();
+});
+
+it('drops the warning, its confirm step and its actions when a finished re-read no longer lists it', async () => {
+  const test = setup();
+  await ask(test);
+  test.warnings.mockResolvedValueOnce({
+    timezone: selected.timezone,
+    sessions: [
+      {
+        session_id: selected.sessionId,
+        answer: {
+          ...read,
+          warnings: read.warnings.filter((one) => one.id !== selected.warning.id),
+          dismissed: [],
+        },
+      },
+    ],
+  });
+  await act(async () => {
+    await test.client().invalidateQueries({
+      queryKey: queryKeys.sessionWarnings(selected.timezone, selected.sessionId),
+    });
+  });
+  expect(screen.queryByTestId('diagnosis-confirm')).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Diagnose/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  expect(screen.getByTestId('warnings-state').textContent).toBe(
+    SESSION_WARNINGS_TEXT.session_unavailable,
+  );
+  expect(test.controls.diagnose).not.toHaveBeenCalled();
+});
+
+// Selecting another warning while the window stays open remounts its content
+// (the content is keyed by session and warning), so that warning, too, acts
+// only on a read finished after it opened, not on the cached answer.
+it('waits for a fresh read after switching to another warning in the open window', async () => {
+  const test = setup();
+  test.mount();
+  await screen.findByRole('button', { name: /^Diagnose/ });
+  const other = read.warnings.find((one) => one.id !== selected.warning.id)!;
+  let finish: (value: SessionWarningsList) => void = () => {};
+  test.warnings.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  test.select({ ...selected, warning: other });
+  await waitFor(() => expect(test.warnings).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId('warnings-state').textContent).toBe(
+    SESSION_WARNINGS_TEXT.session_reading,
+  );
+  expect(screen.queryByRole('button', { name: /^Diagnose/ })).toBeNull();
+  await act(async () => finish(structuredClone(list)));
+  expect((await screen.findByTestId('warning-item')).dataset.warningId).toBe(other.id);
+});
