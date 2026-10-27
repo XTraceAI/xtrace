@@ -282,6 +282,18 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
                 session_stretches,
                 span_details,
                 day_sessions,
+                // Warnings are activity metadata, which a pull-request
+                // refresh never changes.
+                session_warnings: xtrace_desktop::session_warnings_dto::fixture_session_warnings(
+                    database.path(),
+                    fixture.now().timestamp_millis(),
+                    fixture.snapshots().get("prices"),
+                )?,
+                dashboard_warnings:
+                    xtrace_desktop::session_warnings_dto::fixture_dashboard_warnings(
+                        database.path(),
+                        fixture.now().timestamp_millis(),
+                    )?,
                 native_index: xtrace_desktop::dto::NativeIndexStatus {
                     phase: xtrace_desktop::dto::NativeIndexPhase::Disabled {
                         reason: "fixture mode uses a disposable database".into(),

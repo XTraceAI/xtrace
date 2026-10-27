@@ -192,6 +192,10 @@ function source({
       return everyRow.find((candidate) => candidate.id === id) ?? null;
     },
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     pullRequests: unavailable,

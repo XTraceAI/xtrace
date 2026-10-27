@@ -82,6 +82,21 @@ pub enum StateError {
     #[error("a day's sessions request names one day of a Dashboard range")]
     InvalidDayRequest,
     /// Refused before storage is touched.
+    #[error("a warnings request names at most 200 distinct sessions")]
+    InvalidWarningRequest,
+    /// Refused before storage is touched.
+    #[error("a dismissal names one session and one warning of it")]
+    InvalidWarningDismissal,
+    /// The session's answer, read now, has no such warning: nothing is
+    /// stored, since no screen could have shown it.
+    #[error("this session has no such warning now")]
+    UnknownWarning,
+    /// The zone a view asked in is empty, overlong, unnamed or unknown to
+    /// this Mac. Checked once the read has been admitted, before anything is
+    /// read for it.
+    #[error("the requested time zone is not one this Mac knows")]
+    InvalidTimezone,
+    /// Refused before storage is touched.
     #[error("typing speed must be a whole number from 1 to 300 words per minute")]
     InvalidTypingSpeed,
     /// Refused before storage is touched.
@@ -231,6 +246,7 @@ impl StartupOptions {
 
 pub struct AppState {
     database: Mutex<Option<Database>>,
+    warning_cache: Mutex<Option<crate::warning_cache::WarningCacheRequest>>,
     /// Live status never queues behind Dashboard work or another identity read.
     /// Open lazily on the exact live DB; fixture state never opens this reader.
     live_identity: Mutex<Option<xt_store::identity_reader::SessionIdentityReader>>,
@@ -305,8 +321,82 @@ fn settled(
     Ok(status)
 }
 
+fn settled_excerpt(
+    status: crate::dto::SessionExcerptStatus,
+    cancel: &xt_ingest::native::readers_cli::CancelToken,
+) -> crate::dto::SessionExcerptStatus {
+    if cancel.is_cancelled() {
+        crate::dto::SessionExcerptStatus::unavailable(crate::dto::SessionExcerptReason::Source {
+            source: crate::dto::SessionSourceReason::Cancelled,
+        })
+    } else {
+        status
+    }
+}
+
+fn settled_page(
+    status: crate::dto::SessionPageStatus,
+    cancel: &xt_ingest::native::readers_cli::CancelToken,
+) -> crate::dto::SessionPageStatus {
+    if cancel.is_cancelled() {
+        crate::dto::SessionPageStatus::Unavailable {
+            reason: crate::dto::SessionPageReason::Read {
+                detail: crate::dto::SessionExcerptReason::Source {
+                    source: crate::dto::SessionSourceReason::Cancelled,
+                },
+            },
+        }
+    } else {
+        status
+    }
+}
+
 /// What opening one session's source came to: nothing read, with the status
 /// that says why, or the loader's outcome, in memory only.
+enum PageOpen {
+    NotRead(crate::dto::SessionSourceReason),
+    Read(
+        Result<
+            xt_ingest::native::session_source::LoadedPage,
+            xt_ingest::native::session_source::PageUnavailable,
+        >,
+    ),
+}
+
+fn bounded_source_refusal(reason: &crate::dto::SessionSourceReason) -> bool {
+    use crate::dto::{ReaderLimit, SessionSourceLimit, SessionSourceReason as S};
+    matches!(
+        reason,
+        S::TooLarge {
+            limit: SessionSourceLimit::Bytes,
+            ..
+        } | S::ReaderLimit {
+            limit: ReaderLimit::SourceBytes | ReaderLimit::OutputBytes
+        }
+    )
+}
+
+fn resolve_detail_readers(
+    host: xt_store::Host,
+    native: &str,
+    cancel: &xt_ingest::native::readers_cli::CancelToken,
+    readers: &crate::native_index::DetailReaders,
+) -> Result<Option<crate::native_index::ResolvedReaders>, crate::dto::SessionSourceReason> {
+    use crate::{dto::SessionSourceReason, native_index::ReadersUnready};
+    if !matches!(host, xt_store::Host::Codex | xt_store::Host::Cursor)
+        || !xt_ingest::native::session_source::names_one_session(native)
+    {
+        return Ok(None);
+    }
+    readers
+        .resolve(cancel)
+        .map(Some)
+        .map_err(|error| match error {
+            ReadersUnready::Cancelled => SessionSourceReason::Cancelled,
+            ReadersUnready::Unavailable(cause) => SessionSourceReason::ReaderUnavailable { cause },
+        })
+}
+
 enum SourceOpen {
     NotRead(crate::dto::SessionSourceStatus),
     Read(xt_ingest::native::session_source::SessionSourceOutcome),
@@ -376,6 +466,7 @@ impl AppState {
         };
         Ok(Self {
             live_identity: Mutex::new(None),
+            warning_cache: Mutex::new(None),
             database: Mutex::new(Some(Database {
                 store,
                 metrics_path: data_dir.join(DATABASE_FILE),
@@ -433,6 +524,33 @@ impl AppState {
     fn fixture(_: String, _: Option<PathBuf>) -> Result<Self, StateError> {
         Err(StateError::FixtureDisabled)
     }
+    pub(crate) fn warning_cache_path(&self) -> Result<PathBuf, StateError> {
+        Ok(self
+            .admit()?
+            .as_ref()
+            .ok_or(StateError::Closed)?
+            .metrics_path
+            .clone())
+    }
+
+    pub(crate) fn attach_warning_cache(&self, request: crate::warning_cache::WarningCacheRequest) {
+        *self
+            .warning_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(request);
+    }
+
+    pub(crate) fn request_warning_cache(&self, repairs: &[String]) {
+        if let Some(request) = self
+            .warning_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            request.request(repairs);
+        }
+    }
+
     pub fn app_info(&self) -> AppInfo {
         self.info.clone()
     }
@@ -665,89 +783,334 @@ impl AppState {
         }
     }
 
-    pub fn codex_transcript_page(
+    pub fn session_warning_context(
         &self,
         session_id: &str,
-        selection: &crate::dto::CodexPageRequest,
+        record_uuid: &str,
+        block: Option<u32>,
         cancel: &xt_ingest::native::readers_cli::CancelToken,
         readers: &crate::native_index::DetailReaders,
-    ) -> Result<crate::dto::CodexPageStatus, StateError> {
-        use crate::{
-            dto::{CodexPageStatus, SessionSourceReason},
-            native_index::ReadersUnready,
+    ) -> Result<crate::dto::SessionExcerptStatus, StateError> {
+        use crate::dto::{SessionExcerptReason, SessionExcerptStatus, SessionSourceReason};
+        use xt_ingest::native::session_source::{
+            ExcerptLimits, SessionSourceRequest, SourceLimits, excerpt_from_loaded,
+            load_session_excerpt_with,
         };
+        let unavailable =
+            |source| SessionExcerptStatus::unavailable(SessionExcerptReason::Source { source });
+        if cancel.is_cancelled() {
+            return Ok(unavailable(SessionSourceReason::Cancelled));
+        }
+        let Some(home) = self.native_home() else {
+            return Ok(unavailable(SessionSourceReason::NotIndexed));
+        };
+        let Some((host, native, indexed)) = self.source_identity(session_id)? else {
+            return Ok(unavailable(SessionSourceReason::NotIndexed));
+        };
+        let status = if host == xt_store::Host::Claude {
+            if native.trim().is_empty() {
+                return Ok(unavailable(SessionSourceReason::NotIndexed));
+            }
+            SessionExcerptStatus::from_read(
+                load_session_excerpt_with(
+                    &SessionSourceRequest {
+                        home,
+                        host,
+                        native_session_id: &native,
+                        indexed: &indexed,
+                        cancel: Some(cancel),
+                        limits: SourceLimits::default(),
+                    },
+                    record_uuid,
+                    block,
+                    None,
+                    ExcerptLimits::default(),
+                ),
+                block,
+            )
+            .map_err(StateError::SourceEncoding)?
+        } else {
+            match self.loaded_source(session_id, cancel, readers)? {
+                Ok(loaded) => SessionExcerptStatus::from_read(
+                    excerpt_from_loaded(*loaded, record_uuid, block),
+                    block,
+                )
+                .map_err(StateError::SourceEncoding)?,
+                Err(reason) if host == xt_store::Host::Codex && bounded_source_refusal(&reason) => {
+                    self.bounded_warning_context(session_id, record_uuid, block, cancel, readers)?
+                }
+                Err(reason) => unavailable(reason),
+            }
+        };
+        Ok(settled_excerpt(status, cancel))
+    }
+
+    fn bounded_warning_context(
+        &self,
+        session_id: &str,
+        record_uuid: &str,
+        block: Option<u32>,
+        cancel: &xt_ingest::native::readers_cli::CancelToken,
+        readers: &crate::native_index::DetailReaders,
+    ) -> Result<crate::dto::SessionExcerptStatus, StateError> {
+        use crate::dto::{
+            SessionExcerptReason, SessionExcerptStatus, SessionPageSelection, SessionPageTargetKind,
+        };
+        use xt_ingest::native::session_source::{
+            ExcerptLimit, ExcerptUnavailable, LoadedExcerpt, PageUnavailable, SourceUnavailable,
+        };
+        let selection = SessionPageSelection::Anchor {
+            record_uuid: record_uuid.into(),
+            block,
+            expected: if block.is_some() {
+                SessionPageTargetKind::ToolBlock
+            } else {
+                SessionPageTargetKind::Message
+            },
+            generation: None,
+        };
+        let result = match self.open_page(session_id, &selection, cancel, readers, false)? {
+            PageOpen::NotRead(source) => {
+                return Ok(SessionExcerptStatus::unavailable(
+                    SessionExcerptReason::Source { source },
+                ));
+            }
+            PageOpen::Read(Err(reason)) => Err(match reason {
+                PageUnavailable::Read(reason) => reason,
+                PageUnavailable::Changed => {
+                    ExcerptUnavailable::Source(SourceUnavailable::Replaced {
+                        basis: xt_ingest::native::checkpoint::ResumeBasis::Replaced,
+                    })
+                }
+                PageUnavailable::RecordTooLarge => {
+                    ExcerptUnavailable::Limit(ExcerptLimit::OutputBytes)
+                }
+                PageUnavailable::InvalidCursor => ExcerptUnavailable::TargetMissing,
+            }),
+            PageOpen::Read(Ok(page)) => {
+                match page
+                    .target
+                    .and_then(|ordinal| page.records.iter().position(|r| r.ordinal == ordinal))
+                {
+                    None => Err(ExcerptUnavailable::TargetMissing),
+                    Some(target) => {
+                        let source = page.records[target].source;
+                        let start = target.saturating_sub(1);
+                        let end = page.records.len().min(target + 2);
+                        let mut selected = Vec::new();
+                        let mut target_index = 0;
+                        for (index, record) in page
+                            .records
+                            .into_iter()
+                            .enumerate()
+                            .skip(start)
+                            .take(end - start)
+                        {
+                            if record.source == source {
+                                if index == target {
+                                    target_index = selected.len();
+                                }
+                                selected.push(record.record);
+                            }
+                        }
+                        Ok(LoadedExcerpt {
+                            generation: page.generation,
+                            records: selected,
+                            target: target_index,
+                        })
+                    }
+                }
+            }
+        };
+        SessionExcerptStatus::from_read(result, block).map_err(StateError::SourceEncoding)
+    }
+
+    fn source_identity(
+        &self,
+        session_id: &str,
+    ) -> Result<
+        Option<(
+            xt_store::Host,
+            String,
+            Vec<xt_ingest::native::session_source::IndexedSource>,
+        )>,
+        StateError,
+    > {
+        let guard = self.admit()?;
+        let store = &guard.as_ref().ok_or(StateError::Closed)?.store;
+        let Some(session) = store.session(session_id)? else {
+            return Ok(None);
+        };
+        let host = session.meta.host;
+        let native = session.meta.native_session_id.unwrap_or_default();
+        let indexed = xt_ingest::native::session_source::indexed_sources(store, host, &native)?;
+        Ok(Some((host, native, indexed)))
+    }
+
+    fn open_page(
+        &self,
+        session_id: &str,
+        selection: &crate::dto::SessionPageSelection,
+        cancel: &xt_ingest::native::readers_cli::CancelToken,
+        readers: &crate::native_index::DetailReaders,
+        diagnosis: bool,
+    ) -> Result<PageOpen, StateError> {
         use xt_ingest::native::{
             readers_cli::DetailBounds,
             session_source::{
-                DetailReader, SessionSourceRequest, SourceLimits, load_codex_page,
-                names_one_session,
+                DetailReader, ExcerptLimits, SessionSourceRequest, SourceLimits,
+                load_session_context_with_reader, load_session_page_with_reader,
             },
         };
-        if cancel.is_cancelled() {
-            return Ok(CodexPageStatus::unavailable(SessionSourceReason::Cancelled));
-        }
-        let Some(home) = self.native_home() else {
-            return Ok(CodexPageStatus::unavailable(
-                SessionSourceReason::NotIndexed,
+        let (Some(home), Some((host, native, indexed))) =
+            (self.native_home(), self.source_identity(session_id)?)
+        else {
+            return Ok(PageOpen::NotRead(
+                crate::dto::SessionSourceReason::NotIndexed,
             ));
         };
-        let (host, native) = {
-            let guard = self.admit()?;
-            let store = &guard.as_ref().ok_or(StateError::Closed)?.store;
-            let Some(session) = store.session(session_id)? else {
-                return Ok(CodexPageStatus::unavailable(
-                    SessionSourceReason::NotIndexed,
-                ));
-            };
-            (
-                session.meta.host,
-                session.meta.native_session_id.unwrap_or_default(),
-            )
-        };
-        // Refuse these before interpreter discovery or any producer execution.
-        if host != xt_store::Host::Codex {
-            return Ok(CodexPageStatus::unavailable(
-                SessionSourceReason::UnsupportedHost,
+        if !matches!(host, xt_store::Host::Claude | xt_store::Host::Codex) {
+            return Ok(PageOpen::NotRead(
+                crate::dto::SessionSourceReason::UnsupportedHost,
             ));
         }
-        if !names_one_session(&native) {
-            return Ok(CodexPageStatus::unavailable(
-                SessionSourceReason::InvalidIdentifier,
+        if host == xt_store::Host::Claude && native.trim().is_empty() {
+            return Ok(PageOpen::NotRead(
+                crate::dto::SessionSourceReason::NotIndexed,
             ));
         }
-        let resolved = match readers.resolve(cancel) {
+        let resolved = match resolve_detail_readers(host, &native, cancel, readers) {
             Ok(resolved) => resolved,
-            Err(reason) => {
-                return Ok(CodexPageStatus::unavailable(match reason {
-                    ReadersUnready::Cancelled => SessionSourceReason::Cancelled,
-                    ReadersUnready::Unavailable(cause) => {
-                        SessionSourceReason::ReaderUnavailable { cause }
-                    }
-                }));
-            }
+            Err(reason) => return Ok(PageOpen::NotRead(reason)),
         };
-        let result = load_codex_page(
+        let reader = resolved.as_ref().map(|r| DetailReader {
+            python: &r.python,
+            producer: &r.producer,
+            bounds: DetailBounds::default(),
+        });
+        let load = if diagnosis {
+            load_session_context_with_reader
+        } else {
+            load_session_page_with_reader
+        };
+        Ok(PageOpen::Read(load(
             &SessionSourceRequest {
                 home,
                 host,
                 native_session_id: &native,
-                indexed: &[],
+                indexed: &indexed,
                 cancel: Some(cancel),
                 limits: SourceLimits::default(),
             },
             &selection.native(),
-            Some(&DetailReader {
-                python: &resolved.python,
-                producer: &resolved.producer,
-                bounds: DetailBounds::default(),
-            }),
-        );
-        let status = CodexPageStatus::from_read(result).map_err(StateError::SourceEncoding)?;
-        // Cancellation wins even when it arrives during DTO encoding.
+            reader.as_ref(),
+            ExcerptLimits::default(),
+        )))
+    }
+
+    pub fn session_transcript_page(
+        &self,
+        session_id: &str,
+        selection: &crate::dto::SessionPageSelection,
+        cancel: &xt_ingest::native::readers_cli::CancelToken,
+        readers: &crate::native_index::DetailReaders,
+    ) -> Result<crate::dto::SessionPageStatus, StateError> {
+        use crate::dto::{
+            SessionExcerptReason, SessionPageReason, SessionPageStatus, SessionSourceReason,
+        };
+        if cancel.is_cancelled() {
+            return Ok(SessionPageStatus::Unavailable {
+                reason: SessionPageReason::Read {
+                    detail: SessionExcerptReason::Source {
+                        source: SessionSourceReason::Cancelled,
+                    },
+                },
+            });
+        }
+        let status = match self.open_page(session_id, selection, cancel, readers, false)? {
+            PageOpen::NotRead(source) => SessionPageStatus::Unavailable {
+                reason: SessionPageReason::Read {
+                    detail: SessionExcerptReason::Source { source },
+                },
+            },
+            PageOpen::Read(result) => SessionPageStatus::from_read(result, selection)
+                .map_err(StateError::SourceEncoding)?,
+        };
+        Ok(settled_page(status, cancel))
+    }
+
+    /// Local preparation only: the same bounded records used for warning pages.
+    pub fn diagnosis_context(
+        &self,
+        session_id: &str,
+        point: &xt_metrics::WarningPoint,
+        cancel: &xt_ingest::native::readers_cli::CancelToken,
+        readers: &crate::native_index::DetailReaders,
+    ) -> Result<
+        Result<Vec<xt_ingest::canonical::ParsedRecord>, crate::dto::SessionSourceReason>,
+        StateError,
+    > {
+        use crate::dto::{
+            SessionExcerptReason as E, SessionPageReason as P, SessionPageSelection,
+            SessionPageStatus, SessionPageTargetKind, SessionSourceReason as S,
+        };
+        let supports_page = self
+            .source_identity(session_id)?
+            .is_some_and(|(host, _, _)| {
+                matches!(host, xt_store::Host::Claude | xt_store::Host::Codex)
+            });
+        match self.loaded_source(session_id, cancel, readers)? {
+            Ok(loaded) => return Ok(Ok(loaded.records)),
+            Err(reason) if !supports_page || !bounded_source_refusal(&reason) => {
+                return Ok(Err(reason));
+            }
+            Err(_) => {}
+        }
+        let selection = SessionPageSelection::Anchor {
+            record_uuid: point.record_uuid.clone(),
+            block: point.block,
+            expected: if point.block.is_some() {
+                SessionPageTargetKind::ToolBlock
+            } else {
+                SessionPageTargetKind::Message
+            },
+            generation: None,
+        };
+        let result = match self.open_page(session_id, &selection, cancel, readers, true)? {
+            PageOpen::NotRead(reason) => Err(reason),
+            PageOpen::Read(Ok(page)) => Ok(page.records.into_iter().map(|r| r.record).collect()),
+            PageOpen::Read(Err(reason)) => {
+                let SessionPageStatus::Unavailable { reason } =
+                    SessionPageStatus::from_read(Err(reason), &selection)
+                        .map_err(StateError::SourceEncoding)?
+                else {
+                    unreachable!()
+                };
+                match reason {
+                    P::Read {
+                        detail: E::TargetMissing | E::TargetAmbiguous | E::BlockMissing,
+                    } => Ok(Vec::new()),
+                    P::Read {
+                        detail: E::Source { source },
+                    } => Err(source),
+                    P::Changed => Err(S::Replaced),
+                    P::Read {
+                        detail: E::Deadline,
+                    } => Err(S::ReaderDeadline),
+                    P::RecordTooLarge
+                    | P::Read {
+                        detail: E::Limit { .. },
+                    } => Err(S::ReaderLimit {
+                        limit: crate::dto::ReaderLimit::OutputBytes,
+                    }),
+                    _ => Err(S::Unreadable),
+                }
+            }
+        };
         Ok(if cancel.is_cancelled() {
-            CodexPageStatus::unavailable(SessionSourceReason::Cancelled)
+            Err(S::Cancelled)
         } else {
-            status
+            result
         })
     }
 
@@ -760,11 +1123,9 @@ impl AppState {
         cancel: &xt_ingest::native::readers_cli::CancelToken,
         readers: &crate::native_index::DetailReaders,
     ) -> Result<SourceOpen, StateError> {
-        use crate::native_index::ReadersUnready;
         use xt_ingest::native::readers_cli::DetailBounds;
         use xt_ingest::native::session_source::{
-            DetailReader, SessionSourceRequest, SourceLimits, indexed_sources,
-            load_session_source_with, names_one_session,
+            DetailReader, SessionSourceRequest, SourceLimits, load_session_source_with,
         };
         /// No local source identity for this session, so nothing was opened
         /// and nothing was looked for.
@@ -777,25 +1138,12 @@ impl AppState {
         let Some(home) = self.native_home() else {
             return Ok(SourceOpen::NotRead(NOT_INDEXED));
         };
-        let resolved = {
-            let guard = self.admit()?;
-            let store = &guard.as_ref().ok_or(StateError::Closed)?.store;
-            let Some(session) = store.session(session_id)? else {
-                return Ok(SourceOpen::NotRead(NOT_INDEXED));
-            };
-            let host = session.meta.host;
-            let native = session.meta.native_session_id.unwrap_or_default();
-            // A Claude session the index recorded without a native identity
-            // has no file this read could name. Another host is refused by the
-            // loader on its own terms, whatever identity it was recorded with,
-            // so its reason is the loader's to give and not this one's.
-            if host == xt_store::Host::Claude && native.trim().is_empty() {
-                return Ok(SourceOpen::NotRead(NOT_INDEXED));
-            }
-            let indexed = indexed_sources(store, host, &native)?;
-            (host, native, indexed)
+        let Some((host, native, indexed)) = self.source_identity(session_id)? else {
+            return Ok(SourceOpen::NotRead(NOT_INDEXED));
         };
-        let (host, native, indexed) = resolved;
+        if host == xt_store::Host::Claude && native.trim().is_empty() {
+            return Ok(SourceOpen::NotRead(NOT_INDEXED));
+        }
         let request = SessionSourceRequest {
             home,
             host,
@@ -804,27 +1152,13 @@ impl AppState {
             cancel: Some(cancel),
             limits: SourceLimits::default(),
         };
-        let resolved_readers = match host {
-            // Refused by the read itself, before any interpreter is probed.
-            xt_store::Host::Codex | xt_store::Host::Cursor if !names_one_session(&native) => None,
-            xt_store::Host::Codex | xt_store::Host::Cursor => match readers.resolve(cancel) {
-                Ok(resolved) => Some(resolved),
-                Err(ReadersUnready::Cancelled) => {
-                    return Ok(SourceOpen::NotRead(
-                        crate::dto::SessionSourceStatus::Unavailable {
-                            reason: crate::dto::SessionSourceReason::Cancelled,
-                        },
-                    ));
-                }
-                Err(ReadersUnready::Unavailable(cause)) => {
-                    return Ok(SourceOpen::NotRead(
-                        crate::dto::SessionSourceStatus::Unavailable {
-                            reason: crate::dto::SessionSourceReason::ReaderUnavailable { cause },
-                        },
-                    ));
-                }
-            },
-            xt_store::Host::Claude | xt_store::Host::Other => None,
+        let resolved_readers = match resolve_detail_readers(host, &native, cancel, readers) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
+                return Ok(SourceOpen::NotRead(
+                    crate::dto::SessionSourceStatus::Unavailable { reason },
+                ));
+            }
         };
         let reader = resolved_readers.as_ref().map(|resolved| DetailReader {
             python: &resolved.python,
@@ -1028,6 +1362,118 @@ impl AppState {
         })
     }
 
+    /// M-21 for exactly the named sessions, each over its whole history, in
+    /// one snapshot. `timezone` is the zone the asking view shows (a report's
+    /// `window.timezone`); every reason's clock times are written in it.
+    pub fn session_warnings(
+        &self,
+        session_ids: &[String],
+        timezone: &str,
+    ) -> Result<crate::dto::SessionWarningsList, StateError> {
+        let ids = crate::session_warnings_dto::validate_ids(session_ids)?;
+        self.with_metric_inputs(|metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            crate::session_warnings_dto::session_warnings(metrics, &ids, &zone, timezone.to_owned())
+        })
+    }
+
+    /// Exactly one M-21 warning of one session, by its identity
+    /// ([`xt_metrics::SessionWarning::id`]), from the same whole-session
+    /// answer every screen shows, and the zone `timezone` names (resolved as
+    /// [`AppState::session_warnings`] resolves it). `None` when the session
+    /// has no such warning now.
+    pub fn session_warning(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+        timezone: &str,
+    ) -> Result<Option<(xt_metrics::SessionWarning, jiff::tz::TimeZone)>, StateError> {
+        let named = [session_id.to_owned()];
+        let ids = crate::session_warnings_dto::validate_ids(&named)?;
+        self.with_metric_inputs(|metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            let found = metrics.saved_whole_session_warnings(&ids, &zone)?;
+            let warning = found.into_values().find_map(|answer| match answer {
+                xt_metrics::WholeSessionWarnings::Read { warnings, .. } => warnings
+                    .warnings
+                    .into_iter()
+                    .find(|warning| warning.id() == warning_id),
+                _ => None,
+            });
+            Ok(warning.map(|warning| (warning, zone)))
+        })
+    }
+
+    /// Dismisses one of a session's warnings: from now on no mark, count or
+    /// day shows it, and its session's page lists it apart with an undo.
+    /// Only a warning the session has now can be dismissed; the identity is
+    /// checked before storage is touched and against the session's whole
+    /// answer read in its own snapshot before the row is written, with the
+    /// warning's size then. A warning already dismissed at the same size
+    /// keeps its first time; one that grew since is dismissed at its new
+    /// size.
+    pub fn dismiss_session_warning(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+    ) -> Result<crate::dto::SessionWarningDismissal, StateError> {
+        crate::session_warnings_dto::validate_dismissal(session_id, warning_id)?;
+        // The zone only words a warning's reason; which warnings a session
+        // has, and their identities, are the same in every zone.
+        let Some((warning, _)) = self.session_warning(session_id, warning_id, "UTC")? else {
+            return Err(StateError::UnknownWarning);
+        };
+        let now = jiff::Timestamp::now().as_millisecond();
+        self.with_store(|store| {
+            // Its size now: once it grows past this, it shows again.
+            store.dismiss_warning(session_id, warning_id, warning.size, now)?;
+            Ok(crate::dto::SessionWarningDismissal {
+                session_id: session_id.to_owned(),
+                warning_id: warning_id.to_owned(),
+                dismissed: true,
+            })
+        })
+    }
+
+    /// Undoes a dismissal: the warning shows again wherever it falls. Undoing
+    /// one that is not dismissed (or no longer found) changes nothing.
+    pub fn restore_session_warning(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+    ) -> Result<crate::dto::SessionWarningDismissal, StateError> {
+        crate::session_warnings_dto::validate_dismissal(session_id, warning_id)?;
+        self.with_store(|store| {
+            store.restore_warning(session_id, warning_id)?;
+            Ok(crate::dto::SessionWarningDismissal {
+                session_id: session_id.to_owned(),
+                warning_id: warning_id.to_owned(),
+                dismissed: false,
+            })
+        })
+    }
+
+    /// The warnings inside one Dashboard report's whole days, pinned to the
+    /// window it was read over and the zone it was read in, as
+    /// [`AppState::day_sessions`] is.
+    pub fn window_warnings(
+        &self,
+        window_days: u32,
+        window_end_ms: i64,
+        timezone: &str,
+    ) -> Result<crate::dto::DashboardWarnings, StateError> {
+        self.with_metrics(window_days, |metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            let window = crate::dashboard::report_whole_days(window_days, window_end_ms, &zone)?;
+            crate::session_warnings_dto::window_warnings(
+                metrics,
+                window,
+                &zone,
+                timezone.to_owned(),
+            )
+        })
+    }
+
     /// One activity-lane span's detail, read on demand. The span is the one
     /// the lane report named; no window preset applies, so it is measured with
     /// the same admission and fresh connection as every other metric read.
@@ -1067,6 +1513,41 @@ impl AppState {
         })
     }
 
+    /// One session's original source, loaded in memory through the same
+    /// resolution and bounded read a transcript open uses, or the reason it
+    /// could not be. Nothing is written.
+    pub(crate) fn loaded_source(
+        &self,
+        session_id: &str,
+        cancel: &xt_ingest::native::readers_cli::CancelToken,
+        readers: &crate::native_index::DetailReaders,
+    ) -> Result<
+        Result<
+            Box<xt_ingest::native::session_source::LoadedSession>,
+            crate::dto::SessionSourceReason,
+        >,
+        StateError,
+    > {
+        use crate::dto::{SessionSourceReason, SessionSourceStatus};
+        use xt_ingest::native::session_source::SessionSourceOutcome;
+        let reason = |status: SessionSourceStatus| match status {
+            SessionSourceStatus::Unavailable { reason } => reason,
+            SessionSourceStatus::Loaded { .. } => SessionSourceReason::NotIndexed,
+        };
+        let loaded = match self.open_source(session_id, cancel, readers)? {
+            SourceOpen::NotRead(status) => Err(reason(status)),
+            SourceOpen::Read(SessionSourceOutcome::Loaded(session)) => Ok(session),
+            SourceOpen::Read(outcome) => Err(reason(
+                SessionSourceStatus::try_from(&outcome).map_err(StateError::SourceEncoding)?,
+            )),
+        };
+        Ok(if cancel.is_cancelled() {
+            Err(SessionSourceReason::Cancelled)
+        } else {
+            loaded
+        })
+    }
+
     /// One session's original source for a span's words, held in memory, or
     /// why it could not be read.
     fn span_source(
@@ -1076,19 +1557,10 @@ impl AppState {
         readers: &crate::native_index::DetailReaders,
     ) -> Result<crate::dashboard::SpanSource, StateError> {
         use crate::dashboard::SpanSource;
-        use crate::dto::{SessionSourceReason, SessionSourceStatus};
-        use xt_ingest::native::session_source::SessionSourceOutcome;
-        let unavailable = |status: SessionSourceStatus| match status {
-            SessionSourceStatus::Unavailable { reason } => SpanSource::Unavailable(reason),
-            // A loaded status is never a reason not to read.
-            SessionSourceStatus::Loaded { .. } => SpanSource::NotFound,
-        };
-        let source = match self.open_source(session_id, cancel, readers)? {
-            SourceOpen::NotRead(status) => unavailable(status),
-            SourceOpen::Read(SessionSourceOutcome::Loaded(session)) => SpanSource::Loaded(session),
-            SourceOpen::Read(outcome) => unavailable(
-                SessionSourceStatus::try_from(&outcome).map_err(StateError::SourceEncoding)?,
-            ),
+        use crate::dto::SessionSourceReason;
+        let source = match self.loaded_source(session_id, cancel, readers)? {
+            Ok(session) => SpanSource::Loaded(session),
+            Err(reason) => SpanSource::Unavailable(reason),
         };
         // A cancel at any point returns none of the words.
         Ok(if cancel.is_cancelled() {
@@ -1178,7 +1650,11 @@ impl AppState {
             },
         };
         let metrics = xt_metrics::MetricsDb::open(&path)?;
-        read(&metrics, inputs, prepared)
+        let result = read(&metrics, inputs, prepared);
+        if metrics.session_warning_refresh_needed() {
+            self.request_warning_cache(&metrics.session_warning_repairs());
+        }
+        result
     }
 
     pub fn metrics_dashboard(
@@ -1441,6 +1917,10 @@ pub fn pr_refresh_targets(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "state_warning_cache_tests.rs"]
+mod warning_cache_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2440,5 +2920,62 @@ mod tests {
             !directory.exists(),
             "shutdown removes the disposable database"
         );
+    }
+    #[test]
+    fn cancelled_page_and_excerpt_drop_already_encoded_records() {
+        use crate::dto::{
+            SessionExcerptStatus as E, SessionGeneration as G, SessionPageStatus as P,
+        };
+        let record = crate::transcript_dto::SourceRecord {
+            id: "synthetic-private-record".into(),
+            role: crate::transcript_dto::RecordRole::User,
+            at: None,
+            blocks: vec![crate::transcript_dto::SourceBlock::Text {
+                index: 0,
+                text: "synthetic-private-text".into(),
+            }],
+        };
+        let page = P::Loaded {
+            generation: G::Unrecorded,
+            digest: "a".repeat(64),
+            records: vec![record.clone()],
+            record_ranges: vec![crate::dto::SessionSourceRange { start: 0, end: 1 }],
+            start: 0,
+            end: 1,
+            total_records: 1,
+            dropped_records: 0,
+            previous: None,
+            next: None,
+            target: None,
+        };
+        let excerpt = E::Loaded {
+            generation: G::Unrecorded,
+            records: vec![crate::session_excerpt_dto::SessionExcerptRecord {
+                record,
+                target: true,
+                omitted_blocks: false,
+                only_tool_results: false,
+            }],
+        };
+        assert!(
+            serde_json::to_string(&page)
+                .unwrap()
+                .contains("synthetic-private-text")
+        );
+        assert!(
+            serde_json::to_string(&excerpt)
+                .unwrap()
+                .contains("synthetic-private-text")
+        );
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        for status in [
+            serde_json::to_value(settled_page(page, &cancel)).unwrap(),
+            serde_json::to_value(settled_excerpt(excerpt, &cancel)).unwrap(),
+        ] {
+            assert_eq!(status["state"], "unavailable");
+            assert!(status.to_string().contains("cancelled"));
+            assert!(!status.to_string().contains("synthetic-private"));
+        }
     }
 }

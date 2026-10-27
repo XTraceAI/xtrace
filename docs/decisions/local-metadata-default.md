@@ -6,7 +6,7 @@ Status: accepted, 2026-09-10.
 
 An absent content-retention setting means metadata-only. Canonical ingestion
 computes structural measurements from incoming content in memory, then discards
-transcript text, tool input/output and transcript-derived titles before storage.
+full transcript bodies, tool input/output and transcript-derived titles before storage.
 SQLite keeps the identities, timestamps, counts, usage and source provenance used
 for indexing, metrics, deduplication and committed import acknowledgements.
 These local metadata can still contain repository and session identities; this
@@ -37,7 +37,12 @@ The Dashboard's activity bubble showed the last message a person typed by
 reading the whole session file on every hover. The index now keeps, whatever
 the mode, a one-line preview of at most 280 characters of each input the
 classification calls a person's whole message, and of each proven Claude Code
-task notification's own summary (`record_previews`, migration 17). Nothing
-else of those records is kept, readers still choose a message by its current
+task notification's own summary (`record_previews`, migration 17). This does not
+retain full transcript bodies. Readers still choose a message by its current
 classification, and "Delete stored content" clears the previews. The file read
 remains the fallback where no preview exists.
+
+Saved warning decisions can also keep a few matched message words in either
+storage mode. "Delete stored content" clears those decisions too, even when no
+other saved text remains. Later imports can create new previews and warning
+decisions.

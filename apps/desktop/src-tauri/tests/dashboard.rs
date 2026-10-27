@@ -445,7 +445,7 @@ mod assembled {
             assert!(
                 matches!(
                     report_zone(name, &tokyo, MetricClock::System),
-                    Err(StateError::InvalidDayRequest)
+                    Err(StateError::InvalidTimezone)
                 ),
                 "{name:?}"
             );

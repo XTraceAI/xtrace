@@ -1,0 +1,1 @@
+- Share session warning answers and counts across native commands, with dismiss and Undo actions that restore warnings when repeated activity grows.

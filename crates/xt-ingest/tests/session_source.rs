@@ -752,6 +752,49 @@ fn subagent_files_of_the_session_load_after_its_own_transcript() {
 }
 
 #[test]
+fn source_record_counts_keep_empty_files_and_exclude_unidentified_lines() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let dropped = json!({"type": "user", "sessionId": SESSION, "message": {"role": "user", "content": "unidentified"}});
+    let home = home_with(
+        temp.path(),
+        PROJECT,
+        SESSION,
+        &format!("{}{}\n", transcript(SESSION, 3), dropped),
+    );
+    let agents = subagents(&home, PROJECT, SESSION);
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(agents.join("a-empty.jsonl"), format!("{}\n", dropped)).unwrap();
+    fs::write(
+        agents.join("b-agent.jsonl"),
+        format!("{}{}\n", transcript(SESSION, 2), dropped),
+    )
+    .unwrap();
+    let session = loaded(open(&home, SESSION, &[], None, SourceLimits::default()));
+    assert_eq!(
+        session
+            .sources
+            .iter()
+            .map(|source| source.record_count)
+            .collect::<Vec<_>>(),
+        [3, 0, 2]
+    );
+    assert_eq!(session.records.len(), 5);
+    assert_eq!(session.dropped_records, 3);
+    assert_eq!(
+        session
+            .sources
+            .iter()
+            .map(|source| source.role)
+            .collect::<Vec<_>>(),
+        [
+            SourceRole::Primary,
+            SourceRole::Sidechain,
+            SourceRole::Sidechain
+        ]
+    );
+}
+
+#[test]
 fn a_subagent_file_the_index_never_read_leaves_the_whole_session_untied() {
     let temp = tempfile::TempDir::new().unwrap();
     let home = home_with(temp.path(), PROJECT, SESSION, &transcript(SESSION, 4));

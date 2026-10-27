@@ -401,6 +401,25 @@ fn fixture_startup_names_no_local_source_for_any_session() {
         ),
         SessionSourceReason::NotIndexed
     );
+    let page = state
+        .session_transcript_page(
+            "any-session",
+            &xtrace_desktop::dto::SessionPageSelection::First,
+            &CancelToken::new(),
+            &readers,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(page).unwrap()["reason"]["detail"]["source"]["reason"],
+        "not_indexed"
+    );
+    let excerpt = state
+        .session_warning_context("any-session", "target", None, &CancelToken::new(), &readers)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(excerpt).unwrap()["reason"]["source"]["reason"],
+        "not_indexed"
+    );
     assert!(!marker.exists(), "fixture startup started a reader");
 }
 
@@ -869,4 +888,366 @@ fn app_process_that_quits_mid_read() {
     }
     println!("shutdown gave up waiting");
     std::process::exit(3);
+}
+
+#[test]
+fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
+    use xtrace_desktop::dto::{
+        SessionExcerptStatus as E, SessionPageSelection as S, SessionPageStatus as P,
+    };
+    let (_temp, root, db, state) = reader_scene();
+    let marker = root.join("unused-reader");
+    let python = fake_python(&root, &marker, "exit 0");
+    let id = canonical_id(&db, SESSION);
+    let before = counts(&db);
+    let P::Loaded {
+        records,
+        record_ranges,
+        start,
+        end,
+        ..
+    } = state
+        .session_transcript_page(&id, &S::First, &CancelToken::new(), &bundle_with(&python))
+        .unwrap()
+    else {
+        panic!("page")
+    };
+    assert_eq!((start, end), (0, 3));
+    assert_eq!(
+        records.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+        [uuid(0), uuid(1), uuid(2)]
+    );
+    assert_eq!(
+        record_ranges,
+        [xtrace_desktop::dto::SessionSourceRange { start: 0, end: 3 }]
+    );
+    let E::Loaded { records, .. } = state
+        .session_warning_context(
+            &id,
+            &uuid(2),
+            Some(0),
+            &CancelToken::new(),
+            &bundle_with(&python),
+        )
+        .unwrap()
+    else {
+        panic!("excerpt")
+    };
+    assert_eq!(records.len(), 2);
+    assert!(records[1].target);
+    assert_eq!(records[1].record.id, uuid(2));
+    assert_eq!(records[1].record.blocks[0].index(), 0);
+    assert!(!marker.exists());
+    assert_eq!(counts(&db), before);
+}
+
+#[test]
+fn native_pages_refuse_unsupported_missing_invalid_and_cancelled_reads_before_probing() {
+    use xtrace_desktop::dto::SessionPageSelection as S;
+    let (_temp, root, db, state) = reader_scene();
+    let marker = root.join("unused-reader");
+    let python = fake_python(&root, &marker, "exit 0");
+    {
+        let mut store = Store::open(&db).unwrap();
+        let mut meta = SessionMeta::new("codex-latest", "codex", SessionSource::ReadersCli);
+        meta.native_session_id = Some("latest".into());
+        store.upsert_session(&meta, false).unwrap();
+        let meta = SessionMeta::new("claude-no-native", "claude", SessionSource::Transcript);
+        store.upsert_session(&meta, false).unwrap();
+    }
+    for (id, reason) in [
+        ("missing", "not_indexed"),
+        ("cursor-c0d5", "unsupported_host"),
+        ("codex-latest", "invalid_identifier"),
+        ("claude-no-native", "not_indexed"),
+    ] {
+        let status = state
+            .session_transcript_page(id, &S::First, &CancelToken::new(), &bundle_with(&python))
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(status).unwrap()["reason"]["detail"]["source"]["reason"],
+            reason,
+            "{id}"
+        );
+    }
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let status = state
+        .session_transcript_page("codex-c0de", &S::First, &cancel, &bundle_with(&python))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(status).unwrap()["reason"]["detail"]["source"]["reason"],
+        "cancelled"
+    );
+    assert!(!marker.exists());
+}
+
+#[test]
+fn native_codex_page_and_bounded_warning_context_share_pinned_resolution() {
+    use xtrace_desktop::dto::{
+        SessionExcerptStatus as E, SessionPageSelection as S, SessionPageStatus as P,
+    };
+    let (_temp, root, db, state) = reader_scene();
+    let marker = root.join("page-reader");
+    let first = reader_session(&root.join("home"), "codex", CODEX).replace(
+        "\"title\":null",
+        &format!(
+            "\"title\":null,\"context_page\":{}",
+            json!({"version":1,"digest":"a".repeat(64),"start":0,"end":2,"total":2,"target":null})
+        ),
+    );
+    let anchor = reader_session(&root.join("home"), "codex", CODEX).replace(
+        "\"title\":null",
+        &format!(
+            "\"title\":null,\"context_page\":{}",
+            json!({"version":1,"digest":"a".repeat(64),"start":0,"end":2,"total":2,"target":1})
+        ),
+    );
+    let refusal =
+        json!({"type":"diagnostic","host":"codex","code":"detail_limit_source_bytes","path":null});
+    let script = format!(
+        "case \"$*\" in\n*--context-page*) case \"$*\" in *anchor*) {anchor} ;; *) {first} ;; esac ;;\n*) printf '%s\\n' '{refusal}' >&2; exit 2 ;;\nesac"
+    );
+    let python = fake_python(&root, &marker, &script);
+    let before = counts(&db);
+    assert!(matches!(
+        state
+            .session_transcript_page(
+                "codex-c0de",
+                &S::First,
+                &CancelToken::new(),
+                &bundle_with(&python)
+            )
+            .unwrap(),
+        P::Loaded { .. }
+    ));
+    let status = state
+        .session_warning_context(
+            "codex-c0de",
+            &uuid(1),
+            None,
+            &CancelToken::new(),
+            &bundle_with(&python),
+        )
+        .unwrap();
+    let E::Loaded { records, .. } = status else {
+        panic!("{status:?}")
+    };
+    assert_eq!(records.len(), 2);
+    assert!(records[1].target);
+    assert_eq!(records[1].record.id, uuid(1));
+    let runs = fs::read_to_string(marker).unwrap();
+    assert!(runs.contains("--exact-detail"));
+    assert!(runs.contains("--context-page"));
+    assert_eq!(counts(&db), before);
+}
+
+#[test]
+fn native_warning_excerpt_enforces_encoded_bytes_without_truncating_required_text() {
+    use xtrace_desktop::dto::{
+        SessionExcerptLimit as L, SessionExcerptReason as R, SessionExcerptStatus as E,
+        SessionPageReason as Q, SessionPageSelection as S, SessionPageStatus as P,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let record = json!({"uuid":uuid(0),"type":"user","sessionId":SESSION,"message":{"role":"user","content":"x".repeat(1024*1024)}});
+    let home = home_with(root.path(), SESSION, &format!("{record}\n"));
+    let db = root.path().join("data/xtrace.db");
+    index(&db, &home);
+    let id = canonical_id(&db, SESSION);
+    let state = state(root.path());
+    assert_eq!(
+        state
+            .session_warning_context(
+                &id,
+                &uuid(0),
+                None,
+                &CancelToken::new(),
+                &DetailReaders::disabled()
+            )
+            .unwrap(),
+        E::Unavailable {
+            reason: R::Limit {
+                limit: L::OutputBytes
+            }
+        }
+    );
+    let selection = S::Anchor {
+        record_uuid: uuid(0),
+        block: None,
+        expected: xtrace_desktop::dto::SessionPageTargetKind::Message,
+        generation: None,
+    };
+    assert_eq!(
+        state
+            .session_transcript_page(
+                &id,
+                &selection,
+                &CancelToken::new(),
+                &DetailReaders::disabled()
+            )
+            .unwrap(),
+        P::Unavailable {
+            reason: Q::RecordTooLarge
+        }
+    );
+}
+
+#[test]
+fn native_source_ranges_keep_empty_files_and_page_groups_while_excerpts_stay_in_one_file() {
+    use xtrace_desktop::dto::{
+        SessionExcerptStatus as E, SessionPageSelection as S, SessionPageStatus as P,
+        SessionSourceRange as R,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let home = home_with(root.path(), SESSION, &transcript(SESSION));
+    let agents = source_path(&home, SESSION)
+        .parent()
+        .unwrap()
+        .join(SESSION)
+        .join("subagents");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(agents.join("agent-a.jsonl"), "").unwrap();
+    let agent = transcript(SESSION)
+        .lines()
+        .next()
+        .unwrap()
+        .replace(&uuid(0), &uuid(3));
+    fs::write(agents.join("agent-b.jsonl"), format!("{agent}\n")).unwrap();
+    let db = root.path().join("data/xtrace.db");
+    index(&db, &home);
+    let id = canonical_id(&db, SESSION);
+    let state = state(root.path());
+    let SessionSourceStatus::Loaded {
+        sources,
+        records,
+        record_ranges,
+        ..
+    } = open(&state, &id)
+    else {
+        panic!("source")
+    };
+    assert_eq!(sources, 3);
+    assert_eq!(records.len(), 4);
+    assert_eq!(
+        record_ranges,
+        [
+            R { start: 0, end: 3 },
+            R { start: 3, end: 3 },
+            R { start: 3, end: 4 }
+        ]
+    );
+    let selection = S::Anchor {
+        record_uuid: uuid(3),
+        block: None,
+        expected: xtrace_desktop::dto::SessionPageTargetKind::Message,
+        generation: None,
+    };
+    let P::Loaded {
+        records,
+        record_ranges,
+        target: Some(target),
+        ..
+    } = state
+        .session_transcript_page(
+            &id,
+            &selection,
+            &CancelToken::new(),
+            &DetailReaders::disabled(),
+        )
+        .unwrap()
+    else {
+        panic!("page")
+    };
+    assert_eq!(
+        records.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+        [uuid(2), uuid(3)]
+    );
+    assert_eq!(
+        record_ranges,
+        [R { start: 0, end: 1 }, R { start: 1, end: 2 }]
+    );
+    assert_eq!(target.record, 1);
+    let E::Loaded { records, .. } = state
+        .session_warning_context(
+            &id,
+            &uuid(3),
+            None,
+            &CancelToken::new(),
+            &DetailReaders::disabled(),
+        )
+        .unwrap()
+    else {
+        panic!("excerpt")
+    };
+    assert_eq!(records.len(), 1);
+    assert!(records[0].target);
+    assert_eq!(records[0].record.id, uuid(3));
+}
+
+#[test]
+fn diagnosis_context_falls_back_only_for_supported_byte_limit_refusals() {
+    let (_temp, root, db, state) = reader_scene();
+    let home = root.join("home");
+    let before = counts(&db);
+    for (index, id, host, native, code, fallback) in [
+        (
+            0,
+            "codex-c0de",
+            "codex",
+            CODEX,
+            "detail_limit_source_bytes",
+            true,
+        ),
+        (
+            1,
+            "codex-c0de",
+            "codex",
+            CODEX,
+            "detail_limit_native_rows",
+            false,
+        ),
+        (2, "codex-c0de", "codex", CODEX, "detail_deadline", false),
+        (
+            3,
+            "cursor-c0d5",
+            "cursor",
+            CURSOR,
+            "detail_limit_source_bytes",
+            false,
+        ),
+    ] {
+        let marker = root.join(format!("diagnosis-context-{index}"));
+        let page = reader_session(&home, host, native).replace(
+            "\"title\":null",
+            &format!(
+                "\"title\":null,\"context_page\":{}",
+                json!({"version":1,"digest":"a".repeat(64),"start":0,"end":2,"total":2,"target":1})
+            ),
+        );
+        let refusal = json!({"type":"diagnostic","host":host,"code":code,"path":null});
+        let script = format!(
+            "case \"$*\" in\n*--context-page*) {page} ;;\n*) printf '%s\\n' '{refusal}' >&2; exit 2 ;;\nesac"
+        );
+        let python = fake_python(&root, &marker, &script);
+        let result = state
+            .diagnosis_context(
+                id,
+                &xt_metrics::WarningPoint {
+                    record_uuid: uuid(1),
+                    block: None,
+                },
+                &CancelToken::new(),
+                &bundle_with(&python),
+            )
+            .unwrap();
+        if fallback {
+            assert_eq!(result.unwrap().len(), 2);
+        } else {
+            assert!(result.is_err(), "{id}: {code}");
+        }
+        let calls = fs::read_to_string(marker).unwrap();
+        assert_eq!(calls.contains("--context-page"), fallback, "{calls}");
+    }
+    assert_eq!(counts(&db), before);
+    state.shutdown();
 }

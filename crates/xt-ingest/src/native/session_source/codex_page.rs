@@ -5,8 +5,8 @@ use serde::Deserialize;
 use serde_json::json;
 use std::time::Instant;
 
-pub const CODEX_PAGE_RECORDS: usize = 200;
-pub const CODEX_PAGE_OUTPUT_BYTES: usize = 1024 * 1024;
+pub const CODEX_PAGE_RECORDS: usize = MAX_PAGE_RECORDS;
+pub const CODEX_PAGE_OUTPUT_BYTES: usize = MAX_PAGE_OUTPUT_BYTES;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CodexPageSelection {
@@ -50,14 +50,14 @@ impl CodexPage {
 fn invalid() -> CodexPageError {
     CodexPageError::Context(ContextRefusal::InvalidCursor)
 }
-fn digest_valid(value: &str) -> bool {
+pub(super) fn digest_valid(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn decode(cursor: &str) -> Result<(bool, usize, &str), CodexPageError> {
-    if cursor.len() > 128 {
+pub(super) fn decode(cursor: &str) -> Result<(bool, usize, &str), CodexPageError> {
+    if cursor.len() > MAX_PAGE_CURSOR_BYTES {
         return Err(invalid());
     }
     let parts: Vec<_> = cursor.split(':').collect();
@@ -82,6 +82,28 @@ pub fn load_codex_page(
     selection: &CodexPageSelection,
     reader: Option<&DetailReader<'_>>,
 ) -> Result<CodexPage, CodexPageError> {
+    let selection = match selection {
+        CodexPageSelection::First => PageSelection::First,
+        CodexPageSelection::Cursor(cursor) => PageSelection::Cursor(cursor.clone()),
+        CodexPageSelection::ToolCall {
+            record_uuid,
+            block,
+            generation,
+        } => PageSelection::Anchor {
+            record_uuid: record_uuid.clone(),
+            block: Some(*block),
+            kind: PageTargetKind::ToolCall,
+            generation: generation.clone(),
+        },
+    };
+    load_page(request, &selection, reader)
+}
+
+pub(super) fn load_page(
+    request: &SessionSourceRequest<'_>,
+    selection: &PageSelection,
+    reader: Option<&DetailReader<'_>>,
+) -> Result<CodexPage, CodexPageError> {
     if cancelled(request.cancel) {
         return Err(SourceUnavailable::Cancelled.into());
     }
@@ -93,28 +115,31 @@ pub fn load_codex_page(
     }
     let reader = reader.ok_or(SourceUnavailable::PrerequisiteUnavailable)?;
     let (wire, backwards) = match selection {
-        CodexPageSelection::First => (json!({"version":1,"kind":"first"}), false),
-        CodexPageSelection::Cursor(cursor) => {
+        PageSelection::First => (json!({"version":1,"kind":"first"}), false),
+        PageSelection::Cursor(cursor) => {
             let (back, position, generation) = decode(cursor)?;
             (
                 json!({"version":1,"kind":if back {"before"} else {"after"},"position":position,"generation":generation}),
                 back,
             )
         }
-        CodexPageSelection::ToolCall {
+        PageSelection::Anchor {
             record_uuid,
             block,
+            kind,
             generation,
         } => {
             if record_uuid.is_empty()
-                || record_uuid.len() > 4096
+                || record_uuid.len() > MAX_PAGE_ANCHOR_BYTES
                 || generation.as_deref().is_some_and(|g| !digest_valid(g))
             {
                 return Err(invalid());
             }
             (
                 json!({"version":1,"kind":"anchor","record_uuid":record_uuid,"block":block,
-                    "generation":generation,"expected":"tool_call"}),
+                    "generation":generation,"expected":match kind {
+                        PageTargetKind::Message => "message", PageTargetKind::ToolCall => "tool_call",
+                        PageTargetKind::ToolBlock => "tool_block" }}),
                 false,
             )
         }
@@ -166,11 +191,11 @@ pub fn load_codex_page(
         .context_page;
     let session = session_from_stream_mode(request, &roots, &bytes, true)?;
     let expected_digest = match selection {
-        CodexPageSelection::ToolCall { generation, .. } => generation.as_deref(),
-        CodexPageSelection::Cursor(cursor) => Some(decode(cursor)?.2),
+        PageSelection::Anchor { generation, .. } => generation.as_deref(),
+        PageSelection::Cursor(cursor) => Some(decode(cursor)?.2),
         _ => None,
     };
-    if (matches!(selection, CodexPageSelection::First) && meta.start != 0)
+    if (matches!(selection, PageSelection::First) && meta.start != 0)
         || meta.version != 1
         || meta.start > meta.end
         || meta.end > meta.total
@@ -181,12 +206,12 @@ pub fn load_codex_page(
         || session.dropped_records != 0
         || !digest_valid(&meta.digest)
         || expected_digest.is_some_and(|d| d != meta.digest)
-        || matches!(selection, CodexPageSelection::ToolCall { .. }) != meta.target.is_some()
+        || matches!(selection, PageSelection::Anchor { .. }) != meta.target.is_some()
         || meta.target.is_some_and(|t| t < meta.start || t >= meta.end)
     {
         return Err(broken("inconsistent page metadata").into());
     }
-    if let CodexPageSelection::Cursor(cursor) = selection {
+    if let PageSelection::Cursor(cursor) = selection {
         let (back, boundary, _) = decode(cursor)?;
         if if back {
             meta.end != boundary
@@ -196,21 +221,16 @@ pub fn load_codex_page(
             return Err(broken("page boundary changed").into());
         }
     }
-    if let CodexPageSelection::ToolCall {
-        record_uuid, block, ..
+    if let PageSelection::Anchor {
+        record_uuid,
+        block,
+        kind,
+        ..
     } = selection
     {
         let record = &session.records[meta.target.unwrap() - meta.start];
-        let block_kind = record
-            .canonical
-            .message
-            .content
-            .as_ref()
-            .and_then(|c| c.get(*block as usize))
-            .and_then(|b| b.get("type"))
-            .and_then(|t| t.as_str());
         if record.canonical.uuid.as_deref() != Some(record_uuid)
-            || block_kind != Some("tool_use")
+            || !kind.matches(record, *block)
             || session
                 .records
                 .iter()

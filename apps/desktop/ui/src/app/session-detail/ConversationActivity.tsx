@@ -87,7 +87,11 @@ function Activity({ records }: { records: readonly TranscriptRecord[] }) {
   const { request } = useContext(RevealContext);
   const targeted =
     request !== null &&
-    records.some((record) => record.blocks.some((block) => block.id === request.blockId));
+    records.some((record) =>
+      request.kind === 'record'
+        ? record.id === request.recordId
+        : record.blocks.some((block) => block.id === request.blockId),
+    );
   if (targeted && request.token !== state.token) {
     setState({ open: true, token: request.token });
   }
@@ -117,17 +121,21 @@ export function ConversationRecords({
   records,
   markers,
   groupAdjacent,
+  sourceStarts,
 }: {
   records: readonly TranscriptRecord[];
   markers: readonly ConversationMarker[];
   groupAdjacent: boolean;
+  sourceStarts: readonly number[];
 }) {
+  const boundaries = new Set(sourceStarts);
   const groups: { records: TranscriptRecord[]; activity: boolean; start: number }[] = [];
   records.forEach((record, index) => {
     const activity = activityOnly(record);
     const marked = record.blocks.some((block) => markers.some((mark) => mark.blockId === block.id));
     const last = groups.at(-1);
-    if (groupAdjacent && activity && last?.activity && !marked) last.records.push(record);
+    if (groupAdjacent && activity && last?.activity && !marked && !boundaries.has(index))
+      last.records.push(record);
     else groups.push({ records: [record], activity, start: index });
   });
   return groups.map((group) => (

@@ -49,7 +49,14 @@ fn structural_snapshot(
     sql: &Connection,
     registry: &ContentRegistry,
 ) -> std::collections::BTreeMap<String, Vec<Vec<rusqlite::types::Value>>> {
-    let tables = sql.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").unwrap().query_map([], |row| row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+    database_snapshot(sql, Some(registry))
+}
+
+fn database_snapshot(
+    sql: &Connection,
+    registry: Option<&ContentRegistry>,
+) -> std::collections::BTreeMap<String, Vec<Vec<rusqlite::types::Value>>> {
+    let tables = sql.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND (?1 OR name NOT LIKE 'sqlite_%') ORDER BY name").unwrap().query_map([registry.is_none()], |row| row.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
     tables
         .into_iter()
         .map(|table| {
@@ -63,9 +70,11 @@ fn structural_snapshot(
             let structural = columns
                 .iter()
                 .filter(|column| {
-                    !registry
-                        .columns()
-                        .any(|(owner, content)| owner == table && content == *column)
+                    registry.is_none_or(|registry| {
+                        !registry
+                            .columns()
+                            .any(|(owner, content)| owner == table && content == *column)
+                    })
                 })
                 .collect::<Vec<_>>();
             let selected = structural
@@ -324,7 +333,31 @@ fn purge_content_preserves_measurements_receipts_and_original_host_files() {
     db.store_mut()
         .set_retention_mode(RetentionMode::MetadataOnly)
         .unwrap();
-    let structural = structural_snapshot(&sql, &registry);
+    let mut structural = structural_snapshot(&sql, &registry);
+    // Clearing this record's content advances its warning source revision once.
+    let allocator = structural
+        .get_mut("meta")
+        .unwrap()
+        .iter_mut()
+        .find(|row| {
+            row[0] == rusqlite::types::Value::Text("session_warnings_revision_allocator".into())
+        })
+        .unwrap();
+    let rusqlite::types::Value::Text(value) = &allocator[1] else {
+        panic!("warning revision allocator must be text");
+    };
+    let previous_allocator = value.parse::<i64>().unwrap();
+    allocator[1] = rusqlite::types::Value::Text((previous_allocator + 1).to_string());
+    let input = structural
+        .get_mut("session_warning_inputs")
+        .unwrap()
+        .iter_mut()
+        .find(|row| row[0] == rusqlite::types::Value::Text("retained".into()))
+        .unwrap();
+    let rusqlite::types::Value::Integer(previous_revision) = input[1] else {
+        panic!("session warning revision must be an integer");
+    };
+    input[1] = rusqlite::types::Value::Integer(previous_revision + 1);
     let output = db.store_mut().purge_content(&registry).unwrap();
     assert_eq!(structural_snapshot(&sql, &registry), structural);
     assert!(output.invalidate_content);
@@ -383,12 +416,11 @@ fn purge_content_preserves_measurements_receipts_and_original_host_files() {
             .title
             .is_none()
     );
-    assert!(
-        !reopened
-            .purge_content(&registry)
-            .unwrap()
-            .invalidate_content
-    );
+    let before_second_purge = database_snapshot(&sql, None);
+    let second_purge = reopened.purge_content(&registry).unwrap();
+    assert!(!second_purge.invalidate_content);
+    assert!(second_purge.tables.iter().all(|table| table.rows == 0));
+    assert_eq!(database_snapshot(&sql, None), before_second_purge);
 }
 
 #[test]

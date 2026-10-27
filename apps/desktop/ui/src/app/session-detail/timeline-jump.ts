@@ -1,3 +1,5 @@
+import type { SessionWarningPoint } from '../../data/generated/SessionWarningPoint';
+import type { RevealTarget } from './transcript-reveal';
 /**
  * Whether a stretch's first tool call can be shown, and exactly where.
  *
@@ -99,5 +101,57 @@ export function jumpUnavailableText(reason: JumpUnavailable): string {
       return 'More than one block in the transcript sits where that call was recorded, so which one is meant is not known.';
     case 'not_a_tool_call':
       return 'The block recorded at that place in the transcript is not a tool call.';
+  }
+}
+
+export type WarningJump =
+  | { readonly kind: 'target'; readonly target: RevealTarget }
+  | {
+      readonly kind: 'unavailable';
+      readonly reason: JumpUnavailable | 'not_a_user_message' | 'not_a_tool_block';
+    };
+
+/** A saved warning position names one exact message or original tool block. */
+export function resolveWarningJump(point: SessionWarningPoint, read: TranscriptRead): WarningJump {
+  if (read.phase === 'loading') return { kind: 'unavailable', reason: 'transcript_loading' };
+  if (read.phase === 'failed' || read.status.state !== 'loaded')
+    return { kind: 'unavailable', reason: 'transcript_unavailable' };
+  const records = read.status.records.filter((record) => record.id === point.record_uuid);
+  if (records.length !== 1)
+    return { kind: 'unavailable', reason: records.length ? 'ambiguous' : 'not_in_transcript' };
+  if (point.block === null)
+    return records[0]!.role === 'user'
+      ? { kind: 'target', target: { kind: 'record', recordId: point.record_uuid } }
+      : { kind: 'unavailable', reason: 'not_a_user_message' };
+  const blocks = records[0]!.blocks.filter((block) => block.index === point.block);
+  if (blocks.length !== 1)
+    return { kind: 'unavailable', reason: blocks.length ? 'ambiguous' : 'not_in_transcript' };
+  if (blocks[0]!.kind !== 'tool_call' && blocks[0]!.kind !== 'tool_result')
+    return { kind: 'unavailable', reason: 'not_a_tool_block' };
+  return {
+    kind: 'target',
+    target: { kind: 'block', blockId: blockId(point.record_uuid, point.block) },
+  };
+}
+
+export function warningUnavailableText(
+  reason: Extract<WarningJump, { kind: 'unavailable' }>['reason'],
+): string {
+  switch (reason) {
+    case 'transcript_loading':
+      return 'The conversation is still being read.';
+    case 'transcript_unavailable':
+      return 'The conversation is not available to show.';
+    case 'ambiguous':
+      return 'More than one message or block has this saved position, so the exact warning target cannot be selected.';
+    case 'not_a_user_message':
+      return 'The saved warning position does not point to a user message.';
+    case 'not_a_tool_block':
+    case 'not_a_tool_call':
+      return 'The saved warning position is not a tool call or tool result.';
+    case 'no_locator':
+      return 'This warning has no saved message position.';
+    case 'not_in_transcript':
+      return 'The saved warning message or block could not be confirmed in this conversation.';
   }
 }

@@ -299,11 +299,28 @@ pub(super) fn collect_jsonl(
     files: &mut Vec<ClaudeFile>,
     diagnostics: &mut Vec<ReaderDiagnostic>,
 ) {
+    let _ = collect_jsonl_checked(directory, session_id, files, diagnostics, 0, &mut |_, _| {
+        Ok::<_, std::io::Error>(())
+    });
+}
+
+/// Shared traversal with cooperative checks before each entry and source.
+pub(super) fn collect_jsonl_checked<E>(
+    directory: &Path,
+    session_id: &str,
+    files: &mut Vec<ClaudeFile>,
+    diagnostics: &mut Vec<ReaderDiagnostic>,
+    depth: usize,
+    check: &mut dyn FnMut(usize, bool) -> Result<(), E>,
+) -> Result<(), E> {
+    // Check the directory itself before opening it, including empty trees.
+    check(depth, false)?;
     let Ok(entries) = fs::read_dir(directory) else {
         diagnostics.push(unreadable(directory));
-        return;
+        return Ok(());
     };
     for entry in entries {
+        check(depth, false)?;
         let Ok(entry) = entry.map(|entry| entry.path()) else {
             diagnostics.push(unreadable(directory));
             continue;
@@ -321,20 +338,24 @@ pub(super) fn collect_jsonl(
         if kind.is_symlink() {
             diagnostics.push(unreadable(&entry));
         } else if kind.is_dir() {
-            collect_jsonl(&entry, session_id, files, diagnostics);
+            collect_jsonl_checked(&entry, session_id, files, diagnostics, depth + 1, check)?;
         } else if kind.is_file() && name.ends_with(".jsonl") {
             match mtime_ns(&entry) {
-                Ok((mtime_ns, metadata)) => files.push(ClaudeFile {
-                    mtime_ns,
-                    metadata,
-                    path: entry,
-                    session_id: session_id.to_owned(),
-                    sidechain: true,
-                }),
+                Ok((mtime_ns, metadata)) => {
+                    check(depth, true)?;
+                    files.push(ClaudeFile {
+                        mtime_ns,
+                        metadata,
+                        path: entry,
+                        session_id: session_id.to_owned(),
+                        sidechain: true,
+                    });
+                }
                 Err(_) => diagnostics.push(unreadable(&entry)),
             }
         }
     }
+    Ok(())
 }
 
 /// One file named directly, observed exactly as `enumerate` observes what it

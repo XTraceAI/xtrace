@@ -83,6 +83,10 @@ it('uses hash routes for native protocol navigation and reloads', async () => {
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
     // These screens open no transcript; the seam is answered, never called.
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     pullRequests: unavailable,

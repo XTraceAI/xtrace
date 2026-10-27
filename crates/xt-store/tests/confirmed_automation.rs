@@ -523,3 +523,29 @@ fn malformed_or_unbounded_input_rejects_the_whole_call() {
             .is_empty()
     );
 }
+
+#[test]
+fn standalone_confirmation_invalidates_saved_warnings_but_replay_does_not() {
+    let directory = TempDir::new().unwrap();
+    let mut store = open(&directory);
+    seed(&mut store);
+    let sql = Connection::open(directory.path().join("confirmations.sqlite")).unwrap();
+    let revision = || {
+        sql.query_row(
+            "SELECT revision FROM session_warning_inputs WHERE session_id=?1",
+            [SESSION],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let before = revision();
+    store
+        .apply_automated_input_confirmations(&[proof("input", "call-launch")], 1000)
+        .unwrap();
+    let changed = revision();
+    assert!(changed > before);
+    store
+        .apply_automated_input_confirmations(&[proof("input", "call-launch")], 2000)
+        .unwrap();
+    assert_eq!(Some(revision()), Some(changed));
+}

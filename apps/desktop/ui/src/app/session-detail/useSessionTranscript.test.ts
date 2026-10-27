@@ -6,6 +6,7 @@ const status: SessionSourceStatus = {
   state: 'loaded',
   generation: { generation: 'indexed', appended: false },
   sources: 1,
+  record_ranges: [{ start: 0, end: 0 }],
   dropped_records: 0,
   gaps: [],
   records: [],

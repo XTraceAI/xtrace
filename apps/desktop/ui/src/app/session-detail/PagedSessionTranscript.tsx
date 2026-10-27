@@ -1,0 +1,342 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useData } from '../../data/DataProvider';
+import type { SessionPageSelection } from '../../data/generated/SessionPageSelection';
+import type { SessionPageReason } from '../../data/generated/SessionPageReason';
+import type { SessionWarningPoint } from '../../data/generated/SessionWarningPoint';
+import type { MetricToolBlock } from '../../data/generated/MetricToolBlock';
+import type { SessionSourceStatus } from '../../data/generated/SessionSourceStatus';
+import { Button } from '../../kit/Button';
+import { SessionTranscript } from './SessionTranscript';
+import type { ConversationMarker } from './ConversationActivity';
+import { resolveJump, resolveWarningJump, warningUnavailableText } from './timeline-jump';
+import { transcriptProps, unavailableNote } from './transcript-adapter';
+import type { RevealOutcome, RevealTarget } from './transcript-reveal';
+import { useSourceRead } from './useSessionTranscript';
+
+export type PageIntent =
+  | {
+      kind: 'timeline';
+      token: number;
+      locator: MetricToolBlock;
+      index: number;
+      call: 'first' | 'repeated';
+    }
+  | { kind: 'warning'; token: number; point: SessionWarningPoint };
+export interface PageRepeatCandidate {
+  index: number;
+  locator: MetricToolBlock;
+  tool: string;
+  count: number;
+  circling: boolean;
+}
+export type PageFeedback =
+  | {
+      kind: 'timeline';
+      intent: Extract<PageIntent, { kind: 'timeline' }>;
+      target: { blockId: string; tool: string } | null;
+      outcome: RevealOutcome | null;
+      unavailable: string | null;
+    }
+  | {
+      kind: 'warning';
+      intent: Extract<PageIntent, { kind: 'warning' }>;
+      target: RevealTarget | null;
+      outcome: RevealOutcome | null;
+      unavailable: string | null;
+    };
+const FIRST: SessionPageSelection = { kind: 'first' };
+export function pageReason(
+  reason: SessionPageReason,
+  host: 'claude' | 'codex',
+  kind: PageIntent['kind'] = 'timeline',
+): string {
+  switch (reason.reason) {
+    case 'changed':
+      return 'This conversation changed while you were reading it. Load it again to continue.';
+    case 'invalid_cursor':
+      return 'This conversation portion can no longer be opened. Load it again.';
+    case 'record_too_large':
+      return 'One saved message is too large to show as a complete message in this view.';
+    case 'read': {
+      const detail = reason.detail;
+      switch (detail.reason) {
+        case 'source':
+          return detail.source.reason === 'unsupported_history' && host === 'codex'
+            ? 'This view can read one original Codex rollout. Forked conversations, inherited history and conversations spread across several rollouts are not supported here.'
+            : unavailableNote(detail.source);
+        case 'target_missing':
+          return kind === 'warning'
+            ? 'The saved warning message or block could not be found in this conversation.'
+            : 'The saved tool call could not be found in this conversation.';
+        case 'target_ambiguous':
+          return kind === 'warning'
+            ? 'More than one message has this saved message ID, so the exact warning target cannot be selected.'
+            : 'More than one message has this saved message ID, so the exact call cannot be selected.';
+        case 'block_missing':
+          return kind === 'warning'
+            ? 'The saved warning block could not be confirmed in its message.'
+            : 'The saved tool call could not be confirmed in its message.';
+        case 'deadline':
+          return 'Reading this conversation portion took too long. Try again.';
+        case 'incomplete':
+          return 'The complete set of conversation files could not be checked, so this portion cannot be shown.';
+        case 'limit':
+          return 'This conversation exceeds the amount this view can check in one read.';
+      }
+    }
+  }
+}
+
+/** Each owned read replaces the last; no transcript cache or accumulation. */
+export function PagedSessionTranscript({
+  sessionId,
+  host,
+  intent,
+  repeatCandidates,
+  onFeedback,
+  onReset,
+  revealOwner,
+}: {
+  sessionId: string;
+  host: 'claude' | 'codex';
+  intent: PageIntent | null;
+  repeatCandidates: readonly PageRepeatCandidate[];
+  onFeedback: (feedback: PageFeedback | null) => void;
+  onReset: () => void;
+  revealOwner: RefObject<HTMLElement | null>;
+}) {
+  const { source } = useData();
+  const digest = useRef<string | null>(null);
+  const [held, setHeld] = useState<{ token: number | null; selection: SessionPageSelection }>({
+    token: null,
+    selection: FIRST,
+  });
+  const [restart, setRestart] = useState(0);
+  const selection = held.selection;
+  const identity = JSON.stringify([sessionId, held.token, selection, restart]);
+  const load = useCallback(
+    (id: string) => {
+      if (!source.sessionTranscriptPage)
+        return Promise.reject(new Error('Page reader unavailable'));
+      return source.sessionTranscriptPage(sessionId, selection, id);
+    },
+    [source, sessionId, selection],
+  );
+  const cancel = useCallback((id: string) => source.cancelSessionTranscript(id), [source]);
+  const { read, retry } = useSourceRead(identity, load, cancel);
+  const changed =
+    read.phase === 'read' &&
+    read.status.state === 'unavailable' &&
+    read.status.reason.reason === 'changed';
+  // A changed generation stays refused until the reader explicitly reloads.
+  if (intent && held.token !== intent.token && !changed) {
+    const point =
+      intent.kind === 'warning'
+        ? intent.point
+        : { record_uuid: intent.locator.record_uuid, block: intent.locator.block_index };
+    setHeld({
+      token: intent.token,
+      selection: {
+        kind: 'anchor',
+        expected:
+          intent.kind === 'timeline'
+            ? 'tool_call'
+            : point.block === null
+              ? 'message'
+              : 'tool_block',
+        record_uuid: point.record_uuid,
+        block: point.block,
+        generation: digest.current,
+      },
+    });
+  }
+
+  const page = read.phase === 'read' && read.status.state === 'loaded' ? read.status : null;
+  useEffect(() => {
+    if (page) digest.current = page.digest;
+  }, [page]);
+  const view = useMemo(() => {
+    if (!page) return null;
+    const status: SessionSourceStatus = {
+      state: 'loaded',
+      generation: page.generation,
+      sources: page.record_ranges.length,
+      record_ranges: page.record_ranges,
+      records: page.records,
+      gaps: [],
+      dropped_records: page.dropped_records,
+    };
+    return { status, transcript: transcriptProps(status, false) };
+  }, [page]);
+  const target = useMemo(() => {
+    if (!page || !view || selection.kind !== 'anchor' || !intent || held.token !== intent.token)
+      return null;
+    const point =
+      intent.kind === 'warning'
+        ? intent.point
+        : { record_uuid: intent.locator.record_uuid, block: intent.locator.block_index };
+    const matches =
+      page.target !== null &&
+      page.records[page.target.record]?.id === point.record_uuid &&
+      page.target.block === point.block;
+    if (intent.kind === 'warning')
+      return {
+        kind: 'warning' as const,
+        jump: matches
+          ? resolveWarningJump(point, { phase: 'read', status: view.status })
+          : { kind: 'unavailable' as const, reason: 'not_in_transcript' as const },
+      };
+    if (!matches) return null;
+    const jump = resolveJump(intent.locator, { phase: 'read', status: view.status });
+    return jump.kind === 'target'
+      ? { kind: 'timeline' as const, target: { blockId: jump.blockId, tool: jump.tool } }
+      : null;
+  }, [page, view, selection, intent, held.token]);
+  const reveal = useMemo(() => {
+    if (!target || !intent) return null;
+    if (target.kind === 'timeline')
+      return { token: intent.token, kind: 'block' as const, blockId: target.target.blockId };
+    return target.jump.kind === 'target' ? { token: intent.token, ...target.jump.target } : null;
+  }, [target, intent]);
+  const markers = useMemo<ConversationMarker[]>(() => {
+    if (!view) return [];
+    return repeatCandidates.flatMap((candidate) => {
+      const jump = resolveJump(candidate.locator, { phase: 'read', status: view.status });
+      return jump.kind === 'target'
+        ? [
+            {
+              index: candidate.index,
+              blockId: jump.blockId,
+              tool: candidate.tool,
+              count: candidate.count,
+              circling: candidate.circling,
+              selected:
+                intent?.kind === 'timeline' &&
+                intent.call === 'repeated' &&
+                intent.index === candidate.index,
+            },
+          ]
+        : [];
+    });
+  }, [repeatCandidates, view, intent]);
+  const [result, setResult] = useState<{ token: number; outcome: RevealOutcome } | null>(null);
+  const onReveal = useCallback(
+    (token: number, outcome: RevealOutcome) => setResult({ token, outcome }),
+    [],
+  );
+  const navigate = (cursor: string | null | undefined) => {
+    if (cursor) {
+      onFeedback(null);
+      setHeld((current) => ({ ...current, selection: { kind: 'cursor', cursor } }));
+    }
+  };
+  const reload = () => {
+    onReset();
+    digest.current = null;
+    setHeld((current) => ({ ...current, selection: FIRST }));
+    setRestart((n) => n + 1);
+  };
+  const note =
+    read.phase === 'failed'
+      ? 'This conversation portion could not be read just now.'
+      : read.phase === 'read' && read.status.state === 'unavailable'
+        ? pageReason(read.status.reason, host, intent?.kind)
+        : null;
+  const feedback = useMemo<PageFeedback | null>(() => {
+    if (
+      !intent ||
+      (held.token !== intent.token && !(changed && intent.kind === 'warning')) ||
+      (selection.kind !== 'anchor' && !(changed && intent.kind === 'warning'))
+    )
+      return null;
+    const outcome = result?.token === intent.token ? result.outcome : null;
+    if (intent.kind === 'timeline')
+      return {
+        kind: 'timeline',
+        intent,
+        target: target?.kind === 'timeline' ? target.target : null,
+        outcome,
+        unavailable: note,
+      };
+    const jump = target?.kind === 'warning' ? target.jump : null;
+    return {
+      kind: 'warning',
+      intent,
+      target: jump?.kind === 'target' ? jump.target : null,
+      outcome,
+      unavailable:
+        note ?? (jump?.kind === 'unavailable' ? warningUnavailableText(jump.reason) : null),
+    };
+  }, [intent, held.token, selection, target, result, note, changed]);
+  useEffect(() => {
+    onFeedback(feedback);
+  }, [feedback, onFeedback]);
+  return (
+    <>
+      <p className="xt-session-detail-notice" role="note">
+        This conversation is read in bounded portions. It may have changed since the saved
+        measurements were taken. Results for tool calls are not checked across the whole
+        conversation.
+      </p>
+      <nav aria-label="Conversation portions">
+        <Button
+          variant="outline"
+          height={28}
+          aria-disabled={!page?.previous}
+          onClick={() => navigate(page?.previous)}
+        >
+          Earlier messages
+        </Button>{' '}
+        <Button
+          variant="outline"
+          height={28}
+          aria-disabled={!page?.next}
+          onClick={() => navigate(page?.next)}
+        >
+          Later messages
+        </Button>{' '}
+        <Button variant="outline" height={28} onClick={reload}>
+          Load conversation again
+        </Button>
+      </nav>
+      {page && (
+        <p role="status">
+          {page.total_records === 0
+            ? 'No saved messages were found.'
+            : `Showing messages ${page.start + 1}–${page.end} of ${page.total_records}.`}
+        </p>
+      )}
+      {read.phase === 'loading' ? (
+        <SessionTranscript conversation records={[]} state={{ kind: 'loading' }} />
+      ) : view ? (
+        <SessionTranscript
+          conversation
+          revealOwner={revealOwner}
+          groupAdjacentActivity
+          sourceStarts={page?.record_ranges.map((range) => range.start)}
+          markers={markers}
+          records={view.transcript.records}
+          state={view.transcript.state}
+          reveal={reveal}
+          onReveal={onReveal}
+        />
+      ) : (
+        <>
+          <SessionTranscript
+            conversation
+            records={[]}
+            state={{
+              kind: 'unavailable',
+              note: note ?? 'This conversation portion is unavailable.',
+            }}
+          />
+          {read.phase === 'failed' && (
+            <Button variant="outline" height={28} onClick={retry}>
+              Try again
+            </Button>
+          )}
+        </>
+      )}
+    </>
+  );
+}

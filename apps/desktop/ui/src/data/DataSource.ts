@@ -1,5 +1,8 @@
-import type { CodexPageRequest } from './generated/CodexPageRequest';
-import type { CodexPageStatus } from './generated/CodexPageStatus';
+import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
+import type { SessionDiagnosis } from './generated/SessionDiagnosis';
+import type { SavedSkill } from './generated/SavedSkill';
+import type { SessionPageSelection } from './generated/SessionPageSelection';
+import type { SessionPageStatus } from './generated/SessionPageStatus';
 import type { DashboardMetrics } from './generated/DashboardMetrics';
 import type { TokensByHost } from './generated/TokensByHost';
 import type { SessionPage } from './generated/SessionPage';
@@ -20,6 +23,9 @@ import type { TodaySummary } from './generated/TodaySummary';
 import type { SessionTitles } from './generated/SessionTitles';
 import type { SessionCompactions } from './generated/SessionCompactions';
 import type { DashboardDaySessions } from './generated/DashboardDaySessions';
+import type { DashboardWarnings } from './generated/DashboardWarnings';
+import type { SessionWarningsList } from './generated/SessionWarningsList';
+import type { SessionWarningDismissal } from './generated/SessionWarningDismissal';
 import type { DashboardSpanDetail } from './generated/DashboardSpanDetail';
 import type { RuleActivityResult } from './generated/RuleActivityResult';
 import type { ProjectList } from './generated/ProjectList';
@@ -92,6 +98,35 @@ export interface RetentionControls {
   set(mode: ContentRetention): Promise<ContentRetention>;
   /** Call only after user confirmation; resolves with the committed outcome. */
   purge(): Promise<ContentPurge>;
+}
+/**
+ * Dismissing a session warning and undoing it. The native side checks the
+ * identity, stores or deletes the dismissal, and decides from then on which
+ * warnings every mark, count and day shows; the UI re-reads the answers.
+ */
+export interface WarningDismissalControls {
+  /** Refused unless the session has that warning now. */
+  dismiss(sessionId: string, warningId: string): Promise<SessionWarningDismissal>;
+  /** Undoing one not dismissed changes nothing. */
+  restore(sessionId: string, warningId: string): Promise<SessionWarningDismissal>;
+}
+/** Explicit Diagnose and Save actions; native code decides every outcome. */
+export interface DiagnosisControls {
+  /**
+   * Sends one warning's nearby messages to Claude Code, falling back to Codex
+   * only before messages are sent. `timezone` is the page's zone; `readId`
+   * names this run for cancellation. A second active run answers `busy`.
+   */
+  diagnose(
+    sessionId: string,
+    warningId: string,
+    timezone: string,
+    readId: string,
+  ): Promise<SessionDiagnosis>;
+  /** Stops the run `readId` names, including one waiting for a worker. */
+  cancel(readId: string): Promise<boolean>;
+  /** Saves the full suggested draft in this session's project, without replacing a skill. */
+  saveSkill(sessionId: string, name: string, draft: string): Promise<SavedSkill>;
 }
 /**
  * The saved typing speed the typing estimate reads, in whole words per minute.
@@ -337,11 +372,18 @@ export interface DataSource {
    * read is resolved behind this seam, from what the index recorded — a view
    * that could name a path could name any path, and this read opens files.
    */
-  codexTranscriptPage?(
+  /** A bounded original-source excerpt around the saved warning point; never cached. */
+  sessionWarningContext(
     sessionId: string,
-    selection: CodexPageRequest,
+    recordUuid: string,
+    block: number | null,
     readId: string,
-  ): Promise<CodexPageStatus>;
+  ): Promise<SessionExcerptStatus>;
+  sessionTranscriptPage?(
+    sessionId: string,
+    selection: SessionPageSelection,
+    readId: string,
+  ): Promise<SessionPageStatus>;
   sessionTranscript(sessionId: string, readId: string): Promise<SessionSourceStatus>;
   /** Abandon a read. Cancelling one that has not begun is not a mistake. */
   cancelSessionTranscript(readId: string): Promise<void>;
@@ -394,6 +436,27 @@ export interface DataSource {
     timezone: string,
     date: string,
   ): Promise<DashboardDaySessions>;
+  /**
+   * M-21 for exactly the named sessions (at most 200 distinct), each over its
+   * whole history, with every reason's clock times written in `timezone`
+   * (the zone the asking view shows). Metadata only. Present natively and in
+   * a fixture, which answers as its export read.
+   */
+  sessionWarnings?(sessionIds: readonly string[], timezone: string): Promise<SessionWarningsList>;
+  /**
+   * The warnings inside one Dashboard report's whole days, for its Effort
+   * card, named by the report's range, window end and zone as a day's
+   * sessions are. Present natively and in a fixture.
+   */
+  windowWarnings?(
+    windowDays: number,
+    windowEndMs: number,
+    timezone: string,
+  ): Promise<DashboardWarnings>;
+  /** Present only where a writable app database stores dismissals. */
+  readonly warningDismissals?: WarningDismissalControls;
+  /** Present only where a coding tool can be run; fixtures have no real controls. */
+  readonly diagnosis?: DiagnosisControls;
   /** Present only natively, where the app checks pull requests on its own. */
   readonly prAutoCheck?: PrAutoCheckControls;
   /** Present only where a writable app database owns the policy. */

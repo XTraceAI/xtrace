@@ -89,6 +89,10 @@ export const eventKeyPrefixes: Partial<Record<DataEvent, readonly QueryKey[]>> =
     queryKeys.session(7, '').slice(0, 2),
     queryKeys.trayRecent(7).slice(0, 2),
     queryKeys.dashboards,
+    // Relations change who is said to have sent a message, which the
+    // warnings read.
+    queryKeys.sessionWarnings('', '').slice(0, 2),
+    queryKeys.windowWarnings(7, 0, 0, '').slice(0, 2),
     queryKeys.today,
     queryKeys.prAnalytics(7, true).slice(0, 2),
     queryKeys

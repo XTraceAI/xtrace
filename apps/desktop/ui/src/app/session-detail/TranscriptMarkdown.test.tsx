@@ -412,7 +412,7 @@ it('keeps record and block identities, and the first and a repeated reveal, exac
       rerender(
         <SessionTranscript
           records={records}
-          reveal={{ token: 1, blockId: 'mk:two:1' }}
+          reveal={{ kind: 'block', token: 1, blockId: 'mk:two:1' }}
           onReveal={onReveal}
         />,
       );
@@ -429,7 +429,7 @@ it('keeps record and block identities, and the first and a repeated reveal, exac
       rerender(
         <SessionTranscript
           records={records}
-          reveal={{ token: 2, blockId: 'mk:two:1' }}
+          reveal={{ kind: 'block', token: 2, blockId: 'mk:two:1' }}
           onReveal={onReveal}
         />,
       );

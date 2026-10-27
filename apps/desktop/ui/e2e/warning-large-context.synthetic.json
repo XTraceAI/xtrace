@@ -1,0 +1,60 @@
+{
+  "state": "loaded",
+  "generation": {
+    "generation": "indexed",
+    "appended": true
+  },
+  "records": [
+    {
+      "record": {
+        "id": "before",
+        "role": "assistant",
+        "at": "2026-09-07T15:00:00Z",
+        "blocks": [
+          {
+            "kind": "text",
+            "index": 0,
+            "text": "The sample build is ready. I changed the timeout to 30 seconds."
+          }
+        ]
+      },
+      "target": false,
+      "omitted_blocks": false,
+      "only_tool_results": false
+    },
+    {
+      "record": {
+        "id": "w-h3",
+        "role": "user",
+        "at": "2026-09-07T15:00:00Z",
+        "blocks": [
+          {
+            "kind": "text",
+            "index": 0,
+            "text": "Still not fixed. Please check the retry limit."
+          }
+        ]
+      },
+      "target": true,
+      "omitted_blocks": false,
+      "only_tool_results": false
+    },
+    {
+      "record": {
+        "id": "after",
+        "role": "assistant",
+        "at": "2026-09-07T15:00:00Z",
+        "blocks": [
+          {
+            "kind": "text",
+            "index": 0,
+            "text": "I will inspect the retry limit and the failing step."
+          }
+        ]
+      },
+      "target": false,
+      "omitted_blocks": false,
+      "only_tool_results": false
+    }
+  ]
+}

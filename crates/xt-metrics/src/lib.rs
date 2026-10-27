@@ -18,6 +18,7 @@ mod session;
 mod session_hands_off;
 mod session_stretches;
 mod session_summary;
+mod session_warnings;
 mod sessions;
 mod span_detail;
 mod spans;
@@ -25,6 +26,7 @@ mod stats;
 mod sweep;
 mod tokens;
 mod untimed;
+mod warning_cache;
 mod window;
 pub use activity::WindowActivity;
 pub use cost::{
@@ -63,6 +65,13 @@ pub use session::{MAX_SESSIONS, SUB_SESSION_WALK, SessionWindow, SubSessions};
 pub use session_hands_off::SessionHandsOff;
 pub use session_stretches::{SessionStretch, SessionStretches, ToolBlock};
 pub use session_summary::SessionListSummary;
+pub use session_warnings::{
+    AGENT_TOOLS, CORRECTION_PHRASE, CORRECTION_WORDS, CheckState, Dismissal, HANDBACK_TOOLS,
+    Missing, NO_MAX_WORDS, PROMPT_MIN_WORDS, REPEAT_AT_LEAST, STILL_NEGATIVES, STILL_REACH,
+    SessionWarning, SessionWarnings, TASK_LIST_TOOLS, WAITING_TOOLS, WarningChecks, WarningKind,
+    WarningPoint, WholeSessionWarnings, WindowSessionWarnings, comparable_prompt, correction,
+    expected_repeat, tool_written,
+};
 pub use sessions::{DaySessions, SessionsPerDay};
 pub use span_detail::{
     AutomaticText, MAX_PROMPT_CHARS, PromptText, SpanAutomatic, SpanDetail, SpanPrompt, SpanTool,
@@ -75,6 +84,7 @@ pub use tokens::{
     DayTokens, HostTokens, ModelTokens, SurfaceTokens, TokenCounters, TokenReport, TokenSummary,
 };
 pub use untimed::{UntimedHistory, UntimedSurface};
+pub use warning_cache::{SESSION_WARNINGS_CACHE_VERSION, SessionWarningRefresh};
 pub use window::{DayBucket, Window};
 
 use rusqlite::{Connection, OpenFlags};
@@ -82,6 +92,8 @@ use std::{path::Path, time::Duration};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Metric read cancelled")]
+    Cancelled,
     #[error("Invalid metric window")]
     InvalidWindow,
     #[error("Metric counter overflow")]
@@ -111,6 +123,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// The canonical writer installs the shared views after its migrations.
 pub struct MetricsDb {
     connection: Connection,
+    warning_refresh_needed: std::cell::Cell<bool>,
+    warning_repairs: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 impl MetricsDb {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -156,12 +170,29 @@ impl MetricsDb {
             connection.prepare(&format!("{query} LIMIT 0"))?;
         }
         connection.prepare(&format!("{} LIMIT 0", repeats::BLOCK_QUERY))?;
+        for query in [
+            session_warnings::RECORD_QUERY,
+            session_warnings::RESULT_QUERY,
+            session_warnings::CALL_QUERY,
+            session_warnings::SPAN_QUERY,
+            session_warnings::UNTIMED_QUERY,
+            session_warnings::DISMISSED_QUERY,
+            session_warnings::ACTIVE_QUERY,
+        ] {
+            connection.prepare(&format!("{query} LIMIT 0"))?;
+        }
         connection.prepare(&format!("{} LIMIT 0", favorite::OUTPUT_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", favorite::TURN_QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", cost::QUERY))?;
+        connection.prepare(&format!("{} LIMIT 0", warning_cache::SAVED_QUERY))?;
+        connection.prepare(warning_cache::DIRTY_QUERY)?;
         connection.prepare(&format!("{} LIMIT 0", untimed::QUERY))?;
         connection.prepare(&format!("{} LIMIT 0", pr_effort::LINK_QUERY))?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            warning_refresh_needed: std::cell::Cell::new(false),
+            warning_repairs: std::cell::RefCell::new(Default::default()),
+        })
     }
 
     /// Observe or stop observing statements in a synthetic fixture database.

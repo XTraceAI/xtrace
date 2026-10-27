@@ -31,6 +31,7 @@
 //! [`xt_probes::process`]. Storing results and the app's commands live in
 //! `xt-store` and the desktop app.
 
+pub mod diagnosis;
 pub mod installed;
 pub mod maker;
 pub mod protocol;
