@@ -51,11 +51,8 @@ fn metric_reads_request_repairs_even_when_the_outer_read_fails() {
             .unwrap()
     });
     for fail in [false, true] {
-        sql.execute(
-            "UPDATE saved_session_warnings SET payload_json='broken'",
-            [],
-        )
-        .unwrap();
+        sql.execute("UPDATE saved_session_warnings SET payload_json='{}'", [])
+            .unwrap();
         let result = state.with_metric_inputs(|metrics, inputs| {
             let saved = metrics.saved_whole_session_warnings(&["synthetic"], &inputs.zone)?;
             assert_eq!(
@@ -75,7 +72,7 @@ fn metric_reads_request_repairs_even_when_the_outer_read_fails() {
         });
         assert_eq!(result.is_err(), fail);
         wait_until(|| {
-            sql.query_row("SELECT payload_json != 'broken' FROM saved_session_warnings WHERE session_id='synthetic'", [], |row| row.get::<_, bool>(0)).unwrap()
+            sql.query_row("SELECT payload_json != '{}' FROM saved_session_warnings WHERE session_id='synthetic'", [], |row| row.get::<_, bool>(0)).unwrap()
         });
     }
     worker.shutdown();
@@ -129,9 +126,16 @@ fn committed_purge_requests_a_fresh_answer_and_empty_purge_does_not_publish() {
         )
         .unwrap();
     assert_ne!(before, after);
+    worker.shutdown();
+    // The worker's freshly saved answer is itself retained content. Clear it
+    // after stopping refresh before checking a genuinely empty purge.
+    let mut cleared_saved_answer = false;
+    state
+        .purge_stored_content(|| cleared_saved_answer = true)
+        .unwrap();
+    assert!(cleared_saved_answer);
     state
         .purge_stored_content(|| panic!("empty purge published"))
         .unwrap();
-    worker.shutdown();
     state.shutdown();
 }
