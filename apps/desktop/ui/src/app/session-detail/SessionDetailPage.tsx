@@ -21,7 +21,9 @@ import { useSelectedRange } from '../dashboard/range';
 import { agentTime } from '../agent-duration';
 import { evidenceWords } from '../session-cells';
 import { contextLead, contextTitle, modelLabel, shortId } from '../session-context';
-import { listState } from '../session-search';
+import { WARNING_PARAM, listState } from '../session-search';
+import { localZone, useSessionWarning } from '../session-warnings';
+import { SessionReview } from './SessionReview';
 import { SessionTimeline, type TimelineQuery } from './SessionTimeline';
 import { SessionTranscript } from './SessionTranscript';
 import {
@@ -247,8 +249,15 @@ export function SessionDetailPage() {
   const days = rangeDays[range];
   // The list's filters travel in this page's own address, so going back
   // restores the list the reader left — the same search, hosts, pull-request
-  // filter and range — rather than an unfiltered one. Nothing else is read.
-  const [params] = useSearchParams();
+  // filter and range — rather than an unfiltered one. Warning selection stays here.
+  const [params, setParams] = useSearchParams();
+  const warningNavigation = useRef({ warning: params.get(WARNING_PARAM), generation: 0 });
+  if (warningNavigation.current.warning !== params.get(WARNING_PARAM)) {
+    warningNavigation.current = {
+      warning: params.get(WARNING_PARAM),
+      generation: warningNavigation.current.generation + 1,
+    };
+  }
   const back = listState(params);
   const backHref = back.size > 0 ? `/sessions?${back}` : '/sessions';
 
@@ -287,6 +296,36 @@ export function SessionDetailPage() {
   // its title, so the cached answer's links are not shown while it is out.
   const prLinks = listed.isSuccess && !listed.isFetching && row ? row.pr_links : [];
   const { read, retry } = useSessionTranscript(sessionId);
+  // Whole-session warnings use this Mac's zone, as the page's times do.
+  const zone = useMemo(localZone, []);
+  const warnings = useSessionWarning(sessionId, zone);
+  const activeWarnings = warnings.data?.state === 'read' ? warnings.data.warnings : undefined;
+  const warningId = params.get(WARNING_PARAM) ?? activeWarnings?.[0]?.id ?? null;
+  const selectWarning = useCallback(
+    (id: string) => {
+      warningNavigation.current = {
+        warning: id,
+        generation: warningNavigation.current.generation + 1,
+      };
+      setParams((previous) => {
+        const next = new URLSearchParams(previous);
+        next.set(WARNING_PARAM, id);
+        return next;
+      });
+    },
+    [setParams],
+  );
+  const readbackSelectWarning = useCallback(
+    (id: string) => {
+      warningNavigation.current.warning = id;
+      setParams((previous) => {
+        const next = new URLSearchParams(previous);
+        next.set(WARNING_PARAM, id);
+        return next;
+      });
+    },
+    [setParams],
+  );
   const paged =
     host === 'codex' &&
     !!source.codexTranscriptPage &&
@@ -494,6 +533,74 @@ export function SessionDetailPage() {
     );
   }
 
+  const conversation = (
+    <div className="xt-session-conversation">
+      <SectionCard
+        title="Conversation"
+        meta="Read-only history from this session’s own files. Nothing is stored."
+        right={
+          read.phase === 'failed' ? (
+            <Button variant="outline" height={28} onClick={retry}>
+              Try again
+            </Button>
+          ) : timeline.phase === 'ready' && timeline.stretches.state === 'measured' ? (
+            <RepeatNavigation
+              indexes={repeatedIndexes}
+              selected={selectedCall === 'repeated' ? selected : null}
+              onSelect={onShowRepeat}
+            />
+          ) : undefined
+        }
+      >
+        <p
+          className="xt-timeline-note"
+          role="status"
+          aria-live="polite"
+          data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+        >
+          {announcement ?? ''}
+        </p>
+        <div
+          ref={conversationBody}
+          className="xt-conversation-body"
+          role="region"
+          aria-label="Conversation content"
+          tabIndex={0}
+        >
+          {!paged && generation && (
+            <p className="xt-session-detail-notice" role="note">
+              {generation}
+            </p>
+          )}
+          {paged && sessionId ? (
+            <CodexPagedTranscript
+              key={sessionId}
+              sessionId={sessionId}
+              intent={ownedPageIntent?.intent ?? null}
+              repeatCandidates={repeatCandidates}
+              onFeedback={onPageFeedback}
+              onReset={clearPageSelection}
+              revealOwner={conversationBody}
+            />
+          ) : (
+            <SessionTranscript
+              revealOwner={conversationBody}
+              conversation
+              markers={markers}
+              groupAdjacentActivity={
+                read.phase === 'read' && read.status.state === 'loaded' && read.status.sources === 1
+              }
+              records={transcript.records}
+              state={transcript.state}
+              reveal={reveal}
+              onReveal={onReveal}
+            />
+          )}
+        </div>
+      </SectionCard>
+    </div>
+  );
+
   return (
     <section className="xt-session-detail">
       <div className="xt-session-detail-heading">
@@ -596,73 +703,19 @@ export function SessionDetailPage() {
           />
         </SectionCard>
       </details>
-      <div className="xt-session-conversation">
-        <SectionCard
-          title="Conversation"
-          meta="Read-only history from this session’s own files. Nothing is stored."
-          right={
-            read.phase === 'failed' ? (
-              <Button variant="outline" height={28} onClick={retry}>
-                Try again
-              </Button>
-            ) : timeline.phase === 'ready' && timeline.stretches.state === 'measured' ? (
-              <RepeatNavigation
-                indexes={repeatedIndexes}
-                selected={selectedCall === 'repeated' ? selected : null}
-                onSelect={onShowRepeat}
-              />
-            ) : undefined
-          }
-        >
-          <p
-            className="xt-timeline-note"
-            role="status"
-            aria-live="polite"
-            data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
-          >
-            {announcement ?? ''}
-          </p>
-          <div
-            ref={conversationBody}
-            className="xt-conversation-body"
-            role="region"
-            aria-label="Conversation content"
-            tabIndex={0}
-          >
-            {!paged && generation && (
-              <p className="xt-session-detail-notice" role="note">
-                {generation}
-              </p>
-            )}
-            {paged && sessionId ? (
-              <CodexPagedTranscript
-                key={sessionId}
-                sessionId={sessionId}
-                intent={ownedPageIntent?.intent ?? null}
-                repeatCandidates={repeatCandidates}
-                onFeedback={onPageFeedback}
-                onReset={clearPageSelection}
-                revealOwner={conversationBody}
-              />
-            ) : (
-              <SessionTranscript
-                revealOwner={conversationBody}
-                conversation
-                markers={markers}
-                groupAdjacentActivity={
-                  read.phase === 'read' &&
-                  read.status.state === 'loaded' &&
-                  read.status.sources === 1
-                }
-                records={transcript.records}
-                state={transcript.state}
-                reveal={reveal}
-                onReveal={onReveal}
-              />
-            )}
-          </div>
-        </SectionCard>
-      </div>
+      <SessionReview
+        key={sessionId}
+        sessionId={sessionId ?? ''}
+        answer={warnings.data}
+        pending={warnings.isPending && warnings.fetchStatus !== 'idle'}
+        failed={warnings.isError}
+        selection={warningId}
+        onSelect={selectWarning}
+        onReadbackSelect={readbackSelectWarning}
+        navigationGeneration={warningNavigation.current.generation}
+      >
+        {conversation}
+      </SessionReview>
     </section>
   );
 }

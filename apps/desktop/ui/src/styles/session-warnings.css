@@ -254,3 +254,7 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+.xt-session-title-line .xt-warning-marker {
+  align-self: center;
+}
