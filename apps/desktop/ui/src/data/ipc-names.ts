@@ -1,4 +1,7 @@
 export const commands = {
+  diagnoseSessionWarning: 'diagnose_session_warning',
+  cancelSessionDiagnosis: 'cancel_session_diagnosis',
+  saveSuggestedSkill: 'save_suggested_skill',
   liveSessionsRead: 'live_sessions_read',
   liveSessionsRelease: 'live_sessions_release',
   accountUsage: 'account_usage_read',

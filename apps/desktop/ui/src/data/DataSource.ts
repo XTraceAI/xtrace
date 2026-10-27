@@ -1,3 +1,5 @@
+import type { SessionDiagnosis } from './generated/SessionDiagnosis';
+import type { SavedSkill } from './generated/SavedSkill';
 import type { CodexPageRequest } from './generated/CodexPageRequest';
 import type { CodexPageStatus } from './generated/CodexPageStatus';
 import type { DashboardMetrics } from './generated/DashboardMetrics';
@@ -106,6 +108,24 @@ export interface WarningDismissalControls {
   dismiss(sessionId: string, warningId: string): Promise<SessionWarningDismissal>;
   /** Undoing one not dismissed changes nothing. */
   restore(sessionId: string, warningId: string): Promise<SessionWarningDismissal>;
+}
+/** Explicit Diagnose and Save actions; native code decides every outcome. */
+export interface DiagnosisControls {
+  /**
+   * Sends one warning's nearby messages to Claude Code, falling back to Codex
+   * only before messages are sent. `timezone` is the page's zone; `readId`
+   * names this run for cancellation. A second active run answers `busy`.
+   */
+  diagnose(
+    sessionId: string,
+    warningId: string,
+    timezone: string,
+    readId: string,
+  ): Promise<SessionDiagnosis>;
+  /** Stops the run `readId` names, including one waiting for a worker. */
+  cancel(readId: string): Promise<boolean>;
+  /** Saves the full suggested draft in this session's project, without replacing a skill. */
+  saveSkill(sessionId: string, name: string, draft: string): Promise<SavedSkill>;
 }
 /**
  * The saved typing speed the typing estimate reads, in whole words per minute.
@@ -427,6 +447,8 @@ export interface DataSource {
   ): Promise<DashboardWarnings>;
   /** Present only where a writable app database stores dismissals. */
   readonly warningDismissals?: WarningDismissalControls;
+  /** Present only where a coding tool can be run; fixtures have no real controls. */
+  readonly diagnosis?: DiagnosisControls;
   /** Present only natively, where the app checks pull requests on its own. */
   readonly prAutoCheck?: PrAutoCheckControls;
   /** Present only where a writable app database owns the policy. */
