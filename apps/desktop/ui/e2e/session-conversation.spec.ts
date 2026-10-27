@@ -98,7 +98,7 @@ for (const theme of ['light', 'dark'] as const) {
         760,
         2600,
       );
-    await page.getByText('Agent activity', { exact: true }).click();
+    await page.locator('.xt-session-stretches > summary').click();
     await expect(
       page
         .locator('[role="status"][aria-live="polite"]')

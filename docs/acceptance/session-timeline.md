@@ -40,6 +40,15 @@ src/data/DataSource.test.ts` and `pnpm check`.
   announcements remain unchanged. Existing session/range/read/answer ownership
   destroys old selection rather than restoring it on return.
 
+Session detail keeps a compact header and range metrics above one bounded
+conversation scroll area. Session identity, linked PRs, and Agent activity open
+on demand. The linked PR list has its own keyboard scroll and visible focus.
+Repeated-activity navigation stays in the conversation header; jumps open the
+containing activity and exact tool row, scroll the exact card in the conversation,
+and keep focus on the pressed control. Oversized cards align their top edge.
+The combined browser fixture checks those behaviors together in both themes at
+1120×720, 1120×900, and 1440×900, plus clipped and fully visible scroll areas.
+
 The remaining measurement and segment contracts apply inside Agent activity.
 
 ## The query
@@ -243,3 +252,19 @@ check found the repeat line cut off at both widths, which is why it now wraps.
 - A start label is shortened with an ellipsis when its segment is narrow; the
   full time is in the segment's accessible name. The repeat line wraps instead,
   so the most repeated tool and its count are never cut off.
+
+## Session reading layout
+
+The header discloses the full saved identifier and recorded PR links; the shared
+model label stays visible. The record count covers the whole session, while the
+compact measurements explicitly name the selected range. Agent activity opens
+in a disclosure without changing its measurements or target checks.
+
+The conversation has one keyboard-scrollable reading area, including generation
+and partial-history notices. Revealing a tool call scrolls that area; when expanded
+activity puts it outside the window, the page also brings the area into view.
+Caller focus stays on the stretch. Targets taller than the area reveal their
+beginning. Standalone transcripts retain their existing page-scroll behavior.
+The synthetic `session-layout.spec.ts` checks both themes at 1120×720, 1120×900
+and 1440×900 in Chromium and WebKit. This layout adds no warning, diagnosis or
+paged-history features.

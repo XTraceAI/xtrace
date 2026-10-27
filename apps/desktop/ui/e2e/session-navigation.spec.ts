@@ -39,7 +39,7 @@ test('opens a Dashboard session by keyboard, and offers the list that holds it',
 
   // The session itself, measured over the window the Dashboard showed.
   await expect(page).toHaveURL(new RegExp(`/sessions/${id}\\?`));
-  await expect(page.getByText(/^Records .* measured over the last 7 days$/)).toBeVisible();
+  await expect(page.getByText('Last 7 days', { exact: true })).toBeVisible();
 
   // Back is a list that holds this session, filtered as the link said.
   const back = page.getByRole('link', { name: '← All sessions' });
@@ -63,7 +63,7 @@ test('opens a Dashboard session by keyboard, and offers the list that holds it',
   // History moves between the session and its list; the list's search is in
   // its address.
   await page.goBack();
-  await expect(page.getByText(/^Records .* measured over the last 7 days$/)).toBeVisible();
+  await expect(page.getByText('Last 7 days', { exact: true })).toBeVisible();
   await page.goForward();
   await expect(page.getByLabel('Search sessions')).toHaveValue(lane.session_id);
   await expect(page.getByText('Session 00000000', { exact: true })).toBeVisible();
