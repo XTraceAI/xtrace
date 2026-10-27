@@ -21,6 +21,8 @@ export function SessionReview({
   onSelect,
   onReadbackSelect,
   navigationGeneration,
+  actions,
+  below,
   children,
 }: {
   sessionId: string;
@@ -31,6 +33,8 @@ export function SessionReview({
   onSelect: (id: string) => void;
   onReadbackSelect: (id: string) => void;
   navigationGeneration: number;
+  actions?: (warning: SessionWarningItem) => ReactNode;
+  below?: (warning: SessionWarningItem) => ReactNode;
   children: ReactNode;
 }) {
   const card = useRef<HTMLDivElement>(null);
@@ -168,6 +172,8 @@ export function SessionReview({
                 undo={undo}
                 highlighted
                 {...rowProps(selected, undo)}
+                actions={undo ? undefined : actions?.(selected)}
+                below={undo ? undefined : below?.(selected)}
                 summary={
                   <div className="xt-session-selected-summary">
                     <span className="xt-session-issue-time">

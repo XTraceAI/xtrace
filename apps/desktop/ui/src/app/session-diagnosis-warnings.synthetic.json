@@ -1,0 +1,277 @@
+{
+  "session_warnings": {
+    "timezone": "UTC",
+    "sessions": [
+      {
+        "session_id": "s-clean",
+        "answer": {
+          "state": "read",
+          "warnings": [],
+          "count_label": null,
+          "summary": "No warnings. Every check read everything it needed.",
+          "checks_summary": "Checks · all 5 complete",
+          "dismissed": [],
+          "checks": [
+            {
+              "kind": "correction",
+              "complete": true,
+              "text": "Checked: corrections"
+            },
+            {
+              "kind": "interruption",
+              "complete": true,
+              "text": "Checked: interruptions"
+            },
+            {
+              "kind": "repeated_calls",
+              "complete": true,
+              "text": "Checked: repeated calls"
+            },
+            {
+              "kind": "repeated_prompt",
+              "complete": true,
+              "text": "Checked: repeated prompts"
+            },
+            {
+              "kind": "repeated_failure",
+              "complete": true,
+              "text": "Checked: repeated failures"
+            }
+          ],
+          "incomplete_checks": 0
+        }
+      },
+      {
+        "session_id": "s-older",
+        "answer": {
+          "state": "read",
+          "warnings": [
+            {
+              "id": "correction:o-h2",
+              "kind": "correction",
+              "label": "Correction",
+              "at_ms": 1788427800000,
+              "day": "Sep 3",
+              "reason": "you wrote \"wrong\" after a reply (09:30)",
+              "compact_reason": "After an agent reply",
+              "name": "Warning. Sep 3, Correction: you wrote \"wrong\" after a reply (09:30)",
+              "record_uuids": ["o-h2"],
+              "points_at": {
+                "record_uuid": "o-h2",
+                "block": null
+              },
+              "returned": null
+            }
+          ],
+          "count_label": "1 warning",
+          "summary": "1 warning to review.",
+          "checks_summary": "Checks · all 5 complete",
+          "dismissed": [],
+          "checks": [
+            {
+              "kind": "correction",
+              "complete": true,
+              "text": "Checked: corrections"
+            },
+            {
+              "kind": "interruption",
+              "complete": true,
+              "text": "Checked: interruptions"
+            },
+            {
+              "kind": "repeated_calls",
+              "complete": true,
+              "text": "Checked: repeated calls"
+            },
+            {
+              "kind": "repeated_prompt",
+              "complete": true,
+              "text": "Checked: repeated prompts"
+            },
+            {
+              "kind": "repeated_failure",
+              "complete": true,
+              "text": "Checked: repeated failures"
+            }
+          ],
+          "incomplete_checks": 0
+        }
+      },
+      {
+        "session_id": "s-unchecked",
+        "answer": {
+          "state": "read",
+          "warnings": [],
+          "count_label": null,
+          "summary": "No warnings found, but 3 of 5 checks could not read everything, so something may still have gone wrong.",
+          "checks_summary": "Checks · 3 of 5 incomplete",
+          "dismissed": [],
+          "checks": [
+            {
+              "kind": "correction",
+              "complete": true,
+              "text": "Checked: corrections"
+            },
+            {
+              "kind": "interruption",
+              "complete": false,
+              "text": "Not fully checked: interruptions — 2 tool results do not say how they ended"
+            },
+            {
+              "kind": "repeated_calls",
+              "complete": true,
+              "text": "Checked: repeated calls"
+            },
+            {
+              "kind": "repeated_prompt",
+              "complete": false,
+              "text": "Not fully checked: repeated prompts — the words of 1 of your messages were not kept"
+            },
+            {
+              "kind": "repeated_failure",
+              "complete": false,
+              "text": "Not fully checked: repeated failures — 2 tool results do not say how they ended"
+            }
+          ],
+          "incomplete_checks": 3
+        }
+      },
+      {
+        "session_id": "s-warned",
+        "answer": {
+          "state": "read",
+          "warnings": [
+            {
+              "id": "correction:w-h1",
+              "kind": "correction",
+              "label": "Correction",
+              "at_ms": 1788516300000,
+              "day": "Sep 4",
+              "reason": "you wrote \"no\" after a reply (10:05)",
+              "compact_reason": "After an agent reply",
+              "name": "Warning. Sep 4, Correction: you wrote \"no\" after a reply (10:05)",
+              "record_uuids": ["w-h1"],
+              "points_at": {
+                "record_uuid": "w-h1",
+                "block": null
+              },
+              "returned": null
+            },
+            {
+              "id": "repeated_failure:w-r1#0",
+              "kind": "repeated_failure",
+              "label": "Repeated failure",
+              "at_ms": 1788789840000,
+              "day": "Sep 7",
+              "reason": "the same Bash call failed twice (14:02, 14:04)",
+              "compact_reason": "the same Bash call failed twice",
+              "name": "Warning. Sep 7, Repeated failure: the same Bash call failed twice (14:02, 14:04)",
+              "record_uuids": ["w-r1", "w-r2"],
+              "points_at": {
+                "record_uuid": "w-r2",
+                "block": 0
+              },
+              "returned": null
+            },
+            {
+              "id": "interruption:w-r3#0",
+              "kind": "interruption",
+              "label": "Interruption",
+              "at_ms": 1788789960000,
+              "day": "Sep 7",
+              "reason": "you declined a call to Edit (14:06)",
+              "compact_reason": "Declined Edit",
+              "name": "Warning. Sep 7, Interruption: you declined a call to Edit (14:06)",
+              "record_uuids": ["w-r3", "w-i1"],
+              "points_at": {
+                "record_uuid": "w-r3",
+                "block": 0
+              },
+              "returned": null
+            },
+            {
+              "id": "correction:w-h3",
+              "kind": "correction",
+              "label": "Correction",
+              "at_ms": 1788793200000,
+              "day": "Sep 7",
+              "reason": "you wrote \"still not\" after a reply (15:00)",
+              "compact_reason": "After an agent reply",
+              "name": "Warning. Sep 7, Correction: you wrote \"still not\" after a reply (15:00)",
+              "record_uuids": ["w-h3"],
+              "points_at": {
+                "record_uuid": "w-h3",
+                "block": null
+              },
+              "returned": null
+            },
+            {
+              "id": "repeated_calls:w-h4",
+              "kind": "repeated_calls",
+              "label": "Repeated calls",
+              "at_ms": 1788796800000,
+              "day": "Sep 7",
+              "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
+              "compact_reason": "5 repeats · 5 active min",
+              "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
+              "record_uuids": ["w-h4", "w-c4", "w-a3"],
+              "points_at": {
+                "record_uuid": "w-c4",
+                "block": 0
+              },
+              "returned": null
+            },
+            {
+              "id": "repeated_prompt:w-h2",
+              "kind": "repeated_prompt",
+              "label": "Repeated prompt",
+              "at_ms": 1788796800000,
+              "day": "Sep 7",
+              "reason": "same prompt sent twice (14:00, 16:00)",
+              "compact_reason": "Same prompt sent twice",
+              "name": "Warning. Sep 7, Repeated prompt: same prompt sent twice (14:00, 16:00)",
+              "record_uuids": ["w-h2", "w-h4"],
+              "points_at": {
+                "record_uuid": "w-h4",
+                "block": null
+              },
+              "returned": null
+            }
+          ],
+          "count_label": "6 warnings",
+          "summary": "6 warnings to review.",
+          "checks_summary": "Checks · all 5 complete",
+          "dismissed": [],
+          "checks": [
+            {
+              "kind": "correction",
+              "complete": true,
+              "text": "Checked: corrections"
+            },
+            {
+              "kind": "interruption",
+              "complete": true,
+              "text": "Checked: interruptions"
+            },
+            {
+              "kind": "repeated_calls",
+              "complete": true,
+              "text": "Checked: repeated calls"
+            },
+            {
+              "kind": "repeated_prompt",
+              "complete": true,
+              "text": "Checked: repeated prompts"
+            },
+            {
+              "kind": "repeated_failure",
+              "complete": true,
+              "text": "Checked: repeated failures"
+            }
+          ],
+          "incomplete_checks": 0
+        }
+      }
+    ]
+  }
+}
