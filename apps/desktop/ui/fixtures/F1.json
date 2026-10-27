@@ -1,7 +1,7 @@
 {
   "app_info": {
     "name": "XTrace",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "data_dir": "fixture://F1",
     "fixture": "F1",
     "schema_version": 29,
