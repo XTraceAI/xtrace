@@ -1,4 +1,5 @@
 import { Popover } from '@base-ui/react/popover';
+import { useQuery } from '@tanstack/react-query';
 import { Tooltip } from '@base-ui/react/tooltip';
 import {
   useCallback,
@@ -19,7 +20,18 @@ import { useSurfaceTheme } from '../../theme/ThemeProvider';
 import { agentTime } from '../agent-duration';
 import { leverageText } from '../metric-format';
 import { DaySessions } from './DaySessions';
+import { useData } from '../../data/DataProvider';
+import type { DashboardDayWarning } from '../../data/generated/DashboardDayWarning';
+import type { DashboardWarningDay } from '../../data/generated/DashboardWarningDay';
+import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
+import { queryKeys } from '../../data/query-client';
+import { displayTitle, shortId } from '../session-context';
+import { WarningLine } from '../session-warnings';
+import { WarningDialog } from './WarningDialog';
+import { useSessionTitles } from '../session-titles';
+import '../../styles/session-warnings.css';
 import {
+  clockHours,
   QUARTERS,
   LINE_HEIGHT,
   LINE_WIDTH,
@@ -35,6 +47,100 @@ import '../../styles/overview.css';
 /** The totals columns whose widths follow their widest text. */
 const TOTAL_COLUMNS = ['you', 'agents', 'leverage'] as const;
 const HOURS = ['00', '06', '12', '18', '24'];
+/**
+ * How far from a warning dot's centre, in pixels and in any direction, the
+ * pointer is over it: the dot's radius and a little more, so a 7px dot is
+ * easy to point at and dots drawn over one another are all under the pointer
+ * together. A pointer elsewhere on the track, above or below a dot, is not.
+ */
+const DOT_REACH_PX = 5;
+
+/**
+ * A report's session warnings for "human + agent": each day's native answer
+ * by its date, and whether the read failed, so a failed read is never drawn
+ * as days without warnings.
+ */
+export type DayWarnings = {
+  byDate: ReadonlyMap<string, DashboardWarningDay>;
+  failed: boolean;
+  /** What names a warning's session, as the session rows and day card name it. */
+  nameOf: (entry: DashboardDayWarning) => string;
+};
+
+/**
+ * "human + agent": the timeline with the agents' line and each day's session
+ * warnings, read for this report.
+ */
+export function PairedHumanTimeline({
+  report,
+  range,
+}: {
+  report: DashboardMetrics;
+  range: TimeRange;
+}) {
+  const warnings = useDayWarnings(report);
+  return <HumanTimeline report={report} range={range} withAgents warnings={warnings} />;
+}
+
+/**
+ * The warnings inside the report's whole days, by day, for "human + agent":
+ * the native answer for this report's whole days in its zone, each session
+ * read over its whole history, so a warning here is the same warning the
+ * session's rows and page show. Read only while that view is drawn, and kept
+ * until committed data changes (`metrics`).
+ *
+ * The answer covers whole local days, so it is keyed by those days' bounds,
+ * not by the report's end: a live report after each finished turn has a new
+ * end but, until the day changes, the same days and the same answer. Ingest
+ * events re-read it.
+ */
+export function useDayWarnings(report: DashboardMetrics, enabled = true) {
+  const { source } = useData();
+  const { window } = report;
+  const { start_ms: firstStart, end_ms: lastEnd } = report.human_hours.current;
+  const query = useQuery({
+    queryKey: queryKeys.windowWarnings(window.days, firstStart, lastEnd, window.timezone),
+    // The command names the report by its range, end and zone, as a day's
+    // sessions are named; any end inside these days names these days.
+    queryFn: () => source.windowWarnings!(window.days, window.end_ms, window.timezone),
+    enabled: enabled && Boolean(source.windowWarnings),
+    staleTime: Infinity,
+    // When the days move on (a new day), the dots stay where the same range's
+    // last answer in the same zone put them until the new answer is in. A
+    // reason's clock times are written in its zone, so another zone's answer
+    // is never shown in their place.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[2] === window.days && previousQuery.queryKey[5] === window.timezone
+        ? previous
+        : undefined,
+  });
+  // Each warned session is named as its lane and the day card name it: the
+  // host's own title read for its latest record, else the saved title, else
+  // the Guardian hint, else "Session" and its short identifier.
+  const titleRows = useMemo(() => {
+    const rows = new Map<string, number>();
+    for (const day of query.data?.days ?? [])
+      for (const entry of day.warnings) rows.set(entry.session_id, entry.last_ms);
+    return [...rows].map(([id, version]) => ({ id, version }));
+  }, [query.data]);
+  const hostTitle = useSessionTitles(
+    JSON.stringify(['effort-warnings', window.days, window.timezone]),
+    titleRows,
+    { keepResolved: true },
+  );
+  return useMemo<DayWarnings>(
+    () => ({
+      byDate: new Map((query.data?.days ?? []).map((day) => [day.date, day])),
+      failed: query.isError && !query.data,
+      nameOf: (entry) =>
+        displayTitle(
+          hostTitle(entry.session_id, entry.last_ms) ?? entry.title,
+          entry.automated_review,
+        ) ?? `Session ${shortId(entry.session_id)}`,
+    }),
+    [query.data, query.isError, hostTitle],
+  );
+}
 
 /**
  * Human time as a 24-hour timeline: one row per reported local day, oldest
@@ -60,6 +166,7 @@ export function HumanTimeline({
   report,
   range,
   withAgents = false,
+  warnings: dayWarnings,
 }: {
   report: DashboardMetrics;
   /** The Dashboard's range, which a day card's session links carry. */
@@ -71,6 +178,8 @@ export function HumanTimeline({
    * working.
    */
   withAgents?: boolean;
+  /** "human + agent" only: each day's session warnings, by date. */
+  warnings?: DayWarnings;
 }) {
   const human = report.human_hours.current;
   const rows = useMemo(() => timelineRows(human.by_day, report.window), [human, report.window]);
@@ -81,6 +190,25 @@ export function HumanTimeline({
   );
   const root = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  const [selected, setSelected] = useState<{
+    entry: DashboardDayWarning;
+    name: string;
+    date: string;
+    timezone: string;
+  } | null>(null);
+  const warningFocus = useRef<HTMLElement | null>(null);
+  // A refreshed answer can remove the pressed dot while its detail stays open.
+  // Return to that day, or the remaining current day, when the dot has gone.
+  useLayoutEffect(() => {
+    if (!selected || warningFocus.current?.isConnected) return;
+    const days = [
+      ...(body.current?.querySelectorAll<HTMLElement>('[data-testid="human-day"]') ?? []),
+    ];
+    warningFocus.current =
+      days.find((day) => day.dataset.date === selected.date) ??
+      days.find((day) => day.tabIndex === 0) ??
+      root.current;
+  });
   // No total is capped: a busy day's agent hours or a tiny day's leverage
   // can be far wider than usual. Each totals column is as wide as its
   // widest text in any row, never narrower than its usual width (in CSS);
@@ -179,12 +307,13 @@ export function HumanTimeline({
   return (
     <div
       ref={root}
+      tabIndex={-1}
       className="xt-effort xt-human"
       data-testid="human-timeline"
       data-variant={withAgents ? 'paired' : undefined}
     >
       {withAgents ? (
-        <PairedHeadline report={report} />
+        <PairedHeadline report={report} warningsFailed={dayWarnings?.failed ?? false} />
       ) : (
         <p className="xt-effort-headline" data-testid="effort-headline">
           <strong data-testid="effort-total">
@@ -264,6 +393,14 @@ export function HumanTimeline({
               key={row.date}
               row={row}
               line={lines?.get(row.date) ?? (lines ? null : undefined)}
+              warnings={withAgents ? dayWarnings?.byDate.get(row.date) : undefined}
+              nameOf={dayWarnings?.nameOf}
+              warningOpen={selected !== null}
+              onWarning={(entry, button, name) => {
+                warningFocus.current = button;
+                setSessionsDay(null);
+                setSelected({ entry, name, date: row.date, timezone: report.window.timezone });
+              }}
               lower={index >= rows.length / 2}
               current={index === current}
               onFocus={() => setChosen(row.date)}
@@ -277,6 +414,18 @@ export function HumanTimeline({
           ))}
         </div>
       </div>
+      <WarningDialog
+        selected={
+          selected && {
+            warning: selected.entry.warning,
+            name: selected.name,
+            sessionId: selected.entry.session_id,
+            timezone: selected.timezone,
+          }
+        }
+        onClose={() => setSelected(null)}
+        returnFocusRef={warningFocus}
+      />
     </div>
   );
 }
@@ -286,7 +435,14 @@ export function HumanTimeline({
  * whole days, each behind a key drawn like its line, then the leverage tile's
  * own value. Unknown human time says so, as the human h headline does.
  */
-function PairedHeadline({ report }: { report: DashboardMetrics }) {
+function PairedHeadline({
+  report,
+  warningsFailed,
+}: {
+  report: DashboardMetrics;
+  /** The report's warnings could not be read: said, so no day reads as warning-free. */
+  warningsFailed: boolean;
+}) {
   const human = report.human_hours.current;
   const unknown = human.active_ms === null;
   const leverage = report.tiles.leverage.value;
@@ -317,6 +473,11 @@ function PairedHeadline({ report }: { report: DashboardMetrics }) {
         </strong>
         <small>agent time per hour of yours</small>
       </span>
+      {warningsFailed && (
+        <small className="xt-warnings-unread" role="status" data-testid="effort-warnings-unread">
+          {SESSION_WARNINGS_TEXT.window_unread}
+        </small>
+      )}
     </p>
   );
 }
@@ -336,11 +497,23 @@ const isAtBottom = (element: HTMLElement) =>
  * Escape closes it and returns focus to the day. A click on the date does
  * nothing, so it never leaves a box pinned open. Only one of the day's two
  * boxes shows at a time: the card waits until the sessions box has gone.
+ *
+ * Each warning dot shows its own warning: pointing at it shows the session's
+ * name, the warning's day, label and reason (every dot under the pointer when
+ * they overlap) in place of the day's card, and clicking opens the first of
+ * them in a detail modal on the Dashboard. From the focused day, Right arrow moves focus
+ * to its first dot, Left and Right between its dots, and Left from the first
+ * or Escape back to the day; Enter on a dot opens it.
+ *
  * Whether the box is open is the timeline's, which keeps one open at most.
  */
 function Row({
   row,
   line,
+  warnings: warned,
+  nameOf = (entry) => `Session ${shortId(entry.session_id)}`,
+  warningOpen,
+  onWarning,
   lower,
   current,
   onFocus,
@@ -352,6 +525,12 @@ function Row({
   row: TimelineRow;
   /** The day's agents line in the "human + agent" view; `null` there when the report has none. */
   line?: AgentLine | null;
+  /** The day's session warnings in the "human + agent" view: the native answer for that date. */
+  warnings?: DashboardWarningDay;
+  /** What names a warning's session; see {@link DayWarnings}. */
+  nameOf?: (entry: DashboardDayWarning) => string;
+  warningOpen: boolean;
+  onWarning: (entry: DashboardDayWarning, button: HTMLButtonElement, name: string) => void;
   lower: boolean;
   current: boolean;
   onFocus: () => void;
@@ -374,6 +553,15 @@ function Row({
   const [card, setCard] = useState(false);
   /** The sessions box is open or still closing; the card waits until it has gone. */
   const [sessionsShown, setSessionsShown] = useState(false);
+  /** The warning dots under the pointer, by their place in the day's list. */
+  const [pointed, setPointed] = useState<readonly number[]>([]);
+  /** The warning dot that has focus, by its place in the day's list. */
+  const [focusedDot, setFocusedDot] = useState<number | null>(null);
+  const dots = useRef<(HTMLButtonElement | null)[]>([]);
+  const dotAt = (entry: DashboardDayWarning) => clockHours(entry.warning.at_ms, window) / 24;
+  /** The dots whose warnings show in place of the day's card. */
+  const shownDots = warningOpen ? [] : focusedDot !== null ? [focusedDot] : pointed;
+  const focusDot = (index: number) => dots.current[index]?.focus();
   const day = useRef<HTMLElement | null>(null);
   const dayRef = useCallback((element: HTMLElement | null) => {
     day.current = element;
@@ -408,6 +596,14 @@ function Row({
     <span
       className="xt-human-track"
       data-fold={row.fold || undefined}
+      data-on-warning={pointed.length > 0 || undefined}
+      onClick={(event) => {
+        // A press on the dots under the pointer opens the first of them,
+        // through its own button; a press on the button is handled there.
+        const first = dots.current[pointed[0] ?? -1];
+        if (!first || (event.target instanceof Element && event.target.closest('button'))) return;
+        first.click();
+      }}
       onPointerMove={
         paired
           ? (event) => {
@@ -416,6 +612,15 @@ function Row({
               const x = Math.max(0, Math.min(box.width - 1, event.clientX - box.left));
               setPointer({ quarter: Math.floor((x / box.width) * QUARTERS), x });
               setOnTrack(true);
+              // Every dot is centred on the track's middle line.
+              const dy = event.clientY - (box.top + box.height / 2);
+              const under = (warned?.warnings ?? []).flatMap((entry, index) =>
+                Math.hypot(dotAt(entry) * box.width - (event.clientX - box.left), dy) <=
+                DOT_REACH_PX
+                  ? [index]
+                  : [],
+              );
+              setPointed((before) => (before.join() === under.join() ? before : under));
             }
           : undefined
       }
@@ -423,6 +628,7 @@ function Row({
         paired
           ? (event) => {
               setOnTrack(false);
+              setPointed([]);
               // Onto the day's totals the card stays open and drops the
               // quarter now. Off the day, or onto its date, the card closes
               // and keeps it until it has gone: a card whose content changed
@@ -483,6 +689,40 @@ function Row({
           <path d={line.path} vectorEffect="non-scaling-stroke" />
         </svg>
       )}
+      {warned?.warnings.map((entry, index) => (
+        // The day is the tab stop; Right arrow reaches each warning button.
+        <button
+          key={`${entry.session_id}:${entry.warning.id}`}
+          ref={(element) => {
+            dots.current[index] = element;
+          }}
+          type="button"
+          aria-haspopup="dialog"
+          onClick={(event) => onWarning(entry, event.currentTarget, nameOf(entry))}
+          tabIndex={-1}
+          className="xt-human-warning"
+          data-testid="day-warning-dot"
+          data-kind={entry.warning.kind}
+          data-pointed={shownDots.includes(index) || undefined}
+          aria-label={`${nameOf(entry)}, ${entry.warning.name}`}
+          style={{ left: `${dotAt(entry) * 100}%` }}
+          onFocus={() => setFocusedDot(index)}
+          onBlur={() => setFocusedDot((current) => (current === index ? null : current))}
+          onKeyDown={(event) => {
+            if (warningOpen) return;
+            const next = {
+              ArrowRight: index + 1,
+              ArrowLeft: index - 1,
+              Escape: -1,
+            }[event.key];
+            if (next === undefined) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (next >= 0 && next < (warned?.warnings.length ?? 0)) focusDot(next);
+            else if (next < 0) day.current?.focus();
+          }}
+        />
+      ))}
       {pointer && onTrack && (
         <span
           className="xt-human-hair"
@@ -493,14 +733,23 @@ function Row({
       )}
     </span>
   );
+  // The day's warnings in its name: the native count, each listed warning's
+  // session name (named here, as the rows name sessions) and its native
+  // words, then the native "and N more". Only the separators are written here.
+  const listed = warned?.warnings.slice(0, warned.listed) ?? [];
+  const warnedName = warned
+    ? `; ${warned.count_label}: ${listed.map((entry) => `${nameOf(entry)}, ${entry.text}`).join('; ')}${
+        warned.more_label ? `; ${warned.more_label}` : ''
+      }`
+    : '';
   const name = paired
-    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}; Enter opens the day’s sessions`
+    ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}${warnedName}; Enter opens the day’s sessions${warned ? '; Right arrow moves to its warnings' : ''}`
     : row.name;
   const sessionsName = `Sessions on ${row.label}`;
   const dayCard = (
     <Tooltip.Root
       disableHoverablePopup
-      open={card && !sessionsShown}
+      open={card && !warningOpen && !sessionsShown && shownDots.length === 0}
       onOpenChange={(open) => setCard(open)}
       onOpenChangeComplete={(open) => {
         if (!open) setPointer(null);
@@ -519,6 +768,11 @@ function Row({
               paired
                 ? (event) => {
                     if (event.target !== event.currentTarget) return;
+                    if (event.key === 'ArrowRight' && dots.current[0]) {
+                      event.preventDefault();
+                      focusDot(0);
+                      return;
+                    }
                     if (event.key !== 'Enter' && event.key !== ' ') return;
                     event.preventDefault();
                     entering.current = true;
@@ -648,10 +902,45 @@ function Row({
       </Tooltip.Portal>
     </Tooltip.Root>
   );
+  const pointedEntries = shownDots.flatMap((index) => warned?.warnings[index] ?? []);
+  // The warnings under the pointer, or the focused dot's, by the first of
+  // their dots, in place of the day's card.
+  const dotTip = (
+    <Tooltip.Root open={pointedEntries.length > 0} disableHoverablePopup>
+      <Tooltip.Portal data-theme={theme}>
+        <Tooltip.Positioner
+          className="xt-rule-positioner"
+          positionMethod="fixed"
+          anchor={() => dots.current[shownDots[0] ?? -1] ?? null}
+          side={lower ? 'top' : 'bottom'}
+          align="center"
+          sideOffset={6}
+          collisionPadding={8}
+        >
+          <Tooltip.Popup
+            className="xt-rule-popover xt-warning-tip"
+            aria-hidden="true"
+            data-testid="day-warning-tip"
+          >
+            {pointedEntries.map((entry) => (
+              <span
+                key={`${entry.session_id}:${entry.warning.id}`}
+                className="xt-warning-pointed"
+                data-testid="day-warning-tip-line"
+              >
+                <span className="xt-warning-session">{nameOf(entry)}</span>
+                <WarningLine warning={entry.warning} />
+              </span>
+            ))}
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
   if (!paired) return dayCard;
   return (
     <Popover.Root
-      open={sessionsOpen}
+      open={sessionsOpen && !warningOpen}
       onOpenChange={(open, details) => {
         // A click (or tap) on the date neither opens, pins nor closes the
         // box: a pinned box would stay open beside the next day's. Hover
@@ -660,6 +949,7 @@ function Row({
           details.cancel();
           return;
         }
+        if (open && warningOpen) return;
         if (open) setSessionsShown(true);
         // Escape from inside the box hands focus back to the day.
         else if (details.reason === 'escape-key' && popup.current?.contains(document.activeElement))
@@ -674,6 +964,7 @@ function Row({
       }}
     >
       {dayCard}
+      {dotTip}
       <Popover.Portal data-theme={theme}>
         {/* Beside the date, over the track, and never flipped back over the
             dates: a box above or below its date would cover the next date
