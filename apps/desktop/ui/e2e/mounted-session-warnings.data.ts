@@ -29,6 +29,7 @@ export function warningSource() {
     state: 'loaded',
     generation: { generation: 'indexed', appended: false },
     sources: 1,
+    record_ranges: [{ start: 0, end: 30 }],
     dropped_records: 0,
     gaps: [],
     records: Array.from({ length: 30 }, (_, index) => ({

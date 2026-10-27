@@ -18,6 +18,12 @@ pub use crate::session_diagnosis_dto::{
     DiagnosisSkip, DiagnosisSuggestion, DiagnosisTool, DiagnosisToolTried, SaveSkillRefusal,
     SavedSkill, SessionDiagnosis,
 };
+pub use crate::session_excerpt_dto::{
+    SessionExcerptLimit, SessionExcerptReason, SessionExcerptStatus,
+};
+pub use crate::session_page_dto::{
+    SessionPageReason, SessionPageSelection, SessionPageStatus, SessionPageTargetKind,
+};
 pub use crate::session_source_dto::*;
 pub use crate::session_titles::{SessionTitle, SessionTitles};
 pub use crate::session_warnings_dto::{
@@ -326,6 +332,9 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     MetricSessionStretches::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     CodexPageStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     CodexPageRequest::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionPageStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionPageSelection::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    SessionExcerptStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionSourceStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionTitles::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionCompactions::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
