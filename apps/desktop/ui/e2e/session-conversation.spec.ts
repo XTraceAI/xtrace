@@ -98,7 +98,7 @@ for (const theme of ['light', 'dark'] as const) {
         760,
         2600,
       );
-    await page.getByText('Agent activity', { exact: true }).click();
+    await page.locator('.xt-session-stretches > summary').click();
     await expect(
       page
         .locator('[role="status"][aria-live="polite"]')
@@ -160,7 +160,7 @@ for (const theme of ['light', 'dark'] as const) {
       'true',
     );
     await expect(next).toBeFocused();
-    await page.getByText('Agent activity', { exact: true }).click();
+    await page.getByText(/Agent activity · Last/).click();
     await next.focus();
     await page.keyboard.press('Enter');
     const target = conversation.locator('.xt-tool-card[data-block-id="mixed:3"]');

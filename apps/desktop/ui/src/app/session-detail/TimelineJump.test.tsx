@@ -416,7 +416,7 @@ it('keeps the stretches and the measurements when the transcript cannot be read'
     expect(first.getAttribute('aria-label')).toContain('The transcript is not available to show.'),
   );
   expect(segments()).toHaveLength(5);
-  expect(screen.getByText(/^Records .* measured over the last 7 days$/)).toBeTruthy();
+  expect(screen.getByText(/indexed records · whole session$/)).toBeTruthy();
   fireEvent.click(first);
   expect(live()?.textContent).toContain('The transcript is not available to show.');
 });
@@ -838,7 +838,7 @@ it('keeps one active announcement when Agent activity measurements are open', as
   const { data } = source({ stretches: withRepeats });
   mount(data);
   await transcriptReady();
-  fireEvent.click(screen.getByText('Agent activity', { exact: true }));
+  fireEvent.click(screen.getByText(/Agent activity · Last/));
   fireEvent.click(screen.getByRole('button', { name: 'Next ↓' }));
   expect(
     screen
@@ -1129,7 +1129,7 @@ it('pages every measured repeat group including unavailable calls, with checked 
   expect(highlighted()[0]?.getAttribute('data-block-id')).toBe(`${CALLER}:1`);
   expect(document.querySelectorAll('[data-repeat-index]')).toHaveLength(2);
   expect(document.activeElement).toBe(next);
-  fireEvent.click(screen.getByText('Agent activity', { exact: true }));
+  fireEvent.click(screen.getByText(/Agent activity · Last/));
   fireEvent.click(next);
   await screen.findByText('Showing the earliest matching call: Grep.');
   expect(navigation.textContent).toContain('2 of 3');
@@ -1184,4 +1184,119 @@ it('does not create a bounded inline notice from a loadable locator or a text bl
   await screen.findByText('Showing the earliest matching call: Read.');
   expect(document.querySelectorAll('[data-repeat-index]')).toHaveLength(1);
   expect(document.querySelector('[data-repeat-index]')?.getAttribute('data-current')).toBe('true');
+});
+
+it.each(['later', 'changed'] as const)(
+  'preserves the bounded %s state while an uncached range row is pending and after it settles',
+  async (state) => {
+    const h = codexSource();
+    const readRow = h.data.sessionRow;
+    let settleRow: ((row: Awaited<ReturnType<DataSource['sessionRow']>>) => void) | null = null;
+    h.data.sessionRow = (id, days) =>
+      days === 30
+        ? new Promise((resolve) => {
+            settleRow = resolve;
+          })
+        : readRow(id, days);
+    if (state === 'changed') {
+      h.data.codexTranscriptPage = async (_session, selection, id) => {
+        h.reads.push({ selection, id });
+        return selection.kind === 'first'
+          ? codexPage(selection)
+          : { state: 'unavailable', reason: { reason: 'changed' } };
+      };
+    }
+    mount(h.data, `/sessions/${SESSION}?range=7d`);
+    await screen.findByText('synthetic beginning');
+    fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+    const text =
+      state === 'later'
+        ? 'synthetic later portion'
+        : 'This conversation changed while you were reading it. Load it again to continue.';
+    await screen.findByText(text);
+    const activeRead = h.reads.at(-1)!.id;
+    fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+    await waitFor(() => expect(settleRow).not.toBeNull());
+    const whilePending = screen.queryByText(text);
+    const cancelledWhilePending = h.cancelled.includes(activeRead);
+    await act(async () => settleRow!(await readRow(SESSION, 30)));
+    await screen.findByText('Measured in this range');
+    expect({
+      visibleWhilePending: whilePending !== null,
+      cancelledWhilePending,
+      requests: h.reads.map((read) => read.selection.kind),
+    }).toEqual({
+      visibleWhilePending: true,
+      cancelledWhilePending: false,
+      requests: ['first', 'cursor'],
+    });
+    expect(screen.getByText(text)).toBeTruthy();
+    expect(h.reads.filter((read) => read.selection.kind === 'first')).toHaveLength(1);
+    if (state === 'changed') {
+      fireEvent.click(screen.getByRole('button', { name: 'Load conversation again' }));
+      await screen.findByText('synthetic beginning');
+      expect(h.reads.at(-1)!.selection).toEqual({ kind: 'first' });
+    }
+  },
+);
+
+it.each(['missing', 'claude'] as const)(
+  'ends the bounded read when a successful new range row is %s',
+  async (host) => {
+    const h = codexSource();
+    const readRow = h.data.sessionRow;
+    h.data.sessionRow = async (id, days) => {
+      const found = await readRow(id, days);
+      return days !== 30 ? found : host === 'missing' ? null : { ...found!, host };
+    };
+    mount(h.data, `/sessions/${SESSION}?range=7d`);
+    await screen.findByText('synthetic beginning');
+    fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+    await screen.findByText('synthetic later portion');
+    const activeRead = h.reads.at(-1)!.id;
+    fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+    await waitFor(() => expect(h.cancelled).toContain(activeRead));
+    expect(screen.queryByText('synthetic later portion')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Later messages' })).toBeNull();
+    expect(h.reads).toHaveLength(2);
+  },
+);
+
+it('starts a fresh bounded read when the actual session changes', async () => {
+  const h = codexSource();
+  const readPage = h.data.codexTranscriptPage!;
+  const sessions: string[] = [];
+  h.data.codexTranscriptPage = (session, selection, id) => {
+    sessions.push(session);
+    return readPage(session, selection, id);
+  };
+  const other = `/sessions/${OTHER_SESSION}`;
+  mount(h.data, `/sessions/${SESSION}`, other);
+  await screen.findByText('synthetic beginning');
+  fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+  await screen.findByText('synthetic later portion');
+  const activeRead = h.reads.at(-1)!.id;
+  fireEvent.click(screen.getByRole('button', { name: `go ${other}` }));
+  await screen.findByText('synthetic beginning');
+  expect(sessions).toEqual([SESSION, SESSION, OTHER_SESSION]);
+  expect(h.reads.at(-1)!.selection).toEqual({ kind: 'first' });
+  expect(h.cancelled).toContain(activeRead);
+  expect(highlighted()).toHaveLength(0);
+});
+
+it('retains the bounded portion when a new range row fails to load', async () => {
+  const h = codexSource();
+  const readRow = h.data.sessionRow;
+  h.data.sessionRow = (id, days) =>
+    days === 30 ? Promise.reject(new Error('Synthetic row read failure')) : readRow(id, days);
+  mount(h.data, `/sessions/${SESSION}?range=7d`);
+  await screen.findByText('synthetic beginning');
+  fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+  await screen.findByText('synthetic later portion');
+  const activeRead = h.reads.at(-1)!.id;
+  fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+  await screen.findByText(/This session’s measurements could not be loaded/);
+  expect(screen.getByText('synthetic later portion')).toBeTruthy();
+  expect(h.cancelled).not.toContain(activeRead);
+  expect(h.reads).toHaveLength(2);
 });

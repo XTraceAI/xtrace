@@ -2,7 +2,7 @@ import { useContext, useId, useLayoutEffect, useRef, useState } from 'react';
 import { RepeatNotice, type ConversationMarker } from './ConversationActivity';
 import { StatePill } from '../../kit';
 import { CodeSurface } from './TranscriptText';
-import { prefersReducedMotion, RevealContext } from './transcript-reveal';
+import { RevealContext } from './transcript-reveal';
 import {
   type ToolBlock,
   type TranscriptPayload,
@@ -228,7 +228,7 @@ function ToolStripRow({ blocks }: { blocks: ToolBlock[] }) {
   const panelId = useId();
   const failures = toolFailureCount(blocks);
   const detail = toolDetail(blocks);
-  const { request, report } = useContext(RevealContext);
+  const { request, report, scroll } = useContext(RevealContext);
   // This row's own cards, by position. Filled as cards mount and emptied as they unmount,
   // so after an open commits the card at a position is the one standing there now.
   const cards = useRef(new Map<number, HTMLDivElement>());
@@ -262,15 +262,9 @@ function ToolStripRow({ blocks }: { blocks: ToolBlock[] }) {
       return;
     }
     setRevealed(request.token);
-    // jsdom has no layout, and so no scrolling to do.
-    if (typeof card.scrollIntoView === 'function') {
-      card.scrollIntoView({
-        block: 'center',
-        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-      });
-    }
+    scroll(card);
     report(request.token, 'revealed');
-  }, [request, place, places.length, open, report]);
+  }, [request, place, places.length, open, report, scroll]);
 
   return (
     <div className="xt-tool-group">

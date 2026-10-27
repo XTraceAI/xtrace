@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useData } from '../../data/DataProvider';
 import type { CodexPageRequest } from '../../data/generated/CodexPageRequest';
 import type { CodexPageReason } from '../../data/generated/CodexPageReason';
@@ -60,12 +60,14 @@ export function CodexPagedTranscript({
   repeatCandidates,
   onFeedback,
   onReset,
+  revealOwner,
 }: {
   sessionId: string;
   intent: CodexPageIntent | null;
   repeatCandidates: readonly CodexRepeatCandidate[];
   onFeedback: (feedback: CodexPageFeedback | null) => void;
   onReset: () => void;
+  revealOwner: RefObject<HTMLElement | null>;
 }) {
   const { source } = useData();
   const digest = useRef<string | null>(null);
@@ -227,6 +229,7 @@ export function CodexPagedTranscript({
       ) : view ? (
         <SessionTranscript
           conversation
+          revealOwner={revealOwner}
           groupAdjacentActivity
           markers={markers}
           records={view.transcript.records}
