@@ -2,22 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { useData } from '../../data/DataProvider';
 import type { SessionPageSelection } from '../../data/generated/SessionPageSelection';
 import type { SessionPageReason } from '../../data/generated/SessionPageReason';
+import type { SessionWarningPoint } from '../../data/generated/SessionWarningPoint';
 import type { MetricToolBlock } from '../../data/generated/MetricToolBlock';
 import type { SessionSourceStatus } from '../../data/generated/SessionSourceStatus';
 import { Button } from '../../kit/Button';
 import { SessionTranscript } from './SessionTranscript';
 import type { ConversationMarker } from './ConversationActivity';
-import { resolveJump } from './timeline-jump';
+import { resolveJump, resolveWarningJump, warningUnavailableText } from './timeline-jump';
 import { transcriptProps, unavailableNote } from './transcript-adapter';
-import type { RevealOutcome } from './transcript-reveal';
+import type { RevealOutcome, RevealTarget } from './transcript-reveal';
 import { useSourceRead } from './useSessionTranscript';
 
-export interface PageIntent {
-  token: number;
-  locator: MetricToolBlock;
-  index: number;
-  call: 'first' | 'repeated';
-}
+export type PageIntent =
+  | {
+      kind: 'timeline';
+      token: number;
+      locator: MetricToolBlock;
+      index: number;
+      call: 'first' | 'repeated';
+    }
+  | { kind: 'warning'; token: number; point: SessionWarningPoint };
 export interface PageRepeatCandidate {
   index: number;
   locator: MetricToolBlock;
@@ -25,14 +29,27 @@ export interface PageRepeatCandidate {
   count: number;
   circling: boolean;
 }
-export interface PageFeedback {
-  intent: PageIntent;
-  target: { blockId: string; tool: string } | null;
-  outcome: RevealOutcome | null;
-  unavailable: string | null;
-}
+export type PageFeedback =
+  | {
+      kind: 'timeline';
+      intent: Extract<PageIntent, { kind: 'timeline' }>;
+      target: { blockId: string; tool: string } | null;
+      outcome: RevealOutcome | null;
+      unavailable: string | null;
+    }
+  | {
+      kind: 'warning';
+      intent: Extract<PageIntent, { kind: 'warning' }>;
+      target: RevealTarget | null;
+      outcome: RevealOutcome | null;
+      unavailable: string | null;
+    };
 const FIRST: SessionPageSelection = { kind: 'first' };
-export function pageReason(reason: SessionPageReason, host: 'claude' | 'codex'): string {
+export function pageReason(
+  reason: SessionPageReason,
+  host: 'claude' | 'codex',
+  kind: PageIntent['kind'] = 'timeline',
+): string {
   switch (reason.reason) {
     case 'changed':
       return 'This conversation changed while you were reading it. Load it again to continue.';
@@ -48,11 +65,17 @@ export function pageReason(reason: SessionPageReason, host: 'claude' | 'codex'):
             ? 'This view can read one original Codex rollout. Forked conversations, inherited history and conversations spread across several rollouts are not supported here.'
             : unavailableNote(detail.source);
         case 'target_missing':
-          return 'The saved tool call could not be found in this conversation.';
+          return kind === 'warning'
+            ? 'The saved warning message or block could not be found in this conversation.'
+            : 'The saved tool call could not be found in this conversation.';
         case 'target_ambiguous':
-          return 'More than one message has this saved message ID, so the exact call cannot be selected.';
+          return kind === 'warning'
+            ? 'More than one message has this saved message ID, so the exact warning target cannot be selected.'
+            : 'More than one message has this saved message ID, so the exact call cannot be selected.';
         case 'block_missing':
-          return 'The saved tool call could not be confirmed in its message.';
+          return kind === 'warning'
+            ? 'The saved warning block could not be confirmed in its message.'
+            : 'The saved tool call could not be confirmed in its message.';
         case 'deadline':
           return 'Reading this conversation portion took too long. Try again.';
         case 'incomplete':
@@ -89,19 +112,6 @@ export function PagedSessionTranscript({
     selection: FIRST,
   });
   const [restart, setRestart] = useState(0);
-  // Losing a stale highlight must not replace its read or dismiss a changed-source refusal.
-  if (intent && held.token !== intent.token) {
-    setHeld({
-      token: intent.token,
-      selection: {
-        kind: 'anchor',
-        expected: 'tool_call',
-        record_uuid: intent.locator.record_uuid,
-        block: intent.locator.block_index,
-        generation: digest.current,
-      },
-    });
-  }
   const selection = held.selection;
   const identity = JSON.stringify([sessionId, held.token, selection, restart]);
   const load = useCallback(
@@ -114,6 +124,33 @@ export function PagedSessionTranscript({
   );
   const cancel = useCallback((id: string) => source.cancelSessionTranscript(id), [source]);
   const { read, retry } = useSourceRead(identity, load, cancel);
+  const changed =
+    read.phase === 'read' &&
+    read.status.state === 'unavailable' &&
+    read.status.reason.reason === 'changed';
+  // A changed generation stays refused until the reader explicitly reloads.
+  if (intent && held.token !== intent.token && !changed) {
+    const point =
+      intent.kind === 'warning'
+        ? intent.point
+        : { record_uuid: intent.locator.record_uuid, block: intent.locator.block_index };
+    setHeld({
+      token: intent.token,
+      selection: {
+        kind: 'anchor',
+        expected:
+          intent.kind === 'timeline'
+            ? 'tool_call'
+            : point.block === null
+              ? 'message'
+              : 'tool_block',
+        record_uuid: point.record_uuid,
+        block: point.block,
+        generation: digest.current,
+      },
+    });
+  }
+
   const page = read.phase === 'read' && read.status.state === 'loaded' ? read.status : null;
   useEffect(() => {
     if (page) digest.current = page.digest;
@@ -132,27 +169,35 @@ export function PagedSessionTranscript({
     return { status, transcript: transcriptProps(status, false) };
   }, [page]);
   const target = useMemo(() => {
-    if (
-      !page ||
-      !view ||
-      page.target === null ||
-      selection.kind !== 'anchor' ||
-      !intent ||
-      held.token !== intent.token
-    )
+    if (!page || !view || selection.kind !== 'anchor' || !intent || held.token !== intent.token)
       return null;
-    if (
-      page.records[page.target.record]?.id !== intent.locator.record_uuid ||
-      page.target.block !== intent.locator.block_index
-    )
-      return null;
+    const point =
+      intent.kind === 'warning'
+        ? intent.point
+        : { record_uuid: intent.locator.record_uuid, block: intent.locator.block_index };
+    const matches =
+      page.target !== null &&
+      page.records[page.target.record]?.id === point.record_uuid &&
+      page.target.block === point.block;
+    if (intent.kind === 'warning')
+      return {
+        kind: 'warning' as const,
+        jump: matches
+          ? resolveWarningJump(point, { phase: 'read', status: view.status })
+          : { kind: 'unavailable' as const, reason: 'not_in_transcript' as const },
+      };
+    if (!matches) return null;
     const jump = resolveJump(intent.locator, { phase: 'read', status: view.status });
-    return jump.kind === 'target' ? { blockId: jump.blockId, tool: jump.tool } : null;
+    return jump.kind === 'target'
+      ? { kind: 'timeline' as const, target: { blockId: jump.blockId, tool: jump.tool } }
+      : null;
   }, [page, view, selection, intent, held.token]);
-  const reveal = useMemo(
-    () => (target && intent ? { token: intent.token, blockId: target.blockId } : null),
-    [target, intent],
-  );
+  const reveal = useMemo(() => {
+    if (!target || !intent) return null;
+    if (target.kind === 'timeline')
+      return { token: intent.token, kind: 'block' as const, blockId: target.target.blockId };
+    return target.jump.kind === 'target' ? { token: intent.token, ...target.jump.target } : null;
+  }, [target, intent]);
   const markers = useMemo<ConversationMarker[]>(() => {
     if (!view) return [];
     return repeatCandidates.flatMap((candidate) => {
@@ -165,7 +210,10 @@ export function PagedSessionTranscript({
               tool: candidate.tool,
               count: candidate.count,
               circling: candidate.circling,
-              selected: intent?.call === 'repeated' && intent.index === candidate.index,
+              selected:
+                intent?.kind === 'timeline' &&
+                intent.call === 'repeated' &&
+                intent.index === candidate.index,
             },
           ]
         : [];
@@ -192,20 +240,34 @@ export function PagedSessionTranscript({
     read.phase === 'failed'
       ? 'This conversation portion could not be read just now.'
       : read.phase === 'read' && read.status.state === 'unavailable'
-        ? pageReason(read.status.reason, host)
+        ? pageReason(read.status.reason, host, intent?.kind)
         : null;
-  const feedback = useMemo<PageFeedback | null>(
-    () =>
-      intent && held.token === intent.token && selection.kind === 'anchor'
-        ? {
-            intent,
-            target,
-            outcome: result?.token === intent.token ? result.outcome : null,
-            unavailable: note,
-          }
-        : null,
-    [intent, held.token, selection, target, result, note],
-  );
+  const feedback = useMemo<PageFeedback | null>(() => {
+    if (
+      !intent ||
+      (held.token !== intent.token && !(changed && intent.kind === 'warning')) ||
+      (selection.kind !== 'anchor' && !(changed && intent.kind === 'warning'))
+    )
+      return null;
+    const outcome = result?.token === intent.token ? result.outcome : null;
+    if (intent.kind === 'timeline')
+      return {
+        kind: 'timeline',
+        intent,
+        target: target?.kind === 'timeline' ? target.target : null,
+        outcome,
+        unavailable: note,
+      };
+    const jump = target?.kind === 'warning' ? target.jump : null;
+    return {
+      kind: 'warning',
+      intent,
+      target: jump?.kind === 'target' ? jump.target : null,
+      outcome,
+      unavailable:
+        note ?? (jump?.kind === 'unavailable' ? warningUnavailableText(jump.reason) : null),
+    };
+  }, [intent, held.token, selection, target, result, note, changed]);
   useEffect(() => {
     onFeedback(feedback);
   }, [feedback, onFeedback]);

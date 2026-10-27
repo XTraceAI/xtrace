@@ -1,3 +1,4 @@
+import type { SessionWarningItem } from '../../data/generated/SessionWarningItem';
 import {
   answer as warningAnswer,
   dismissedAnswer,
@@ -1435,46 +1436,107 @@ it.each([
   },
 );
 
-// Warning navigation shares this mounted bounded reader; it never requests a page.
-it('keeps the bounded portion through warning selection, Dismiss and Undo', async () => {
-  const h = codexSource();
-  let current = warningAnswer;
-  h.data.sessionWarnings = async (ids, timezone) => ({
-    timezone,
-    sessions: ids.map((session_id) => ({ session_id, answer: current })),
-  });
-  Object.defineProperty(h.data, 'warningDismissals', {
-    value: {
-      dismiss: async (session_id: string, warning_id: string) => {
-        current = dismissedAnswer;
-        return { session_id, warning_id, dismissed: true };
+function warningPage(selection: SessionPageSelection): SessionPageStatus {
+  const page = sessionPage(selection);
+  if (selection.kind !== 'anchor' || selection.expected === 'tool_call' || page.state !== 'loaded')
+    return page;
+  const record: SourceRecord =
+    selection.block === null
+      ? {
+          id: selection.record_uuid,
+          role: 'user',
+          at: null,
+          blocks: [
+            { kind: 'text', index: 0, text: `Original warning message ${selection.record_uuid}` },
+          ],
+        }
+      : {
+          id: selection.record_uuid,
+          role: 'user',
+          at: null,
+          blocks: [
+            {
+              kind: 'tool_result',
+              index: selection.block,
+              call_id: 'original-call',
+              failed: true,
+              parts: [{ kind: 'text', text: `Original warning result ${selection.record_uuid}` }],
+            },
+          ],
+        };
+  return {
+    ...page,
+    records: [record],
+    record_ranges: [{ start: 0, end: 1 }],
+    target: { record: 0, block: selection.block },
+    end: page.start + 1,
+  };
+}
+
+it.each(['claude', 'codex'] as const)(
+  'selects exact %s warning targets without extra reads on Dismiss, Undo or same-point refetch',
+  async (host) => {
+    const h = codexSource('source_bytes', host);
+    let current = warningAnswer;
+    h.data.sessionWarnings = async (ids, timezone) => ({
+      timezone,
+      sessions: ids.map((session_id) => ({ session_id, answer: current })),
+    });
+    h.data.sessionTranscriptPage = async (_session, selection, id) => {
+      h.reads.push({ selection, id });
+      return warningPage(selection);
+    };
+    Object.defineProperty(h.data, 'warningDismissals', {
+      value: {
+        dismiss: async (session_id: string, warning_id: string) => {
+          current = dismissedAnswer;
+          return { session_id, warning_id, dismissed: true };
+        },
+        restore: async (session_id: string, warning_id: string) => {
+          current = warningAnswer;
+          return { session_id, warning_id, dismissed: false };
+        },
       },
-      restore: async (session_id: string, warning_id: string) => {
-        current = warningAnswer;
-        return { session_id, warning_id, dismissed: false };
-      },
-    },
-  });
-  mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(suppliedWarning.id)}`);
-  await screen.findByText('synthetic beginning');
-  fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
-  await screen.findByText('synthetic later portion');
-  const activeRead = h.reads.at(-1)!.id;
-  fireEvent.click(await screen.findByRole('button', { name: suppliedSecond.name }));
-  const selected = screen.getByRole('list', { name: 'Selected warning' });
-  expect(selected.textContent).toContain(suppliedSecond.reason);
-  fireEvent.click(screen.getByRole('button', { name: suppliedWarning.name }));
-  fireEvent.click(within(selected).getByRole('button', { name: 'Dismiss' }));
-  const undo = await within(selected).findByRole('button', { name: 'Undo' });
-  await waitFor(() => expect(document.activeElement).toBe(undo));
-  fireEvent.click(undo);
-  await waitFor(() =>
-    expect(document.activeElement).toBe(within(selected).getByRole('button', { name: 'Dismiss' })),
-  );
-  expect(screen.getByText('synthetic later portion')).toBeTruthy();
-  expect(h.cancelled).not.toContain(activeRead);
-  expect(h.reads.map((read) => read.selection.kind)).toEqual(['first', 'cursor']);
-});
+    });
+    let client!: QueryClient;
+    function ClientProbe() {
+      client = useQueryClient();
+      return null;
+    }
+    mount(
+      h.data,
+      `/sessions/${SESSION}?warning=${encodeURIComponent(suppliedWarning.id)}`,
+      undefined,
+      <ClientProbe />,
+    );
+    await screen.findByText('Showing the warning’s original tool block.');
+    expect(h.reads.filter((read) => read.selection.kind === 'anchor')).toHaveLength(1);
+    fireEvent.click(await screen.findByRole('button', { name: suppliedSecond.name }));
+    await screen.findByText('Original warning message other');
+    await screen.findByText('Showing the original warning message.');
+    expect(h.reads.filter((read) => read.selection.kind === 'anchor')).toHaveLength(2);
+    const selected = screen.getByRole('list', { name: 'Selected warning' });
+    expect(selected.contains(document.activeElement)).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: suppliedWarning.name }));
+    await screen.findByText('Showing the warning’s original tool block.');
+    expect(h.reads.filter((read) => read.selection.kind === 'anchor')).toHaveLength(3);
+    const reads = h.reads.length;
+    const activeRead = h.reads.at(-1)!.id;
+    fireEvent.click(within(selected).getByRole('button', { name: 'Dismiss' }));
+    const undo = await within(selected).findByRole('button', { name: 'Undo' });
+    await waitFor(() => expect(document.activeElement).toBe(undo));
+    fireEvent.click(undo);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(selected).getByRole('button', { name: 'Dismiss' }),
+      ),
+    );
+    current = { ...warningAnswer, summary: warningAnswer.summary + ' refreshed' };
+    await act(() => client.invalidateQueries({ queryKey: ['sessions', 'warnings'] }));
+    expect(h.reads).toHaveLength(reads);
+    expect(h.cancelled).not.toContain(activeRead);
+  },
+);
 
 it.each(['missing', 'cursor'] as const)(
   'ends the Claude bounded read when a successful range row is %s',
@@ -1553,3 +1615,383 @@ it('keeps adjacent Claude tool messages in separate source groups', async () => 
   groups.forEach((group) => fireEvent.click(group));
   expect(screen.queryByText('No result for this call is in the record.')).toBeNull();
 });
+
+function supplyWarnings(h: ReturnType<typeof source>, items: SessionWarningItem[]) {
+  h.data.sessionWarnings = async (ids, timezone) => ({
+    timezone,
+    sessions: ids.map((session_id) => ({
+      session_id,
+      answer: { ...warningAnswer, warnings: items, dismissed: [] },
+    })),
+  });
+}
+const messageWarning = {
+  ...suppliedWarning,
+  points_at: { record_uuid: 'warning-message', block: null },
+};
+const resultWarning = {
+  ...suppliedSecond,
+  points_at: { record_uuid: 'warning-result', block: 128 },
+};
+
+it.each(['claude', 'codex'] as const)(
+  'reveals exact full-read %s warning messages and high-index results without another read',
+  async (host) => {
+    const original: SourceRecord[] = [
+      {
+        id: 'warning-message',
+        role: 'user',
+        at: null,
+        blocks: [
+          { kind: 'text', index: 0, text: 'Original correction ' + 'long text '.repeat(1000) },
+        ],
+      },
+      {
+        id: 'warning-result',
+        role: 'user',
+        at: null,
+        blocks: [
+          {
+            kind: 'tool_result',
+            index: 128,
+            call_id: 'original-result',
+            failed: true,
+            parts: [{ kind: 'text', text: 'Long original result ' + 'result words '.repeat(1000) }],
+          },
+        ],
+      },
+    ];
+    const h = source({ transcript: loaded(original) });
+    const row = h.data.sessionRow;
+    h.data.sessionRow = async (...args) => {
+      const found = await row(...args);
+      return found ? { ...found, host } : null;
+    };
+    h.data.sessionTranscriptPage = vi.fn(async () => sessionPage({ kind: 'first' }));
+    supplyWarnings(h, [messageWarning, resultWarning]);
+    mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`);
+    await screen.findByText('Showing the original warning message.');
+    const message = document.querySelector('[data-record-id="warning-message"]');
+    expect(message?.getAttribute('data-highlighted')).toBe('true');
+    expect(scrolled.some((item) => item.element === message)).toBe(true);
+    const selected = screen.getByRole('list', { name: 'Selected warning' });
+    expect(selected.contains(document.activeElement)).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: resultWarning.name }));
+    await screen.findByText('Showing the warning’s original tool block.');
+    expect(
+      document
+        .querySelector('[data-block-id="warning-result:128"]')
+        ?.getAttribute('data-highlighted'),
+    ).toBe('true');
+    expect(
+      screen
+        .getByRole('button', { name: 'Tool activity · 1 saved message' })
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(selected.contains(document.activeElement)).toBe(true);
+    expect(h.opened).toHaveLength(1);
+    expect(h.data.sessionTranscriptPage).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['claude', 'codex'] as const)(
+  'keeps a %s changed-source refusal across warning changes until explicit reload',
+  async (host) => {
+    const h = codexSource('source_bytes', host);
+    supplyWarnings(h, [messageWarning, resultWarning]);
+    h.data.sessionTranscriptPage = async (_session, selection, id) => {
+      h.reads.push({ selection, id });
+      return selection.kind === 'anchor' && selection.record_uuid === 'warning-result'
+        ? { state: 'unavailable', reason: { reason: 'changed' } }
+        : warningPage(selection);
+    };
+    mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`);
+    await screen.findByText('Showing the original warning message.');
+    fireEvent.click(screen.getByRole('button', { name: resultWarning.name }));
+    await screen.findAllByText(/This conversation changed while you were reading it/);
+    const count = h.reads.length;
+    fireEvent.click(screen.getByRole('button', { name: messageWarning.name }));
+    await waitFor(() =>
+      expect(screen.getByRole('list', { name: 'Selected warning' }).textContent).toContain(
+        messageWarning.reason,
+      ),
+    );
+    expect(h.reads).toHaveLength(count);
+    expect(document.querySelectorAll('.xt-conversation-body [data-highlighted]')).toHaveLength(0);
+    expect(screen.queryByText('Showing the original warning message.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Load conversation again' }));
+    await screen.findByText('synthetic beginning');
+    expect(h.reads.at(-1)!.selection).toEqual({ kind: 'first' });
+    fireEvent.click(screen.getByRole('button', { name: messageWarning.name }));
+    await screen.findByText('Showing the original warning message.');
+    expect(
+      h.reads.filter(
+        (read) =>
+          read.selection.kind === 'anchor' && read.selection.record_uuid === 'warning-message',
+      ),
+    ).toHaveLength(2);
+  },
+);
+
+it.each(['claude', 'codex'] as const)(
+  'keeps %s warning feedback after a cursor read reports a changed source',
+  async (host) => {
+    const h = codexSource('source_bytes', host);
+    supplyWarnings(h, [messageWarning, resultWarning]);
+    h.data.sessionTranscriptPage = async (_session, selection, id) => {
+      h.reads.push({ selection, id });
+      return selection.kind === 'cursor'
+        ? { state: 'unavailable', reason: { reason: 'changed' } }
+        : warningPage(selection);
+    };
+    mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`);
+    await screen.findByText('Showing the original warning message.');
+    fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+    await waitFor(() => expect(live()?.textContent).toMatch(/This conversation changed/));
+    const count = h.reads.length;
+    fireEvent.click(screen.getByRole('button', { name: resultWarning.name }));
+    await waitFor(() => expect(live()?.textContent).toMatch(/This conversation changed/));
+    expect(h.reads).toHaveLength(count);
+    expect(document.querySelectorAll('.xt-conversation-body [data-highlighted]')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Load conversation again' }));
+    await screen.findByText('synthetic beginning');
+    expect(h.reads.at(-1)!.selection).toEqual({ kind: 'first' });
+  },
+);
+
+it.each(['claude', 'codex'] as const)(
+  'drops a stale %s warning anchor when a newer warning takes over',
+  async (host) => {
+    const h = codexSource('source_bytes', host);
+    supplyWarnings(h, [messageWarning, resultWarning]);
+    let finish!: (page: SessionPageStatus) => void;
+    let pending!: SessionPageSelection;
+    h.data.sessionTranscriptPage = async (_session, selection, id) => {
+      h.reads.push({ selection, id });
+      if (selection.kind === 'anchor' && selection.record_uuid === 'warning-message') {
+        pending = selection;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      }
+      return warningPage(selection);
+    };
+    mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`);
+    await waitFor(() => expect(finish).toBeDefined());
+    const stale = h.reads.at(-1)!.id;
+    fireEvent.click(screen.getByRole('button', { name: resultWarning.name }));
+    await screen.findByText('Showing the warning’s original tool block.');
+    await act(() => finish(warningPage(pending)));
+    expect(screen.queryByText('Original warning message warning-message')).toBeNull();
+    expect(
+      document
+        .querySelector('[data-block-id="warning-result:128"]')
+        ?.getAttribute('data-highlighted'),
+    ).toBe('true');
+    expect(h.cancelled).toContain(stale);
+  },
+);
+
+it.each(
+  (['claude', 'codex'] as const).flatMap((host) =>
+    (['wrong_uuid', 'wrong_role', 'wrong_block', 'duplicate_uuid'] as const).map(
+      (mismatch) => [host, mismatch] as const,
+    ),
+  ),
+)('refuses a %s bounded warning when the page returns %s', async (host, mismatch) => {
+  const h = codexSource('source_bytes', host);
+  const item = mismatch === 'wrong_block' ? resultWarning : messageWarning;
+  supplyWarnings(h, [item]);
+  h.data.sessionTranscriptPage = async (_session, selection, id) => {
+    h.reads.push({ selection, id });
+    const page = warningPage(selection);
+    if (page.state !== 'loaded' || selection.kind !== 'anchor') return page;
+    if (mismatch === 'wrong_uuid') page.records[0]!.id = 'nearby';
+    if (mismatch === 'wrong_role') page.records[0]!.role = 'assistant';
+    if (mismatch === 'wrong_block') page.target!.block = 0;
+    if (mismatch === 'duplicate_uuid') {
+      page.records.push({ ...page.records[0]! });
+      page.end += 1;
+      page.record_ranges[0]!.end = 2;
+    }
+    return page;
+  };
+  mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(item.id)}`);
+  await screen.findByText(/The original warning message cannot be shown/);
+  expect(document.querySelectorAll('.xt-conversation-body [data-highlighted]')).toHaveLength(0);
+  expect(screen.queryByText('Showing the original warning message.')).toBeNull();
+});
+
+it('lets a timeline press take over a warning until the same warning is explicitly selected again', async () => {
+  const h = codexSource('source_bytes', 'claude');
+  supplyWarnings(h, [messageWarning]);
+  h.data.sessionTranscriptPage = async (_session, selection, id) => {
+    h.reads.push({ selection, id });
+    return warningPage(selection);
+  };
+  mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`);
+  await screen.findByText('Showing the original warning message.');
+  fireEvent.click(await segment(0));
+  await screen.findByText('Showing the first tool call of activity period 1: Read.');
+  expect(
+    document.querySelector('[data-block-id="' + CALLER + ':1"]')?.getAttribute('data-highlighted'),
+  ).toBe('true');
+  expect(
+    h.reads.filter(
+      (read) => read.selection.kind === 'anchor' && read.selection.expected === 'message',
+    ),
+  ).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: messageWarning.name }));
+  await screen.findByText('Showing the original warning message.');
+  expect(
+    h.reads.filter(
+      (read) => read.selection.kind === 'anchor' && read.selection.expected === 'message',
+    ),
+  ).toHaveLength(2);
+});
+
+it.each(['claude', 'codex'] as const)(
+  'keeps the %s warning target through a pending cached-null range row and new stretches',
+  async (host) => {
+    const h = codexSource('source_bytes', host);
+    supplyWarnings(h, [messageWarning]);
+    h.data.sessionTranscriptPage = async (_session, selection, id) => {
+      h.reads.push({ selection, id });
+      return warningPage(selection);
+    };
+    const readRow = h.data.sessionRow;
+    let settle!: (row: Awaited<ReturnType<DataSource['sessionRow']>>) => void;
+    h.data.sessionRow = (id, days) =>
+      days === 30
+        ? new Promise((resolve) => {
+            settle = resolve;
+          })
+        : readRow(id, days);
+    let client!: QueryClient;
+    function Probe() {
+      client = useQueryClient();
+      return null;
+    }
+    mount(
+      h.data,
+      `/sessions/${SESSION}?range=7d&warning=${encodeURIComponent(messageWarning.id)}`,
+      undefined,
+      <Probe />,
+    );
+    await screen.findByText('Showing the original warning message.');
+    const target = document.querySelector('[data-record-id="warning-message"]');
+    const count = h.reads.length;
+    const active = h.reads.at(-1)!.id;
+    const key = queryKeys.session(30, SESSION);
+    await act(async () => {
+      client.setQueryData(key, null);
+      await client.invalidateQueries({ queryKey: key, refetchType: 'none' });
+    });
+    fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+    await waitFor(() => expect(settle).toBeDefined());
+    expect(document.querySelector('[data-record-id="warning-message"]')).toBe(target);
+    expect(h.reads).toHaveLength(count);
+    expect(h.cancelled).not.toContain(active);
+    await act(async () => settle(await readRow(SESSION, 30)));
+    await screen.findByText('Measured in this range');
+    expect(document.querySelector('[data-record-id="warning-message"]')).toBe(target);
+    expect(h.reads).toHaveLength(count);
+    expect(h.cancelled).not.toContain(active);
+    expect(screen.getByText('Showing the original warning message.')).toBeTruthy();
+  },
+);
+
+it.each(['claude', 'codex'] as const)(
+  'starts the exact %s warning read for the new session and abandons the previous one',
+  async (host) => {
+    const h = codexSource('source_bytes', host);
+    supplyWarnings(h, [messageWarning]);
+    const sessions: string[] = [];
+    h.data.sessionTranscriptPage = async (session, selection, id) => {
+      sessions.push(session);
+      h.reads.push({ selection, id });
+      return warningPage(selection);
+    };
+    const next = `/sessions/${OTHER_SESSION}?warning=${encodeURIComponent(messageWarning.id)}`;
+    mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`, next);
+    await screen.findByText('Showing the original warning message.');
+    const active = h.reads.at(-1)!.id;
+    const count = h.reads.length;
+    fireEvent.click(screen.getByRole('button', { name: `go ${next}` }));
+    await waitFor(() => expect(h.reads.length).toBeGreaterThan(count));
+    await screen.findByText('Showing the original warning message.');
+    expect(sessions.at(-1)).toBe(OTHER_SESSION);
+    expect(h.cancelled).toContain(active);
+    expect(h.reads.at(-1)!.selection.kind).toBe('anchor');
+  },
+);
+
+it('abandons the previous source warning promise when the data source is replaced', async () => {
+  const first = codexSource('source_bytes', 'claude');
+  const second = codexSource('source_bytes', 'claude');
+  supplyWarnings(first, [messageWarning]);
+  supplyWarnings(second, [messageWarning]);
+  let finish!: (page: SessionPageStatus) => void;
+  let pending!: SessionPageSelection;
+  first.data.sessionTranscriptPage = async (_session, selection, id) => {
+    first.reads.push({ selection, id });
+    if (selection.kind === 'anchor') {
+      pending = selection;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    }
+    return warningPage(selection);
+  };
+  second.data.sessionTranscriptPage = async (_session, selection, id) => {
+    second.reads.push({ selection, id });
+    const page = warningPage(selection);
+    if (page.state === 'loaded' && selection.kind === 'anchor')
+      page.records[0]!.blocks = [{ kind: 'text', index: 0, text: 'New source original warning' }];
+    return page;
+  };
+  const path = `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`;
+  const view = mount(first.data, path);
+  await waitFor(() => expect(finish).toBeDefined());
+  const old = first.reads.at(-1)!.id;
+  view.rerender(
+    <ThemeProvider>
+      <DataProvider source={second.data}>
+        <MemoryRouter initialEntries={[path]}>
+          <AppRoutes />
+        </MemoryRouter>
+      </DataProvider>
+    </ThemeProvider>,
+  );
+  await screen.findByText('New source original warning');
+  await act(() => finish(warningPage(pending)));
+  expect(screen.queryByText('Original warning message warning-message')).toBeNull();
+  expect(first.cancelled).toContain(old);
+  expect(second.reads.filter((read) => read.selection.kind === 'anchor')).toHaveLength(1);
+});
+
+it.each(['claude', 'codex'] as const)(
+  'loads one new %s anchor when a different warning names the same point',
+  async (host) => {
+    const h = codexSource('source_bytes', host);
+    supplyWarnings(h, [messageWarning, { ...resultWarning, points_at: messageWarning.points_at }]);
+    h.data.sessionTranscriptPage = async (_session, selection, id) => {
+      h.reads.push({ selection, id });
+      return warningPage(selection);
+    };
+    mount(h.data, `/sessions/${SESSION}?warning=${encodeURIComponent(messageWarning.id)}`);
+    await screen.findByText('Showing the original warning message.');
+    expect(h.reads.filter((read) => read.selection.kind === 'anchor')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: resultWarning.name }));
+    await waitFor(() =>
+      expect(h.reads.filter((read) => read.selection.kind === 'anchor')).toHaveLength(2),
+    );
+    await screen.findByText('Showing the original warning message.');
+    expect(h.reads.at(-1)!.selection).toMatchObject({
+      kind: 'anchor',
+      record_uuid: 'warning-message',
+      block: null,
+      expected: 'message',
+    });
+  },
+);

@@ -123,7 +123,7 @@ it('opens both exact owning disclosures once, leaves focus with its caller, and 
         conversation
         groupAdjacentActivity
         records={records}
-        reveal={{ token: 1, blockId: 'b:0' }}
+        reveal={{ kind: 'block', token: 1, blockId: 'b:0' }}
         onReveal={report}
       />
     </>,

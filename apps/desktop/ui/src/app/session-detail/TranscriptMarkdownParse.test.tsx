@@ -110,7 +110,12 @@ it('parses only the answers on screen, and never an unchanged one twice', () => 
 
   // Re-rendering the transcript — a reveal request, a row opened — parses nothing again.
   act(() => {
-    rerender(<SessionTranscript records={records} reveal={{ token: 1, blockId: 'perf-3:1' }} />);
+    rerender(
+      <SessionTranscript
+        records={records}
+        reveal={{ kind: 'block', token: 1, blockId: 'perf-3:1' }}
+      />,
+    );
   });
   fireEvent.click(screen.getAllByRole('button', { name: /Ran 1 command/ })[0]);
   expect(parses.count).toBe(short);

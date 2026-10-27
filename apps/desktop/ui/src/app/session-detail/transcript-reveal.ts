@@ -25,12 +25,11 @@
  */
 import { createContext } from 'react';
 
-export interface RevealRequest {
-  /** Unique per request, so one request is answered once. */
-  readonly token: number;
-  /** The presentation id of the one tool call to show. */
-  readonly blockId: string;
-}
+export type RevealTarget =
+  | { readonly kind: 'block'; readonly blockId: string }
+  | { readonly kind: 'record'; readonly recordId: string };
+
+export type RevealRequest = RevealTarget & { readonly token: number };
 
 /** `not_found`: no card stood at that block's place after the row opened. */
 export type RevealOutcome = 'revealed' | 'not_found';

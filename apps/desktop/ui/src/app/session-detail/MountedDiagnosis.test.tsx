@@ -212,21 +212,33 @@ it.each(['claude', 'codex'] as const)(
       ): Promise<SessionPageStatus> => {
         pageNames.push(readId);
         const later = selection.kind === 'cursor';
+        const anchored = selection.kind === 'anchor';
         return {
           state: 'loaded',
           generation: { generation: 'unrecorded' },
           digest: 'a'.repeat(64),
           records: [
             {
-              id: later ? 'later' : 'first',
+              id: anchored ? selection.record_uuid : later ? 'later' : 'first',
               role: 'user',
               at: null,
               blocks: [
                 {
                   kind: 'text',
-                  index: 0,
+                  index: anchored ? 1 : 0,
                   text: later ? 'Combined later page' : 'Combined first page',
                 },
+                ...(anchored && selection.block !== null
+                  ? [
+                      {
+                        kind: 'tool_result' as const,
+                        index: selection.block,
+                        call_id: 'saved',
+                        failed: true,
+                        parts: [{ kind: 'text' as const, text: 'Combined original result' }],
+                      },
+                    ]
+                  : []),
               ],
             },
           ],
@@ -237,7 +249,7 @@ it.each(['claude', 'codex'] as const)(
           dropped_records: 0,
           previous: later ? 'before' : null,
           next: later ? null : 'after',
-          target: null,
+          target: anchored ? { record: 0, block: selection.block } : null,
         };
       },
     );
@@ -249,6 +261,8 @@ it.each(['claude', 'codex'] as const)(
     await screen.findByText('Combined later page');
     const conversation = screen.getByRole('region', { name: 'Conversation content' });
     const activeRead = pageNames.at(-1)!;
+    const readsBeforeDiagnosis = pageRead.mock.calls.length;
+    expect(pageRead.mock.calls.filter((call) => call[1].kind === 'anchor')).toHaveLength(1);
     ask();
     expect(screen.getByTestId('diagnosis-confirm')).toBeTruthy();
     expect(h.controls.diagnose).not.toHaveBeenCalled();
@@ -259,7 +273,7 @@ it.each(['claude', 'codex'] as const)(
     await screen.findByTestId('diagnosis-result');
     expect(screen.getByRole('region', { name: 'Conversation content' })).toBe(conversation);
     expect(screen.getByText('Combined later page')).toBeTruthy();
-    expect(pageRead).toHaveBeenCalledTimes(2);
+    expect(pageRead).toHaveBeenCalledTimes(readsBeforeDiagnosis);
     expect(transcript).toHaveBeenCalledOnce();
     expect(cancel.mock.calls.flat()).not.toContain(activeRead);
   },

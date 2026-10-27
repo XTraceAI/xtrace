@@ -1,0 +1,1 @@
+- Selecting a warning reveals its exact original message or tool block in full and paged conversations.

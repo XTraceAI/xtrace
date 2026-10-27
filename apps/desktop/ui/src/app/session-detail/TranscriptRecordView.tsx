@@ -1,3 +1,5 @@
+import { useContext, useLayoutEffect, useRef } from 'react';
+import { RevealContext } from './transcript-reveal';
 import type { ConversationMarker } from './ConversationActivity';
 import { ToolActivityStrip } from './ToolStrip';
 import { TranscriptMarkdown } from './TranscriptMarkdown';
@@ -77,9 +79,25 @@ export function TranscriptRecordView({
   markers?: readonly ConversationMarker[];
 }) {
   const segments = recordSegments(record);
+  const { request, report, scroll } = useContext(RevealContext);
+  const element = useRef<HTMLElement>(null);
+  const answered = useRef<number | null>(null);
+  const highlighted = request?.kind === 'record' && request.recordId === record.id;
+  useLayoutEffect(() => {
+    if (!highlighted || !request || answered.current === request.token) return;
+    answered.current = request.token;
+    if (!element.current?.isConnected) {
+      report(request.token, 'not_found');
+      return;
+    }
+    scroll(element.current);
+    report(request.token, 'revealed');
+  }, [highlighted, request, report, scroll]);
 
   return (
     <article
+      ref={element}
+      data-highlighted={highlighted || undefined}
       className={`xt-turn${conversation ? ' xt-conversation-turn' : ''}`}
       data-role={record.role}
       data-record-id={record.id}

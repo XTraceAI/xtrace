@@ -1,3 +1,5 @@
+import type { DataSource } from '../../data/DataSource';
+import type { SessionWarningPoint } from '../../data/generated/SessionWarningPoint';
 import { RepeatNavigation, type ConversationMarker } from './ConversationActivity';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -35,8 +37,14 @@ import {
   type PageRepeatCandidate,
 } from './PagedSessionTranscript';
 import { type TranscriptProps, transcriptProps } from './transcript-adapter';
-import { jumpUnavailableText, type JumpUnavailable, resolveJump } from './timeline-jump';
-import type { RevealOutcome, RevealRequest } from './transcript-reveal';
+import {
+  jumpUnavailableText,
+  type JumpUnavailable,
+  resolveJump,
+  resolveWarningJump,
+  warningUnavailableText,
+} from './timeline-jump';
+import type { RevealOutcome, RevealRequest, RevealTarget } from './transcript-reveal';
 import { type TranscriptRead, useSessionTranscript } from './useSessionTranscript';
 import '../../styles/sessions.css';
 import './session-detail.css';
@@ -99,7 +107,7 @@ const MEASURES: {
 ];
 
 /**
- * The reader's last press on a stretch, and everything it was made against.
+ * The current warning or activity selection, and what it was made against.
  *
  * A press means "the stretch at this index, in this list". It is only that
  * while all four still hold: the session, the window, the read of the
@@ -115,6 +123,12 @@ const MEASURES: {
  * now sits at that index.
  */
 type Press =
+  | {
+      readonly kind: 'warning';
+      readonly token: number;
+      readonly point: SessionWarningPoint;
+      readonly owner: { readonly identity: string; readonly source: DataSource };
+    }
   | {
       readonly kind: 'reveal';
       readonly index: number;
@@ -140,7 +154,7 @@ type PressedCall = 'first' | 'repeated';
 
 /** What a press on one call of one stretch did, in words, or nothing yet. */
 function pressText(
-  pressed: Press,
+  pressed: Exclude<Press, { kind: 'warning' }>,
   result: { token: number; outcome: RevealOutcome } | null,
 ): string | null {
   const stretch = `activity period ${pressed.index + 1}`;
@@ -160,6 +174,8 @@ function pressText(
 
 function pageFeedbackText(feedback: PageFeedback | null): string | null {
   if (!feedback) return null;
+  if (feedback.kind === 'warning')
+    return warningFeedbackText(feedback.target, feedback.outcome, feedback.unavailable);
   const { intent, target, outcome, unavailable } = feedback;
   const which = intent.call === 'first' ? 'The first tool call' : 'The repeated call';
   if (unavailable)
@@ -169,6 +185,20 @@ function pageFeedbackText(feedback: PageFeedback | null): string | null {
   return intent.call === 'first'
     ? `Showing the first tool call of activity period ${intent.index + 1}: ${target.tool}.`
     : `Showing the earliest matching call: ${target.tool}.`;
+}
+
+function warningFeedbackText(
+  target: RevealTarget | null,
+  outcome: RevealOutcome | null,
+  unavailable: string | null,
+): string | null {
+  if (unavailable) return `The original warning message cannot be shown. ${unavailable}`;
+  if (!target || !outcome) return null;
+  if (outcome !== 'revealed')
+    return 'The original warning message could not be revealed in the conversation.';
+  return target.kind === 'record'
+    ? 'Showing the original warning message.'
+    : 'Showing the warning’s original tool block.';
 }
 
 /** What a press was made against. Replace any of it and the press is void. */
@@ -304,6 +334,25 @@ export function SessionDetailPage() {
   const activeWarnings = warnings.data?.state === 'read' ? warnings.data.warnings : undefined;
   const warningId = params.get(WARNING_PARAM) ?? activeWarnings?.[0]?.id ?? null;
   const diagnose = useDiagnose(sessionId ?? '', zone, activeWarnings, warningId);
+  const warningPoint =
+    warnings.data?.state === 'read'
+      ? [...warnings.data.warnings, ...warnings.data.dismissed].find(
+          (warning) => warning.id === warningId,
+        )?.points_at
+      : undefined;
+  const warningRecord = warningPoint?.record_uuid ?? null;
+  const warningBlock = warningPoint?.block ?? null;
+  const warningIdentity =
+    warningId === null
+      ? null
+      : JSON.stringify([
+          sessionId,
+          warningId,
+          warningRecord,
+          warningBlock,
+          warningNavigation.current.generation,
+        ]);
+
   const selectWarning = useCallback(
     (id: string) => {
       warningNavigation.current = {
@@ -339,7 +388,7 @@ export function SessionDetailPage() {
       ['source_bytes', 'output_bytes'].includes(read.status.reason.limit)) ||
       (read.status.reason.reason === 'too_large' && read.status.reason.limit === 'bytes'));
   const [pageIntent, setPageIntent] = useState<{
-    intent: PageIntent;
+    intent: Extract<PageIntent, { kind: 'timeline' }>;
     scope: PressScope;
   } | null>(null);
   const [pageFeedback, setPageFeedback] = useState<PageFeedback | null>(null);
@@ -348,6 +397,7 @@ export function SessionDetailPage() {
     [],
   );
   const clearPageSelection = useCallback(() => {
+    setPress(null);
     setPageIntent(null);
     setPageFeedback(null);
   }, []);
@@ -398,27 +448,77 @@ export function SessionDetailPage() {
   const [press, setPress] = useState<Press | null>(null);
   const [result, setResult] = useState<{ token: number; outcome: RevealOutcome } | null>(null);
   const answer = stretchesQuery.data;
-  // Read during render, so a press whose scope has been replaced is never
-  // painted, not even for the frame before the effect below runs.
-  const pressed = holds(press, { sessionId, days, read, stretches: answer }) ? press : null;
-  const ownedPageIntent =
-    paged && holds(pageIntent, { sessionId, days, read, stretches: answer }) ? pageIntent : null;
-  const selected = ownedPageIntent?.intent.index ?? pressed?.index ?? null;
-  const selectedCall = ownedPageIntent?.intent.call ?? pressed?.call;
-  const reveal = pressed?.kind === 'reveal' ? pressed.request : null;
+  useEffect(() => {
+    setPageIntent(null);
+    setPageFeedback(null);
+    setResult(null);
+    if (warningIdentity !== null && warningRecord !== null) {
+      tokens.current += 1;
+      setPress({
+        kind: 'warning',
+        token: tokens.current,
+        point: { record_uuid: warningRecord, block: warningBlock },
+        owner: { identity: warningIdentity, source },
+      });
+    } else setPress((current) => (current?.kind === 'warning' ? null : current));
+  }, [source, warningIdentity, warningRecord, warningBlock]);
+  const pressed =
+    press?.kind === 'warning'
+      ? press.owner.identity === warningIdentity && press.owner.source === source
+        ? press
+        : null
+      : holds(press, { sessionId, days, read, stretches: answer })
+        ? press
+        : null;
+  const ownedTimelineIntent =
+    paged && holds(pageIntent, { sessionId, days, read, stretches: answer })
+      ? pageIntent!.intent
+      : null;
+  const ownedPageIntent = useMemo<PageIntent | null>(
+    () =>
+      paged && pressed?.kind === 'warning'
+        ? { kind: 'warning', token: pressed.token, point: pressed.point }
+        : ownedTimelineIntent,
+    [paged, pressed, ownedTimelineIntent],
+  );
+  const selected =
+    ownedPageIntent?.kind === 'timeline'
+      ? ownedPageIntent.index
+      : pressed && pressed.kind !== 'warning'
+        ? pressed.index
+        : null;
+  const selectedCall =
+    ownedPageIntent?.kind === 'timeline'
+      ? ownedPageIntent.call
+      : pressed && pressed.kind !== 'warning'
+        ? pressed.call
+        : undefined;
+  const warningJump = useMemo(
+    () => (pressed?.kind === 'warning' ? resolveWarningJump(pressed.point, read) : null),
+    [pressed, read],
+  );
+  const reveal = useMemo<RevealRequest | null>(
+    () =>
+      pressed?.kind === 'reveal'
+        ? pressed.request
+        : !paged && pressed?.kind === 'warning' && warningJump?.kind === 'target'
+          ? { token: pressed.token, ...warningJump.target }
+          : null,
+    [pressed, paged, warningJump],
+  );
   // And destroyed, so it cannot come back. Returning `current` unchanged when
   // it still holds leaves the state identical and re-renders nothing.
   useEffect(() => {
     setPress((current) =>
-      holds(current, { sessionId, days, read, stretches: answer }) ? current : null,
+      current?.kind === 'warning' || holds(current, { sessionId, days, read, stretches: answer })
+        ? current
+        : null,
     );
-    // A result is only ever read beside a live press of the same token; with
-    // the scope replaced there is none, so it goes with it.
+    // Results are displayed only beside a live selection with the same token.
     setPageIntent((current) =>
       holds(current, { sessionId, days, read, stretches: answer }) ? current : null,
     );
-    setPageFeedback(null);
-    setResult(null);
+    setPageFeedback((current) => (current?.kind === 'warning' ? current : null));
   }, [sessionId, days, read, answer]);
   const pressCall = useCallback(
     (index: number, call: PressedCall) => {
@@ -436,7 +536,7 @@ export function SessionDetailPage() {
         setPageFeedback(null);
         setPageIntent({
           scope: { sessionId, days, read, stretches: answer },
-          intent: { token: tokens.current, locator, index, call },
+          intent: { kind: 'timeline', token: tokens.current, locator, index, call },
         });
         return;
       }
@@ -453,7 +553,7 @@ export function SessionDetailPage() {
               index,
               call,
               tool: jump.tool,
-              request: { token: tokens.current, blockId: jump.blockId },
+              request: { kind: 'block', token: tokens.current, blockId: jump.blockId },
               scope,
             }
           : { kind: 'unavailable', index, call, reason: jump.reason, scope },
@@ -470,12 +570,18 @@ export function SessionDetailPage() {
     [],
   );
   const ownedFeedback =
-    ownedPageIntent && pageFeedback?.intent === ownedPageIntent.intent ? pageFeedback : null;
+    ownedPageIntent && pageFeedback?.intent === ownedPageIntent ? pageFeedback : null;
   const announcement = ownedPageIntent
     ? pageFeedbackText(ownedFeedback)
-    : pressed
-      ? pressText(pressed, result)
-      : null;
+    : pressed?.kind === 'warning'
+      ? warningFeedbackText(
+          warningJump?.kind === 'target' ? warningJump.target : null,
+          result?.token === pressed.token ? result.outcome : null,
+          warningJump?.kind === 'unavailable' ? warningUnavailableText(warningJump.reason) : null,
+        )
+      : pressed
+        ? pressText(pressed, result)
+        : null;
   // A command that failed is not a session that cannot be shown, but it looks
   // the same to a reader, so it is said in the same place — with its own
   // sentence, and with the one thing a reader can do about it beside it.
@@ -581,7 +687,7 @@ export function SessionDetailPage() {
               key={`${sessionId}:${host}`}
               sessionId={sessionId}
               host={host === 'claude' ? 'claude' : 'codex'}
-              intent={ownedPageIntent?.intent ?? null}
+              intent={ownedPageIntent}
               repeatCandidates={repeatCandidates}
               onFeedback={onPageFeedback}
               onReset={clearPageSelection}
