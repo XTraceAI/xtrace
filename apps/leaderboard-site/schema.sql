@@ -27,3 +27,7 @@ create table if not exists rate_counters (
   count integer not null,
   primary key (bucket, window_start)
 );
+
+-- The hourly cleanup deletes by these columns.
+create index if not exists rate_counters_window_start on rate_counters (window_start);
+create index if not exists pending_joins_expires_at on pending_joins (expires_at);

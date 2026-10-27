@@ -99,6 +99,15 @@ describe('POST /api/join checks the body first', () => {
       'a\u007fb@example.com',
       'a@exa_mple.com',
       'a@exa,mple.com',
+      '.a@example.com',
+      'a.@example.com',
+      'a..b@example.com',
+      'a@-example.com',
+      'a@example-.com',
+      'a@example.com-',
+      'a@sub.-example.com',
+      'a@example..com',
+      'a@com',
       'a@example.com>',
       'ä@example.com',
       'a@exämple.com',
@@ -112,6 +121,9 @@ describe('POST /api/join checks the body first', () => {
       `${'a'.repeat(249)}@b.co`,
       "o'brien@example.com",
       "a!#$%&'*+/=?^_`{|}~-z@my-host.example.com",
+      'first.m.last+news@mail.sub.example.co.uk',
+      'someone@xn--bcher-kva.example',
+      'a@b--c.example.com',
     ];
     for (const [index, email] of good.entries())
       assert.equal((await post({ nickname: `good${index}`, email })).status, 202, email);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { clientIp, ipLimitKey } from '../src/limits.js';
+import { clientIp, inboxAddress, ipLimitKey } from '../src/limits.js';
 import {
   HOUR,
   harness,
@@ -94,6 +94,55 @@ describe('POST /api/join', () => {
   });
 });
 
+describe('email limits count the inbox, not the exact address', () => {
+  test('the inbox address drops +tags everywhere, and dots for Gmail', () => {
+    const cases: [string, string][] = [
+      ['Victim@Example.com', 'victim@example.com'],
+      ['victim+tag@example.com', 'victim@example.com'],
+      ['victim+a+b@example.com', 'victim@example.com'],
+      ['vic.tim@example.com', 'vic.tim@example.com'],
+      ['V.i.c.t.i.m+x@gmail.com', 'victim@gmail.com'],
+      ['vic.tim@googlemail.com', 'victim@gmail.com'],
+      ['vic.tim@mail.gmail.com', 'vic.tim@mail.gmail.com'],
+    ];
+    for (const [email, inbox] of cases) assert.equal(inboxAddress(email), inbox, email);
+  });
+
+  test('30 plus-tagged joins from 6 IPs reach one inbox only 10 times a day', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 30; i += 1) {
+      const response = await postJoin(
+        'tagger',
+        `victim+${i}@gmail.com`,
+        `198.51.100.${70 + (i % 6)}`,
+      );
+      statuses.push(response.status);
+    }
+    assert.equal(statuses.filter((status) => status === 202).length, 10);
+    assert.equal(statuses.filter((status) => status === 429).length, 20);
+    // Dots and googlemail.com are the same Gmail inbox.
+    await expectLimited(
+      await postJoin('tagger', 'v.ictim@googlemail.com', '192.0.2.150'),
+      12 * 3600,
+    );
+  });
+
+  test('the (email, IP) limit also counts the inbox', async () => {
+    for (let i = 1; i <= 3; i += 1)
+      assert.equal((await postJoin('pair', `pair+${i}@example.com`, '192.0.2.160')).status, 202);
+    await expectLimited(await postJoin('pair', 'PAIR+4@example.com', '192.0.2.160'), 3600);
+  });
+
+  test('the stored email and member lookups stay the exact address', async () => {
+    const first = await join(h, 'Exact', 'exact+one@gmail.com');
+    await join(h, 'Other_Exact', 'ex.act+one@gmail.com');
+    const emails = (await h.query('select email from members order by id')).map((row) => row.email);
+    assert.deepEqual(emails, ['exact+one@gmail.com', 'ex.act+one@gmail.com']);
+    assert.equal(h.mailer.sent[0]!.to, 'exact+one@gmail.com');
+    assert.equal((await h.app.me.GET(request('GET', '/api/me', { key: first }))).status, 200);
+  });
+});
+
 describe('POST /api/join/verify', () => {
   test('20 per hour per IP', async () => {
     const attempt = (ip: string) =>
@@ -162,11 +211,34 @@ describe('every /api/* request except GET /api/leaderboard', () => {
 });
 
 describe('client IP', () => {
-  test('x-real-ip, else the first x-forwarded-for entry', () => {
+  test('x-vercel-forwarded-for, else x-real-ip, else the first x-forwarded-for entry', () => {
     const at = (headers: Record<string, string>) =>
       clientIp(new Request('https://leaderboard.test/', { headers }));
+    const all = {
+      'x-vercel-forwarded-for': '192.0.2.9',
+      'x-real-ip': '192.0.2.1',
+      'x-forwarded-for': '192.0.2.2',
+    };
+    assert.equal(at(all), '192.0.2.9');
     assert.equal(at({ 'x-real-ip': '192.0.2.1', 'x-forwarded-for': '192.0.2.2' }), '192.0.2.1');
     assert.equal(at({ 'x-forwarded-for': ' 192.0.2.2 , 10.0.0.1' }), '192.0.2.2');
+    assert.equal(at({ 'x-vercel-forwarded-for': ' 2001:db8::7 ' }), '2001:db8::7');
+    assert.equal(at({}), 'unknown');
+  });
+
+  test('a value that is not an IP address counts as unknown', () => {
+    const at = (headers: Record<string, string>) =>
+      clientIp(new Request('https://leaderboard.test/', { headers }));
+    for (const value of [
+      'not-an-ip',
+      '192.0.2.999',
+      '[2001:db8::1]',
+      '1.2.3.4:80',
+      'a'.repeat(300),
+    ])
+      assert.equal(at({ 'x-vercel-forwarded-for': value }), 'unknown', value);
+    // The first header present decides; a bad one does not fall through.
+    assert.equal(at({ 'x-real-ip': 'garbage', 'x-forwarded-for': '192.0.2.2' }), 'unknown');
   });
 
   test('IPv6 addresses are limited by their /64; IPv4-mapped ones as IPv4', () => {

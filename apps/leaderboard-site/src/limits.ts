@@ -1,7 +1,7 @@
 // The one rate-limit rule: fixed windows counted in Postgres, so every Vercel
 // instance shares them. Each limit's numbers live only in LIMITS below.
 import { createHmac } from 'node:crypto';
-import { isIPv4, isIPv6 } from 'node:net';
+import { isIP, isIPv4, isIPv6 } from 'node:net';
 import type { Query } from './db.js';
 
 export type Limit = { name: string; max: number; windowSeconds: number };
@@ -60,15 +60,20 @@ export async function cleanUp(query: Query, now: Date): Promise<void> {
   await query('delete from pending_joins where expires_at < $1::timestamptz', [cutoff]);
 }
 
+/** Headers that carry the client IP, in the order they are trusted. */
+const IP_HEADERS = ['x-vercel-forwarded-for', 'x-real-ip', 'x-forwarded-for'];
+
 /**
- * The client's IP: `x-real-ip` (set by Vercel; the local server sets it from the
- * socket), else the first `x-forwarded-for` entry.
+ * The client's IP, from the first of IP_HEADERS that is present (its first
+ * comma-separated entry). Vercel sets these; the local server sets the first one
+ * from the socket. Anything that is not a valid IPv4 or IPv6 address is 'unknown'.
  */
 export function clientIp(request: Request): string {
-  const real = request.headers.get('x-real-ip')?.trim();
-  if (real) return real;
-  const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return forwarded || 'unknown';
+  for (const name of IP_HEADERS) {
+    const value = request.headers.get(name)?.split(',')[0]?.trim();
+    if (value) return isIP(value) ? value : 'unknown';
+  }
+  return 'unknown';
 }
 
 /** Expands an IPv6 address to its 8 groups, or null when it is not one. */
@@ -118,7 +123,24 @@ export function ipSubject(request: Request, secret: string): string {
     .digest('hex');
 }
 
-/** Email buckets use a keyed hash of the lowercased email, never the email. */
+/**
+ * The inbox an address delivers to, for limit buckets only (stored emails and
+ * member lookups use the exact address). Drops a `+tag` for every domain; for
+ * Gmail also drops dots and treats googlemail.com as gmail.com.
+ */
+export function inboxAddress(email: string): string {
+  const lower = email.toLowerCase();
+  const at = lower.lastIndexOf('@');
+  let local = lower.slice(0, at);
+  let domain = lower.slice(at + 1);
+  const plus = local.indexOf('+');
+  if (plus !== -1) local = local.slice(0, plus);
+  if (domain === 'googlemail.com') domain = 'gmail.com';
+  if (domain === 'gmail.com') local = local.replaceAll('.', '');
+  return `${local}@${domain}`;
+}
+
+/** Email buckets use a keyed hash of the inbox address, never the email. */
 export function emailSubject(email: string, secret: string): string {
-  return createHmac('sha256', secret).update(email.toLowerCase(), 'utf8').digest('hex');
+  return createHmac('sha256', secret).update(inboxAddress(email), 'utf8').digest('hex');
 }

@@ -154,8 +154,9 @@ Fixed windows; the one rule lives in one module.
 - PUT /api/score: 12 per hour per member.
 - PATCH /api/me: 10 per day per member.
 - Every /api/* request except GET /api/leaderboard: 600 per hour per IP.
-  Client IP: on Vercel the `x-real-ip` header (Vercel sets it), else the first `x-forwarded-for` entry, else the socket
-  address (local server). The IP is never stored in clear: only HMAC-SHA256(IP, `$IP_HASH_SECRET`). Production with no
+  Client IP: ~~on Vercel the `x-real-ip` header (Vercel sets it), else the first `x-forwarded-for` entry, else the socket
+  address (local server).~~ _As built (after review): `x-vercel-forwarded-for`, else `x-real-ip`, else the first
+  `x-forwarded-for` entry; see the notes at the end._ The IP is never stored in clear: only HMAC-SHA256(IP, `$IP_HASH_SECRET`). Production with no
   IP_HASH_SECRET → 503 `server_misconfigured` on rate-limited endpoints (fail closed). Local server uses a fixed dev secret.
   Counter rows and expired pending joins older than a day are deleted opportunistically.
 
@@ -229,12 +230,26 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
 - The 600-per-hour API limit covers `POST /api/join`, `POST /api/join/verify`, `PUT /api/score` and
   `GET`/`PATCH`/`DELETE /api/me`. `GET /api/leaderboard` and the public page (`GET`/`HEAD /`, served by
   `/api/page`) are not limited.
-- A request without `x-real-ip` or `x-forwarded-for` is counted under the IP `unknown`. IPv6 addresses are
+- Client IP: the first entry of the first header present among `x-vercel-forwarded-for`, `x-real-ip` and
+  `x-forwarded-for`, trimmed. If that value is not a valid IPv4 or IPv6 address, or no header is present, the
+  request is counted under the IP `unknown` (a bad header does not fall through to the next one). IPv6 addresses are
   grouped by their first 64 bits (written `a:b:c:d::/64`); IPv4-mapped IPv6 addresses (`::ffff:1.2.3.4`)
   count as the IPv4 address. Bucket names: `<limit>:<hmac>` for IPs and emails, `<limit>:<member id>` for
   members, and `join:email-ip:<email hmac>:<ip hmac>` for the email-and-IP pair. The local server
-  sets `x-real-ip` from the socket address and drops any client-sent `x-real-ip` / `x-forwarded-for`,
-  as Vercel's proxy does.
+  sets `x-vercel-forwarded-for` from the socket address and drops any client-sent `x-real-ip` /
+  `x-forwarded-for`, as Vercel's proxy does.
+- The two email limits (per (email, IP) and per day) count the _inbox_ address, not the exact one: everything
+  from the first `+` in the part before `@` is dropped for every domain, and for `gmail.com` and
+  `googlemail.com` the dots before `@` are dropped too and both count as `gmail.com`. So
+  `victim+1@gmail.com` and `v.ictim@googlemail.com` share `victim@gmail.com`'s limits. The stored email,
+  the code email and the member lookup still use the exact (lowercased) address.
+- Known limit, accepted: anyone who knows an email can use up its 10 joins for the day (from several IPs),
+  so that inbox cannot start a new join until the next UTC midnight. A code that was already sent and is
+  still live keeps working, and an existing member's entry is not affected.
+- Emails are also refused (400 `invalid_email`) when the part before `@` starts or ends with a dot or has
+  two dots in a row, or when the domain has fewer than two labels, an empty label (`..`), or a label that
+  starts or ends with `-`. Plus addressing, subdomains and punycode (`xn--…`) domains are accepted.
+- `schema.sql` also indexes `rate_counters(window_start)` and `pending_joins(expires_at)` for the cleanup.
 - An empty `IP_HASH_SECRET` counts as missing.
 - `POST /api/join/verify` with `pending_id` or `code` missing or not a string, or a `nickname` that is not a
   string, gets 400 `invalid_request`. A `nickname` of `null` is the same as leaving it out. A bad code is

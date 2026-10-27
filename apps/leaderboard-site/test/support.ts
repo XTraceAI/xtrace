@@ -92,8 +92,8 @@ export function request(
   } = {},
 ): Request {
   const headers = new Headers(options.headers);
-  if (!headers.has('x-real-ip') && !headers.has('x-forwarded-for'))
-    headers.set('x-real-ip', options.ip ?? DEFAULT_IP);
+  if (!['x-vercel-forwarded-for', 'x-real-ip', 'x-forwarded-for'].some((name) => headers.has(name)))
+    headers.set('x-vercel-forwarded-for', options.ip ?? DEFAULT_IP);
   if (options.key !== undefined) headers.set('authorization', `Bearer ${options.key}`);
   let body: string | Uint8Array | undefined = options.raw;
   if (options.body !== undefined) {

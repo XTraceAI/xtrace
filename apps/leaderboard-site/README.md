@@ -90,7 +90,7 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
    DATABASE_URL='<the Neon connection string>' pnpm --dir apps/leaderboard-site db:migrate
    ```
 
-   It prints `Schema applied: 3 statement(s).` Running it again is safe.
+   It prints `Schema applied: 5 statement(s).` Running it again is safe.
 
 6. Deploy. Open the deployment's address and check that the page says "No one is listed yet."
 7. In the project's **Domains** settings, add `leaderboard.xtrace.ai`, then add the DNS record Vercel shows you.
@@ -100,6 +100,14 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
    these rules stop a flood before it reaches the functions and the database.
 9. In the Vercel team's **Settings → Billing**, set a spend limit, so a flood cannot run up a bill.
    In Resend, check the plan's sending limit too.
+
+## Known limits
+
+- Anyone who knows an email address can use up its 10 joins for the day (spread over several IPs).
+  That inbox then cannot start a new join until the next UTC midnight.
+  A code that was already sent and has not expired still works, and existing members keep their entry.
+- The email limits count the inbox, not the exact address: `name+tag@…` counts as `name@…`,
+  and for Gmail the dots do not count either.
 
 ## Later changes
 

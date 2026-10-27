@@ -56,8 +56,9 @@ function toRequest(incoming: IncomingMessage, origin: string): Request {
     else if (value !== undefined) headers.set(name, value);
   }
   // Like Vercel's proxy, the server, not the client, says who is calling.
+  headers.delete('x-real-ip');
   headers.delete('x-forwarded-for');
-  headers.set('x-real-ip', incoming.socket.remoteAddress ?? 'unknown');
+  headers.set('x-vercel-forwarded-for', incoming.socket.remoteAddress ?? 'unknown');
   const method = incoming.method ?? 'GET';
   const hasBody = method !== 'GET' && method !== 'HEAD';
   return new Request(new URL(incoming.url ?? '/', origin), {

@@ -44,7 +44,12 @@ after(async () => {
 
 test('schema.sql can be applied again without changes', async () => {
   const { db, query } = await openLocalDatabase();
-  assert.equal(await applySchema(query, readSchema()), 3);
+  assert.equal(await applySchema(query, readSchema()), 5);
+  const indexes = (await query(`select indexname from pg_indexes where schemaname = 'public'`)).map(
+    (row) => String(row.indexname),
+  );
+  assert.ok(indexes.includes('rate_counters_window_start'));
+  assert.ok(indexes.includes('pending_joins_expires_at'));
   const columns = await query(
     `select column_name from information_schema.columns where table_name = 'members' order by ordinal_position`,
   );
@@ -152,15 +157,19 @@ test('Vercel installs this package with the pinned pnpm and no strict Node check
 
 test('the client IP is the socket address, whatever the client claims', async () => {
   await fetch(`${origin}/api/me`, {
-    headers: { 'x-real-ip': '192.0.2.50', 'x-forwarded-for': '192.0.2.60' },
+    headers: {
+      'x-vercel-forwarded-for': '192.0.2.40',
+      'x-real-ip': '192.0.2.50',
+      'x-forwarded-for': '192.0.2.60',
+    },
   });
   const hmac = (ip: string) => createHmac('sha256', LOCAL_IP_HASH_SECRET).update(ip).digest('hex');
   const buckets = (await localQuery('select bucket from rate_counters')).map((row) =>
     String(row.bucket),
   );
   assert.ok(buckets.includes(`api:ip:${hmac('127.0.0.1')}`));
-  assert.ok(!buckets.includes(`api:ip:${hmac('192.0.2.50')}`));
-  assert.ok(!buckets.includes(`api:ip:${hmac('192.0.2.60')}`));
+  for (const spoofed of ['192.0.2.40', '192.0.2.50', '192.0.2.60'])
+    assert.ok(!buckets.includes(`api:ip:${hmac(spoofed)}`));
 });
 
 test('unknown paths are 404 and unsupported methods are 405', async () => {

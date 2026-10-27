@@ -25,7 +25,11 @@ export function parseEmail(value: string): string | null {
   const [local, domain] = parts as [string, string];
   // A plain address only: no display names, quotes, brackets, commas, spaces or control characters.
   if (!EMAIL_LOCAL.test(local) || !EMAIL_DOMAIN.test(domain)) return null;
-  if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) return null;
+  // No leading, trailing or double dots before the @.
+  if (local.startsWith('.') || local.endsWith('.') || local.includes('..')) return null;
+  // The domain has at least two labels; none is empty or starts or ends with '-'.
+  const labels = domain.split('.');
+  if (labels.length < 2 || labels.some((label) => !label || /^-|-$/.test(label))) return null;
   return email.toLowerCase();
 }
 
