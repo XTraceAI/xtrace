@@ -64,7 +64,7 @@ export const SESSION_WARNINGS_TEXT = {
     "repeated_prompt": "The same request, sent again.",
     "repeated_failure": "Another attempt. The same failure."
   },
-  "flagged_next": "See the conversation around it, then take a closer look.",
+  "you_wrote": "you wrote",
   "message_tags": {
     "correction": "Correction",
     "interruption": "Interruption",

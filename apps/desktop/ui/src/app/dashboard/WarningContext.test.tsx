@@ -62,7 +62,7 @@ const excerpt = () => contextExcerpt(contextFixture('target'), 'target');
 it('reads the exact saved point once, and shows only the native bounded records', async () => {
   const h = mount();
   await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
-  expect(h.read).toHaveBeenCalledWith('session-a', 'target', null, expect.any(String));
+  expect(h.read).toHaveBeenCalledWith('session-a', 'target', null, expect.any(String), point.kind);
   await act(async () => h.calls[0]!.resolve(excerpt()));
   // The warning's own message is tagged with its kind, once.
   expect(screen.getByTestId('warning-context-flag').textContent).toBe(
@@ -84,7 +84,13 @@ it('cancels a replaced point and drops its late text while the new point is load
   h.change({ record: 'new-target', block: 150 });
   expect(h.cancel).toHaveBeenCalledExactlyOnceWith(id);
   await waitFor(() => expect(h.read).toHaveBeenCalledTimes(2));
-  expect(h.read).toHaveBeenLastCalledWith('session-a', 'new-target', 150, expect.any(String));
+  expect(h.read).toHaveBeenLastCalledWith(
+    'session-a',
+    'new-target',
+    150,
+    expect.any(String),
+    point.kind,
+  );
   await act(async () => h.calls[0]!.resolve(excerpt()));
   expect(screen.queryByText(/Still not fixed/)).toBeNull();
   expect(screen.getByRole('status').textContent).toBe('Loading the original conversation…');

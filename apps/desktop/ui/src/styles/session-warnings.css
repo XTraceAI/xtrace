@@ -791,15 +791,38 @@
   line-height: 1.3;
   letter-spacing: -0.01em;
 }
-.xt-warning-modal-reason,
-.xt-warning-modal-next {
+.xt-warning-modal-reason {
   margin: 0;
   color: var(--body);
   font-size: 13px;
   line-height: 1.6;
 }
-.xt-warning-modal-next {
+/* A correction's whole message, as written (line breaks kept), with the
+   words that made it a correction marked in the danger ink. */
+.xt-warning-modal-reason[data-quote] {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.xt-warning-modal-wrote {
   color: var(--secondary);
+}
+.xt-warning-quote {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  border-radius: 0 6px 6px 0;
+  background: var(--subtle);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.xt-warning-mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-weight: 650;
 }
 .xt-warning-modal-side > .xt-warning-actions {
   justify-content: flex-start;

@@ -414,7 +414,14 @@ fn fixture_startup_names_no_local_source_for_any_session() {
         "not_indexed"
     );
     let excerpt = state
-        .session_warning_context("any-session", "target", None, &CancelToken::new(), &readers)
+        .session_warning_context(
+            "any-session",
+            "target",
+            None,
+            None,
+            &CancelToken::new(),
+            &readers,
+        )
         .unwrap();
     assert_eq!(
         serde_json::to_value(excerpt).unwrap()["reason"]["source"]["reason"],
@@ -926,6 +933,7 @@ fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
             &id,
             &uuid(2),
             Some(0),
+            None,
             &CancelToken::new(),
             &bundle_with(&python),
         )
@@ -962,6 +970,7 @@ fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
             &id,
             &uuid(2),
             Some(0),
+            None,
             &CancelToken::new(),
             &bundle_with(&python),
         )
@@ -1058,6 +1067,7 @@ fn native_codex_page_and_bounded_warning_context_share_pinned_resolution() {
             "codex-c0de",
             &uuid(1),
             None,
+            None,
             &CancelToken::new(),
             &bundle_with(&python),
         )
@@ -1092,6 +1102,7 @@ fn native_warning_excerpt_enforces_encoded_bytes_without_truncating_required_tex
             .session_warning_context(
                 &id,
                 &uuid(0),
+                None,
                 None,
                 &CancelToken::new(),
                 &DetailReaders::disabled()
@@ -1203,6 +1214,7 @@ fn native_source_ranges_keep_empty_files_and_page_groups_while_excerpts_stay_in_
         .session_warning_context(
             &id,
             &uuid(3),
+            None,
             None,
             &CancelToken::new(),
             &DetailReaders::disabled(),

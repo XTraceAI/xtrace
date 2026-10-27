@@ -783,11 +783,14 @@ impl AppState {
         }
     }
 
+    /// `kind` is the warning's: a correction's target record is marked
+    /// where its text says so (`SessionExcerptStatus::with_correction_marks`).
     pub fn session_warning_context(
         &self,
         session_id: &str,
         record_uuid: &str,
         block: Option<u32>,
+        kind: Option<crate::session_warnings_dto::SessionWarningKind>,
         cancel: &xt_ingest::native::readers_cli::CancelToken,
         readers: &crate::native_index::DetailReaders,
     ) -> Result<crate::dto::SessionExcerptStatus, StateError> {
@@ -854,7 +857,13 @@ impl AppState {
             self.with_store(|store| Ok(store.record_persons(session_id, &ids)?))
                 .unwrap_or_default()
         };
-        Ok(settled_excerpt(status.with_persons(&persons), cancel))
+        let status = status.with_persons(&persons);
+        let status = if kind == Some(crate::session_warnings_dto::SessionWarningKind::Correction) {
+            status.with_correction_marks()
+        } else {
+            status
+        };
+        Ok(settled_excerpt(status, cancel))
     }
 
     fn bounded_warning_context(
@@ -2968,6 +2977,7 @@ mod tests {
                 omitted_blocks: false,
                 only_tool_results: false,
                 person: None,
+                correction_marks: Vec::new(),
             }],
         };
         assert!(

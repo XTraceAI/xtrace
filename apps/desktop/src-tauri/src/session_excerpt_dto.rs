@@ -32,6 +32,21 @@ pub struct SessionExcerptRecord {
     /// `null` where the index has no answer for it. Only `true` is shown as
     /// "You"; the saved role alone never decides it.
     pub person: Option<bool>,
+    /// Set on the target record of a correction warning only: the words
+    /// M-21's own matcher (`xt_metrics::correction_spans`) finds a
+    /// correction in, over this record's text blocks as shown. Empty
+    /// everywhere else, and where the shown text has no match.
+    pub correction_marks: Vec<TextMark>,
+}
+
+/// A stretch of one text block's text. `start` and `end` count UTF-16 code
+/// units, as a JavaScript string indexes it (`text.slice(start, end)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct TextMark {
+    /// The text block's `index` in its record.
+    pub block: u32,
+    pub start: u32,
+    pub end: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "reason", rename_all = "snake_case")]
@@ -84,6 +99,50 @@ impl SessionExcerptStatus {
                 .collect(),
             Self::Unavailable { .. } => Vec::new(),
         }
+    }
+    /// Marks where the target record's text says it is a correction, by
+    /// M-21's own matcher over its text blocks as shown (joined by line
+    /// breaks, so no word spans two blocks). For a correction warning only.
+    pub fn with_correction_marks(mut self) -> Self {
+        let Self::Loaded { records, .. } = &mut self else {
+            return self;
+        };
+        let Some(target) = records.iter_mut().find(|entry| entry.target) else {
+            return self;
+        };
+        let blocks: Vec<(u32, &str)> = target
+            .record
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                SourceBlock::Text { index, text } => Some((*index, text.as_str())),
+                _ => None,
+            })
+            .collect();
+        let joined = blocks
+            .iter()
+            .map(|(_, text)| *text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let Some(spans) = xt_metrics::correction_spans(&joined) else {
+            return self;
+        };
+        let mut marks = Vec::new();
+        let mut offset = 0;
+        for (index, text) in &blocks {
+            let range = offset..offset + text.len();
+            for span in spans.iter().filter(|span| range.contains(&span.start)) {
+                let utf16 = |byte: usize| text[..byte - offset].encode_utf16().count() as u32;
+                marks.push(TextMark {
+                    block: *index,
+                    start: utf16(span.start),
+                    end: utf16(span.end),
+                });
+            }
+            offset = range.end + 1;
+        }
+        target.correction_marks = marks;
+        self
     }
     /// Sets each record's M-02 answer from the index's, by record ID.
     pub fn with_persons(mut self, persons: &std::collections::BTreeMap<String, bool>) -> Self {
@@ -140,6 +199,7 @@ impl SessionExcerptStatus {
                     target,
                     only_tool_results,
                     person: None,
+                    correction_marks: Vec::new(),
                 })
             })
             .collect::<Result<Vec<_>, &'static str>>()?;
@@ -215,6 +275,75 @@ mod tests {
         assert!(records[0].omitted_blocks);
         assert_eq!(records[0].record.blocks.len(), 1);
         assert_eq!(records[0].record.blocks[0].index(), 1);
+    }
+    #[test]
+    fn correction_marks_only_the_target_in_utf16_and_only_when_asked() {
+        let neighbour = record(json!([{"type":"text","text":"that was wrong"}]));
+        let target = record(json!([
+            {"type":"text","text":"🙂 ok"},
+            {"type":"text","text":"Then I said the left panel"}
+        ]));
+        let status = SessionExcerptStatus::from_read(
+            Ok(LoadedExcerpt {
+                generation: GenerationBasis::Unrecorded,
+                records: vec![neighbour, target],
+                target: 1,
+            }),
+            None,
+        )
+        .unwrap();
+        // Not a correction warning: nothing is marked.
+        let SessionExcerptStatus::Loaded { records, .. } = &status else {
+            panic!("loaded");
+        };
+        assert!(
+            records
+                .iter()
+                .all(|entry| entry.correction_marks.is_empty())
+        );
+        let SessionExcerptStatus::Loaded { records, .. } = status.with_correction_marks() else {
+            panic!("loaded");
+        };
+        assert!(records[0].correction_marks.is_empty());
+        let SourceBlock::Text { index, text } = &records[1].record.blocks[1] else {
+            panic!("text");
+        };
+        assert_eq!(
+            records[1].correction_marks,
+            [
+                TextMark {
+                    block: *index,
+                    start: 5,
+                    end: 6
+                },
+                TextMark {
+                    block: *index,
+                    start: 7,
+                    end: 11
+                },
+            ]
+        );
+        let units: Vec<u16> = text.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&units[5..6]).unwrap(), "I");
+        assert_eq!(String::from_utf16(&units[7..11]).unwrap(), "said");
+        // A target with no match stays unmarked.
+        let plain = status_of(record(
+            json!([{"type":"text","text":"add an export button"}]),
+        ));
+        let SessionExcerptStatus::Loaded { records, .. } = plain.with_correction_marks() else {
+            panic!("loaded");
+        };
+        assert!(records[0].correction_marks.is_empty());
+        // A multi-byte character before the match counts as two UTF-16 units.
+        let emoji = status_of(record(json!([{"type":"text","text":"🙂 that is wrong"}])));
+        let SessionExcerptStatus::Loaded { records, .. } = emoji.with_correction_marks() else {
+            panic!("loaded");
+        };
+        assert_eq!(records[0].correction_marks[0].start, 11);
+        assert_eq!(records[0].correction_marks[0].end, 16);
+    }
+    fn status_of(record: xt_ingest::canonical::ParsedRecord) -> SessionExcerptStatus {
+        status(record, None)
     }
     #[test]
     fn person_comes_only_from_the_index_answer() {

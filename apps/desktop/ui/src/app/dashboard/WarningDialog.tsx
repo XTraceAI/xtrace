@@ -1,8 +1,17 @@
 import { useNavigate, useSearchParams } from 'react-router';
 import { useSelectedRange } from './range';
 import { listAddress, listState } from '../session-search';
-import { WarningContext } from './WarningContext';
-import { useId, useImperativeHandle, useRef, type RefObject } from 'react';
+import { WarningContextView } from './WarningContext';
+import { useWarningContext } from './useWarningContext';
+import { correctionQuote, type WarningContextRead } from './warning-context';
+import {
+  Fragment,
+  useId,
+  useImperativeHandle,
+  useRef,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import type { SessionWarningItem } from '../../data/generated/SessionWarningItem';
 import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
 import { Modal } from '../../kit/Modal';
@@ -168,55 +177,63 @@ function SelectedIssue({
             data-testid={dismissed ? 'dismissed-warning' : 'warning-item'}
             tabIndex={-1}
           >
-            <WarningContext
-              sessionId={selected.sessionId}
-              warning={warning}
-              timezone={selected.timezone}
-              host={selected.host}
-              fullSession={{
-                href: warningHref(selected.sessionId, warning.id, carry),
-                open: () => {
-                  diagnose?.notNow();
-                  onClose();
-                  navigate(warningHref(selected.sessionId, warning.id, carry));
-                },
-              }}
-            />
-            <section className="xt-warning-modal-side">
-              {panel && diagnose ? (
-                <DiagnosisPanel diagnose={diagnose} warning={warning} />
-              ) : (
+            <WithWarningContext sessionId={selected.sessionId} warning={warning}>
+              {({ read, retry }) => (
                 <>
-                  <div id={why} className="xt-warning-modal-why">
-                    <p className="xt-warning-modal-label">{SESSION_WARNINGS_TEXT.flagged_label}</p>
-                    <h3>{SESSION_WARNINGS_TEXT.flagged_headings[warning.kind]}</h3>
-                    <p className="xt-warning-modal-reason">{warning.reason}</p>
-                    <p className="xt-warning-modal-next">{SESSION_WARNINGS_TEXT.flagged_next}</p>
-                  </div>
-                  {((active && diagnose) || press?.onPress) && (
-                    <span className="xt-warning-actions">
-                      {active && diagnose && (
-                        <DiagnoseButton diagnose={diagnose} warning={warning} primary />
-                      )}
-                      {press?.onPress && (
-                        <DismissButton
-                          undo={Boolean(dismissed)}
-                          busy={press.busy}
-                          onPress={press.onPress}
-                          describedBy={why}
-                        />
-                      )}
-                    </span>
-                  )}
-                  {active && elsewhere && diagnose && <BusyDiagnosis diagnose={diagnose} />}
+                  <WarningContextView
+                    read={read}
+                    retry={retry}
+                    warning={warning}
+                    timezone={selected.timezone}
+                    host={selected.host}
+                    fullSession={{
+                      href: warningHref(selected.sessionId, warning.id, carry),
+                      open: () => {
+                        diagnose?.notNow();
+                        onClose();
+                        navigate(warningHref(selected.sessionId, warning.id, carry));
+                      },
+                    }}
+                  />
+                  <section className="xt-warning-modal-side">
+                    {panel && diagnose ? (
+                      <DiagnosisPanel diagnose={diagnose} warning={warning} />
+                    ) : (
+                      <>
+                        <div id={why} className="xt-warning-modal-why">
+                          <p className="xt-warning-modal-label">
+                            {SESSION_WARNINGS_TEXT.flagged_label}
+                          </p>
+                          <h3>{SESSION_WARNINGS_TEXT.flagged_headings[warning.kind]}</h3>
+                          <WarningReason warning={warning} read={read} />
+                        </div>
+                        {((active && diagnose) || press?.onPress) && (
+                          <span className="xt-warning-actions">
+                            {active && diagnose && (
+                              <DiagnoseButton diagnose={diagnose} warning={warning} primary />
+                            )}
+                            {press?.onPress && (
+                              <DismissButton
+                                undo={Boolean(dismissed)}
+                                busy={press.busy}
+                                onPress={press.onPress}
+                                describedBy={why}
+                              />
+                            )}
+                          </span>
+                        )}
+                        {active && elsewhere && diagnose && <BusyDiagnosis diagnose={diagnose} />}
+                      </>
+                    )}
+                    <WarningNotes
+                      warning={warning}
+                      undo={Boolean(dismissed)}
+                      refused={Boolean(press?.refused)}
+                    />
+                  </section>
                 </>
               )}
-              <WarningNotes
-                warning={warning}
-                undo={Boolean(dismissed)}
-                refused={Boolean(press?.refused)}
-              />
-            </section>
+            </WithWarningContext>
           </div>
         ) : (
           <section className="xt-warning-modal-side" data-alone="">
@@ -241,5 +258,65 @@ function SelectedIssue({
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * Reads the warning's original messages once for the window: the
+ * conversation column and a correction's reason both show this one read.
+ */
+function WithWarningContext({
+  sessionId,
+  warning,
+  children,
+}: {
+  sessionId: string;
+  warning: SessionWarningItem;
+  children: (context: { read: WarningContextRead; retry: () => void }) => ReactNode;
+}) {
+  return children(useWarningContext(sessionId, warning));
+}
+
+/**
+ * Why a warning was flagged. A correction shows "you wrote" and the whole
+ * message it points at, with the words that made it a correction marked
+ * (the native marks, `correctionQuote`); until the message is read, or when
+ * it cannot be or marks nothing, and for every other kind, the warning's
+ * own reason.
+ */
+function WarningReason({
+  warning,
+  read,
+}: {
+  warning: SessionWarningItem;
+  read: WarningContextRead;
+}) {
+  const quote = warning.kind === 'correction' ? correctionQuote(read) : null;
+  if (!quote)
+    return (
+      <p className="xt-warning-modal-reason" data-testid="warning-reason">
+        {warning.reason}
+      </p>
+    );
+  return (
+    <div className="xt-warning-modal-reason" data-testid="warning-reason" data-quote="">
+      <span className="xt-warning-modal-wrote">{SESSION_WARNINGS_TEXT.you_wrote}</span>
+      <blockquote className="xt-warning-quote">
+        {quote.map((parts, line) => (
+          <Fragment key={line}>
+            {line > 0 && '\n'}
+            {parts.map((part, index) =>
+              part.marked ? (
+                <mark key={index} className="xt-warning-mark">
+                  {part.text}
+                </mark>
+              ) : (
+                <Fragment key={index}>{part.text}</Fragment>
+              ),
+            )}
+          </Fragment>
+        ))}
+      </blockquote>
+    </div>
   );
 }

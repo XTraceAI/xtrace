@@ -624,3 +624,75 @@ it('waits for a fresh read after switching to another warning in the open window
   await act(async () => finish(structuredClone(list)));
   expect((await screen.findByTestId('warning-item')).dataset.warningId).toBe(other.id);
 });
+
+const quoted = (
+  marks = [
+    { block: 0, start: 0, end: 5 },
+    { block: 0, start: 6, end: 9 },
+  ],
+) =>
+  contextExcerpt(
+    contextFixture(selected.warning.points_at.record_uuid),
+    selected.warning.points_at.record_uuid,
+    null,
+    marks,
+  );
+
+// A correction's reason is its whole message with the native marks shown;
+// the conversation and the reason share one read.
+it('shows a correction as "you wrote" and its whole message with the native marks', async () => {
+  const test = setup();
+  test.transcript.mockResolvedValue(quoted());
+  test.mount();
+  await waitFor(() => expect(screen.getByTestId('warning-reason').dataset.quote).toBe(''));
+  const reason = screen.getByTestId('warning-reason');
+  expect(reason.textContent).toBe(
+    `${SESSION_WARNINGS_TEXT.you_wrote}Still not fixed. The sample build fails at the same step. Please check the retry limit instead of changing the timeout again.`,
+  );
+  expect([...reason.querySelectorAll('mark')].map((mark) => mark.textContent)).toEqual([
+    'Still',
+    'not',
+  ]);
+  expect(reason.textContent).not.toContain(selected.warning.reason);
+  expect(test.transcript).toHaveBeenCalledOnce();
+  expect((test.transcript.mock.calls[0] as unknown[])[4]).toBe('correction');
+  expect(dialog().textContent).not.toContain('take a closer look');
+});
+
+for (const state of ['loading', 'failed', 'unmarked', 'unavailable'] as const)
+  it(`shows the correction's own reason while the message is ${state}`, async () => {
+    const test = setup();
+    if (state === 'loading') test.transcript.mockImplementation(() => new Promise(() => {}));
+    else if (state === 'failed') test.transcript.mockRejectedValue(new Error('unreadable'));
+    else if (state === 'unmarked') test.transcript.mockResolvedValue(quoted([]));
+    else
+      test.transcript.mockResolvedValue({
+        state: 'unavailable',
+        reason: { reason: 'target_missing' },
+      });
+    test.mount();
+    await screen.findByTestId('warning-reason');
+    await waitFor(() => expect(test.transcript).toHaveBeenCalled());
+    if (state !== 'loading')
+      await waitFor(() =>
+        expect(screen.queryByText('Loading the original conversation…')).toBeNull(),
+      );
+    const reason = screen.getByTestId('warning-reason');
+    expect(reason.textContent).toBe(selected.warning.reason);
+    expect(reason.querySelector('mark')).toBeNull();
+    expect(dialog().textContent).not.toContain('take a closer look');
+  });
+
+it('keeps every other kind on its own reason, whatever the read carries', async () => {
+  const test = setup();
+  const other = read.warnings.find((one) => one.kind !== 'correction')!;
+  test.transcript.mockResolvedValue(quoted());
+  test.mount();
+  await screen.findByTestId('warning-reason');
+  test.select({ ...selected, warning: other });
+  await waitFor(() => expect(screen.getByTestId('warning-item').dataset.warningId).toBe(other.id));
+  await waitFor(() => expect(test.transcript).toHaveBeenCalledTimes(2));
+  expect((test.transcript.mock.calls[1] as unknown[])[4]).toBe(other.kind);
+  expect(screen.getByTestId('warning-reason').textContent).toBe(other.reason);
+  expect(screen.getByTestId('warning-reason').querySelector('mark')).toBeNull();
+});

@@ -536,16 +536,62 @@ pub(crate) struct Evidence {
     pub(crate) tool_only_calls: BTreeSet<(String, u64)>,
 }
 
+/// One word of a message as the text rules compare it, and where it came
+/// from in the original text, as a byte range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Word {
+    text: String,
+    span: std::ops::Range<usize>,
+}
+
 /// The words of a message as the text rules compare them: lowercase, curly
 /// apostrophes made straight, split on anything that is not a letter, digit,
-/// apostrophe or hyphen.
+/// apostrophe or hyphen. Each keeps the byte range of the original text it
+/// came from (every lowercase character maps to the original character it
+/// was made from), so a match can be shown in the message as written.
+fn spanned_words(text: &str) -> Vec<Word> {
+    let lower = text.to_lowercase();
+    let mut lowered = lower.chars();
+    let mut words = Vec::new();
+    let mut current: Vec<(char, usize, usize)> = Vec::new();
+    let mut flush = |current: &mut Vec<(char, usize, usize)>| {
+        let trim = |c: &(char, usize, usize)| c.0 == '\'' || c.0 == '-';
+        let first = current.iter().position(|c| !trim(c));
+        let last = current.iter().rposition(|c| !trim(c));
+        if let (Some(first), Some(last)) = (first, last) {
+            let kept = &current[first..=last];
+            words.push(Word {
+                text: kept.iter().map(|c| c.0).collect(),
+                span: kept[0].1..kept[kept.len() - 1].2,
+            });
+        }
+        current.clear();
+    };
+    for (at, original) in text.char_indices() {
+        let end = at + original.len_utf8();
+        // `str::to_lowercase` writes as many characters for each character as
+        // `char::to_lowercase` does (a final sigma differs only in which one).
+        for _ in 0..original.to_lowercase().count() {
+            let Some(mut c) = lowered.next() else { break };
+            if c == '\u{2019}' {
+                c = '\'';
+            }
+            if c.is_alphanumeric() || c == '\'' || c == '-' {
+                current.push((c, at, end));
+            } else {
+                flush(&mut current);
+            }
+        }
+    }
+    flush(&mut current);
+    words
+}
+
+/// The words of a message as the text rules compare them ([`spanned_words`]).
 fn words(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .replace('\u{2019}', "'")
-        .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '-'))
-        .map(|word| word.trim_matches(|c| c == '\'' || c == '-'))
-        .filter(|word| !word.is_empty())
-        .map(str::to_owned)
+    spanned_words(text)
+        .into_iter()
+        .map(|word| word.text)
         .collect()
 }
 
@@ -554,22 +600,55 @@ pub fn correction(text: &str) -> Option<String> {
     find_correction(text, true)
 }
 
+/// Where [`correction`] found its words in the message as written: the byte
+/// range in `text` of each word of the matched phrase, in order (for "still"
+/// beside a negative word, every word from one to the other). Lowercased
+/// and joined with spaces, they are exactly [`correction`]'s phrase. `None`
+/// when [`correction`] finds none.
+pub fn correction_spans(text: &str) -> Option<Vec<std::ops::Range<usize>>> {
+    let words = spanned_words(text);
+    let matched = match_correction(&words, true)?;
+    Some(
+        words[matched]
+            .iter()
+            .map(|word| word.span.clone())
+            .collect(),
+    )
+}
+
 /// [`correction`] over a message's words. `whole` says they are all of the
 /// message; for only its start, the "no" rule cannot run, because how many
 /// words the whole message has is not known.
 fn find_correction(text: &str, whole: bool) -> Option<String> {
-    let words = words(text);
-    if whole && words.first().map(String::as_str) == Some("no") && words.len() <= NO_MAX_WORDS {
-        return Some("no".to_owned());
+    let words = spanned_words(text);
+    let matched = match_correction(&words, whole)?;
+    Some(
+        words[matched]
+            .iter()
+            .map(|word| word.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+/// The one correction matcher: the indices of the matched words in `words`,
+/// first to last, or `None`. See [`find_correction`] for `whole`.
+fn match_correction(words: &[Word], whole: bool) -> Option<std::ops::RangeInclusive<usize>> {
+    if whole
+        && words.first().map(|word| word.text.as_str()) == Some("no")
+        && words.len() <= NO_MAX_WORDS
+    {
+        return Some(0..=0);
     }
     for (index, word) in words.iter().enumerate() {
-        if CORRECTION_WORDS.contains(&word.as_str()) {
-            return Some(word.clone());
+        let word = word.text.as_str();
+        if CORRECTION_WORDS.contains(&word) {
+            return Some(index..=index);
         }
         if word == CORRECTION_PHRASE[0]
-            && words.get(index + 1).map(String::as_str) == Some(CORRECTION_PHRASE[1])
+            && words.get(index + 1).map(|next| next.text.as_str()) == Some(CORRECTION_PHRASE[1])
         {
-            return Some(CORRECTION_PHRASE.join(" "));
+            return Some(index..=index + 1);
         }
         if word == "still" {
             let low = index.saturating_sub(STILL_REACH);
@@ -579,9 +658,9 @@ fn find_correction(text: &str, whole: bool) -> Option<String> {
                 .flat_map(|distance| [index.checked_add(distance), index.checked_sub(distance)])
                 .flatten()
                 .filter(|other| (low..=high).contains(other))
-                .find(|other| STILL_NEGATIVES.contains(&words[*other].as_str()));
+                .find(|other| STILL_NEGATIVES.contains(&words[*other].text.as_str()));
             if let Some(other) = near {
-                return Some(words[index.min(other)..=index.max(other)].join(" "));
+                return Some(index.min(other)..=index.max(other));
             }
         }
     }
@@ -2113,6 +2192,107 @@ mod tests {
             "add an export button",
         ] {
             assert_eq!(correction(none), None, "{none}");
+        }
+    }
+
+    /// The spans agree with [`correction`] on every case above: sliced from
+    /// the message as written, lowercased (curly apostrophes made straight)
+    /// and joined with spaces, they are its phrase; and they are found only
+    /// where it finds one.
+    #[test]
+    fn correction_spans_slice_back_to_the_matched_words() {
+        for text in [
+            "I still need an export button",
+            "still not working",
+            "It\u{2019}s still broken",
+            "the same thing is still happening",
+            "I still don't see it",
+            "still a b c d e broken",
+            "still a b c d broken",
+            "that's WRONG",
+            "Please stop.",
+            "try again",
+            "I said the left panel",
+            "notice the nothing",
+            "a no-op change",
+            "stopwatch",
+            "she said yes",
+            "add an export button",
+            "No, use the other file",
+            "no",
+            "no that is not the file I meant",
+            "no that is not the file I meant here",
+            "there is no test for it yet",
+            "Ça ne marche pas, I SAID «gauche» — wrong!",
+            "Still\n\nNOT fixed 🙂",
+            "ΟΔΟΣ still broken",
+            "İstanbul is wrong",
+            "the build—still—fails",
+        ] {
+            let phrase = correction(text);
+            let spans = correction_spans(text);
+            assert_eq!(phrase.is_some(), spans.is_some(), "{text}");
+            if let (Some(phrase), Some(spans)) = (phrase, spans) {
+                let sliced = spans
+                    .iter()
+                    .map(|span| text[span.clone()].to_lowercase().replace('\u{2019}', "'"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert_eq!(sliced, phrase, "{text}");
+            }
+        }
+        // Non-adjacent words: every word from "still" to the negative one.
+        let text = "It is Still, sadly, NOT fixed";
+        let spans = correction_spans(text).unwrap();
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| &text[span.clone()])
+                .collect::<Vec<_>>(),
+            ["Still", "sadly", "NOT"]
+        );
+        // The synthetic UI fixtures state these marks for their correction.
+        assert_eq!(
+            correction_spans(
+                "Still not fixed. The sample build fails at the same step. Please check the retry limit instead of changing the timeout again."
+            ),
+            Some(vec![0..5, 6..9])
+        );
+        // Byte ranges over multi-byte text.
+        let text = "– héllo, I said ünïcode";
+        let spans = correction_spans(text).unwrap();
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| &text[span.clone()])
+                .collect::<Vec<_>>(),
+            ["I", "said"]
+        );
+    }
+
+    /// The offset-keeping split gives exactly the words the split before
+    /// it gave, on text where lowercasing changes lengths or depends on
+    /// position.
+    #[test]
+    fn spanned_words_are_the_words_the_old_split_gave() {
+        fn legacy(text: &str) -> Vec<String> {
+            text.to_lowercase()
+                .replace('\u{2019}', "'")
+                .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '-'))
+                .map(|word| word.trim_matches(|c| c == '\'' || c == '-'))
+                .filter(|word| !word.is_empty())
+                .map(str::to_owned)
+                .collect()
+        }
+        for text in [
+            "ΟΔΟΣ ΣΑΣ σ",
+            "İstanbul İİ",
+            "it\u{2019}s 'quoted' -dash- a--b ''",
+            "ﬁle ß ẞ Ǆ",
+            "tab\tnew\nline 🙂emoji🙂",
+            "",
+        ] {
+            assert_eq!(words(text), legacy(text), "{text}");
         }
     }
 

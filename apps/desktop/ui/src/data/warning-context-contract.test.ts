@@ -24,14 +24,16 @@ it.each([null, 150])(
     };
     vi.mocked(invoke).mockResolvedValueOnce(answer).mockResolvedValueOnce(undefined);
     expect(invoke).not.toHaveBeenCalled();
-    expect(await source.sessionWarningContext('session-a', 'record-a', block, 'read-a')).toBe(
-      answer,
-    );
+    expect(
+      await source.sessionWarningContext('session-a', 'record-a', block, 'read-a', 'correction'),
+    ).toBe(answer);
+    // The warning's kind goes with it: the native side marks a correction.
     expect(invoke).toHaveBeenNthCalledWith(1, 'session_warning_context', {
       sessionId: 'session-a',
       recordUuid: 'record-a',
       block,
       readId: 'read-a',
+      kind: 'correction',
     });
     await source.cancelSessionTranscript('read-a');
     expect(invoke).toHaveBeenNthCalledWith(2, 'cancel_session_transcript', { readId: 'read-a' });

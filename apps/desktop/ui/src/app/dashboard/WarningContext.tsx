@@ -14,7 +14,7 @@ import {
   type TranscriptRecord,
 } from '../session-detail/transcript-view';
 import { useWarningContext } from './useWarningContext';
-import { warningExcerpt } from './warning-context';
+import { warningExcerpt, type WarningContextRead } from './warning-context';
 import '../../styles/session-warnings.css';
 
 /**
@@ -29,18 +29,38 @@ import '../../styles/session-warnings.css';
 export function WarningContext({
   sessionId,
   warning,
+  ...props
+}: {
+  sessionId: string;
+  warning: SessionWarningItem;
+  timezone: string;
+  host?: string;
+  fullSession?: { href: string; open: () => void };
+}) {
+  const { read, retry } = useWarningContext(sessionId, warning);
+  return <WarningContextView read={read} retry={retry} warning={warning} {...props} />;
+}
+
+/**
+ * The conversation around a warning, from a read its caller owns (the
+ * Dashboard's window reads it once and shows it here and in its reason).
+ */
+export function WarningContextView({
+  read,
+  retry,
+  warning,
   timezone,
   host,
   fullSession,
 }: {
-  sessionId: string;
+  read: WarningContextRead;
+  retry: () => void;
   warning: SessionWarningItem;
   timezone: string;
   /** The session's host: named in the header, and the agent's mark. */
   host?: string;
   fullSession?: { href: string; open: () => void };
 }) {
-  const { read, retry } = useWarningContext(sessionId, warning.points_at);
   const excerpt = warningExcerpt(read);
   const generation = read.phase === 'read' ? generationNote(read.status) : null;
   let notice: string | null = null;

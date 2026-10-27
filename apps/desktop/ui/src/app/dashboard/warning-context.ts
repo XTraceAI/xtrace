@@ -15,11 +15,45 @@ export type WarningContext =
       neighborsAvailable: boolean;
     };
 
-export function warningExcerpt(
-  read: import('../session-detail/useSessionTranscript').SourceRead<
-    import('../../data/generated/SessionExcerptStatus').SessionExcerptStatus
-  >,
-): WarningContext {
+/** One read of a warning's original messages. */
+export type WarningContextRead = import('../session-detail/useSessionTranscript').SourceRead<
+  import('../../data/generated/SessionExcerptStatus').SessionExcerptStatus
+>;
+
+/** A stretch of a correction's message: marked where its words made it one. */
+export type QuotePart = { readonly text: string; readonly marked: boolean };
+
+/**
+ * A correction's whole message as the excerpt read it, split at the native
+ * marks (`SessionExcerptRecord.correction_marks`, UTF-16 offsets into each
+ * text block): its text blocks, in order, one per line. `null` until the
+ * excerpt is read, and when it is unavailable or marks nothing, so the
+ * warning's own reason is shown instead. Nothing here looks for words.
+ */
+export function correctionQuote(read: WarningContextRead): QuotePart[][] | null {
+  if (read.phase !== 'read' || read.status.state !== 'loaded') return null;
+  const target = read.status.records.find((entry) => entry.target);
+  if (!target || target.correction_marks.length === 0) return null;
+  const quote = target.record.blocks.flatMap((block) => {
+    if (block.kind !== 'text') return [];
+    const marks = target.correction_marks
+      .filter((mark) => mark.block === block.index)
+      .sort((a, b) => a.start - b.start);
+    const parts: QuotePart[] = [];
+    let at = 0;
+    for (const mark of marks) {
+      if (mark.start < at || mark.end > block.text.length || mark.end <= mark.start) continue;
+      if (mark.start > at) parts.push({ text: block.text.slice(at, mark.start), marked: false });
+      parts.push({ text: block.text.slice(mark.start, mark.end), marked: true });
+      at = mark.end;
+    }
+    if (at < block.text.length) parts.push({ text: block.text.slice(at), marked: false });
+    return [parts];
+  });
+  return quote.some((parts) => parts.some((part) => part.marked)) ? quote : null;
+}
+
+export function warningExcerpt(read: WarningContextRead): WarningContext {
   if (read.phase !== 'read') return { kind: 'unavailable', reason: '' };
   if (read.status.state === 'unavailable') {
     const reason = read.status.reason;

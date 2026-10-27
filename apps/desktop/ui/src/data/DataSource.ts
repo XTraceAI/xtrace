@@ -1,3 +1,4 @@
+import type { SessionWarningKind } from './generated/SessionWarningKind';
 import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
 import type { SessionDiagnosis } from './generated/SessionDiagnosis';
 import type { SavedSkill } from './generated/SavedSkill';
@@ -372,12 +373,17 @@ export interface DataSource {
    * read is resolved behind this seam, from what the index recorded — a view
    * that could name a path could name any path, and this read opens files.
    */
-  /** A bounded original-source excerpt around the saved warning point; never cached. */
+  /**
+   * A bounded original-source excerpt around the saved warning point; never
+   * cached. `kind` is the warning's: a correction's target is marked where
+   * its text says so (`SessionExcerptRecord.correction_marks`).
+   */
   sessionWarningContext(
     sessionId: string,
     recordUuid: string,
     block: number | null,
     readId: string,
+    kind?: SessionWarningKind,
   ): Promise<SessionExcerptStatus>;
   sessionTranscriptPage?(
     sessionId: string,

@@ -66,7 +66,7 @@ Object.defineProperties(source, {
   },
 });
 Object.assign(window, { __dismissals: dismissals });
-source.sessionWarningContext = async () => {
+source.sessionWarningContext = async (_session, recordUuid, _block, _readId, kind) => {
   if (params.get('context') === 'large') {
     const response = await fetch('/e2e/warning-large-context.synthetic.json');
     return response.json() as Promise<SessionExcerptStatus>;
@@ -99,7 +99,21 @@ source.sessionWarningContext = async () => {
     status.records[2]!.blocks = [
       { kind: 'text', index: 0, text: 'Synthetic long content. '.repeat(500) },
     ];
-  return contextExcerpt(status, warning.points_at.record_uuid, warning.points_at.block);
+  // The native marks for the correction's own message ("Still not fixed. …"):
+  // "Still" and "not", as M-21's matcher finds them. Stated here, never
+  // looked for in the UI; none for another warning, a sub-agent's or a
+  // replaced message.
+  const marks =
+    kind === 'correction' &&
+    recordUuid === warning.points_at.record_uuid &&
+    !subagent &&
+    !params.has('long')
+      ? [
+          { block: 0, start: 0, end: 5 },
+          { block: 0, start: 6, end: 9 },
+        ]
+      : [];
+  return contextExcerpt(status, warning.points_at.record_uuid, warning.points_at.block, marks);
 };
 if (params.has('full-session-targets')) {
   const host = params.get('host') === 'codex' ? 'codex' : 'claude';

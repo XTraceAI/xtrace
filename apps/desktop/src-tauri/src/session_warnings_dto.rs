@@ -87,8 +87,9 @@ pub struct WarningsText {
     pub flagged_label: &'static str,
     /// A short heading over the reason, by the warning's kind.
     pub flagged_headings: KindWords,
-    /// Under the reason: what the reader can do next.
-    pub flagged_next: &'static str,
+    /// Before a correction's whole message, in place of its reason, with
+    /// the words that made it a correction marked.
+    pub you_wrote: &'static str,
     /// What the flagged message itself is called on its card, by kind: one
     /// message, so one call or one prompt.
     pub message_tags: KindWords,
@@ -134,7 +135,7 @@ pub const TEXT: WarningsText = WarningsText {
         repeated_prompt: "The same request, sent again.",
         repeated_failure: "Another attempt. The same failure.",
     },
-    flagged_next: "See the conversation around it, then take a closer look.",
+    you_wrote: "you wrote",
     message_tags: KindWords {
         correction: "Correction",
         interruption: "Interruption",

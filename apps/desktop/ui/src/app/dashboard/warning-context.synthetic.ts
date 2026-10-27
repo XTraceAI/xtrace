@@ -67,6 +67,11 @@ export function contextExcerpt(
   status: Extract<SessionSourceStatus, { state: 'loaded' }>,
   target: string,
   block: number | null = null,
+  /**
+   * The native correction marks for the target, stated by the fixture: the
+   * UI never works them out (`SessionExcerptRecord.correction_marks`).
+   */
+  marks: import('../../data/generated/TextMark').TextMark[] = [],
 ): import('../../data/generated/SessionExcerptStatus').SessionExcerptStatus {
   const matches = status.records.flatMap((record, index) => (record.id === target ? [index] : []));
   if (matches.length !== 1)
@@ -104,6 +109,7 @@ export function contextExcerpt(
             ? null
             : start + index >= status.record_ranges[0]!.start &&
               start + index < status.record_ranges[0]!.end,
+        correction_marks: target ? marks : [],
       };
     }),
   };

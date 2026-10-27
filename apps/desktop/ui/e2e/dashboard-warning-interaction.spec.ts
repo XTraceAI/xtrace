@@ -88,7 +88,12 @@ for (const scheme of ['light', 'dark'] as const) {
     const modal = page.getByTestId('dashboard-warning-modal');
     await expect(modal).toHaveAccessibleName('Correction Fix the flaky build');
     await expect(modal.getByRole('button', { name: 'Close' })).toBeFocused();
-    await expect(modal).toContainText('you wrote "still not" after a reply (15:00)');
+    // A correction's reason is its whole message, the native marks shown.
+    const reason = modal.getByTestId('warning-reason');
+    await expect(reason).toContainText(
+      `${SESSION_WARNINGS_TEXT.you_wrote}Still not fixed. The sample build fails at the same step.`,
+    );
+    await expect(reason.locator('mark')).toHaveText(['Still', 'not']);
     await expect(page.getByTestId('warning-tip')).toHaveCount(0);
     await expect(page).toHaveURL(location);
     if (shots) await page.screenshot({ path: `${shots}/lane-warning-modal-${scheme}.png` });
