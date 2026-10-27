@@ -13,6 +13,7 @@ import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { DashboardWindow } from '../../data/generated/DashboardWindow';
 import { UNMEASURED } from '../../kit/format';
 import { Icon } from '../../kit/icons';
+import { RulePopover } from '../../kit/RulePopover';
 import type { TimeRange } from '../../kit/TopBar';
 import { useSurfaceTheme } from '../../theme/ThemeProvider';
 import { agentTime } from '../agent-duration';
@@ -196,32 +197,47 @@ export function HumanTimeline({
         </p>
       )}
       <div className="xt-human-plot">
-        <div className="xt-human-axis" aria-hidden="true">
+        <div className="xt-human-axis">
           <span />
-          <span className="xt-human-hours">
+          <span className="xt-human-hours" aria-hidden="true">
             {HOURS.map((hour) => (
               <span key={hour}>{hour}</span>
             ))}
           </span>
           {withAgents ? (
             <>
-              <span className="xt-human-total-head" data-testid="human-total-head">
-                <Icon name="person" size={13} />
-              </span>
-              <span
-                className="xt-human-total-head"
-                data-key="agents"
-                data-testid="agent-total-head"
-              >
-                <Icon name="bot" size={13} />
-              </span>
-              <span
-                className="xt-human-total-head"
-                data-key="leverage"
-                data-testid="leverage-total-head"
-              >
-                <Icon name="bolt" size={13} />
-              </span>
+              <RulePopover ruleId="M-08" text="Human hrs">
+                <span
+                  className="xt-human-total-head"
+                  data-testid="human-total-head"
+                  role="img"
+                  aria-label="Human hrs"
+                >
+                  <Icon name="person" size={13} />
+                </span>
+              </RulePopover>
+              <RulePopover ruleId="M-05" text="Agent hrs">
+                <span
+                  className="xt-human-total-head"
+                  data-key="agents"
+                  data-testid="agent-total-head"
+                  role="img"
+                  aria-label="Agent hrs"
+                >
+                  <Icon name="bot" size={13} />
+                </span>
+              </RulePopover>
+              <RulePopover ruleId="M-08" text="Leverage">
+                <span
+                  className="xt-human-total-head"
+                  data-key="leverage"
+                  data-testid="leverage-total-head"
+                  role="img"
+                  aria-label="Leverage"
+                >
+                  <Icon name="bolt" size={13} />
+                </span>
+              </RulePopover>
             </>
           ) : (
             <span />
