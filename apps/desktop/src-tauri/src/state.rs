@@ -869,7 +869,7 @@ impl AppState {
             },
             generation: None,
         };
-        let result = match self.open_page(session_id, &selection, cancel, readers)? {
+        let result = match self.open_page(session_id, &selection, cancel, readers, false)? {
             PageOpen::NotRead(source) => {
                 return Ok(SessionExcerptStatus::unavailable(
                     SessionExcerptReason::Source { source },
@@ -953,12 +953,13 @@ impl AppState {
         selection: &crate::dto::SessionPageSelection,
         cancel: &xt_ingest::native::readers_cli::CancelToken,
         readers: &crate::native_index::DetailReaders,
+        diagnosis: bool,
     ) -> Result<PageOpen, StateError> {
         use xt_ingest::native::{
             readers_cli::DetailBounds,
             session_source::{
                 DetailReader, ExcerptLimits, SessionSourceRequest, SourceLimits,
-                load_session_page_with_reader,
+                load_session_context_with_reader, load_session_page_with_reader,
             },
         };
         let (Some(home), Some((host, native, indexed))) =
@@ -987,7 +988,12 @@ impl AppState {
             producer: &r.producer,
             bounds: DetailBounds::default(),
         });
-        Ok(PageOpen::Read(load_session_page_with_reader(
+        let load = if diagnosis {
+            load_session_context_with_reader
+        } else {
+            load_session_page_with_reader
+        };
+        Ok(PageOpen::Read(load(
             &SessionSourceRequest {
                 home,
                 host,
@@ -1021,7 +1027,7 @@ impl AppState {
                 },
             });
         }
-        let status = match self.open_page(session_id, selection, cancel, readers)? {
+        let status = match self.open_page(session_id, selection, cancel, readers, false)? {
             PageOpen::NotRead(source) => SessionPageStatus::Unavailable {
                 reason: SessionPageReason::Read {
                     detail: SessionExcerptReason::Source { source },
@@ -1031,6 +1037,81 @@ impl AppState {
                 .map_err(StateError::SourceEncoding)?,
         };
         Ok(settled_page(status, cancel))
+    }
+
+    /// Local preparation only: the same bounded records used for warning pages.
+    pub fn diagnosis_context(
+        &self,
+        session_id: &str,
+        point: &xt_metrics::WarningPoint,
+        cancel: &xt_ingest::native::readers_cli::CancelToken,
+        readers: &crate::native_index::DetailReaders,
+    ) -> Result<
+        Result<Vec<xt_ingest::canonical::ParsedRecord>, crate::dto::SessionSourceReason>,
+        StateError,
+    > {
+        use crate::dto::{
+            SessionExcerptReason as E, SessionPageReason as P, SessionPageSelection,
+            SessionPageStatus, SessionPageTargetKind, SessionSourceReason as S,
+        };
+        let supports_page = self
+            .source_identity(session_id)?
+            .is_some_and(|(host, _, _)| {
+                matches!(host, xt_store::Host::Claude | xt_store::Host::Codex)
+            });
+        match self.loaded_source(session_id, cancel, readers)? {
+            Ok(loaded) => return Ok(Ok(loaded.records)),
+            Err(reason) if !supports_page || !bounded_source_refusal(&reason) => {
+                return Ok(Err(reason));
+            }
+            Err(_) => {}
+        }
+        let selection = SessionPageSelection::Anchor {
+            record_uuid: point.record_uuid.clone(),
+            block: point.block,
+            expected: if point.block.is_some() {
+                SessionPageTargetKind::ToolBlock
+            } else {
+                SessionPageTargetKind::Message
+            },
+            generation: None,
+        };
+        let result = match self.open_page(session_id, &selection, cancel, readers, true)? {
+            PageOpen::NotRead(reason) => Err(reason),
+            PageOpen::Read(Ok(page)) => Ok(page.records.into_iter().map(|r| r.record).collect()),
+            PageOpen::Read(Err(reason)) => {
+                let SessionPageStatus::Unavailable { reason } =
+                    SessionPageStatus::from_read(Err(reason), &selection)
+                        .map_err(StateError::SourceEncoding)?
+                else {
+                    unreachable!()
+                };
+                match reason {
+                    P::Read {
+                        detail: E::TargetMissing | E::TargetAmbiguous | E::BlockMissing,
+                    } => Ok(Vec::new()),
+                    P::Read {
+                        detail: E::Source { source },
+                    } => Err(source),
+                    P::Changed => Err(S::Replaced),
+                    P::Read {
+                        detail: E::Deadline,
+                    } => Err(S::ReaderDeadline),
+                    P::RecordTooLarge
+                    | P::Read {
+                        detail: E::Limit { .. },
+                    } => Err(S::ReaderLimit {
+                        limit: crate::dto::ReaderLimit::OutputBytes,
+                    }),
+                    _ => Err(S::Unreadable),
+                }
+            }
+        };
+        Ok(if cancel.is_cancelled() {
+            Err(S::Cancelled)
+        } else {
+            result
+        })
     }
 
     /// The resolution and bounded read behind [`AppState::session_transcript`],

@@ -1073,3 +1073,528 @@ fn a_competing_final_file_created_during_staging_prevents_publication() {
         1
     );
 }
+
+#[test]
+fn changed_source_result_blocks_stop_before_any_agent_is_called() {
+    use std::os::unix::fs::PermissionsExt;
+    use xt_ingest::native::session_source::GenerationBasis;
+
+    for replacement in [
+        None,
+        Some(json!({"type": "text", "text": "changed result"})),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = home.join(".claude/projects/-diagnosis-fixture");
+        std::fs::create_dir_all(&project).unwrap();
+        let sid = uuid(90);
+        let calls = json!({"uuid": uuid(1), "type": "assistant", "sessionId": sid,
+        "timestamp": at(1), "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "make"}},
+            {"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "make"}}
+        ]}});
+        let replies = json!({"uuid": uuid(2), "type": "user", "sessionId": sid,
+        "timestamp": at(2), "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "a", "is_error": true, "content": "first failure"},
+            {"type": "tool_result", "tool_use_id": "b", "is_error": true, "content": "second failure"}
+        ]}});
+        let data = root.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let mut store = xt_store::Store::open(data.join("xtrace.db")).unwrap();
+        let mut meta =
+            xt_store::SessionMeta::new(&sid, "claude", xt_store::SessionSource::Transcript);
+        meta.native_session_id = Some(sid.clone());
+        meta.surface = Some("cli".into());
+        store.upsert_session(&meta, false).unwrap();
+        store
+            .upsert_records(
+                &sid,
+                &[
+                    record(calls.clone()).canonical,
+                    record(replies.clone()).canonical,
+                ],
+                false,
+            )
+            .unwrap();
+        drop(store);
+
+        let mut changed = replies;
+        let blocks = changed["message"]["content"].as_array_mut().unwrap();
+        blocks.pop();
+        if let Some(replacement) = replacement {
+            blocks.push(replacement);
+        }
+        std::fs::write(
+            project.join(format!("{sid}.jsonl")),
+            format!("{calls}\n{changed}\n"),
+        )
+        .unwrap();
+        let state = AppState::build(
+            crate::state::StartupOptions {
+                data_dir: Some(data),
+                native_home: Some(home.clone()),
+                ..Default::default()
+            },
+            || panic!("explicit test data"),
+            || panic!("explicit test home"),
+        )
+        .unwrap();
+        let warning_id = format!("repeated_failure:{}#0", uuid(2));
+        let (warning, _) = state
+            .session_warning(&sid, &warning_id, "UTC")
+            .unwrap()
+            .unwrap();
+        assert_eq!(warning.points_at().block, Some(1));
+        let readers = crate::native_index::DetailReaders::disabled();
+        let loaded = state
+            .loaded_source(&sid, &CancelToken::new(), &readers)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.generation, GenerationBasis::Unrecorded);
+        drop(loaded);
+
+        let fake = root.path().join("fake-coding-tool");
+        std::fs::write(&fake, "#!/bin/sh\n: > \"$HOME/agent-called\"\nexit 9\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let environment = RunEnvironment {
+            inherited_env: vec![
+                ("HOME".into(), home.as_os_str().to_owned()),
+                ("PATH".into(), root.path().as_os_str().to_owned()),
+                (
+                    xt_probes::executable::CLAUDE_ENV.into(),
+                    fake.as_os_str().to_owned(),
+                ),
+                (agents::CODEX_ENV.into(), fake.as_os_str().to_owned()),
+                (agents::CURSOR_ENV.into(), fake.as_os_str().to_owned()),
+            ],
+            temp_dir: root.path().join("agent-runs"),
+            limits: AgentLimits::default(),
+        };
+        let request = Request {
+            session_id: &sid,
+            warning_id: &warning_id,
+            timezone: "UTC",
+            read_id: "missing-result",
+        };
+        let runs = Arc::new(DiagnosisRuns::default());
+        let answer = diagnose(
+            &state,
+            reserve(&runs, &request).unwrap().unwrap(),
+            &readers,
+            &environment,
+            &request,
+        )
+        .unwrap();
+        assert!(
+            matches!(answer, SessionDiagnosis::FlaggedMessageNotFound { .. }),
+            "{answer:?}"
+        );
+        assert!(!home.join("agent-called").exists());
+        assert!(!environment.temp_dir.exists());
+    }
+}
+
+#[test]
+fn only_one_diagnosis_runs_at_a_time_and_cancel_names_it() {
+    let runs = Arc::new(DiagnosisRuns::default());
+    let slot = runs.begin("one").unwrap();
+    assert!(runs.begin("two").is_none());
+    assert!(!runs.cancel("two"));
+    assert!(runs.cancel("one"));
+    assert!(slot.source.is_cancelled() && slot.agent.is_cancelled());
+    drop(slot);
+    assert!(runs.begin("two").is_some());
+    runs.shutdown();
+    assert!(
+        runs.begin("three").is_none(),
+        "nothing starts after quitting"
+    );
+}
+
+#[test]
+fn a_reserved_diagnosis_can_be_stopped_before_its_worker_starts() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("home")).unwrap();
+    let state = AppState::build(
+        crate::state::StartupOptions {
+            data_dir: Some(root.path().join("data")),
+            native_home: Some(root.path().join("home")),
+            ..Default::default()
+        },
+        || panic!("explicit test data"),
+        || panic!("explicit test home"),
+    )
+    .unwrap();
+    let runs = Arc::new(DiagnosisRuns::default());
+    let request = Request {
+        session_id: "no-session",
+        warning_id: "correction:no-message",
+        timezone: "UTC",
+        read_id: "queued",
+    };
+    let slot = reserve(&runs, &request).unwrap().unwrap();
+    assert!(runs.cancel("queued"));
+    assert!(reserve(&runs, &request).unwrap().is_none());
+    // The nonexistent session would answer WarningNotFound if preparation ran.
+    let answer = diagnose(
+        &state,
+        slot,
+        &crate::native_index::DetailReaders::disabled(),
+        &RunEnvironment {
+            inherited_env: Vec::new(),
+            temp_dir: root.path().join("unused"),
+            limits: AgentLimits::default(),
+        },
+        &request,
+    )
+    .unwrap();
+    assert!(matches!(answer, SessionDiagnosis::Cancelled { .. }));
+    assert!(!root.path().join("unused").exists());
+    let later = reserve(&runs, &request).unwrap().unwrap();
+    assert!(!runs.cancel("old"));
+    assert!(!later.source.is_cancelled());
+    drop(later);
+    // A queued closure discarded on dispatch failure drops its slot as well.
+    let slot = reserve(&runs, &request).unwrap().unwrap();
+    let worker = move || drop(slot);
+    drop(worker);
+    assert!(reserve(&runs, &request).unwrap().is_some());
+}
+
+fn native_diagnosis_scene(lines: &[Value]) -> (tempfile::TempDir, AppState, String, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().canonicalize().unwrap().join("home");
+    let directory = home.join(".claude/projects/-diagnose-run-fixture");
+    std::fs::create_dir_all(&directory).unwrap();
+    let sid = uuid(94);
+    let mut lines = lines.to_vec();
+    for line in &mut lines {
+        line["sessionId"] = json!(sid);
+    }
+    std::fs::write(
+        directory.join(format!("{sid}.jsonl")),
+        lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let data = root.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let mut store = xt_store::Store::open(data.join("xtrace.db")).unwrap();
+    let mut meta = xt_store::SessionMeta::new(&sid, "claude", xt_store::SessionSource::Transcript);
+    meta.native_session_id = Some(sid.clone());
+    meta.surface = Some("cli".into());
+    store.upsert_session(&meta, false).unwrap();
+    store
+        .upsert_records(
+            &sid,
+            &lines
+                .into_iter()
+                .map(|line| record(line).canonical)
+                .collect::<Vec<_>>(),
+            false,
+        )
+        .unwrap();
+    drop(store);
+    let state = AppState::build(
+        crate::state::StartupOptions {
+            data_dir: Some(data),
+            native_home: Some(home.clone()),
+            ..Default::default()
+        },
+        || panic!("explicit synthetic data"),
+        || panic!("explicit synthetic home"),
+    )
+    .unwrap();
+    (root, state, sid, home)
+}
+
+fn repeated_failure_lines() -> Vec<Value> {
+    vec![
+        json!({"uuid":uuid(1),"type":"assistant","timestamp":at(1),"message":{"role":"assistant","content":[
+            {"type":"tool_use","id":"first","name":"Bash","input":{"command":"make"}},
+            {"type":"tool_use","id":"second","name":"Bash","input":{"command":"make"}}]}}),
+        json!({"uuid":uuid(2),"type":"user","timestamp":at(2),"message":{"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"first","is_error":true,"content":"first failure"},
+            {"type":"tool_result","tool_use_id":"second","is_error":true,"content":"second failure"}]}}),
+    ]
+}
+
+fn synthetic_agent(root: &Path, home: &Path, wait: bool) -> RunEnvironment {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = root.join("fake-coding-tool");
+    let answer = json!({"what_happened":"Two synthetic calls failed.","real_problem":"no","suggestion":"nothing","draft":"","why":"In [1] the tool was called."});
+    let result = json!({"is_error":false,"result":answer.to_string(),"modelUsage":{"claude-haiku-synthetic":{}}});
+    std::fs::write(&binary, format!(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '2.1.304 (Claude Code)'; exit 0; fi\nif [ \"$1\" = auth ]; then echo '{{\"loggedIn\":true}}'; exit 0; fi\n/bin/cat > \"$HOME/sent-prompt.txt\"\necho started > \"$HOME/model-started\"\n{}\nprintf '%s\\n' '{result}'\n",
+        if wait { "/bin/sleep 30" } else { ":" },
+    )).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    RunEnvironment {
+        inherited_env: vec![
+            ("HOME".into(), home.into()),
+            ("PATH".into(), root.into()),
+            (
+                xt_probes::executable::CLAUDE_ENV.into(),
+                binary.clone().into(),
+            ),
+            (agents::CODEX_ENV.into(), binary.clone().into()),
+            (agents::CURSOR_ENV.into(), binary.into()),
+        ],
+        temp_dir: root.into(),
+        limits: AgentLimits {
+            deadline: Duration::from_secs(20),
+            check_deadline: Duration::from_secs(5),
+            exit_grace: Duration::from_millis(100),
+            term_grace: Duration::from_millis(100),
+            ..AgentLimits::default()
+        },
+    }
+}
+
+#[test]
+fn native_diagnosis_runs_a_fake_tool_and_returns_the_exact_sent_messages() {
+    let (root, state, sid, home) = native_diagnosis_scene(&repeated_failure_lines());
+    let environment = synthetic_agent(root.path(), &home, false);
+    let runs = Arc::new(DiagnosisRuns::default());
+    let warning_id = format!("repeated_failure:{}#0", uuid(2));
+    let request = Request {
+        session_id: &sid,
+        warning_id: &warning_id,
+        timezone: "UTC",
+        read_id: "native-run",
+    };
+    let before = state.with_store(|store| Ok(store.counts()?)).unwrap();
+    let found = diagnose(
+        &state,
+        reserve(&runs, &request).unwrap().unwrap(),
+        &crate::native_index::DetailReaders::disabled(),
+        &environment,
+        &request,
+    )
+    .unwrap();
+    let SessionDiagnosis::Diagnosed {
+        tool,
+        model,
+        messages,
+        sent,
+        ..
+    } = found
+    else {
+        panic!("{found:?}")
+    };
+    assert_eq!(tool, dto::DiagnosisTool::ClaudeCode);
+    assert_eq!(model.as_deref(), Some("claude-haiku-synthetic"));
+    assert_eq!(sent.tools, [dto::DiagnosisTool::ClaudeCode]);
+    assert_eq!(messages.len(), 3);
+    assert!(messages[2].flagged);
+    assert!(messages[2].text.ends_with("second failure"));
+    let prompt = std::fs::read_to_string(home.join("sent-prompt.txt")).unwrap();
+    assert!(prompt.contains("first failure") && prompt.contains("second failure"));
+    assert_eq!(
+        std::fs::read_dir(root.path().join("xtrace-grading/diagnose"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(
+        state.with_store(|store| Ok(store.counts()?)).unwrap(),
+        before
+    );
+    assert!(
+        reserve(&runs, &request).unwrap().is_some(),
+        "the completed run releases admission"
+    );
+    state.shutdown();
+}
+
+#[test]
+fn native_shutdown_cancels_a_running_fake_tool_and_closes_admission() {
+    let (root, state, sid, home) = native_diagnosis_scene(&repeated_failure_lines());
+    let environment = synthetic_agent(root.path(), &home, true);
+    let runs = Arc::new(DiagnosisRuns::default());
+    let warning_id = format!("repeated_failure:{}#0", uuid(2));
+    let request = Request {
+        session_id: &sid,
+        warning_id: &warning_id,
+        timezone: "UTC",
+        read_id: "native-run",
+    };
+    let slot = reserve(&runs, &request).unwrap().unwrap();
+    let shutdown_runs = Arc::clone(&runs);
+    let ready = home.join("model-started");
+    let shutdown = std::thread::spawn(move || {
+        let end = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let running = ready.exists();
+        shutdown_runs.shutdown();
+        running
+    });
+    let started = Instant::now();
+    let found = diagnose(
+        &state,
+        slot,
+        &crate::native_index::DetailReaders::disabled(),
+        &environment,
+        &request,
+    )
+    .unwrap();
+    assert!(
+        shutdown.join().unwrap(),
+        "shutdown waited until the fake attempt started"
+    );
+    assert!(
+        matches!(found, SessionDiagnosis::Cancelled { .. }),
+        "{found:?}"
+    );
+    assert!(started.elapsed() < SHUTDOWN_BOUND);
+    assert!(reserve(&runs, &request).unwrap().is_none());
+    assert_eq!(
+        std::fs::read_dir(root.path().join("xtrace-grading/diagnose"))
+            .unwrap()
+            .count(),
+        0
+    );
+    state.shutdown();
+}
+
+#[test]
+fn shutdown_cancels_both_tokens_and_waits_for_the_slot_guard() {
+    let runs = Arc::new(DiagnosisRuns::default());
+    let slot = runs.begin("held").unwrap();
+    let closer_runs = Arc::clone(&runs);
+    let started = Instant::now();
+    let closer = std::thread::spawn(move || closer_runs.shutdown());
+    let end = Instant::now() + Duration::from_secs(2);
+    while !slot.agent.is_cancelled() && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(slot.source.is_cancelled() && slot.agent.is_cancelled());
+    assert!(
+        !closer.is_finished(),
+        "shutdown waits for the reserved slot to finish"
+    );
+    assert!(runs.begin("later").is_none());
+    drop(slot);
+    closer.join().unwrap();
+    assert!(started.elapsed() < SHUTDOWN_BOUND);
+}
+
+#[test]
+fn bounded_diagnosis_context_keeps_a_late_flag_and_only_its_subagent_messages() {
+    use std::io::Write;
+    let lines:Vec<_>=(1..=30).map(|n|json!({"uuid":uuid(n),"type":"user","timestamp":at(n),"message":{"role":"user","content":"main-only context"}})).collect();
+    let (root, state, sid, home) = native_diagnosis_scene(&lines);
+    let project = home.join(".claude/projects/-diagnose-run-fixture");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(project.join(format!("{sid}.jsonl")))
+        .unwrap();
+    let ignored = format!(
+        "{}\n",
+        json!({"type":"progress","data":"x".repeat(1024*1024)})
+    );
+    for _ in 0..65 {
+        file.write_all(ignored.as_bytes()).unwrap();
+    }
+    drop(file);
+    let agents = project.join(&sid).join("subagents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let other = json!({"uuid":uuid(40),"type":"user","sessionId":sid,"isSidechain":true,"agentId":"agent-a","timestamp":at(40),"message":{"role":"user","content":"other-agent-only context"}});
+    std::fs::write(agents.join("agent-a.jsonl"), format!("{other}\n")).unwrap();
+    let mut blocks = vec![json!({"type":"text","text":"long prose ".repeat(2000)})];
+    for n in 0..25 {
+        blocks.push(json!({"type":"tool_use","id":format!("setup-{n}"),"name":"setup","input":{}}));
+    }
+    blocks.push(json!({"type":"tool_use","id":"repeat-call","name":"write_stdin","input":{"session_id":123,"chars":""}}));
+    let own = vec![
+        json!({"uuid":uuid(50),"type":"user","sessionId":sid,"isSidechain":true,"agentId":"agent-b","timestamp":at(50),"message":{"role":"user","content":"own-agent context"}}),
+        json!({"uuid":uuid(51),"type":"assistant","sessionId":sid,"isSidechain":true,"agentId":"agent-b","timestamp":at(51),"message":{"role":"assistant","content":blocks}}),
+        json!({"uuid":uuid(52),"type":"user","sessionId":sid,"isSidechain":true,"agentId":"agent-b","timestamp":at(52),"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"repeat-call","content":"test process still running"}]}}),
+    ];
+    std::fs::write(
+        agents.join("agent-b.jsonl"),
+        own.iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    state
+        .with_store(|store| {
+            let parsed: Vec<_> = std::iter::once(other).chain(own).map(record).collect();
+            let records: Vec<_> = parsed
+                .iter()
+                .map(|record| record.canonical.clone())
+                .collect();
+            let identities: Vec<_> = parsed
+                .iter()
+                .map(|record| xt_store::model::RecordIdentity {
+                    agent_id: record.native.agent_id.clone(),
+                    ..Default::default()
+                })
+                .collect();
+            let meta = store.session(&sid)?.unwrap().meta;
+            let mut batch = xt_store::batch::IngestBatch::new(&meta, &records, false);
+            batch.identities = &identities;
+            store.apply_ingest_batch(&batch)?;
+            Ok(())
+        })
+        .unwrap();
+    let readers = crate::native_index::DetailReaders::disabled();
+    assert!(matches!(
+        state
+            .loaded_source(&sid, &CancelToken::new(), &readers)
+            .unwrap(),
+        Err(crate::dto::SessionSourceReason::TooLarge { .. })
+    ));
+    let point = WarningPoint {
+        record_uuid: uuid(51),
+        block: Some(26),
+    };
+    let records = state
+        .diagnosis_context(&sid, &point, &CancelToken::new(), &readers)
+        .unwrap()
+        .unwrap();
+    assert_eq!(records.iter().position(|record|record.canonical.uuid.as_deref()==Some(point.record_uuid.as_str())),Some(12));
+    assert!(
+        records
+            .iter()
+            .any(|record| record.canonical.uuid.as_deref() == Some(uuid(40).as_str()))
+    );
+    let facts = state
+        .with_store(|store| session_facts(store, &sid))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        facts.records[&uuid(51)].agent_id.as_deref(),
+        Some("agent-b")
+    );
+    let (messages, flagged) = conversation(&records, &facts.records, &point).unwrap();
+    assert!(messages[flagged].text.starts_with("(ran write_stdin:"));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.text.contains("main-only")
+                || message.text.contains("other-agent-only"))
+    );
+    let built = input::build(
+        &input::Header {
+            kind: input::WarningKind::RepeatedCalls,
+            reason: "repeated calls".into(),
+            host: HostName::ClaudeCode,
+            project: "synthetic".into(),
+        },
+        &messages,
+        flagged,
+    )
+    .unwrap();
+    assert!(built.text.contains("own-agent context"));
+    assert!(
+        built.text.contains("write_stdin") && built.text.contains("test process still running")
+    );
+    state.shutdown();
+    drop(root);
+}

@@ -1,3 +1,5 @@
+import type { SessionDiagnosis } from './generated/SessionDiagnosis';
+import type { SavedSkill } from './generated/SavedSkill';
 import type { DashboardWarnings } from './generated/DashboardWarnings';
 import type { SessionWarningsList } from './generated/SessionWarningsList';
 import type { SessionWarningDismissal } from './generated/SessionWarningDismissal';
@@ -180,6 +182,18 @@ export class TauriDataSource implements DataSource {
       invoke<SessionWarningDismissal>(commands.dismissSessionWarning, { sessionId, warningId }),
     restore: (sessionId: string, warningId: string) =>
       invoke<SessionWarningDismissal>(commands.restoreSessionWarning, { sessionId, warningId }),
+  };
+  readonly diagnosis = {
+    diagnose: (sessionId: string, warningId: string, timezone: string, readId: string) =>
+      invoke<SessionDiagnosis>(commands.diagnoseSessionWarning, {
+        sessionId,
+        warningId,
+        timezone,
+        readId,
+      }),
+    cancel: (readId: string) => invoke<boolean>(commands.cancelSessionDiagnosis, { readId }),
+    saveSkill: (sessionId: string, name: string, draft: string) =>
+      invoke<SavedSkill>(commands.saveSuggestedSkill, { sessionId, name, draft }),
   };
   readonly humanBreak = {
     read: () => invoke<number>(commands.humanBreak),

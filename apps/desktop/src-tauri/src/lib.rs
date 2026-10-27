@@ -628,6 +628,74 @@ fn cancel_session_transcript(
     reads.cancel(&read_id);
 }
 
+/// Diagnose one warning of one session with a small hosted model, on the
+/// person's click: about 20 messages around the flagged one are read from
+/// the session's original source and sent to Claude Code (Haiku), or to
+/// Codex when Claude Code cannot be used before it is given them; the
+/// messages never go to a second tool. The answer says which tool and model
+/// ran and which messages were sent. Nothing is stored.
+/// `timezone` is the zone the view shows (for the warning's identity and the
+/// sent messages' times); `read_id` names this run for
+/// `cancel_session_diagnosis`. One runs at a time; another answers `busy`.
+#[tauri::command]
+async fn diagnose_session_warning(
+    app: tauri::AppHandle,
+    session_id: String,
+    warning_id: String,
+    timezone: String,
+    read_id: String,
+) -> Result<dto::SessionDiagnosis, String> {
+    // Reserve before dispatch so Stop can cancel a run waiting for a worker.
+    let runs = app
+        .try_state::<std::sync::Arc<session_diagnosis::DiagnosisRuns>>()
+        .ok_or_else(|| state::StateError::Closed.to_string())?;
+    let slot = session_diagnosis::reserve(
+        &runs,
+        &session_diagnosis::Request {
+            session_id: &session_id,
+            warning_id: &warning_id,
+            timezone: &timezone,
+            read_id: &read_id,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let Some(slot) = slot else {
+        return Ok(dto::SessionDiagnosis::Busy {
+            text: session_diagnosis_dto::BUSY.to_owned(),
+        });
+    };
+    on_worker(READ_WORKER_FAILED, move || {
+        let index = app
+            .try_state::<native_index::NativeIndex>()
+            .ok_or(state::StateError::Closed)?;
+        let state = app
+            .try_state::<state::AppState>()
+            .ok_or(state::StateError::Closed)?;
+        session_diagnosis::diagnose(
+            &state,
+            slot,
+            index.detail_readers(),
+            &session_diagnosis::RunEnvironment::process(),
+            &session_diagnosis::Request {
+                session_id: &session_id,
+                warning_id: &warning_id,
+                timezone: &timezone,
+                read_id: &read_id,
+            },
+        )
+    })
+    .await
+}
+
+/// Stop the diagnosis `read_id` names, if it is running.
+#[tauri::command]
+fn cancel_session_diagnosis(
+    runs: tauri::State<'_, std::sync::Arc<session_diagnosis::DiagnosisRuns>>,
+    read_id: String,
+) -> bool {
+    runs.cancel(&read_id)
+}
+
 /// Save a skill a diagnosis suggested, on the person's explicit click, as
 /// `<project>/.claude/skills/<name>/SKILL.md` in the session's own project
 /// folder: the name and draft are checked first, an existing skill is never
@@ -1522,6 +1590,9 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(session_titles::TitleReads::default());
     app.manage(session_compactions::CompactionReads::default());
     app.manage(dashboard::SpanDetailReads::default());
+    app.manage(std::sync::Arc::new(
+        session_diagnosis::DiagnosisRuns::default(),
+    ));
     app.manage(refresh);
     app.manage(auto_worker);
     // With the state managed: runs a crash left `running` are saved
@@ -1590,6 +1661,11 @@ fn stop_services(app: &tauri::AppHandle) {
     // A span read may run a pinned reader, as a transcript open does.
     if let Some(reads) = app.try_state::<dashboard::SpanDetailReads>() {
         reads.shutdown();
+    }
+    // A diagnosis may be reading a source or running a coding tool: both
+    // are cancelled, and its tool's group ended, within its bound.
+    if let Some(runs) = app.try_state::<std::sync::Arc<session_diagnosis::DiagnosisRuns>>() {
+        runs.shutdown();
     }
     // A rule activity read starts no process and holds no
     // database; it is cancelled and waited for within its bound.
@@ -1685,6 +1761,8 @@ pub fn run() {
             metrics_window_warnings,
             dismiss_session_warning,
             restore_session_warning,
+            diagnose_session_warning,
+            cancel_session_diagnosis,
             save_suggested_skill,
             session_transcript,
             session_transcript_page,

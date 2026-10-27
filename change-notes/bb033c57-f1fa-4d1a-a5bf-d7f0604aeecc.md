@@ -1,0 +1,1 @@
+- Show Diagnose confirmation, progress, answers, supporting messages, and explicit skill-save actions under the selected session warning.
