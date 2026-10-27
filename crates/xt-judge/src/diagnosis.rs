@@ -1,5 +1,6 @@
 //! The framed input and validated answer of a session diagnosis.
 
+pub mod agents;
 pub mod answer;
 pub mod input;
 
