@@ -14,6 +14,8 @@ const navigation = {
   gear: sidebarIcons.settings,
 };
 const drawings = {
+  back: <path d="M19 12H5m7-7-7 7 7 7" />,
+  forward: <path d="M5 12h14m-7-7 7 7-7 7" />,
   lanes: (
     <g fill="currentColor" stroke="none">
       <rect x="3" y="5" width="18" height="3" rx="1.5" />
