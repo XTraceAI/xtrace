@@ -388,7 +388,7 @@ jobs:
             TESTS+=(scripts/ci/hosted-telemetry.test.mjs scripts/ci/hosted-telemetry-proxy.test.mjs)
           fi
           node --test "${TESTS[@]}"
-      - name: Validate the unchanged signed 0.1.8 selected launch mode
+      - name: Validate the unchanged signed 0.1.9 selected launch mode
         timeout-minutes: ${{ inputs.delivery_mode == 'telemetry' && 22 || 11 }}
         env:
           DELIVERY_MODE: ${{ inputs.delivery_mode }}
@@ -466,7 +466,7 @@ jobs:
       - name: Test update and first-launch guards
         timeout-minutes: 3
         run: node --test scripts/ci/hosted-stop.test.mjs scripts/ci/hosted-validation.test.mjs scripts/ci/hosted-release.test.mjs scripts/ci/hosted-update.test.mjs scripts/ci/hosted-metadata.test.mjs scripts/ci/hosted-database.test.mjs
-      - name: Validate the real signed 0.1.7 to 0.1.8 update, restart, rename on quit and reopen
+      - name: Validate the real signed 0.1.8 to 0.1.9 update, distinct restart, normal quit and reopen
         timeout-minutes: 17
         env:
           ALLOW_RELEASE_IDENTITY: ${{ inputs.allow_release_identity }}

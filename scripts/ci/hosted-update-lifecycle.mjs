@@ -13,7 +13,7 @@ import {
   verifyPreviousInventory,
 } from './hosted-update-checks.mjs';
 const earlierBundle = previousRelease.bundle,
-  renamedBundle = release.bundle;
+  candidateBundle = release.bundle;
 export async function runUpdateLifecycle(
   {
     report,
@@ -116,7 +116,7 @@ export async function runUpdateLifecycle(
     95_000,
     `Observed usable native ${release.version} Dashboard after restart and retained completed Welcome`,
   );
-  // (a) After the restart: still the earlier folder, now holding the
+  // (a) After the restart: the same fixed folder, now holding the
   // candidate's exact files, relaunched as a distinct process, data kept.
   report.restarted = {
     applications: requireBundleStep('restarted', await entries('/Applications')),
@@ -126,8 +126,8 @@ export async function runUpdateLifecycle(
   await validateSignature(earlierBundle, 'updated-app');
   await dataKept('After restart');
   report.restarted.dataKept = true;
-  // A normal quit (the Quit Apple event, never forced) runs the app's own
-  // exit path, which renames the earlier folder.
+  // A normal quit (the Quit Apple event, never forced) must finish before
+  // inspecting the candidate or reopening it.
   await checked(
     'quit-updated',
     helper,
@@ -144,21 +144,21 @@ export async function runUpdateLifecycle(
   );
   report.exitConfirmed = true;
   report.normalQuit = true;
-  // (b) After the quit: only the candidate's folder name, identical files,
+  // (b) After the quit: only XTrace.app, identical files,
   // a valid signature, ticket and Gatekeeper assessment, data kept.
-  report.renamed = {
+  report.afterQuit = {
     applications: requireBundleStep('quit', await entries('/Applications')),
-    inventory: await inventory(renamedBundle),
+    inventory: await inventory(candidateBundle),
   };
-  if (JSON.stringify(report.renamed.inventory) !== JSON.stringify(report.restarted.inventory))
-    throw new Error('Renamed app contents differ from the updated app');
-  await appIdentity(renamedBundle, release.version, 'renamed-plist');
-  await validateSignature(renamedBundle, 'renamed-app');
-  report.quarantine.renamedAfterQuit = await quarantineAt(renamedBundle, 'renamed-after-quit');
+  if (JSON.stringify(report.afterQuit.inventory) !== JSON.stringify(report.restarted.inventory))
+    throw new Error('App contents after normal quit differ from the updated app');
+  await appIdentity(candidateBundle, release.version, 'after-quit-plist');
+  await validateSignature(candidateBundle, 'after-quit-app');
+  report.quarantine.afterQuit = await quarantineAt(candidateBundle, 'after-quit');
   await dataKept('After quit');
   report.databaseAfterUpdate = await database(source, env.XTRACE_DATA_DIR, checked);
-  report.renamed.dataKept = true;
-  // Reopen the renamed folder as a person would: Dashboard, no Welcome.
+  report.afterQuit.dataKept = true;
+  // Reopen XTrace.app as a person would: Dashboard, no Welcome.
   markAttempt('reopen');
   await checked(
     'reopen',
@@ -179,9 +179,9 @@ export async function runUpdateLifecycle(
   await observe(
     'reopened-dashboard',
     reopened.pid,
-    renamedBundle,
+    candidateBundle,
     95_000,
-    `Observed usable native ${release.version} Dashboard after reopening the renamed app without Welcome`,
+    `Observed usable native ${release.version} Dashboard after reopening XTrace.app without Welcome`,
   );
   await checked(
     'quit-reopened',
@@ -200,9 +200,12 @@ export async function runUpdateLifecycle(
   report.reopenExitConfirmed = true;
   report.reopened = {
     applications: requireBundleStep('reopened', await entries('/Applications')),
-    inventory: await inventory(renamedBundle),
+    inventory: await inventory(candidateBundle),
   };
-  report.quarantine.installedAfterExit = await quarantineAt(renamedBundle, 'installed-after-exit');
+  report.quarantine.installedAfterExit = await quarantineAt(
+    candidateBundle,
+    'installed-after-exit',
+  );
   await dataKept('After reopening');
   report.sentinelRetained = true;
   report.database = await database(source, env.XTRACE_DATA_DIR, checked);
@@ -296,16 +299,13 @@ export async function cleanupUpdate({
       );
       report.reopenExitConfirmed = true;
     }
-    // Baseline proved neither folder existed, so whichever exists now is this
-    // run's: the installed earlier folder or the app's own rename of it.
+    // Baseline proved this fixed installation path did not exist. Remove
+    // each owned bundle once, only after all process exits are confirmed.
     if (installed)
-      for (const [name, bundle] of [
-        ['unregister-earlier', earlierBundle],
-        ['unregister-renamed', renamedBundle],
-      ]) {
+      for (const bundle of new Set([earlierBundle, candidateBundle])) {
         if (!(await exists(bundle))) continue;
         await checked(
-          name,
+          'unregister-app',
           '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
           ['-u', bundle],
         );
@@ -363,12 +363,12 @@ export async function prepareUpdateInstall(
     browserDownloadTested: false,
     securityPromptsAutomaticallyApproved: false,
   };
-  // Only the exact reviewed hash above can reach extraction. Its 79-member
+  // Only the exact reviewed hash above can reach extraction. Its 101-member
   // regular-file/directory map was checked before this pin was committed.
   await checked('old-extract', '/usr/bin/tar', ['-xzf', archive, '-C', owned], 60_000);
   const extracted = join(owned, basename(earlierBundle));
   report.extractedInventory = await inventory(extracted);
-  if ((await exists(earlierBundle)) || (await exists(renamedBundle)))
+  if ((await exists(earlierBundle)) || (await exists(candidateBundle)))
     throw new Error('Installation path appeared after baseline');
   markInstalled();
   await checked('install', '/usr/bin/ditto', [extracted, earlierBundle], 60_000);

@@ -119,7 +119,7 @@ async function registryFixture(overrides = {}) {
     owned = join(parent, 'staging.noindex');
   const helperName = `XTraceUpdaterTest-${'a'.repeat(32)}`;
   const helper = join(owned, `${helperName}.app`),
-    target = join(owned, 'valid-target', 'XTrace Desktop.app');
+    target = join(owned, 'valid-target', 'XTrace.app');
   await mkdir(helper, { recursive: true });
   await mkdir(target, { recursive: true });
   const calls = [],
@@ -132,7 +132,7 @@ async function registryFixture(overrides = {}) {
     parent,
     helperName,
     cases: ['valid'],
-    oldBundleName: 'XTrace Desktop.app',
+    oldBundleName: 'XTrace.app',
     output,
     report,
     Buffer,
@@ -408,6 +408,13 @@ test('fixture pins reject substituted content and dependency lock', async () => 
   assert.match(fixture.lockSha256, /^[a-f0-9]{64}$/);
   assert.throws(() => verifyFixture(archive, signature, lock), 'unfilled or different real pins');
   assert.throws(() => verifyFixture(Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)));
+});
+
+test('SDK helper lock pin matches the actual harness checkout', async () => {
+  assert.equal(
+    fixture.lockSha256,
+    sha256(await readFile(new URL('../../Cargo.lock', import.meta.url))),
+  );
 });
 
 test('the SDK cases target the candidate archive from the earlier folder and version', () => {

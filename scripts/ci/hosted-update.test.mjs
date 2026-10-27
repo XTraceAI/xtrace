@@ -3,7 +3,7 @@ import { cleanupUpdate, prepareUpdateInstall } from './hosted-update-lifecycle.m
 import { hostedSwift, swiftPolicy } from './hosted-swift.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -189,11 +189,9 @@ test('the update starts from distinct pinned earlier release inputs', () => {
   assert.equal(previousRelease.tag, `v${previousRelease.version}`);
   assert.match(previousRelease.source, /^[a-f0-9]{40}$/);
   assert.notEqual(previousRelease.source, release.source);
-  assert.equal(previousRelease.bundle, '/Applications/XTrace Desktop.app');
-  assert.equal(
-    previousRelease.archive,
-    `XTrace-Desktop-${previousRelease.version}-macos-arm64.app.tar.gz`,
-  );
+  assert.equal(previousRelease.bundle, '/Applications/XTrace.app');
+  assert.equal(previousRelease.bundle, release.bundle);
+  assert.equal(previousRelease.archive, `XTrace-${previousRelease.version}-macos-arm64.app.tar.gz`);
   assert.ok(previousRelease.bytes > 0);
   assert.ok(previousRelease.inventoryEntries > 0);
   assert.equal(previousRelease.identifier, release.identifier);
@@ -217,19 +215,17 @@ test('old archive and both inventories reject unchecked synthetic input', async 
 
 test('one rule names the app folder after restart, quit and reopen, and rejects copies', () => {
   assert.deepEqual(bundleSteps, {
-    installed: ['XTrace Desktop.app'],
-    restarted: ['XTrace Desktop.app'],
+    installed: ['XTrace.app'],
+    restarted: ['XTrace.app'],
     quit: ['XTrace.app'],
     reopened: ['XTrace.app'],
   });
   const others = ['Safari.app', 'Xcode_16.4.app', 'Utilities'];
-  assert.deepEqual(requireBundleStep('restarted', [...others, 'XTrace Desktop.app']), [
-    'XTrace Desktop.app',
-  ]);
+  assert.deepEqual(requireBundleStep('restarted', [...others, 'XTrace.app']), ['XTrace.app']);
   assert.deepEqual(requireBundleStep('quit', ['XTrace.app', ...others]), ['XTrace.app']);
   for (const [step, names] of [
-    // (a) after restart the folder must keep its earlier name; no XTrace.app yet.
-    ['restarted', ['XTrace.app']],
+    // Every phase requires only the same fixed XTrace.app folder.
+    ['restarted', ['XTrace Desktop.app']],
     ['restarted', ['XTrace Desktop.app', 'XTrace.app']],
     ['restarted', []],
     // (b) after a normal quit only XTrace.app may remain.
@@ -278,11 +274,11 @@ test('identity, version and database checks reject a different app or a replaced
   assert.throws(() => requireSameDatabase(database, undefined, 'step'));
 });
 
-test('synthetic update in place, then rename on quit, keeps one identical inventory', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'update-rename-'));
+test('synthetic update in place keeps the same folder and identical candidate inventory', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'update-in-place-'));
   try {
     const applications = join(temporary, 'Applications');
-    const earlier = join(applications, 'XTrace Desktop.app');
+    const earlier = join(applications, 'XTrace.app');
     await mkdir(join(earlier, 'Contents'), { recursive: true });
     await writeFile(join(earlier, 'Contents/Info.plist'), 'earlier');
     // The updater replaces the folder's contents under the same name.
@@ -291,11 +287,8 @@ test('synthetic update in place, then rename on quit, keeps one identical invent
     await writeFile(join(earlier, 'Contents/Info.plist'), 'candidate');
     const restarted = await appInventory(earlier, 'XTrace.app');
     const values = { ...release, inventoryEntries: 3, inventorySha256: restarted.sha256 };
-    assert.deepEqual(requireBundleStep('restarted', await readdir(applications)), [
-      'XTrace Desktop.app',
-    ]);
+    assert.deepEqual(requireBundleStep('restarted', await readdir(applications)), ['XTrace.app']);
     assert.deepEqual(await verifyAppInventory(earlier, values), restarted);
-    await rename(earlier, join(applications, 'XTrace.app'));
     assert.deepEqual(requireBundleStep('quit', await readdir(applications)), ['XTrace.app']);
     assert.deepEqual(await verifyAppInventory(join(applications, 'XTrace.app'), values), restarted);
     // A copy left beside it fails the quit step, whatever it holds.
@@ -338,17 +331,17 @@ test('update observes old files, presses once, restarts in place, quits normally
     'earlier-inspect',
     'updated-dashboard',
     'entries:/Applications',
-    'inventory:earlier',
-    'identity:earlier',
+    'inventory:restarted',
+    'identity:updated-plist',
     'signature:updated-app',
     'data:After restart',
     'earlier-quit',
     'earlier-absent',
     'entries:/Applications',
-    'inventory:renamed',
-    'identity:renamed',
-    'signature:renamed-app',
-    'quarantine:renamed-after-quit',
+    'inventory:afterQuit',
+    'identity:after-quit-plist',
+    'signature:after-quit-app',
+    'quarantine:after-quit',
     'data:After quit',
     'database',
     'attempt:reopen',
@@ -359,7 +352,7 @@ test('update observes old files, presses once, restarts in place, quits normally
     'quit',
     'absent',
     'entries:/Applications',
-    'inventory:renamed',
+    'inventory:reopened',
     'quarantine:installed-after-exit',
     'data:After reopening',
     'database',
@@ -374,7 +367,7 @@ test('update observes old files, presses once, restarts in place, quits normally
   assert.equal(report.reopenExitConfirmed, true);
   assert.equal(report.nativeDatabaseVerified, true);
   assert.deepEqual(report.beforePressInventory, { old: true });
-  assert.deepEqual(report.restarted.inventory, report.renamed.inventory);
+  assert.deepEqual(report.restarted.inventory, report.afterQuit.inventory);
 });
 
 test('prelaunch verifies feed and old archive before extraction, installation and launch', async () => {
@@ -403,7 +396,7 @@ test('prelaunch verifies feed and old archive before extraction, installation an
           {
             readFile: async () => Buffer.from('synthetic'),
             writeFile: async () => {},
-            readdir: async () => ['XTrace Desktop.app'],
+            readdir: async () => ['XTrace.app'],
             verifyProductionFeed: () => record('feed'),
             verifyPreviousDownload: () => record('archive'),
             verifyPreviousInventory: async () => record('inventory'),
@@ -458,24 +451,58 @@ test('prelaunch default feed verifier refuses invalid bytes before old download 
   }
 });
 
-test('failed update transition or normal quit prevents rename, database acceptance and reopen', async () => {
+test('failed update transition or normal quit prevents after-quit acceptance, database acceptance and reopen', async () => {
   for (const failAt of ['earlier-adopt-update', 'earlier-quit', 'earlier-absent']) {
     const control = updateControl({ failAt });
     await assert.rejects(control.run(), new RegExp(failAt));
-    assert.equal(control.calls.includes('inventory:renamed'), false);
+    assert.equal(control.calls.includes('inventory:afterQuit'), false);
     assert.equal(control.calls.includes('database'), false);
     assert.equal(control.calls.includes('attempt:reopen'), false);
     assert.equal(control.report.normalQuit, undefined);
   }
 });
 
+test('candidate changes after normal quit prevent database acceptance and reopening', async () => {
+  const control = updateControl();
+  const inventory = control.effects.verifyAppInventory;
+  let reads = 0;
+  control.effects.verifyAppInventory = async (bundle) => ({
+    ...(await inventory(bundle)),
+    phase: ++reads,
+  });
+  await assert.rejects(control.run(), /contents after normal quit differ/);
+  assert.equal(control.report.normalQuit, true);
+  assert.equal(control.calls.includes('database'), false);
+  assert.equal(control.calls.includes('attempt:reopen'), false);
+});
+
+test('failed reopening, Dashboard observation or normal exit prevents completed acceptance', async () => {
+  for (const failAt of ['launch', 'reopened-dashboard', 'quit', 'absent']) {
+    const control = updateControl({ failAt });
+    await assert.rejects(control.run(), new RegExp(failAt));
+    assert.equal(control.report.normalQuit, true);
+    assert.equal(control.report.reopenExitConfirmed, undefined);
+    assert.equal(control.report.reopened, undefined);
+    assert.equal(control.report.nativeDatabaseVerified, undefined);
+    assert.equal(control.report.noLeftoverCopies, undefined);
+  }
+});
+
+test('updater copies in Applications or either temporary root reject the lifecycle', async () => {
+  for (const contaminated of ['/Applications', '/owned/tmp', tmpdir()]) {
+    const control = updateControl();
+    const entries = control.effects.readdir;
+    control.effects.readdir = async (path) => [
+      ...(await entries(path)),
+      ...(path === contaminated ? ['tauri_updated_appOwned'] : []),
+    ];
+    await assert.rejects(control.run(), /expected only|Updater copies were left/);
+    assert.equal(control.report.noLeftoverCopies, undefined);
+  }
+});
+
 test('cleanup confirms both owners absent before unregistering or removing files', async () => {
-  for (const failed of [
-    null,
-    'cleanup-all-exited',
-    'cleanup-reopened-exited',
-    'unregister-earlier',
-  ]) {
+  for (const failed of [null, 'cleanup-all-exited', 'cleanup-reopened-exited', 'unregister-app']) {
     const calls = [],
       report = {};
     const failure = await cleanupUpdate({
@@ -503,10 +530,8 @@ test('cleanup confirms both owners absent before unregistering or removing files
       'cleanup-all-exited',
       'cleanup-stop-reopened',
       'cleanup-reopened-exited',
-      'unregister-earlier',
+      'unregister-app',
       `remove:${previousRelease.bundle}`,
-      'unregister-renamed',
-      `remove:${release.bundle}`,
       'remove:/owned/staging',
     ];
     assert.deepEqual(calls, failed ? expected.slice(0, expected.indexOf(failed) + 1) : expected);
@@ -731,13 +756,13 @@ for (observed, missing): (UInt64?, Bool) in [(nil, false), (101, false), (101, t
 }
 for bad in [[record(10, 201)], [record(11, 199)], [next, record(12, 202)], [next, next],
             [record(11, 201, "ai.xtrace.desktop")], [record(11, 201, "ai.xtrace.app", "/other")],
-            // The updater writes into the earlier folder; a successor elsewhere is not adopted.
-            [record(11, 201, "ai.xtrace.app", ProductBundle.current)],
+            // A successor at any other folder must not be adopted.
+            [record(11, 201, "ai.xtrace.app", "/Applications/Other.app")],
             [Receipt(pid: 11, startTime: 201, bundle: old.bundle, executable: "/wrong", identifier: old.identifier)]] {
   do { _ = try successor(t, bad, originalAlive: false); fatalError("Accepted invalid successor") } catch {}
 }
-// Only the earlier folder is updated in place: no transition starts from XTrace.app.
-let currentOriginal = Transition(original: record(10, 100, "ai.xtrace.app", ProductBundle.current), armedAt: 200)
+// No transition may start outside the fixed installation folder.
+let currentOriginal = Transition(original: record(10, 100, "ai.xtrace.app", "/Applications/Other.app"), armedAt: 200)
 do { _ = try successor(currentOriginal, [], originalAlive: true); fatalError("Accepted a transition outside the earlier folder") } catch {}
 func text(_ value: String) -> [String: String] { [kAXValueAttribute: value] }
 func versionRow(_ value: String, _ parent: String = "footer", _ position: Int = 0,
@@ -747,9 +772,9 @@ func versionRow(_ value: String, _ parent: String = "footer", _ position: Int = 
 }
 // Synthetic rows exercise split version labels and the current release relationship.
 assert(Release.candidate == "${release.version}" && Release.earlier == "${previousRelease.version}")
-assert(Release.bundle("update-ready") == "/Applications/XTrace Desktop.app")
-assert(Release.bundle("update-press") == "/Applications/XTrace Desktop.app")
-assert(Release.bundle("updated-dashboard") == "/Applications/XTrace Desktop.app")
+assert(Release.bundle("update-ready") == "/Applications/XTrace.app")
+assert(Release.bundle("update-press") == "/Applications/XTrace.app")
+assert(Release.bundle("updated-dashboard") == "/Applications/XTrace.app")
 for mode in ["reopened-dashboard", "first-launch", "telemetry-notice", "unknown"] {
   assert(Release.bundle(mode) == "/Applications/XTrace.app")
 }
@@ -788,7 +813,7 @@ assert(updateDashboard(splitDashboard, "${release.version}"))
 let splitOldDashboard = rows.filter { $0 != versionRow("v${previousRelease.version}") } +
     [versionRow("v", "footer", 4), versionRow("${previousRelease.version}", "footer", 5)]
 assert(updateReady(splitOldDashboard))
-// After the restart and after reopening the renamed app: Dashboard, never Welcome.
+// After the restart and after reopening XTrace.app: Dashboard, never Welcome.
 assert(!updateDashboard(updated + [text("Welcome to XTrace")], "${release.version}"))
 assert(!updateDashboard(rows, "${release.version}"))
 let wrongTarget = rows.map { $0 == rows[5] ? text("Update 99.98.97 is ready. Your local data stays on this Mac.") : $0 }

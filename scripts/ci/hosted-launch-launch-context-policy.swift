@@ -1,7 +1,5 @@
-// `earlier-` commands act on the folder releases through 0.1.7 installed under
-// (the update starts there and the updater writes the new version into it);
-// all other product commands act on the current folder. Arm/adopt exist only
-// for the earlier folder, the one that is updated in place.
+// `earlier-` commands own the update lifecycle, including arm/adopt. Both
+// releases use the same folder; command roles remain distinct.
 struct LaunchContext {
     let command: String
     let bundle: URL
