@@ -41,6 +41,8 @@ mod projects_dto;
 pub mod rule_activity;
 mod rule_activity_dto;
 pub mod session_compactions;
+pub mod session_diagnosis;
+mod session_diagnosis_dto;
 mod session_source_dto;
 pub mod session_titles;
 pub mod session_warnings_dto;

@@ -72,6 +72,11 @@ pub struct WarningsText {
     /// Under a mark's warning: what opening the mark (a click, or Enter
     /// with it focused) does.
     pub open_hint: &'static str,
+    /// Said before a Diagnose click: which messages will be sent, and to
+    /// which tool (`session_diagnosis_dto::BEFORE_SENDING`).
+    pub diagnose_before_sending: &'static str,
+    /// Every other word the Diagnose controls show.
+    pub diagnose: crate::session_diagnosis_dto::DiagnoseText,
 }
 
 pub const TEXT: WarningsText = WarningsText {
@@ -90,6 +95,8 @@ pub const TEXT: WarningsText = WarningsText {
     dismiss_failed: "This warning could not be dismissed. Nothing was changed.",
     restore_failed: "This warning could not be brought back. Nothing was changed.",
     open_hint: "Open to see it on the session page",
+    diagnose_before_sending: crate::session_diagnosis_dto::BEFORE_SENDING,
+    diagnose: crate::session_diagnosis_dto::DIAGNOSE_TEXT,
 };
 
 /// Writes [`TEXT`] as `SessionWarningsText.ts` into the generated directory.
