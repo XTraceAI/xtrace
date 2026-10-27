@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { DashboardLaneCost } from '../../data/generated/DashboardLaneCost';
 import type { DashboardLaneSession } from '../../data/generated/DashboardLaneSession';
@@ -26,8 +26,17 @@ import {
   useSessionCompactions,
 } from '../session-compactions';
 import { isLiveSessionHost, useLiveSessionStatus } from '../live-session-status';
+import {
+  WarningDot,
+  WarningMarker,
+  beforeAxisLabel,
+  useSessionWarnings,
+  warningHref,
+  warningsOf,
+} from '../session-warnings';
 import '../../styles/live-session-status.css';
 import { LaneSpan } from './LaneSpan';
+import { WarningDialog, type SelectedWarning } from './WarningDialog';
 import {
   costAmount,
   axisTime,
@@ -179,6 +188,16 @@ function Axis({ start, span, window }: { start: number; span: number; window: Da
  */
 export function ActivityLanes({ report, range }: { report: DashboardMetrics; range: TimeRange }) {
   const { lanes, lane_start_ms: start, lane_end_ms: end, window } = report;
+  const root = useRef<HTMLDivElement>(null);
+  const warningFocus = useRef<HTMLElement | null>(null);
+  const warningRow = useRef<HTMLElement | null>(null);
+  const [selected, setSelected] = useState<SelectedWarning | null>(null);
+  useLayoutEffect(() => {
+    if (!selected || warningFocus.current?.isConnected) return;
+    warningFocus.current = warningRow.current?.isConnected
+      ? warningRow.current
+      : (root.current?.querySelector<HTMLElement>('a[href]') ?? root.current);
+  });
   const span = Math.max(1, end - start);
   const hours = laneHours(report);
   // Context is addressed by identity, not by position: the report orders it by
@@ -281,6 +300,23 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
       .map((lane) => lane.sessionId),
     { retryTransient: true },
   );
+  // M-21 over each session's whole history, read for the rows in view as
+  // their titles are, in the report's zone; kept per session until committed
+  // data changes. A warning inside the axis is a dot on the track; the row's
+  // name carries a marker for those before it. One after the axis's end (a
+  // session that moved on since this report was read) is left out until the
+  // next report's axis reaches it.
+  const warningsFor = useSessionWarnings(
+    sessions.filter((lane) => visible.has(lane.sessionId)).map((lane) => lane.sessionId),
+    window.timezone,
+  );
+  const laneWarnings = (lane: SessionLane) => {
+    const all = warningsOf(warningsFor(lane.sessionId));
+    return {
+      inside: all.filter((warning) => warning.at_ms >= start && warning.at_ms <= end),
+      before: all.filter((warning) => warning.at_ms < start),
+    };
+  };
   const parentOf = (lane: SessionLane) => {
     const parent = linkOf(lane);
     if (!parent) return null;
@@ -455,6 +491,19 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
             >
               {title ?? `Session ${shortId(lane.sessionId)}`}
             </Link>
+            {(() => {
+              const { before } = laneWarnings(lane);
+              const outside = beforeAxisLabel(before.length, hours);
+              return (
+                <WarningMarker
+                  warnings={before}
+                  label={outside}
+                  heading={outside}
+                  to={warningHref(lane.sessionId, '', listAddress(lane, range))}
+                  testId="lane-warnings-before"
+                />
+              );
+            })()}
             {created && (
               // Between the name and the context, so the context gives way
               // first. The link carries the list state that finds the parent,
@@ -591,6 +640,25 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
               />
             );
           })}
+          {laneWarnings(lane).inside.map((warning) => (
+            <WarningDot
+              key={warning.id}
+              warning={warning}
+              left={position(warning.at_ms)}
+              suppressTooltip={selected !== null}
+              onOpen={(button) => {
+                warningFocus.current = button;
+                warningRow.current =
+                  button.closest('[role="row"]')?.querySelector<HTMLElement>('a[href]') ?? null;
+                setSelected({
+                  warning,
+                  name: nameOf(lane),
+                  sessionId: lane.sessionId,
+                  timezone: window.timezone,
+                });
+              }}
+            />
+          ))}
           {/* A sub-session is not read for compactions; its parent is. Ticks
               outside the window are not drawn; inside it they are drawn
               wherever they fall, idle gaps included. */}
@@ -636,6 +704,8 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
 
   return (
     <div
+      ref={root}
+      tabIndex={-1}
       className="xt-lanes"
       data-empty={sessions.length === 0 || undefined}
       style={
@@ -665,6 +735,11 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
                 returned.length > 0 ? 'No session to list' : 'No active span'
               } in the last ${hours} hours (${clockTime(start, window)} – ${clockTime(end, window)}).`
         }
+      />
+      <WarningDialog
+        selected={selected}
+        onClose={() => setSelected(null)}
+        returnFocusRef={warningFocus}
       />
     </div>
   );

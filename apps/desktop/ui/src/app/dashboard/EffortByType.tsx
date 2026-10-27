@@ -24,7 +24,7 @@ import { UNMEASURED } from '../../kit/format';
 import { agentTime } from '../agent-duration';
 import { costCell } from './pr-effort';
 import type { BarMetric, EffortMetric } from './pr-effort';
-import { HumanTimeline } from './HumanTimeline';
+import { HumanTimeline, PairedHumanTimeline } from './HumanTimeline';
 import { plural, unpricedText, usd } from './present';
 
 const metricOptions = [
@@ -80,7 +80,7 @@ export function EffortByType({
   const chart = useMemo(() => effortChart(current, barMetric(metric)), [current, metric]);
   const empty = current.cohort.sessions === 0;
   if (metric === 'human') return <HumanTimeline report={report} range={range} />;
-  if (metric === 'paired') return <HumanTimeline report={report} range={range} withAgents />;
+  if (metric === 'paired') return <PairedHumanTimeline report={report} range={range} />;
   return (
     <div className="xt-effort" data-testid="effort-by-type">
       {empty ? (
