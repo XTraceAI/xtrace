@@ -15,7 +15,7 @@ use std::{
 use xt_store::saved_session_warnings::SavedSessionWarning;
 
 /// Bump for changes to payload, rules, default thresholds or stored-fact meaning.
-pub const SESSION_WARNINGS_CACHE_VERSION: i64 = 2;
+pub const SESSION_WARNINGS_CACHE_VERSION: i64 = 3;
 
 pub(crate) const SAVED_QUERY: &str = "SELECT session_id,i.revision,c.revision,c.rule_version,c.payload_json FROM sessions s LEFT JOIN session_warning_inputs i USING(session_id) LEFT JOIN saved_session_warnings c USING(session_id) WHERE s.kind='user'";
 pub(crate) const DIRTY_QUERY: &str = "SELECT session_id,i.revision FROM session_warning_inputs i JOIN sessions s USING(session_id) LEFT JOIN saved_session_warnings c USING(session_id) WHERE s.kind='user' AND (c.revision IS NOT i.revision OR c.rule_version IS NOT ?1)";

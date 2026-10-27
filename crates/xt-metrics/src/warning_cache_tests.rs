@@ -38,6 +38,138 @@ fn warm(db: &mut TempDb) {
 }
 
 #[test]
+fn old_v2_answer_at_current_revision_cannot_hide_parent_conflict() {
+    use crate::session_warnings::{CheckState, Missing};
+
+    let mut db = TempDb::empty().unwrap();
+    db.store_mut()
+        .upsert_session(
+            &SessionMeta::new("s", "claude", SessionSource::Transcript),
+            false,
+        )
+        .unwrap();
+    let mut record: CanonicalRecord = serde_json::from_value(serde_json::json!({
+        "uuid":"r", "type":"user", "timestamp":"2026-09-01T00:00:00Z",
+        "message":{"role":"user", "content":[]}
+    }))
+    .unwrap();
+    db.store_mut()
+        .upsert_records("s", &[record.clone()], false)
+        .unwrap();
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let mut old = metrics
+        .prepare_session_warning_refresh(&[])
+        .unwrap()
+        .unwrap()
+        .rows
+        .pop()
+        .unwrap();
+    let mut payload: Payload = serde_json::from_str(&old.payload_json).unwrap();
+    let WholeSessionWarnings::Read { warnings, .. } = payload.answer.render(&TimeZone::UTC) else {
+        panic!("expected timed warning answer");
+    };
+    assert_eq!(warnings.checks.repeated_failure, CheckState::Complete);
+    assert_eq!(warnings.checks.interruption, CheckState::Complete);
+    assert_eq!(warnings.tool_results, 0);
+
+    record.message.content = Some(
+        serde_json::from_value(serde_json::json!([
+            {"type":"tool_result", "tool_use_id":"t", "is_error":true, "content":"synthetic failure"}
+        ]))
+        .unwrap(),
+    );
+    db.store_mut()
+        .upsert_records("s", &[record], false)
+        .unwrap();
+    let connection = Connection::open(db.path()).unwrap();
+    let parent: (bool, bool) = connection
+        .query_row(
+            "SELECT has_conflict,is_tool_result_carrier FROM records WHERE uuid='r'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(parent, (true, false));
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM tool_results", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let revision: i64 = connection
+        .query_row(
+            "SELECT revision FROM session_warning_inputs WHERE session_id='s'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(revision > old.revision);
+    // Simulate the old reader's valid complete-zero answer after the conflict
+    // already existed. Source revision checks alone cannot reject this row.
+    old.revision = revision;
+    old.rule_version = 2;
+    payload.version = 2;
+    payload.revision = revision;
+    old.payload_json = serde_json::to_string(&payload).unwrap();
+    assert_eq!(
+        db.store_mut()
+            .publish_session_warnings(&[old])
+            .unwrap()
+            .published,
+        1
+    );
+    let saved: (i64, i64) = connection
+        .query_row(
+            "SELECT revision,rule_version FROM saved_session_warnings WHERE session_id='s'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(saved, (revision, 2));
+
+    assert!(!metrics.session_warning_cache_is_current().unwrap());
+    let found = metrics
+        .saved_whole_session_warnings(&["s"], &TimeZone::UTC)
+        .unwrap();
+    let WholeSessionWarnings::Read { warnings, .. } = &found["s"] else {
+        panic!("expected timed warning answer");
+    };
+    let incomplete = CheckState::Incomplete {
+        missing: vec![Missing::OutcomeNotSaved { records: 1 }],
+    };
+    assert_eq!(warnings.checks.repeated_failure, incomplete);
+    assert_eq!(warnings.checks.interruption, incomplete);
+    assert!(warnings.warnings.is_empty());
+    assert!(metrics.session_warning_refresh_needed());
+    let refresh = metrics
+        .prepare_session_warning_refresh(&[])
+        .unwrap()
+        .unwrap();
+    assert_eq!(refresh.rows.len(), 1);
+    assert_eq!(
+        (refresh.rows[0].revision, refresh.rows[0].rule_version),
+        (revision, 3)
+    );
+    db.store_mut()
+        .publish_session_warnings(&refresh.rows)
+        .unwrap();
+    assert!(metrics.session_warning_cache_is_current().unwrap());
+    assert_eq!(
+        metrics
+            .saved_whole_session_warnings(&["s"], &TimeZone::UTC)
+            .unwrap(),
+        found
+    );
+    assert!(
+        metrics
+            .prepare_session_warning_refresh(&[])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn current_saved_reads_and_unchanged_refresh_never_load_history() {
     let mut db = seeded();
     warm(&mut db);
