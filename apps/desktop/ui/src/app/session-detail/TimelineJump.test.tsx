@@ -1,3 +1,7 @@
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import { queryKeys } from '../../data/query-client';
+import { refreshQueries } from '../../data/subscribe-invalidation';
 import type { CodexPageRequest } from '../../data/generated/CodexPageRequest';
 import type { CodexPageStatus } from '../../data/generated/CodexPageStatus';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -187,11 +191,12 @@ function Go({ to }: { to: string }) {
   );
 }
 
-function mount(data: DataSource, path = `/sessions/${SESSION}`, to?: string) {
+function mount(data: DataSource, path = `/sessions/${SESSION}`, to?: string, probe?: ReactNode) {
   return render(
     <ThemeProvider>
       <DataProvider source={data}>
         <MemoryRouter initialEntries={[path]}>
+          {probe}
           {to && <Go to={to} />}
           <AppRoutes />
         </MemoryRouter>
@@ -1300,3 +1305,81 @@ it('retains the bounded portion when a new range row fails to load', async () =>
   expect(h.cancelled).not.toContain(activeRead);
   expect(h.reads).toHaveLength(2);
 });
+
+it.each(['later', 'changed'] as const)(
+  'preserves the bounded %s state while a stale cached-null range row is refetching',
+  async (state) => {
+    const h = codexSource();
+    const readRow = h.data.sessionRow;
+    let settleRow: ((row: Awaited<ReturnType<DataSource['sessionRow']>>) => void) | null = null;
+    let rowReads = 0;
+    h.data.sessionRow = (id, days) =>
+      days === 30
+        ? new Promise((resolve) => {
+            rowReads += 1;
+            settleRow = resolve;
+          })
+        : readRow(id, days);
+    if (state === 'changed') {
+      h.data.codexTranscriptPage = async (_session, selection, id) => {
+        h.reads.push({ selection, id });
+        return selection.kind === 'first'
+          ? codexPage(selection)
+          : { state: 'unavailable', reason: { reason: 'changed' } };
+      };
+    }
+    let client: QueryClient | undefined;
+    function ClientProbe() {
+      client = useQueryClient();
+      return null;
+    }
+    mount(h.data, `/sessions/${SESSION}?range=7d`, undefined, <ClientProbe />);
+    await screen.findByText('synthetic beginning');
+    fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+    const text =
+      state === 'later'
+        ? 'synthetic later portion'
+        : 'This conversation changed while you were reading it. Load it again to continue.';
+    await screen.findByText(text);
+    const activeRead = h.reads.at(-1)!.id;
+    const key = queryKeys.session(30, SESSION);
+    // An inactive answer from before discovery remains cached when the real refresh path invalidates it.
+    await act(async () => {
+      client!.setQueryData(key, null);
+      refreshQueries(client!, [key], () => {
+        throw new Error('Synthetic refresh failed');
+      });
+    });
+    expect(client!.getQueryState(key)).toMatchObject({
+      data: null,
+      status: 'success',
+      fetchStatus: 'idle',
+      isInvalidated: true,
+    });
+    expect(client!.getQueryCache().find({ queryKey: key })!.getObserversCount()).toBe(0);
+    expect(rowReads).toBe(0);
+    fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+    await waitFor(() => expect(settleRow).not.toBeNull());
+    const cacheWhilePending = client!.getQueryState(key);
+    expect(cacheWhilePending).toMatchObject({
+      data: null,
+      status: 'success',
+      fetchStatus: 'fetching',
+    });
+    const visibleWhilePending = screen.queryByText(text) !== null;
+    const cancelledWhilePending = h.cancelled.includes(activeRead);
+    await act(async () => settleRow!(await readRow(SESSION, 30)));
+    await screen.findByText('Measured in this range');
+    expect({
+      visibleWhilePending,
+      cancelledWhilePending,
+      requests: h.reads.map((read) => read.selection.kind),
+    }).toEqual({
+      visibleWhilePending: true,
+      cancelledWhilePending: false,
+      requests: ['first', 'cursor'],
+    });
+    expect(screen.getByText(text)).toBeTruthy();
+    expect(rowReads).toBe(1);
+  },
+);

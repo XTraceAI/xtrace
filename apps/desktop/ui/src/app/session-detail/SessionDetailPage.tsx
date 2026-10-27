@@ -271,7 +271,12 @@ export function SessionDetailPage() {
     host: string | null;
   }>({ sessionId, source, host: null });
   const sameHostOwner = acceptedHost.sessionId === sessionId && acceptedHost.source === source;
-  const host = listed.isSuccess ? (row?.host ?? null) : sameHostOwner ? acceptedHost.host : null;
+  const host =
+    listed.isSuccess && !listed.isFetching
+      ? (row?.host ?? null)
+      : sameHostOwner
+        ? acceptedHost.host
+        : null;
   if (!sameHostOwner || acceptedHost.host !== host) {
     setAcceptedHost({ sessionId, source, host });
   }

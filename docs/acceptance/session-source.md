@@ -236,20 +236,6 @@ Exact tool-block reveals still use held refs and preserve caller focus.
 
 ## Bounded Codex conversation portions
 
-When a Codex whole read refuses source bytes, converted output bytes or the
-consumer byte ceiling, Session detail requests the first bounded portion from
-`codex_transcript_page`. Earlier/Later replace the held portion. Existing
-hands-off first-call and repeated-call controls request the exact saved record
-ID and canonical block index. The backend confirms a unique tool-call target;
-the existing conversation disclosures open and highlight that block while
-focus stays on the caller. A portion does not infer call/result pairing across unseen
-messages, and the UI says both the shown interval and the full record count.
-Bounded records use the published conversation presentation and one-source
-activity grouping. Repeated activity navigation counts every measured group,
-including unavailable targets. Inline notices require an exact loaded record
-and tool-block match; a loadable locator alone creates no notice. Checked
-reveal metadata reaches the page owner, which keeps one active announcement.
-
 The producer remains the sole Codex converter. Its version 1 context mode
 supports one flat original rollout or one original paginated root, without
 forks, inherited history or multiple rollout files. Those unsupported shapes
@@ -265,15 +251,3 @@ anchor and cursor boundary. A changed generation, missing/ambiguous target,
 invalid cursor, oversized required record, unsupported history or other reader
 refusal returns no records. The DTO independently bounds encoded output,
 trimming only an edge while preserving the target and advancing cursors.
-
-Each view holds one portion in memory, without a query cache. Replacing the
-request or leaving cancels its own read ID and discards late responses. A
-changed conversation requires an explicit fresh first read.
-Background measurement refreshes clear stale call selection and highlighting
-without replacing the active portion request or its changed-source refusal.
-Paging generation checks connect successive portions to each other; they do not prove that the
-source still matches the index's saved measurements. Claude, Cursor and
-ordinary whole-transcript behavior remain outside this API.
-
-Synthetic regression sources are `xt-ingest/tests/exact_detail.rs`, the app's
-`codex_context` integration test, DTO bound tests and `TimelineJump.test.tsx`.

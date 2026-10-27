@@ -49,11 +49,27 @@ and keep focus on the pressed control. Oversized cards align their top edge.
 The combined browser fixture checks those behaviors together in both themes at
 1120×720, 1120×900, and 1440×900, plus clipped and fully visible scroll areas.
 
-Bounded Codex portions use that same conversation scroll area and exact-card
-reveal owner. Earlier/Later controls stay inside the reader; repeat navigation
-and its single outcome announcement stay in the conversation header. The
-bounded fixture also checks keyboard scrolling and unavailable targets after
-paging, with caller focus retained and no hidden second announcement.
+## Large Codex conversations
+
+A Codex whole read refused for source bytes, converted output bytes or the
+consumer byte ceiling opens bounded portions. The reader states the shown
+message interval and total, and leaves cross-portion call/result pairing
+unchecked. Small Codex, Claude and Cursor whole reads keep their existing path.
+
+One portion stays in memory without a query cache. Earlier/Later replace it;
+replacing a request or leaving cancels its read and discards late responses.
+Portions share the existing conversation scroll area and exact-card reveal
+owner. First/repeated controls load and confirm an exact saved record and tool
+block before marking it; the global navigation, caller focus and single
+header announcement contracts above apply. A loadable locator is not a notice.
+
+Only a settled, successful row answer can replace the accepted host. Pending,
+refetching or failed metadata keeps the same session/source's portion and any
+changed-source refusal; range/background refreshes clear stale selection and
+highlighting without restarting the read. A settled null or non-Codex row ends
+it; a new session or provider replaces the owner. A changed-source refusal
+requires explicit reload. Portion generations connect successive reads; they
+do not prove that the source still matches the index's saved measurements.
 
 The remaining measurement and segment contracts apply inside Agent activity.
 
