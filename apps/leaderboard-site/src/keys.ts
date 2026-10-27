@@ -1,6 +1,6 @@
 // Member keys. Only the SHA-256 of a key is stored; the key itself is returned
 // once, on join, and never logged.
-import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 
 const KEY = /^[A-Za-z0-9_-]{43}$/;
 
@@ -34,8 +34,4 @@ export function newCode(): string {
 /** Codes are stored and compared only as SHA-256 hashes. */
 export function hashCode(code: string): Buffer {
   return createHash('sha256').update(code, 'utf8').digest();
-}
-
-export function sameHash(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && timingSafeEqual(a, b);
 }

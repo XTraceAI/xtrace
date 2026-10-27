@@ -2,7 +2,7 @@
 // POST /api/join/verify turns the right code into a member key.
 import type { Clock, Query } from './db.js';
 import { fail, json } from './http.js';
-import { hashCode, newCode, newKey, newPendingId, sameHash } from './keys.js';
+import { hashCode, newCode, newKey, newPendingId } from './keys.js';
 import { CLEANUP_AFTER_SECONDS } from './limits.js';
 import type { Mailer } from './mail.js';
 import type { Nickname } from './validate.js';
@@ -33,14 +33,8 @@ export async function startJoin(
 ): Promise<Response> {
   const now = clock();
   await cleanUp(query, now);
-  const member = await query('select 1 from members where email = $1', [email]);
-  // A member's email signs them back in, so their typed nickname is ignored.
-  if (member.length === 0) {
-    const taken = await query('select 1 from members where nickname_key = $1', [
-      nickname.nicknameKey,
-    ]);
-    if (taken.length > 0) return fail(409, 'nickname_taken');
-  }
+  // Nickname availability is not checked here: the answer must be the same
+  // whether or not the email already belongs to a member. Verify checks it.
   const id = newPendingId();
   const code = newCode();
   const expires = new Date(now.getTime() + CODE_LIFETIME_MINUTES * 60_000);
@@ -74,30 +68,45 @@ export async function verifyJoin(
   { query, clock }: JoinContext,
   pendingId: string,
   code: string,
+  nicknameOverride: Nickname | null,
 ): Promise<Response> {
   const now = clock().toISOString();
-  // Claiming an attempt first keeps the 5-attempt rule exact under concurrent requests.
-  const claimed = await query(
+  const codeHash = hashCode(code).toString('hex');
+  const live = `id = $1 and expires_at > $2::timestamptz and attempts < ${MAX_CODE_ATTEMPTS}`;
+
+  // Only wrong codes count. The comparison and the count are one statement, so
+  // concurrent guesses can never count past the limit or slip a guess in after it.
+  const wrong = await query(
     `update pending_joins set attempts = attempts + 1
-     where id = $1 and expires_at > $2::timestamptz and attempts < $3
-     returning nickname, nickname_key, email, encode(code_hash, 'hex') as code_hash, attempts`,
-    [pendingId, now, MAX_CODE_ATTEMPTS],
+     where ${live} and code_hash <> decode($3, 'hex')
+     returning attempts`,
+    [pendingId, now, codeHash],
   );
-  const pending = claimed[0];
-  if (!pending) {
-    await query('delete from pending_joins where id = $1', [pendingId]);
-    return fail(410, 'code_expired');
-  }
-  if (!sameHash(hashCode(code), Buffer.from(String(pending.code_hash), 'hex'))) {
-    if (Number(pending.attempts) >= MAX_CODE_ATTEMPTS)
+  if (wrong[0]) {
+    if (Number(wrong[0].attempts) >= MAX_CODE_ATTEMPTS)
       await query('delete from pending_joins where id = $1', [pendingId]);
     return fail(400, 'invalid_code');
   }
-  // Single use: only the request that deletes the row goes on.
-  const used = await query('delete from pending_joins where id = $1 returning id', [pendingId]);
-  if (used.length === 0) return fail(410, 'code_expired');
+
+  // The right code: claim the pending join. Only one request can delete it.
+  const claimed = await query(
+    `delete from pending_joins where ${live} and code_hash = decode($3, 'hex')
+     returning id, nickname, nickname_key, email, encode(code_hash, 'hex') as code_hash,
+               attempts, expires_at::text as expires_at, created_at::text as created_at`,
+    [pendingId, now, codeHash],
+  );
+  const pending = claimed[0];
+  if (!pending) {
+    // Unknown, expired or used up.
+    await query('delete from pending_joins where id = $1', [pendingId]);
+    return fail(410, 'code_expired');
+  }
 
   const email = String(pending.email);
+  const nickname = nicknameOverride ?? {
+    nickname: String(pending.nickname),
+    nicknameKey: String(pending.nickname_key),
+  };
   const { key, keyHashHex } = newKey();
   const signBackIn = async () => {
     const rows = await query(
@@ -106,6 +115,7 @@ export async function verifyJoin(
     );
     return rows[0] ? json(201, { key, nickname: rows[0].nickname, rejoined: true }) : null;
   };
+  // A member's email signs them back in; the nickname is ignored.
   const rejoined = await signBackIn();
   if (rejoined) return rejoined;
   const created = await query(
@@ -113,9 +123,28 @@ export async function verifyJoin(
      values ($1, $2, $3, decode($4, 'hex'))
      on conflict do nothing
      returning nickname`,
-    [pending.nickname, pending.nickname_key, email, keyHashHex],
+    [nickname.nickname, nickname.nicknameKey, email, keyHashHex],
   );
   if (created[0]) return json(201, { key, nickname: created[0].nickname, rejoined: false });
-  // Someone else took the nickname, or this email joined, in the meantime.
-  return (await signBackIn()) ?? fail(409, 'nickname_taken');
+  // This email may have joined in the meantime.
+  const late = await signBackIn();
+  if (late) return late;
+  // The nickname is taken. Put the pending join back unchanged (same code,
+  // expiry and attempts), unless a newer join for this email replaced it.
+  await query(
+    `insert into pending_joins (id, nickname, nickname_key, email, code_hash, attempts, expires_at, created_at)
+     select $1, $2, $3, $4, decode($5, 'hex'), $6, $7::timestamptz, $8::timestamptz
+     where not exists (select 1 from pending_joins where email = $4)`,
+    [
+      pending.id,
+      pending.nickname,
+      pending.nickname_key,
+      email,
+      pending.code_hash,
+      pending.attempts,
+      pending.expires_at,
+      pending.created_at,
+    ],
+  );
+  return fail(409, 'nickname_taken');
 }

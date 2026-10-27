@@ -183,6 +183,19 @@ create table if not exists rate_counters (
 Env vars RESEND_API_KEY, LEADERBOARD_FROM_EMAIL (optional), IP_HASH_SECRET (random 32+ bytes).
 Also recommend a Vercel Firewall rate-limit rule on `/api/join` as an outer layer, and a spend limit.
 
+## v2.1 correction (2026-10-27): join must not reveal whether an email is a member
+
+The v2 rule "409 nickname_taken at POST /api/join when the email is not a member" let anyone test whether an email
+belongs to a member (send a known-taken nickname with someone's email: 202 = member, 409 = not). Replaced by:
+
+- POST /api/join never checks nickname availability: valid input always gets 202 (rate limits and 503 still apply).
+- POST /api/join/verify body becomes `{"pending_id", "code", "nickname"?}`. The optional `nickname` replaces the pending
+  join's nickname (validated: 400 invalid_nickname, without counting an attempt).
+- Right code, email not a member, nickname taken by another member → 409 `nickname_taken`, and the pending join is KEPT
+  (same code, same expiry) so the person can send verify again with the same code and a different `nickname`.
+  This attempt does not count toward the 5 wrong attempts (only wrong codes count).
+- Right code for a member's email → signs back in as before (nickname ignored).
+
 ## Details the contract above leaves open (as built)
 
 - A body over 4 KB means more than 4096 bytes. The 413 body is `{"error": "body_too_large"}`.
@@ -190,7 +203,8 @@ Also recommend a Vercel Firewall rate-limit rule on `/api/join` as an outer laye
   (413 / 400), then the key (401), then the endpoint's own limit, then the work.
   - `POST /api/join`: the per-IP and per-email join limits count only requests whose body passed the
     checks. Invalid bodies use up only the 600-per-hour API limit.
-  - `POST /api/join/verify`: the 20-per-hour limit counts only requests whose code is 6 digits.
+  - `POST /api/join/verify`: the 20-per-hour limit counts only requests whose code is 6 digits and whose
+    optional `nickname` is valid.
   - `PUT /api/score` and `PATCH /api/me` count against the member only when the key is known.
 - A refused (429) request still counts. The window resets on its fixed boundary: the hour, or the UTC
   day for `PATCH /api/me`. `retry_after_seconds` is the whole seconds until then (at least 1).
@@ -201,10 +215,16 @@ Also recommend a Vercel Firewall rate-limit rule on `/api/join` as an outer laye
   sets `x-real-ip` from the socket address and drops any client-sent `x-real-ip` / `x-forwarded-for`,
   as Vercel's proxy does.
 - An empty `IP_HASH_SECRET` counts as missing.
-- `POST /api/join/verify` with `pending_id` or `code` missing or not a string gets 400 `invalid_request`.
+- `POST /api/join/verify` with `pending_id` or `code` missing or not a string, or a `nickname` that is not a
+  string, gets 400 `invalid_request`. A `nickname` of `null` is the same as leaving it out. A bad code is
+  reported (400 `invalid_code`) before a bad nickname (400 `invalid_nickname`).
 - A code is expired from `expires_at` on: exactly 15 minutes after the join it no longer works.
-- Each `/api/join/verify` with a 6-digit code takes one attempt before the code is compared, so the
-  5-attempt rule holds for concurrent requests. A right code deletes the pending join, so it works once.
+- Only wrong codes count as attempts. The check "code is wrong" and the count happen in one database
+  statement, so concurrent guesses cannot count past 5 or get a guess through after the 5th wrong one.
+- A right code claims the pending join by deleting it, so only one of several identical requests goes on;
+  the others get 410 `code_expired`. On 409 `nickname_taken` the pending join is put back unchanged (same
+  id, code, attempts and expiry), unless a newer join for the same email has replaced it in the meantime.
+  While it is being put back, a second identical request can get 410.
 - Opportunistic cleanup runs on each `POST /api/join`: counter rows whose window started more than a day
   ago, and pending joins that expired more than a day ago, are deleted.
 - `PUT /api/score`: a body that is not a JSON object gets 400 `invalid_request`. A JSON object whose

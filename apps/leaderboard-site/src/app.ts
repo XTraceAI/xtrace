@@ -107,13 +107,18 @@ export function createApp({
   const verify = limitedByIp(async (request, ip) => {
     const body = await readJsonObject(request);
     if (!body.ok) return body.response;
-    const { pending_id: pendingId, code } = body.value;
+    const { pending_id: pendingId, code, nickname: rawNickname } = body.value;
     if (typeof pendingId !== 'string' || typeof code !== 'string')
       return fail(400, 'invalid_request');
+    // `nickname` is optional: absent or null means "keep the one given at join".
+    const nicknameGiven = rawNickname !== undefined && rawNickname !== null;
+    if (nicknameGiven && typeof rawNickname !== 'string') return fail(400, 'invalid_request');
     if (!CODE_FORMAT.test(code)) return fail(400, 'invalid_code');
+    const nickname = nicknameGiven ? parseNickname(String(rawNickname)) : null;
+    if (nicknameGiven && !nickname) return fail(400, 'invalid_nickname');
     const wait = await limit(LIMITS.verifyPerIp, ip);
     if (wait !== null) return rateLimited(wait);
-    return verifyJoin(joinContext, pendingId, code);
+    return verifyJoin(joinContext, pendingId, code, nickname);
   });
 
   const score = limitedByIp(async (request) => {

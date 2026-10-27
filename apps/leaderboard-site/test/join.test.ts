@@ -40,6 +40,10 @@ const pendingRows = () =>
      from pending_joins`,
     [new Date(START.getTime() + 15 * MINUTE).toISOString()],
   );
+const verifyWith = (pendingId: string, code: string, extra: Record<string, unknown>) =>
+  h.app.verify.POST(
+    request('POST', '/api/join/verify', { body: { pending_id: pendingId, code, ...extra } }),
+  );
 const memberCount = async () =>
   Number((await h.query('select count(*)::int as n from members'))[0]!.n);
 
@@ -81,17 +85,30 @@ describe('POST /api/join', () => {
     assert.equal(await memberCount(), 0);
   });
 
-  test("a nickname that is another member's (any case) is 409 nickname_taken", async () => {
+  test('join never checks the nickname: a taken one with a new email still gets 202', async () => {
     await join(h, 'Owner');
-    for (const nickname of ['owner', ' OWNER '])
-      await expectError(
-        await h.app.join.POST(
-          request('POST', '/api/join', { body: { nickname, email: 'new@example.com' } }),
-        ),
-        409,
-        'nickname_taken',
+    for (const nickname of ['owner', ' OWNER ']) {
+      const response = await h.app.join.POST(
+        request('POST', '/api/join', { body: { nickname, email: 'new@example.com' } }),
       );
-    assert.deepEqual(await pendingRows(), []);
+      assert.equal(response.status, 202);
+    }
+  });
+
+  test('join gives no way to tell whether an email belongs to a member', async () => {
+    await join(h, 'Owner', 'owner@example.com');
+    await join(h, 'Member', 'member@example.com');
+    // A known-taken nickname used to give 202 for a member's email and 409 otherwise.
+    const ask = (email: string) =>
+      h.app.join.POST(request('POST', '/api/join', { body: { nickname: 'Owner', email } }));
+    const member = await ask('member@example.com');
+    const stranger = await ask('stranger@example.com');
+    assert.equal(member.status, 202);
+    assert.equal(stranger.status, 202);
+    assert.deepEqual([...member.headers], [...stranger.headers]);
+    const shape = (body: unknown) =>
+      JSON.stringify(body).replace(/"pending_id":"[A-Za-z0-9_-]{22}"/, '"pending_id":"x"');
+    assert.equal(shape(await readJson(member)), shape(await readJson(stranger)));
   });
 
   test('a failed send removes the pending join and answers 503 email_unavailable', async () => {
@@ -205,17 +222,88 @@ describe('POST /api/join/verify', () => {
     assert.equal((await verify(h, second, secondCode)).status, 201);
   });
 
-  test('if the nickname was taken meanwhile, verify is 409 and the pending join is gone', async () => {
+  test('a taken nickname at verify is 409; the pending join stays for another try', async () => {
     const a = await startJoin(h, 'Racer', 'a@example.com');
     const b = await startJoin(h, 'racer', 'b@example.com');
     assert.equal((await verify(h, a, h.mailer.lastCodeFor('a@example.com'))).status, 201);
-    await expectError(
-      await verify(h, b, h.mailer.lastCodeFor('b@example.com')),
-      409,
-      'nickname_taken',
-    );
-    assert.deepEqual(await pendingRows(), []);
+    const codeB = h.mailer.lastCodeFor('b@example.com');
+    const before = await pendingRows();
+    await expectError(await verify(h, b, codeB), 409, 'nickname_taken');
+    // Kept unchanged: same id, code hash, attempts and expiry.
+    assert.deepEqual(await pendingRows(), before);
     assert.equal(await memberCount(), 1);
+    // The same code with a free nickname now joins.
+    const response = await verifyWith(b, codeB, { nickname: ' Racer_2 ' });
+    assert.equal(response.status, 201);
+    const body = (await readJson(response)) as Record<string, unknown>;
+    assert.equal(body.nickname, 'Racer_2');
+    assert.equal(body.rejoined, false);
+    assert.deepEqual(await pendingRows(), []);
+    await expectError(await verify(h, b, codeB), 410, 'code_expired');
+  });
+
+  test('409s do not use up the 5 wrong-code attempts', async () => {
+    await join(h, 'Popular');
+    const pendingId = await startJoin(h, 'popular', 'p@example.com');
+    const code = h.mailer.lastCodeFor('p@example.com');
+    const wrong = code === '000000' ? '111111' : '000000';
+    for (let i = 0; i < 4; i += 1) await verify(h, pendingId, wrong);
+    for (let i = 0; i < 8; i += 1)
+      await expectError(await verify(h, pendingId, code), 409, 'nickname_taken');
+    assert.equal((await pendingRows())[0]!.attempts, 4);
+    assert.equal((await verifyWith(pendingId, code, { nickname: 'fresh_name' })).status, 201);
+  });
+
+  test('the optional nickname: checked without counting an attempt; null means none', async () => {
+    const pendingId = await startJoin(h, 'Original', 'o@example.com');
+    const code = h.mailer.lastCodeFor('o@example.com');
+    await expectError(
+      await verifyWith(pendingId, code, { nickname: 'no' }),
+      400,
+      'invalid_nickname',
+    );
+    await expectError(
+      await verifyWith(pendingId, code, { nickname: 'bad name' }),
+      400,
+      'invalid_nickname',
+    );
+    await expectError(await verifyWith(pendingId, code, { nickname: 7 }), 400, 'invalid_request');
+    // A bad code is reported before a bad nickname.
+    await expectError(await verifyWith(pendingId, '12', { nickname: 'no' }), 400, 'invalid_code');
+    assert.equal((await pendingRows())[0]!.attempts, 0);
+    const response = await verifyWith(pendingId, code, { nickname: null });
+    assert.equal(((await readJson(response)) as { nickname: string }).nickname, 'Original');
+  });
+
+  test('racing duplicate verifies with the right code make one member and use the code once', async () => {
+    const pendingId = await startJoin(h, 'Twin', 'twin@example.com');
+    const code = h.mailer.lastCodeFor('twin@example.com');
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => verifyWith(pendingId, code, { nickname: `twin_${i}` })),
+    );
+    const statuses = results.map((response) => response.status).sort();
+    assert.deepEqual(statuses, [201, 410, 410, 410, 410, 410]);
+    assert.equal(await memberCount(), 1);
+    assert.deepEqual(await pendingRows(), []);
+  });
+
+  test('racing wrong guesses never count past 5 and never let a guess through after', async () => {
+    const pendingId = await startJoin(h, 'Target', 'target@example.com');
+    const code = h.mailer.lastCodeFor('target@example.com');
+    const guesses = Array.from({ length: 12 }, (_, i) =>
+      String((Number(code) + 1 + i) % 1_000_000).padStart(6, '0'),
+    );
+    const results = await Promise.all([
+      ...guesses.map((guess) => verify(h, pendingId, guess)),
+      verify(h, pendingId, code),
+    ]);
+    const statuses = results.map((response) => response.status);
+    const wrongCounted = statuses.filter((status) => status === 400).length;
+    assert.ok(wrongCounted <= 5, `${wrongCounted} wrong guesses counted`);
+    const joined = statuses.at(-1) === 201;
+    // The right code only works if it was compared before the 5th wrong guess.
+    assert.ok(joined ? wrongCounted <= 5 : statuses.at(-1) === 410);
+    assert.equal(await memberCount(), joined ? 1 : 0);
   });
 });
 
@@ -227,7 +315,10 @@ describe('signing back in', () => {
 
     // Any valid nickname is accepted and ignored, even one another member has.
     const pendingId = await startJoin(h, 'taken_by_other', '  BACK@example.com ');
-    const response = await verify(h, pendingId, h.mailer.lastCodeFor('back@example.com'));
+    // A nickname sent at verify is ignored for a member's email too.
+    const response = await verifyWith(pendingId, h.mailer.lastCodeFor('back@example.com'), {
+      nickname: 'Brand_New',
+    });
     assert.equal(response.status, 201);
     const body = (await readJson(response)) as { key: string; nickname: string; rejoined: boolean };
     assert.equal(body.nickname, 'Returning');

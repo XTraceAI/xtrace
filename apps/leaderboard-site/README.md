@@ -3,6 +3,9 @@
 This folder is the public leaderboard website and its JSON API.
 People join from the XTrace app with a nickname and an email.
 The site emails them a 6-digit code, and they type it into the app to finish joining.
+The nickname is checked only at that second step. If it is taken by then, the app can ask for
+another nickname and send the same code again.
+The first step answers the same way for every valid email, so it never shows whether an email has joined.
 The app then sends their 7-day leverage, and the site lists it next to their nickname.
 Joining again with the same email (for example on a new Mac) signs you back in to the same entry.
 The page shows only the nickname and the number. Emails are never shown or returned.
