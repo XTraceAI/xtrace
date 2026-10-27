@@ -72,6 +72,11 @@ export const commands = {
   telemetrySetEnabled: 'telemetry_set_enabled',
   telemetryDisclosureShown: 'telemetry_disclosure_shown',
   openTelemetryDoc: 'open_telemetry_doc',
+  leaderboardStatus: 'leaderboard_status',
+  leaderboardJoin: 'leaderboard_join',
+  leaderboardRename: 'leaderboard_rename',
+  leaderboardLeave: 'leaderboard_leave',
+  leaderboardOpenPage: 'leaderboard_open_page',
 } as const;
 export const events = {
   importReceived: 'ingest://import-received',

@@ -26,6 +26,7 @@ mod grading_link_dto;
 pub mod grading_overview;
 pub mod grading_picker;
 pub mod human_break;
+pub mod leaderboard;
 pub mod live_codex_status;
 mod local_updates;
 pub mod native_index;
@@ -1253,6 +1254,127 @@ async fn open_telemetry_doc(webview_window: tauri::WebviewWindow) -> Result<(), 
     .await
 }
 
+/// Where the public leaderboard membership stands; asks the leaderboard
+/// for the rank when joined.
+#[tauri::command]
+async fn leaderboard_status(
+    app: tauri::AppHandle,
+) -> Result<leaderboard::LeaderboardStatus, String> {
+    on_leaderboard(app, |service| Ok(service.status())).await
+}
+
+/// Joins with the nickname and email as typed; the leaderboard checks them
+/// and its answer is returned in plain words.
+#[tauri::command]
+async fn leaderboard_join(
+    app: tauri::AppHandle,
+    nickname: String,
+    email: String,
+) -> Result<leaderboard::LeaderboardStatus, String> {
+    on_leaderboard(app, move |service| service.join(&nickname, &email)).await
+}
+
+#[tauri::command]
+async fn leaderboard_rename(
+    app: tauri::AppHandle,
+    nickname: String,
+) -> Result<leaderboard::LeaderboardStatus, String> {
+    on_leaderboard(app, move |service| service.rename(&nickname)).await
+}
+
+/// Deletes the member on the leaderboard, then forgets the saved membership.
+#[tauri::command]
+async fn leaderboard_leave(
+    app: tauri::AppHandle,
+) -> Result<leaderboard::LeaderboardStatus, String> {
+    on_leaderboard(app, |service| service.leave()).await
+}
+
+/// Main window only: opens the public leaderboard page in the system
+/// browser. The renderer cannot name a URL.
+#[tauri::command]
+async fn leaderboard_open_page(webview_window: tauri::WebviewWindow) -> Result<(), String> {
+    if webview_window.label() != tray::MAIN_LABEL {
+        return Err("only the main window may do this".into());
+    }
+    let url = webview_window
+        .try_state::<leaderboard::LeaderboardService>()
+        .ok_or_else(|| state::StateError::Closed.to_string())?
+        .page_url()
+        .to_owned();
+    on_worker(
+        "the leaderboard page could not be opened in the browser",
+        move || leaderboard::open_page(&url),
+    )
+    .await
+}
+
+/// The leaderboard's calls make network requests, so they run on the
+/// blocking pool.
+async fn on_leaderboard<T: Send + 'static>(
+    app: tauri::AppHandle,
+    run: impl FnOnce(&leaderboard::LeaderboardService) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    match tauri::async_runtime::spawn_blocking(move || {
+        let service = app
+            .try_state::<leaderboard::LeaderboardService>()
+            .ok_or_else(|| state::StateError::Closed.to_string())?;
+        run(&service)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err("the leaderboard request did not complete".into()),
+    }
+}
+
+/// The leaderboard service for this launch and its hourly upload. Fixture
+/// startup's service is not available: it never sends a fixture's numbers.
+fn start_leaderboard<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    fixture: bool,
+) -> (leaderboard::LeaderboardService, pr_refresh::AutoCheckWorker) {
+    let base = leaderboard::base_url(std::env::var(leaderboard::URL_ENV).ok().as_deref());
+    let transport = (!fixture)
+        .then(|| leaderboard::HttpTransport::new(&base))
+        .flatten()
+        .map(|transport| Arc::new(transport) as Arc<dyn leaderboard::Transport>);
+    let available = transport.is_some();
+    let told = app.clone();
+    let service = leaderboard::LeaderboardService::new(
+        &base,
+        transport,
+        Arc::new(leaderboard::AppHost(app.clone())),
+        Arc::new(|| jiff::Timestamp::now().as_millisecond()),
+        // Telemetry decides on its own whether this event may be sent.
+        Arc::new(move || {
+            if let Some(telemetry) = told.try_state::<telemetry::Telemetry>() {
+                telemetry.leaderboard_opted_in();
+            }
+        }),
+    );
+    if !available {
+        return (service, pr_refresh::AutoCheckWorker::disabled());
+    }
+    let handle = app.clone();
+    let worker = pr_refresh::AutoCheckWorker::start_named(
+        "leaderboard-upload",
+        leaderboard::UPLOAD_INTERVAL,
+        move || {
+            let Some(service) = handle.try_state::<leaderboard::LeaderboardService>() else {
+                return true;
+            };
+            service.upload();
+            true
+        },
+    );
+    (service, worker)
+}
+
+/// The hourly leaderboard upload, kept apart from the pull-request check's
+/// worker of the same kind.
+struct LeaderboardUploads(pr_refresh::AutoCheckWorker);
+
 fn telemetry_service<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<tauri::State<'_, telemetry::Telemetry>, state::StateError> {
@@ -1579,6 +1701,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .telemetry_consent()
         .unwrap_or(telemetry::consent::Consent::FRESH);
     let live = state.database_path().is_some();
+    let state_fixture = state.app_info().fixture.is_some();
     app.manage(warnings);
     app.manage(state);
     // After the state, which the sender's store calls go through.
@@ -1599,6 +1722,12 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // interrupted, and their staging folders removed.
     grading.recover();
     app.manage(grading);
+    // Uploads are their own: they never read the telemetry switch. The first
+    // one runs now (it sends only when joined), then one every hour.
+    let (leaderboard, uploads) = start_leaderboard(app.handle(), state_fixture);
+    app.manage(leaderboard);
+    uploads.wake();
+    app.manage(LeaderboardUploads(uploads));
     tray::setup(app)?;
     app.state::<telemetry::Telemetry>().opened();
     Ok(())
@@ -1686,6 +1815,11 @@ fn stop_services(app: &tauri::AppHandle) {
     // cancelled, a running reader killed and reaped, within a bound.
     if let Some(index) = app.try_state::<native_index::NativeIndex>() {
         index.shutdown();
+    }
+    // The hourly leaderboard upload ends after any upload in progress,
+    // whose saved result is refused once storage closes.
+    if let Some(uploads) = app.try_state::<LeaderboardUploads>() {
+        uploads.0.stop();
     }
     // The telemetry sender stops before the database closes: its request
     // is cancelled and anything still queued is never sent.
@@ -1813,7 +1947,12 @@ pub fn run() {
             telemetry_state,
             telemetry_set_enabled,
             telemetry_disclosure_shown,
-            open_telemetry_doc
+            open_telemetry_doc,
+            leaderboard_status,
+            leaderboard_join,
+            leaderboard_rename,
+            leaderboard_leave,
+            leaderboard_open_page
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|error| startup_failure::exit(&startup_failure::message(&error)))

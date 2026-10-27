@@ -24,6 +24,7 @@ import type {
 } from './DataSource';
 import type { AppInfo } from './generated/AppInfo';
 import type { DbCounts } from './generated/DbCounts';
+import type { LeaderboardStatus } from './generated/LeaderboardStatus';
 import type { NativeIndexStatus } from './generated/NativeIndexStatus';
 import type { SessionSourceStatus } from './generated/SessionSourceStatus';
 import type { PrList } from './generated/PrList';
@@ -206,6 +207,15 @@ export class TauriDataSource implements DataSource {
       invoke<TelemetryState>(commands.telemetrySetEnabled, { enabled }),
     acknowledgeDisclosure: () => invoke<TelemetryState>(commands.telemetryDisclosureShown),
     openEventList: () => invoke<void>(commands.openTelemetryDoc),
+  };
+  readonly leaderboard = {
+    read: () => invoke<LeaderboardStatus>(commands.leaderboardStatus),
+    join: (nickname: string, email: string) =>
+      invoke<LeaderboardStatus>(commands.leaderboardJoin, { nickname, email }),
+    rename: (nickname: string) =>
+      invoke<LeaderboardStatus>(commands.leaderboardRename, { nickname }),
+    leave: () => invoke<LeaderboardStatus>(commands.leaderboardLeave),
+    openPage: () => invoke<void>(commands.leaderboardOpenPage),
   };
   dashboard(windowDays: number) {
     return invoke<DashboardMetrics>(commands.dashboard, { windowDays });

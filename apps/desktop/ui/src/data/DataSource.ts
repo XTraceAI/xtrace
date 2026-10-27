@@ -44,6 +44,7 @@ import type { GradingReportOpen } from './generated/GradingReportOpen';
 import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
+import type { LeaderboardStatus } from './generated/LeaderboardStatus';
 
 export type Unsubscribe = () => void;
 /** Development builds only: release information without update installation. */
@@ -164,6 +165,22 @@ export interface TelemetryControls {
   acknowledgeDisclosure(): Promise<TelemetryState>;
   /** Opens the fixed published event list in the system browser. */
   openEventList(): Promise<void>;
+}
+/**
+ * The public leaderboard, which a person joins on purpose. The Rust core
+ * talks to it, keeps the saved membership and decides every field of the
+ * status; the leaderboard itself checks nicknames and emails. A refused
+ * change rejects with the leaderboard's answer in plain words.
+ */
+export interface LeaderboardControls {
+  /** Asks the leaderboard for the rank when joined. */
+  read(): Promise<LeaderboardStatus>;
+  join(nickname: string, email: string): Promise<LeaderboardStatus>;
+  rename(nickname: string): Promise<LeaderboardStatus>;
+  /** Deletes the member on the leaderboard, then forgets the saved membership. */
+  leave(): Promise<LeaderboardStatus>;
+  /** Opens the public page in the system browser; no URL crosses this seam. */
+  openPage(): Promise<void>;
 }
 /**
  * Host titles for the rows a list is showing, read from the sessions' original
@@ -467,6 +484,8 @@ export interface DataSource {
   readonly humanBreak?: HumanBreakControls;
   /** Present only where a writable app database owns the setting. */
   readonly telemetry?: TelemetryControls;
+  /** Present only natively, where the app can reach the leaderboard. */
+  readonly leaderboard?: LeaderboardControls;
   /** Present only in the native tray popover window. */
   readonly tray?: TrayControls;
   /** Present only where original local sources can be read. */

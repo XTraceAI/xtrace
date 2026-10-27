@@ -185,6 +185,15 @@ impl Telemetry {
         }
     }
 
+    /// The user joined the public leaderboard: `leaderboard_opted_in`, sent
+    /// only while telemetry may send, like every event. The leaderboard
+    /// itself never reads this service.
+    pub fn leaderboard_opted_in(&self) {
+        if let Some(sender) = &self.sender {
+            sender.event(events::TelemetryEvent::LeaderboardOptedIn);
+        }
+    }
+
     /// Stops the sender before the store closes.
     pub fn shutdown(&self) {
         if let Some(sender) = &self.sender {

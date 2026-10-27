@@ -210,7 +210,10 @@ lists every event and property.
 ## Status
 
 XTrace is a public beta. Some numbers can be incomplete when part of your
-history is missing. Rulebook and Leaderboard are marked as coming soon in the sidebar. See the [beta testing limits](docs/UPDATES.md#beta-testing-limits).
+history is missing. Rulebook is marked as coming soon in the sidebar. On the
+Leaderboard page you can choose to join the public leaderboard at
+leaderboard.xtrace.ai; [TELEMETRY.md](TELEMETRY.md#leaderboard) says what that
+sends. See the [beta testing limits](docs/UPDATES.md#beta-testing-limits).
 
 ## Build from source
 

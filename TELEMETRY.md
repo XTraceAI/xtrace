@@ -50,7 +50,7 @@ never sends anything either.
 | `plugin_detected`      | `host`                | Not sent yet.                                                                                            |
 | `plugin_installed`     | `host`                | Not sent yet.                                                                                            |
 | `rule_activated`       | `class`, `mode`       | Not sent yet.                                                                                            |
-| `leaderboard_opted_in` | none                  | Not sent yet.                                                                                            |
+| `leaderboard_opted_in` | none                  | Yes: when you join the public leaderboard on the Leaderboard page.                                       |
 | `cloud_connected`      | none                  | Not sent yet.                                                                                            |
 | `update_installed`     | none                  | Not sent yet.                                                                                            |
 
@@ -98,6 +98,32 @@ PostHog derives an approximate location (country and city) from the request's
 IP address. Whether PostHog also stores the IP address itself is a setting of
 the XTrace PostHog project, outside the app; the project is meant to have IP
 storage turned off so only the derived location is kept.
+
+## Leaderboard
+
+The public leaderboard at [leaderboard.xtrace.ai](https://leaderboard.xtrace.ai)
+is separate from telemetry. Nothing is sent to it unless you join it yourself on
+the app's **Leaderboard** page.
+
+- **When you join**, the app sends the nickname and the email you type. The
+  leaderboard shows your nickname and never shows your email; it keeps the
+  email only so XTrace can reach you. The app does not save the email.
+- **While you are joined**, the app sends one number: your leverage for the
+  last 7 days, as the Dashboard shows it for the 7-day range, to one decimal
+  (or no number when it has none). It is sent right after you join, when the
+  app starts, and once an hour while it runs. Nothing else is sent: no
+  sessions, projects, prompts or other data.
+- **Change nickname** sends the new nickname.
+- **Leave leaderboard** deletes your nickname, email and number from the
+  leaderboard.
+
+The app keeps the key the leaderboard gave it when you joined, your nickname
+and the last number it sent in its own database on this Mac.
+
+Turning telemetry off does not stop leaderboard updates, and leaving the
+leaderboard does not change telemetry. When you join with telemetry on, the
+`leaderboard_opted_in` event above is sent; it says only that someone joined,
+not who.
 
 ## Retention
 
