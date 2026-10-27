@@ -1,3 +1,5 @@
+import type { CodexPageRequest } from './generated/CodexPageRequest';
+import type { CodexPageStatus } from './generated/CodexPageStatus';
 import type { DashboardMetrics } from './generated/DashboardMetrics';
 import type { TokensByHost } from './generated/TokensByHost';
 import type { SessionPage } from './generated/SessionPage';
@@ -211,6 +213,10 @@ export class TauriDataSource implements DataSource {
   sessionStretches(sessionId: string, windowDays: number) {
     return invoke<MetricSessionStretches>(commands.sessionStretches, { sessionId, windowDays });
   }
+  codexTranscriptPage(sessionId: string, selection: CodexPageRequest, readId: string) {
+    return invoke<CodexPageStatus>(commands.codexTranscriptPage, { sessionId, selection, readId });
+  }
+
   sessionTranscript(sessionId: string, readId: string) {
     return invoke<SessionSourceStatus>(commands.sessionTranscript, { sessionId, readId });
   }

@@ -1,3 +1,5 @@
+import type { CodexPageRequest } from './generated/CodexPageRequest';
+import type { CodexPageStatus } from './generated/CodexPageStatus';
 import type { DashboardMetrics } from './generated/DashboardMetrics';
 import type { TokensByHost } from './generated/TokensByHost';
 import type { SessionPage } from './generated/SessionPage';
@@ -335,6 +337,11 @@ export interface DataSource {
    * read is resolved behind this seam, from what the index recorded — a view
    * that could name a path could name any path, and this read opens files.
    */
+  codexTranscriptPage?(
+    sessionId: string,
+    selection: CodexPageRequest,
+    readId: string,
+  ): Promise<CodexPageStatus>;
   sessionTranscript(sessionId: string, readId: string): Promise<SessionSourceStatus>;
   /** Abandon a read. Cancelling one that has not begun is not a mistake. */
   cancelSessionTranscript(readId: string): Promise<void>;

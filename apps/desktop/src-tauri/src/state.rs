@@ -665,6 +665,92 @@ impl AppState {
         }
     }
 
+    pub fn codex_transcript_page(
+        &self,
+        session_id: &str,
+        selection: &crate::dto::CodexPageRequest,
+        cancel: &xt_ingest::native::readers_cli::CancelToken,
+        readers: &crate::native_index::DetailReaders,
+    ) -> Result<crate::dto::CodexPageStatus, StateError> {
+        use crate::{
+            dto::{CodexPageStatus, SessionSourceReason},
+            native_index::ReadersUnready,
+        };
+        use xt_ingest::native::{
+            readers_cli::DetailBounds,
+            session_source::{
+                DetailReader, SessionSourceRequest, SourceLimits, load_codex_page,
+                names_one_session,
+            },
+        };
+        if cancel.is_cancelled() {
+            return Ok(CodexPageStatus::unavailable(SessionSourceReason::Cancelled));
+        }
+        let Some(home) = self.native_home() else {
+            return Ok(CodexPageStatus::unavailable(
+                SessionSourceReason::NotIndexed,
+            ));
+        };
+        let (host, native) = {
+            let guard = self.admit()?;
+            let store = &guard.as_ref().ok_or(StateError::Closed)?.store;
+            let Some(session) = store.session(session_id)? else {
+                return Ok(CodexPageStatus::unavailable(
+                    SessionSourceReason::NotIndexed,
+                ));
+            };
+            (
+                session.meta.host,
+                session.meta.native_session_id.unwrap_or_default(),
+            )
+        };
+        // Refuse these before interpreter discovery or any producer execution.
+        if host != xt_store::Host::Codex {
+            return Ok(CodexPageStatus::unavailable(
+                SessionSourceReason::UnsupportedHost,
+            ));
+        }
+        if !names_one_session(&native) {
+            return Ok(CodexPageStatus::unavailable(
+                SessionSourceReason::InvalidIdentifier,
+            ));
+        }
+        let resolved = match readers.resolve(cancel) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
+                return Ok(CodexPageStatus::unavailable(match reason {
+                    ReadersUnready::Cancelled => SessionSourceReason::Cancelled,
+                    ReadersUnready::Unavailable(cause) => {
+                        SessionSourceReason::ReaderUnavailable { cause }
+                    }
+                }));
+            }
+        };
+        let result = load_codex_page(
+            &SessionSourceRequest {
+                home,
+                host,
+                native_session_id: &native,
+                indexed: &[],
+                cancel: Some(cancel),
+                limits: SourceLimits::default(),
+            },
+            &selection.native(),
+            Some(&DetailReader {
+                python: &resolved.python,
+                producer: &resolved.producer,
+                bounds: DetailBounds::default(),
+            }),
+        );
+        let status = CodexPageStatus::from_read(result).map_err(StateError::SourceEncoding)?;
+        // Cancellation wins even when it arrives during DTO encoding.
+        Ok(if cancel.is_cancelled() {
+            CodexPageStatus::unavailable(SessionSourceReason::Cancelled)
+        } else {
+            status
+        })
+    }
+
     /// The resolution and bounded read behind [`AppState::session_transcript`],
     /// shared with the span detail's prompt words: either the status that
     /// says why nothing was read, or the loader's own outcome, held in memory.
