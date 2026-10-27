@@ -28,7 +28,19 @@ for (const router of ['browser', 'hash'] as const) {
     await expect(page).toHaveURL(/q=missing/);
     await forward.focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByText('Measured over the last 7 days', { exact: true })).toBeVisible();
+    const sessionPath = `/sessions/${encodeURIComponent(fixture.sessions[0].rows[0].id)}`;
+    await expect(page).toHaveURL((url) =>
+      router === 'hash'
+        ? url.hash.split('?')[0] === `#${sessionPath}`
+        : url.pathname === sessionPath,
+    );
+    await expect(
+      page.getByRole('heading', { name: 'Measured in this range', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('radio', { name: '7d', exact: true })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
     await page.keyboard.press('Meta+[');
     await expect(page.getByLabel('Search sessions')).toHaveValue('missing');
     await page.keyboard.press('Meta+[');
