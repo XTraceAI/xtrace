@@ -36,6 +36,9 @@ function sessionFilter(sessionId: string): QueryFilters {
   };
 }
 
+/** Readbacks that concurrent warning writes may cancel and replace. */
+const warningReadbacks = new WeakMap<QueryClient, Set<Promise<void>>>();
+
 /**
  * After a dismissal or its undo (stored or refused), the answers that show
  * the session's warnings are read again: that session's in every zone, and
@@ -50,10 +53,23 @@ function sessionFilter(sessionId: string): QueryFilters {
 export async function invalidateSessionWarnings(client: QueryClient, sessionId: string) {
   const [metrics, days] = queryKeys.windowWarnings(7, 0, 0, '');
   const filters = [sessionFilter(sessionId), { queryKey: [metrics, days] }];
-  await Promise.all(filters.map((filter) => client.cancelQueries(filter)));
-  await Promise.all(
-    filters.map((filter) => client.invalidateQueries({ ...filter, refetchType: 'all' })),
-  );
+  const pending = warningReadbacks.get(client) ?? new Set<Promise<void>>();
+  warningReadbacks.set(client, pending);
+  const readback = (async () => {
+    await Promise.all(filters.map((filter) => client.cancelQueries(filter)));
+    await Promise.all(
+      filters.map((filter) => client.invalidateQueries({ ...filter, refetchType: 'all' })),
+    );
+  })();
+  pending.add(readback);
+  try {
+    await readback;
+  } finally {
+    pending.delete(readback);
+  }
+  // Cancellation can settle this read before another press's replacement
+  // answer arrives. Wait for those readbacks before inspecting the cache.
+  while (pending.size > 0) await Promise.all(pending);
 }
 
 /**

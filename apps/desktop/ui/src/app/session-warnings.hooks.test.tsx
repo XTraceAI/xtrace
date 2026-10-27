@@ -624,6 +624,95 @@ it('reads back a refused Undo and clears only that action state', async () => {
   expect(moved).toHaveBeenCalledTimes(1);
 });
 
+it('settles overlapping readbacks when the runtime cancels their held native reads', async () => {
+  const client = new QueryClient();
+  const key = queryKeys.sessionWarnings('UTC', 's');
+  const reads: ReturnType<typeof deferred<SessionWarningsAnswer>>[] = [];
+  client.setQueryData(key, answer('cached'));
+  const observer = new QueryObserver(client, {
+    queryKey: key,
+    staleTime: Infinity,
+    queryFn: () => {
+      const held = deferred<SessionWarningsAnswer>();
+      reads.push(held);
+      return held.promise;
+    },
+  });
+  const stop = observer.subscribe(() => {});
+  const a = invalidateSessionWarnings(client, 's');
+  await waitFor(() => expect(reads).toHaveLength(1));
+  const b = invalidateSessionWarnings(client, 's');
+  await waitFor(() => expect(reads).toHaveLength(2));
+  await client.cancelQueries();
+  await Promise.all([a, b]);
+  expect(client.getQueryData(key)).toEqual(answer('cached'));
+  expect(client.getQueryState(key)?.fetchStatus).toBe('idle');
+  stop();
+});
+
+it('keeps an earlier press busy when a second write replaces its held readback', async () => {
+  const gone = new Set<string>();
+  type List = Awaited<ReturnType<NonNullable<DataSource['sessionWarnings']>>>;
+  const reads: { held: ReturnType<typeof deferred<List>>; value: List }[] = [];
+  let initial = true;
+  const data = source(async (ids, timezone) => {
+    const value = {
+      timezone,
+      sessions: ids.map((session_id) => ({
+        session_id,
+        answer: answer(
+          'supplied answer',
+          [first, second].filter((w) => !gone.has(w.id)),
+          [first, second].filter((w) => gone.has(w.id)),
+        ),
+      })),
+    };
+    if (initial) {
+      initial = false;
+      return value;
+    }
+    const held = deferred<List>();
+    reads.push({ held, value });
+    return held.promise;
+  });
+  Object.defineProperty(data.source, 'warningDismissals', {
+    value: {
+      dismiss: vi.fn(async (session_id: string, warning_id: string) => {
+        gone.add(warning_id);
+        return { session_id, warning_id, dismissed: true };
+      }),
+      restore: vi.fn(),
+    },
+  });
+  const moved = vi.fn();
+  render(
+    <DataProvider source={data.source}>
+      <Actions onMoved={moved} />
+    </DataProvider>,
+  );
+  const a = await screen.findByRole('button', { name: `dismiss ${first.id}` });
+  const b = screen.getByRole('button', { name: `dismiss ${second.id}` });
+  fireEvent.click(a);
+  await waitFor(() => expect(reads).toHaveLength(1));
+  fireEvent.click(b);
+  await waitFor(() => expect(reads).toHaveLength(2));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(a.getAttribute('aria-busy')).toBe('true');
+  expect(b.getAttribute('aria-busy')).toBe('true');
+  expect(moved).not.toHaveBeenCalled();
+  await act(async () => reads[1].held.resolve(reads[1].value));
+  await screen.findByRole('button', { name: `restore ${first.id}` });
+  await screen.findByRole('button', { name: `restore ${second.id}` });
+  await waitFor(() =>
+    expect(moved.mock.calls.map(([id]) => id).sort()).toEqual([first.id, second.id]),
+  );
+  // A's superseded native promise can still answer; it must not restore B.
+  await act(async () => reads[0].held.resolve(reads[0].value));
+  expect(screen.queryByRole('button', { name: `dismiss ${second.id}` })).toBeNull();
+});
+
 it('does not move focus when the readback fails and clears its action busy state', async () => {
   const data = controlled();
   const moved = vi.fn();
