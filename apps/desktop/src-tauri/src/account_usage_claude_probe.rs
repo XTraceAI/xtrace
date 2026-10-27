@@ -402,12 +402,11 @@ fn interact(
 
 #[cfg(target_os = "macos")]
 mod pty {
-    //! Minimal pseudo-terminal plumbing with the C library calls declared
-    //! directly, as the rest of this crate does for `kill`.
+    //! Pseudo-terminal plumbing and the descriptor boundary of its child.
     use std::{
         ffi::{c_char, c_int, c_ulong, c_void},
         fs::File,
-        io::{Read as _, Write as _},
+        io::{self, Read as _, Write as _},
         os::fd::{AsRawFd, FromRawFd, OwnedFd},
         os::unix::process::CommandExt,
         path::Path,
@@ -436,6 +435,10 @@ mod pty {
     const FIOCLEX: c_ulong = 0x2000_6601;
     const SIGKILL: c_int = 9;
 
+    #[link(name = "proc")]
+    unsafe extern "C" {}
+    const _: () = assert!(std::mem::size_of::<libc::proc_bsdinfo>() == 136);
+
     unsafe extern "C" {
         fn openpty(
             master: *mut c_int,
@@ -462,6 +465,111 @@ mod pty {
     struct SigInfo([u8; 128]);
     /// Offset of `si_pid` in macOS's `siginfo_t` (after three ints).
     const SI_PID_OFFSET: usize = 12;
+
+    pub(super) fn descriptor_bound(creation_ceiling: c_int, allocated: u32) -> io::Result<c_int> {
+        if creation_ceiling <= 0 || allocated == 0 {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        let allocated = c_int::try_from(allocated)
+            .map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+        Ok(creation_ceiling.max(allocated))
+    }
+
+    /// New fds cannot exceed the Darwin creation ceiling; existing high fds can
+    /// survive a lowered soft limit, so include the allocated table size too.
+    /// External privileged changes to the global kernel cap are outside this
+    /// process's spawn model.
+    pub(super) fn inherited_fd_bound() -> io::Result<c_int> {
+        let mut ceiling: c_int = 0;
+        let mut bytes;
+        loop {
+            bytes = std::mem::size_of_val(&ceiling);
+            // SAFETY: valid fixed-size output, no new value is supplied.
+            if unsafe {
+                libc::sysctlbyname(
+                    c"kern.maxfilesperproc".as_ptr(),
+                    (&raw mut ceiling).cast(),
+                    &raw mut bytes,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            } == 0
+            {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+        if bytes != std::mem::size_of_val(&ceiling) {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        // SAFETY: the SDK structure contains only integer fields and byte arrays.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of_val(&info) as c_int;
+        // SAFETY: getpid has no pointer arguments or failure result.
+        let pid = unsafe { libc::getpid() };
+        loop {
+            // SAFETY: our own PID and a valid, sized output structure.
+            let read = unsafe {
+                libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
+            };
+            if read == size {
+                break;
+            }
+            if read > 0 {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL));
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+        if pid <= 0 || info.pbi_pid != pid as u32 {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        descriptor_bound(ceiling, info.pbi_nfiles)
+    }
+
+    /// Called after fork: only scalar work and async-signal-safe fcntl calls.
+    /// Mark rather than close, so Rust's exec-error pipe survives a failed exec.
+    pub(super) fn mark_inherited_fds(bound: c_int) -> io::Result<()> {
+        for fd in 3..bound {
+            let flags = loop {
+                // SAFETY: reads the flags of this child's descriptor slot.
+                let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+                if flags != -1 {
+                    break Some(flags);
+                }
+                let error = io::Error::last_os_error();
+                match error.raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::EBADF) => break None,
+                    _ => return Err(error),
+                }
+            };
+            let Some(flags) = flags else {
+                continue;
+            };
+            if flags & libc::FD_CLOEXEC != 0 {
+                continue;
+            }
+            loop {
+                // SAFETY: preserves flags and changes only this child's slot.
+                if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } != -1 {
+                    break;
+                }
+                let error = io::Error::last_os_error();
+                match error.raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::EBADF) => break,
+                    _ => return Err(error),
+                }
+            }
+        }
+        Ok(())
+    }
 
     /// Asks whether `pid` has exited while leaving it unreaped (`WNOWAIT`).
     fn exited_unreaped(pid: u32) -> bool {
@@ -530,9 +638,9 @@ mod pty {
             // SAFETY: openpty returned two new descriptors this function owns.
             let (master, slave) =
                 unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
-            // Close-on-exec at once, so neither side leaks into the child
-            // (beyond the standard streams set up below) or into any process
-            // another thread starts.
+            // Mark promptly, though openpty then ioctl is not atomic against
+            // another thread's spawn. The child sweep below also covers other
+            // descriptors inherited during concurrent parent activity.
             for fd in [&master, &slave] {
                 // SAFETY: a flag change on a descriptor this function owns.
                 if unsafe { ioctl(fd.as_raw_fd(), FIOCLEX) } == -1 {
@@ -547,19 +655,22 @@ mod pty {
                 .stdout(Stdio::from(slave.try_clone()?))
                 .stderr(Stdio::from(slave));
             super::configure_environment(&mut command, binary);
-            // SAFETY: setsid and ioctl are async-signal-safe. The child gets
+            let fd_bound = inherited_fd_bound()?;
+            // SAFETY: setsid, ioctl and fcntl are async-signal-safe; the bound
+            // was prepared in the parent and the callback allocates nothing.
+            // The child gets
             // its own session with the pseudo-terminal (already its stdin) as
             // controlling terminal, so closing the master hangs it up and its
             // process group can be killed as a whole.
             unsafe {
-                command.pre_exec(|| {
+                command.pre_exec(move || {
                     if setsid() == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
                     if ioctl(0, TIOCSCTTY, 0) == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
-                    Ok(())
+                    mark_inherited_fds(fd_bound)
                 });
             }
             let child = command.spawn()?;
@@ -646,6 +757,10 @@ mod pty {
         }
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "account_usage_claude_probe_fd_tests.rs"]
+mod fd_tests;
 
 /// The environment every Claude Code child of the probe gets: the probe
 /// itself and its sign-in check.
