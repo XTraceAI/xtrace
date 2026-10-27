@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -103,6 +103,55 @@ test('routine CI is Linux-only and native work is explicit release preparation',
   for (const job of [jobs.ui, jobs['ui-extras']]) {
     assert.match(job, /path: ~\/\.cache\/ms-playwright/);
     assert.match(job, /playwright install --with-deps webkit/);
+  }
+});
+
+test('browser setup changes only the Azure Ubuntu mirror in legacy and deb822 sources', async () => {
+  const scripts = [jobs.ui, jobs['ui-extras']].map((job) =>
+    job
+      .match(/- name: Prepare Ubuntu package sources[\s\S]*?run: \|\n([\s\S]*?)(?=\n {6}-)/)[1]
+      .replace(/^ {10}/gm, ''),
+  );
+  assert.equal(scripts[0], scripts[1]);
+  assert.equal(spawnSync('bash', ['-n'], { input: scripts[0] }).status, 0);
+  const directory = await mkdtemp(join(tmpdir(), 'xtrace-ci-apt-'));
+  try {
+    await mkdir(join(directory, 'sources.list.d'));
+    const fixtures = {
+      'apt-mirrors.txt':
+        'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n',
+      'sources.list.d/runner.sources':
+        'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble noble-updates noble-backports noble-security\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',
+      'sources.list': 'deb http://azure.archive.ubuntu.com/ubuntu noble main restricted\n',
+      'sources.list.d/ubuntu.sources':
+        'Types: deb\nURIs: https://azure.archive.ubuntu.com/ubuntu http://security.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',
+      'sources.list.d/legacy.list':
+        'deb [arch=amd64 signed-by=/keys/ubuntu.gpg] https://azure.archive.ubuntu.com/ubuntu noble-backports multiverse\n',
+      'sources.list.d/other.sources':
+        'Types: deb\nURIs: https://archive.ubuntu.com/ubuntu https://mirror.example/ubuntu https://azure.archive.ubuntu.com.example/ubuntu\nSuites: noble-security\nComponents: main\nSigned-By: /keys/other.gpg\n',
+    };
+    for (const [file, contents] of Object.entries(fixtures))
+      await writeFile(join(directory, file), contents);
+    await writeFile(join(directory, 'sources.list.d/google-chrome.list'), 'unused browser source');
+    // Run the actual workflow shell on temporary files; adapt only sudo and BSD sed's -i spelling.
+    const sudo =
+      process.platform === 'darwin'
+        ? 'sudo() { if [[ "$1" == sed && "$2" == -i ]]; then shift 2; command sed -i "" "$@"; else command "$@"; fi; };\n'
+        : 'sudo() { command "$@"; };\n';
+    const script = scripts[0].replaceAll('/etc/apt', `'${directory.replaceAll("'", "'\\''")}'`);
+    const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', sudo + script], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    for (const [file, contents] of Object.entries(fixtures)) {
+      const expected = contents
+        .replaceAll('http://azure.archive.ubuntu.com/', 'http://archive.ubuntu.com/')
+        .replaceAll('https://azure.archive.ubuntu.com/', 'https://archive.ubuntu.com/');
+      assert.equal(await readFile(join(directory, file), 'utf8'), expected, file);
+    }
+    await assert.rejects(access(join(directory, 'sources.list.d/google-chrome.list')));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
