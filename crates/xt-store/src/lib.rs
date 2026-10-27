@@ -135,7 +135,7 @@ pub use model::{
     CanonicalMessage, CanonicalRecord, Host, SessionMeta, SessionSource, SurfaceEvidence, Usage,
     WriteStats,
 };
-pub use read::{StoreCounts, StoredRecord, StoredSession, StoredToolUse};
+pub use read::{RecordPerson, StoreCounts, StoredRecord, StoredSession, StoredToolUse};
 
 use rusqlite::{Connection, OpenFlags};
 use std::{path::Path, time::Duration};

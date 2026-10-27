@@ -37,7 +37,7 @@ export function WarningContext({
   host?: string;
   fullSession?: { href: string; open: () => void };
 }) {
-  const { read, retry } = useWarningContext(sessionId, warning);
+  const { read, retry } = useWarningContext(sessionId, warning, props.timezone);
   return <WarningContextView read={read} retry={retry} warning={warning} {...props} />;
 }
 

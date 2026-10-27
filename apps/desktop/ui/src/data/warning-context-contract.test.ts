@@ -25,15 +25,20 @@ it.each([null, 150])(
     vi.mocked(invoke).mockResolvedValueOnce(answer).mockResolvedValueOnce(undefined);
     expect(invoke).not.toHaveBeenCalled();
     expect(
-      await source.sessionWarningContext('session-a', 'record-a', block, 'read-a', 'correction'),
+      await source.sessionWarningContext('session-a', 'record-a', block, 'read-a', {
+        id: 'correction:record-a',
+        timezone: 'Asia/Tokyo',
+      }),
     ).toBe(answer);
-    // The warning's kind goes with it: the native side marks a correction.
+    // The warning's ID and zone go with it: the native side looks it up and
+    // marks a correction.
     expect(invoke).toHaveBeenNthCalledWith(1, 'session_warning_context', {
       sessionId: 'session-a',
       recordUuid: 'record-a',
       block,
       readId: 'read-a',
-      kind: 'correction',
+      warningId: 'correction:record-a',
+      timezone: 'Asia/Tokyo',
     });
     await source.cancelSessionTranscript('read-a');
     expect(invoke).toHaveBeenNthCalledWith(2, 'cancel_session_transcript', { readId: 'read-a' });

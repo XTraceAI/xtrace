@@ -66,7 +66,7 @@ Object.defineProperties(source, {
   },
 });
 Object.assign(window, { __dismissals: dismissals });
-source.sessionWarningContext = async (_session, recordUuid, _block, _readId, kind) => {
+source.sessionWarningContext = async (_session, recordUuid, _block, _readId, shown) => {
   if (params.get('context') === 'large') {
     const response = await fetch('/e2e/warning-large-context.synthetic.json');
     return response.json() as Promise<SessionExcerptStatus>;
@@ -104,7 +104,7 @@ source.sessionWarningContext = async (_session, recordUuid, _block, _readId, kin
   // looked for in the UI; none for another warning, a sub-agent's or a
   // replaced message.
   const marks =
-    kind === 'correction' &&
+    shown?.id === after.warning_id &&
     recordUuid === warning.points_at.record_uuid &&
     !subagent &&
     !params.has('long')

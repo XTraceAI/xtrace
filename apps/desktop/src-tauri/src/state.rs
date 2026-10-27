@@ -783,14 +783,17 @@ impl AppState {
         }
     }
 
-    /// `kind` is the warning's: a correction's target record is marked
-    /// where its text says so (`SessionExcerptStatus::with_correction_marks`).
+    /// `warning` names the warning shown (its ID, and the zone the view
+    /// reads warnings in): when it is one of the session's corrections now,
+    /// its target record is marked where its text says so
+    /// (`SessionExcerptStatus::with_correction_marks`). Unknown, missing or
+    /// any other kind: no marks.
     pub fn session_warning_context(
         &self,
         session_id: &str,
         record_uuid: &str,
         block: Option<u32>,
-        kind: Option<crate::session_warnings_dto::SessionWarningKind>,
+        warning: Option<(&str, &str)>,
         cancel: &xt_ingest::native::readers_cli::CancelToken,
         readers: &crate::native_index::DetailReaders,
     ) -> Result<crate::dto::SessionExcerptStatus, StateError> {
@@ -857,12 +860,21 @@ impl AppState {
             self.with_store(|store| Ok(store.record_persons(session_id, &ids)?))
                 .unwrap_or_default()
         };
-        let status = status.with_persons(&persons);
-        let status = if kind == Some(crate::session_warnings_dto::SessionWarningKind::Correction) {
-            status.with_correction_marks()
-        } else {
-            status
+        // The warning's own stored phrase, looked up by its ID, so a mark
+        // never names other words than the warning does. Only a caption
+        // detail: when it cannot be read, nothing is marked.
+        let phrase = match (&status, warning) {
+            (crate::dto::SessionExcerptStatus::Loaded { .. }, Some((warning_id, timezone))) => self
+                .session_warning(session_id, warning_id, timezone)
+                .ok()
+                .flatten()
+                .filter(|(found, _)| found.kind == xt_metrics::WarningKind::Correction)
+                .and_then(|(found, _)| found.correction_phrase),
+            _ => None,
         };
+        let status = status
+            .with_persons(&persons)
+            .with_correction_marks(phrase.as_deref(), &persons);
         Ok(settled_excerpt(status, cancel))
     }
 

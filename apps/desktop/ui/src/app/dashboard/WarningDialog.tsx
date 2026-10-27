@@ -177,7 +177,11 @@ function SelectedIssue({
             data-testid={dismissed ? 'dismissed-warning' : 'warning-item'}
             tabIndex={-1}
           >
-            <WithWarningContext sessionId={selected.sessionId} warning={warning}>
+            <WithWarningContext
+              sessionId={selected.sessionId}
+              warning={warning}
+              timezone={selected.timezone}
+            >
               {({ read, retry }) => (
                 <>
                   <WarningContextView
@@ -268,13 +272,15 @@ function SelectedIssue({
 function WithWarningContext({
   sessionId,
   warning,
+  timezone,
   children,
 }: {
   sessionId: string;
   warning: SessionWarningItem;
+  timezone: string;
   children: (context: { read: WarningContextRead; retry: () => void }) => ReactNode;
 }) {
-  return children(useWarningContext(sessionId, warning));
+  return children(useWarningContext(sessionId, warning, timezone));
 }
 
 /**
@@ -291,7 +297,9 @@ function WarningReason({
   warning: SessionWarningItem;
   read: WarningContextRead;
 }) {
-  const quote = warning.kind === 'correction' ? correctionQuote(read) : null;
+  // The native side marks only a correction whose phrase the marks agree
+  // with: marks present are enough.
+  const quote = correctionQuote(read);
   if (!quote)
     return (
       <p className="xt-warning-modal-reason" data-testid="warning-reason">

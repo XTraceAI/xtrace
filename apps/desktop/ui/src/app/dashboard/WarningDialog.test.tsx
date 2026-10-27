@@ -655,7 +655,10 @@ it('shows a correction as "you wrote" and its whole message with the native mark
   ]);
   expect(reason.textContent).not.toContain(selected.warning.reason);
   expect(test.transcript).toHaveBeenCalledOnce();
-  expect((test.transcript.mock.calls[0] as unknown[])[4]).toBe('correction');
+  expect((test.transcript.mock.calls[0] as unknown[])[4]).toEqual({
+    id: selected.warning.id,
+    timezone: selected.timezone,
+  });
   expect(dialog().textContent).not.toContain('take a closer look');
 });
 
@@ -683,16 +686,21 @@ for (const state of ['loading', 'failed', 'unmarked', 'unavailable'] as const)
     expect(dialog().textContent).not.toContain('take a closer look');
   });
 
-it('keeps every other kind on its own reason, whatever the read carries', async () => {
+// The native side marks only a correction it can stand behind; for any
+// other warning it sends no marks, and the window shows the reason.
+it('asks for every warning by its own ID and shows its reason when nothing is marked', async () => {
   const test = setup();
   const other = read.warnings.find((one) => one.kind !== 'correction')!;
-  test.transcript.mockResolvedValue(quoted());
+  test.transcript.mockResolvedValue(quoted([]));
   test.mount();
   await screen.findByTestId('warning-reason');
   test.select({ ...selected, warning: other });
   await waitFor(() => expect(screen.getByTestId('warning-item').dataset.warningId).toBe(other.id));
   await waitFor(() => expect(test.transcript).toHaveBeenCalledTimes(2));
-  expect((test.transcript.mock.calls[1] as unknown[])[4]).toBe(other.kind);
+  expect((test.transcript.mock.calls[1] as unknown[])[4]).toEqual({
+    id: other.id,
+    timezone: selected.timezone,
+  });
   expect(screen.getByTestId('warning-reason').textContent).toBe(other.reason);
   expect(screen.getByTestId('warning-reason').querySelector('mark')).toBeNull();
 });

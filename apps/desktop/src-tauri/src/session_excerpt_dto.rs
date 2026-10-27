@@ -100,55 +100,82 @@ impl SessionExcerptStatus {
             Self::Unavailable { .. } => Vec::new(),
         }
     }
-    /// Marks where the target record's text says it is a correction, by
-    /// M-21's own matcher over its text blocks as shown (joined by line
-    /// breaks, so no word spans two blocks). For a correction warning only.
-    pub fn with_correction_marks(mut self) -> Self {
+    /// Marks where the target record says it is a correction, for the
+    /// correction warning whose stored phrase is `phrase` (`None` for any
+    /// other warning, or none found). M-21's one matcher
+    /// (`xt_metrics::correction_spans`) runs over exactly the text the check
+    /// read: the record's text blocks joined with nothing between them
+    /// (`xt_store::record_text::joined`). Each matched word is split at block
+    /// boundaries into one mark per block.
+    ///
+    /// Marked only when both hold, so a mark never disagrees with the
+    /// warning: M-02 counts the whole record as the person's message
+    /// (`whole_message`, unknown counts as no), and the matched words,
+    /// lowercased and joined by single spaces, are the stored phrase (a cut
+    /// message the check read only the start of can match differently).
+    pub fn with_correction_marks(
+        mut self,
+        phrase: Option<&str>,
+        persons: &std::collections::BTreeMap<String, xt_store::RecordPerson>,
+    ) -> Self {
+        let Some(phrase) = phrase else {
+            return self;
+        };
         let Self::Loaded { records, .. } = &mut self else {
             return self;
         };
         let Some(target) = records.iter_mut().find(|entry| entry.target) else {
             return self;
         };
-        let blocks: Vec<(u32, &str)> = target
-            .record
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                SourceBlock::Text { index, text } => Some((*index, text.as_str())),
-                _ => None,
-            })
-            .collect();
-        let joined = blocks
-            .iter()
-            .map(|(_, text)| *text)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let whole = persons
+            .get(&target.record.id)
+            .and_then(|facts| facts.whole_message);
+        if whole != Some(true) {
+            return self;
+        }
+        // Each text block's index and its byte range in the joined text.
+        let mut joined = String::new();
+        let mut blocks: Vec<(u32, std::ops::Range<usize>)> = Vec::new();
+        for block in &target.record.blocks {
+            if let SourceBlock::Text { index, text } = block {
+                blocks.push((*index, joined.len()..joined.len() + text.len()));
+                joined.push_str(text);
+            }
+        }
+        if xt_metrics::correction(&joined).as_deref() != Some(phrase) {
+            return self;
+        }
         let Some(spans) = xt_metrics::correction_spans(&joined) else {
             return self;
         };
+        let utf16 = |text: &str| text.encode_utf16().count() as u32;
         let mut marks = Vec::new();
-        let mut offset = 0;
-        for (index, text) in &blocks {
-            let range = offset..offset + text.len();
-            for span in spans.iter().filter(|span| range.contains(&span.start)) {
-                let utf16 = |byte: usize| text[..byte - offset].encode_utf16().count() as u32;
+        for span in &spans {
+            for (index, range) in &blocks {
+                let start = span.start.max(range.start);
+                let end = span.end.min(range.end);
+                if start >= end {
+                    continue;
+                }
+                let block = &joined[range.clone()];
                 marks.push(TextMark {
                     block: *index,
-                    start: utf16(span.start),
-                    end: utf16(span.end),
+                    start: utf16(&block[..start - range.start]),
+                    end: utf16(&block[..end - range.start]),
                 });
             }
-            offset = range.end + 1;
         }
         target.correction_marks = marks;
         self
     }
     /// Sets each record's M-02 answer from the index's, by record ID.
-    pub fn with_persons(mut self, persons: &std::collections::BTreeMap<String, bool>) -> Self {
+    pub fn with_persons(
+        mut self,
+        persons: &std::collections::BTreeMap<String, xt_store::RecordPerson>,
+    ) -> Self {
         if let Self::Loaded { records, .. } = &mut self {
             for entry in records {
-                entry.person = persons.get(&entry.record.id).copied();
+                entry.person = persons.get(&entry.record.id).and_then(|facts| facts.person);
             }
         }
         self
@@ -237,6 +264,7 @@ impl std::io::Write for OutputCounter {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use xt_ingest::{
         canonical::{Parsed, SourceContext, parse_with_context},
         native::session_source::GenerationBasis,
@@ -276,11 +304,34 @@ mod tests {
         assert_eq!(records[0].record.blocks.len(), 1);
         assert_eq!(records[0].record.blocks[0].index(), 1);
     }
+    fn facts(whole: Option<bool>) -> BTreeMap<String, xt_store::RecordPerson> {
+        BTreeMap::from([(
+            "target".to_owned(),
+            xt_store::RecordPerson {
+                person: Some(true),
+                whole_message: whole,
+            },
+        )])
+    }
+    fn marks_of(blocks: serde_json::Value, phrase: &str, whole: Option<bool>) -> Vec<TextMark> {
+        let SessionExcerptStatus::Loaded { mut records, .. } =
+            status(record(blocks), None).with_correction_marks(Some(phrase), &facts(whole))
+        else {
+            panic!("loaded");
+        };
+        records.remove(0).correction_marks
+    }
+    fn texts(blocks: &[&str]) -> serde_json::Value {
+        blocks
+            .iter()
+            .map(|text| json!({"type":"text","text":text}))
+            .collect()
+    }
     #[test]
-    fn correction_marks_only_the_target_in_utf16_and_only_when_asked() {
+    fn correction_marks_only_the_target_in_utf16_and_only_for_a_correction() {
         let neighbour = record(json!([{"type":"text","text":"that was wrong"}]));
         let target = record(json!([
-            {"type":"text","text":"🙂 ok"},
+            {"type":"text","text":"🙂 ok "},
             {"type":"text","text":"Then I said the left panel"}
         ]));
         let status = SessionExcerptStatus::from_read(
@@ -292,8 +343,11 @@ mod tests {
             None,
         )
         .unwrap();
-        // Not a correction warning: nothing is marked.
-        let SessionExcerptStatus::Loaded { records, .. } = &status else {
+        // Not a correction warning (or no warning found): nothing is marked.
+        let SessionExcerptStatus::Loaded { records, .. } = status
+            .clone()
+            .with_correction_marks(None, &facts(Some(true)))
+        else {
             panic!("loaded");
         };
         assert!(
@@ -301,7 +355,9 @@ mod tests {
                 .iter()
                 .all(|entry| entry.correction_marks.is_empty())
         );
-        let SessionExcerptStatus::Loaded { records, .. } = status.with_correction_marks() else {
+        let SessionExcerptStatus::Loaded { records, .. } =
+            status.with_correction_marks(Some("i said"), &facts(Some(true)))
+        else {
             panic!("loaded");
         };
         assert!(records[0].correction_marks.is_empty());
@@ -326,37 +382,99 @@ mod tests {
         let units: Vec<u16> = text.encode_utf16().collect();
         assert_eq!(String::from_utf16(&units[5..6]).unwrap(), "I");
         assert_eq!(String::from_utf16(&units[7..11]).unwrap(), "said");
-        // A target with no match stays unmarked.
-        let plain = status_of(record(
-            json!([{"type":"text","text":"add an export button"}]),
-        ));
-        let SessionExcerptStatus::Loaded { records, .. } = plain.with_correction_marks() else {
-            panic!("loaded");
-        };
-        assert!(records[0].correction_marks.is_empty());
         // A multi-byte character before the match counts as two UTF-16 units.
-        let emoji = status_of(record(json!([{"type":"text","text":"🙂 that is wrong"}])));
-        let SessionExcerptStatus::Loaded { records, .. } = emoji.with_correction_marks() else {
-            panic!("loaded");
-        };
-        assert_eq!(records[0].correction_marks[0].start, 11);
-        assert_eq!(records[0].correction_marks[0].end, 16);
+        assert_eq!(
+            marks_of(texts(&["🙂 that is wrong"]), "wrong", Some(true)),
+            [TextMark {
+                block: 0,
+                start: 11,
+                end: 16
+            }]
+        );
+        // The fixture's correction, as the UI fixtures state its marks.
+        assert_eq!(
+            marks_of(
+                texts(&["Still not fixed. Please check the retry limit."]),
+                "still not",
+                Some(true)
+            ),
+            [
+                TextMark {
+                    block: 0,
+                    start: 0,
+                    end: 5
+                },
+                TextMark {
+                    block: 0,
+                    start: 6,
+                    end: 9
+                },
+            ]
+        );
     }
-    fn status_of(record: xt_ingest::canonical::ParsedRecord) -> SessionExcerptStatus {
-        status(record, None)
+    #[test]
+    fn no_marks_unless_the_whole_record_is_the_persons_and_the_phrase_agrees() {
+        // Only part of the record is the person's (or M-02 cannot say): the
+        // correction word may sit in the part that is not.
+        assert!(marks_of(texts(&["fix it, wrong file"]), "wrong", Some(false)).is_empty());
+        assert!(marks_of(texts(&["fix it, wrong file"]), "wrong", None).is_empty());
+        // A cut message: the check read only its start, with the "no" rule
+        // off, and found "wrong"; the whole text's first match is "no".
+        assert!(marks_of(texts(&["No, that file is wrong"]), "wrong", Some(true)).is_empty());
+        // No match at all.
+        assert!(marks_of(texts(&["add an export button"]), "wrong", Some(true)).is_empty());
+    }
+    #[test]
+    fn marks_follow_the_checks_own_joining_across_blocks() {
+        // Joined with nothing between, "stop" + "watch" is "stopwatch": the
+        // check found "wrong", never "stop".
+        assert_eq!(
+            marks_of(texts(&["stop", "watch is wrong"]), "wrong", Some(true)),
+            [TextMark {
+                block: 1,
+                start: 9,
+                end: 14
+            }]
+        );
+        assert!(marks_of(texts(&["stop", "watch is wrong"]), "stop", Some(true)).is_empty());
+        // A word split between blocks is one word, marked in each block.
+        assert_eq!(
+            marks_of(texts(&["I sai", "d the left panel"]), "i said", Some(true)),
+            [
+                TextMark {
+                    block: 0,
+                    start: 0,
+                    end: 1
+                },
+                TextMark {
+                    block: 0,
+                    start: 2,
+                    end: 5
+                },
+                TextMark {
+                    block: 1,
+                    start: 0,
+                    end: 1
+                },
+            ]
+        );
     }
     #[test]
     fn person_comes_only_from_the_index_answer() {
-        let record = record(json!([{"type":"text","text":"words"}]));
-        let loaded = status(record, None);
+        let loaded = status(record(json!([{"type":"text","text":"words"}])), None);
         assert_eq!(loaded.record_ids(), vec!["target"]);
         let SessionExcerptStatus::Loaded { records, .. } = &loaded else {
             panic!("loaded");
         };
         // A user-role record is not a person's message until M-02 says so.
         assert_eq!(records[0].person, None);
-        let mut persons = std::collections::BTreeMap::new();
-        persons.insert("target".to_owned(), false);
+        let persons = BTreeMap::from([(
+            "target".to_owned(),
+            xt_store::RecordPerson {
+                person: Some(false),
+                whole_message: Some(true),
+            },
+        )]);
         let SessionExcerptStatus::Loaded { records, .. } = loaded.with_persons(&persons) else {
             panic!("loaded");
         };

@@ -1,4 +1,3 @@
-import type { SessionWarningKind } from './generated/SessionWarningKind';
 import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
 import type { SessionDiagnosis } from './generated/SessionDiagnosis';
 import type { SavedSkill } from './generated/SavedSkill';
@@ -375,15 +374,17 @@ export interface DataSource {
    */
   /**
    * A bounded original-source excerpt around the saved warning point; never
-   * cached. `kind` is the warning's: a correction's target is marked where
-   * its text says so (`SessionExcerptRecord.correction_marks`).
+   * cached. `warning` names the warning shown (its ID, and the zone the view
+   * reads warnings in): the native side looks it up, and a correction's
+   * target is marked where its text says so
+   * (`SessionExcerptRecord.correction_marks`).
    */
   sessionWarningContext(
     sessionId: string,
     recordUuid: string,
     block: number | null,
     readId: string,
-    kind?: SessionWarningKind,
+    warning?: { readonly id: string; readonly timezone: string },
   ): Promise<SessionExcerptStatus>;
   sessionTranscriptPage?(
     sessionId: string,

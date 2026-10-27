@@ -956,6 +956,27 @@ fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
         assert_eq!(entry.person, indexed, "{}", entry.record.id);
     }
     assert!(records.iter().any(|entry| entry.person.is_some()));
+    // A warning ID the session does not have marks nothing, and the excerpt
+    // still loads.
+    let E::Loaded { records, .. } = state
+        .session_warning_context(
+            &id,
+            &uuid(2),
+            None,
+            Some(("correction:no-such-warning", "UTC")),
+            &CancelToken::new(),
+            &bundle_with(&python),
+        )
+        .unwrap()
+    else {
+        panic!("excerpt for an unknown warning")
+    };
+    assert!(records.iter().any(|entry| entry.target));
+    assert!(
+        records
+            .iter()
+            .all(|entry| entry.correction_marks.is_empty())
+    );
     assert!(!marker.exists());
     assert_eq!(counts(&db), before);
     // When the index cannot answer who sent a message, the excerpt still

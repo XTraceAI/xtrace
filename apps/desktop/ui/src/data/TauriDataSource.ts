@@ -1,4 +1,3 @@
-import type { SessionWarningKind } from './generated/SessionWarningKind';
 import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
 import type { SessionDiagnosis } from './generated/SessionDiagnosis';
 import type { SavedSkill } from './generated/SavedSkill';
@@ -256,14 +255,15 @@ export class TauriDataSource implements DataSource {
     recordUuid: string,
     block: number | null,
     readId: string,
-    kind?: SessionWarningKind,
+    warning?: { readonly id: string; readonly timezone: string },
   ) {
     return invoke<SessionExcerptStatus>(commands.sessionWarningContext, {
       sessionId,
       recordUuid,
       block,
       readId,
-      kind: kind ?? null,
+      warningId: warning?.id ?? null,
+      timezone: warning?.timezone ?? null,
     });
   }
   sessionTranscriptPage(sessionId: string, selection: SessionPageSelection, readId: string) {

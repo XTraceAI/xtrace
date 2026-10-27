@@ -243,6 +243,11 @@ pub struct SessionWarning {
     /// Not part of the saved neutral answer's storage shape.
     #[serde(skip)]
     pub compact_reason: String,
+    /// A correction's matched words, as [`correction`] gave them (the
+    /// phrase its `reason` quotes); `None` for every other kind. Not
+    /// serialised.
+    #[serde(skip)]
+    pub correction_phrase: Option<String>,
     /// The representative tool call for repeated calls, or the first repeat
     /// (the second message/result) for a repeated prompt or failure.
     /// Read through [`SessionWarning::points_at`]. Not serialised.
@@ -1016,6 +1021,10 @@ impl NeutralSessionWarnings {
                     record_uuids: warning.record_uuids.clone(),
                     reason: warning.reason.render(zone),
                     compact_reason: warning.reason.compact(),
+                    correction_phrase: match &warning.reason {
+                        WarningReason::Correction { phrase, .. } => Some(phrase.clone()),
+                        _ => None,
+                    },
                     repeat: warning.repeat.clone(),
                     size: warning.size,
                 })

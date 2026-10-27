@@ -188,17 +188,39 @@ fn record_persons_reads_the_same_m02_answer_as_records() {
         .record_persons("codex-child", &["input", "reply", "reminder", "missing"])
         .unwrap();
     // Known answers, not just agreement with `records()`.
-    assert_eq!(persons.get("input"), Some(&true));
-    assert_eq!(persons.get("reminder"), Some(&false));
+    assert_eq!(persons["input"].person, Some(true));
+    assert_eq!(persons["input"].whole_message, Some(true));
+    assert_eq!(persons["reminder"].person, Some(false));
     for stored in store.records("codex-child").unwrap() {
+        let facts = persons[&stored.uuid];
+        assert_eq!(facts.person, stored.human_is_eligible, "{}", stored.uuid);
         assert_eq!(
-            persons.get(&stored.uuid).copied(),
-            stored.human_is_eligible,
+            facts.whole_message,
+            stored
+                .human_text_len
+                .zip(stored.text_len)
+                .map(|(human, text)| human == text),
             "{}",
             stored.uuid
         );
     }
     assert!(!persons.contains_key("missing"));
+    // Only part of the message is the person's: a reply to a question kept
+    // its first five characters.
+    store
+        .apply_human_input_adjustments(&[InputAdjustment {
+            record_uuid: "input".into(),
+            session_id: "codex-child".into(),
+            original_ts: "2026-09-01T00:00:00Z".into(),
+            original_length: 12,
+            retained_length: Some(5),
+            reason: "question_reply".into(),
+            native_item_id: None,
+        }])
+        .unwrap();
+    let persons = store.record_persons("codex-child", &["input"]).unwrap();
+    assert_eq!(persons["input"].person, Some(true));
+    assert_eq!(persons["input"].whole_message, Some(false));
     assert!(
         store
             .record_persons("another-session", &["input"])
