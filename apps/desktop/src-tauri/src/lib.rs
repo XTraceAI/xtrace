@@ -14,6 +14,7 @@ mod account_usage_dto;
 mod account_usage_history;
 mod account_usage_process;
 mod bundle_rename;
+mod codex_page_dto;
 pub mod dashboard;
 mod dashboard_dto;
 pub mod dto;
@@ -423,6 +424,37 @@ async fn session_transcript(
     state
         .session_transcript(&session_id, read.token(), index.detail_readers())
         .map_err(|error| error.to_string())
+}
+
+/// One bounded portion of a Codex conversation, under this open's cancel token.
+#[tauri::command]
+async fn codex_transcript_page(
+    app: tauri::AppHandle,
+    session_id: String,
+    read_id: String,
+    selection: dto::CodexPageRequest,
+) -> Result<dto::CodexPageStatus, String> {
+    on_worker(READ_WORKER_FAILED, move || {
+        let reads = app
+            .try_state::<transcript_reads::TranscriptReads>()
+            .ok_or(state::StateError::Closed)?;
+        let read = reads
+            .begin(&read_id)
+            .map_err(|_| state::StateError::ReadRefused)?;
+        let state = app
+            .try_state::<state::AppState>()
+            .ok_or(state::StateError::Closed)?;
+        let index = app
+            .try_state::<native_index::NativeIndex>()
+            .ok_or(state::StateError::Closed)?;
+        state.codex_transcript_page(
+            &session_id,
+            &selection,
+            read.token(),
+            index.detail_readers(),
+        )
+    })
+    .await
 }
 
 /// The host's own title for each named session that has one, read from its
@@ -1520,6 +1552,7 @@ pub fn run() {
             session_row,
             session_stretches,
             session_transcript,
+            codex_transcript_page,
             cancel_session_transcript,
             session_titles,
             cancel_session_titles,
@@ -2779,12 +2812,14 @@ mod tests {
             run_id: "0f8fad5b-d9cb-469f-a165-70867728950e".into(),
             state: dto::GradingProgressState::Running,
             elapsed_seconds: 5,
+            step: Some("Running analyze.py".into()),
         });
         rubric(&dto::GradingRubricProgress {
             job_id: "0f8fad5b-d9cb-469f-a165-70867728950f".into(),
             location: "plugin:tools@market/lint".into(),
             state: dto::GradingProgressState::Finished,
             elapsed_seconds: 61,
+            step: None,
         });
         let heard = heard.lock().unwrap().clone();
         assert_eq!(heard.len(), 3, "{heard:?}");
@@ -2798,7 +2833,8 @@ mod tests {
             serde_json::json!({
                 "run_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
                 "state": "running",
-                "elapsed_seconds": 5
+                "elapsed_seconds": 5,
+                "step": "Running analyze.py"
             })
         );
         assert_eq!(heard[2].0, GRADING_RUBRIC_PROGRESS_EVENT);
@@ -2808,7 +2844,8 @@ mod tests {
                 "job_id": "0f8fad5b-d9cb-469f-a165-70867728950f",
                 "location": "plugin:tools@market/lint",
                 "state": "finished",
-                "elapsed_seconds": 61
+                "elapsed_seconds": 61,
+                "step": null
             })
         );
     }

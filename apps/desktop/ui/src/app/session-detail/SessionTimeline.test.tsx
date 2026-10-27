@@ -534,7 +534,9 @@ it('offers the selected stretch’s repeated call, from the keyboard’s own ele
 
   view(0, target('a:2'));
   expect(
-    screen.getByText('Stretch 1: the most repeated call was Bash, 7 calls with the same argument.'),
+    screen.getByText(
+      'Stretch 1: the most repeated call was Bash, 7 calls with the same command, path or pattern.',
+    ),
   ).toBeTruthy();
   const button = screen.getByRole('button', { name: 'Show repeated call: Bash, stretch 1' });
   expect(button.tagName).toBe('BUTTON');

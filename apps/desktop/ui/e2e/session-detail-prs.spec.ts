@@ -17,6 +17,7 @@ for (const size of [
       await page.setViewportSize(size);
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto(`/sessions/${id}?range=7d`);
+      await page.locator('.xt-session-detail-prs > summary').click();
       const list = page.getByRole('list', { name: 'Linked PRs' });
       await expect(list).toBeVisible();
 

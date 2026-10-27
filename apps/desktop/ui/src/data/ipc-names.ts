@@ -16,6 +16,7 @@ export const commands = {
   sessionRow: 'session_row',
   sessionStretches: 'session_stretches',
   sessionTranscript: 'session_transcript',
+  codexTranscriptPage: 'codex_transcript_page',
   cancelSessionTranscript: 'cancel_session_transcript',
   sessionTitles: 'session_titles',
   cancelSessionTitles: 'cancel_session_titles',

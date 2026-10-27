@@ -1,8 +1,10 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, type RefObject } from 'react';
+import { ConversationRecords, type ConversationMarker } from './ConversationActivity';
 import { TranscriptRecordView } from './TranscriptRecordView';
 import {
   type RevealChannel,
   RevealContext,
+  revealInTranscript,
   type RevealOutcome,
   type RevealRequest,
 } from './transcript-reveal';
@@ -45,21 +47,38 @@ export function SessionTranscript({
   state = { kind: 'ready' },
   reveal = null,
   onReveal = NO_REPORT,
+  revealOwner,
+  conversation = false,
+  markers = [],
+  groupAdjacentActivity = false,
 }: {
+  revealOwner?: RefObject<HTMLElement | null>;
   records: readonly TranscriptRecord[];
+  conversation?: boolean;
+  markers?: readonly ConversationMarker[];
+  /** Enable only when the caller knows these records belong to one source. */
+  groupAdjacentActivity?: boolean;
   state?: TranscriptState;
   /** Show one tool call — see `transcript-reveal.ts`. Absent means none is asked for. */
   reveal?: RevealRequest | null;
   /** Told once per request whether its card was shown. Keep it stable across renders. */
   onReveal?: (token: number, outcome: RevealOutcome) => void;
 }) {
+  const scroll = useCallback(
+    (target: HTMLElement) => revealInTranscript(revealOwner?.current ?? null, target),
+    [revealOwner],
+  );
   const channel = useMemo<RevealChannel>(
-    () => ({ request: reveal, report: onReveal }),
-    [reveal, onReveal],
+    () => ({ request: reveal, report: onReveal, scroll }),
+    [reveal, onReveal, scroll],
   );
   if (state.kind === 'loading') {
     return (
-      <section className="xt-transcript" aria-label="Session transcript" data-state="loading">
+      <section
+        className={`xt-transcript${conversation ? ' xt-conversation' : ''}`}
+        aria-label="Session transcript"
+        data-state="loading"
+      >
         <div className="xt-transcript-notice" role="status">
           <p>{TRANSCRIPT_TEXT.loading}</p>
         </div>
@@ -71,7 +90,11 @@ export function SessionTranscript({
   // would be offered as the transcript, which is the claim this state exists to withhold.
   if (state.kind === 'unavailable') {
     return (
-      <section className="xt-transcript" aria-label="Session transcript" data-state="unavailable">
+      <section
+        className={`xt-transcript${conversation ? ' xt-conversation' : ''}`}
+        aria-label="Session transcript"
+        data-state="unavailable"
+      >
         <div className="xt-transcript-notice" data-state="unavailable" role="note">
           <p>{TRANSCRIPT_TEXT.unavailable}</p>
           {state.note?.trim() ? <p className="xt-transcript-note">{state.note}</p> : null}
@@ -84,7 +107,11 @@ export function SessionTranscript({
 
   return (
     <RevealContext.Provider value={channel}>
-      <section className="xt-transcript" aria-label="Session transcript" data-state={state.kind}>
+      <section
+        className={`xt-transcript${conversation ? ' xt-conversation' : ''}`}
+        aria-label="Session transcript"
+        data-state={state.kind}
+      >
         {partial ? (
           <div className="xt-transcript-notice" data-state={state.kind} role="note">
             <p>
@@ -98,6 +125,12 @@ export function SessionTranscript({
           <p className="xt-tx-unsupported" data-empty="true">
             {TRANSCRIPT_TEXT.empty}
           </p>
+        ) : conversation ? (
+          <ConversationRecords
+            records={records}
+            markers={markers}
+            groupAdjacent={groupAdjacentActivity}
+          />
         ) : (
           records.map((record, index) => (
             // Position-prefixed for React only; the id itself reaches the DOM untouched.

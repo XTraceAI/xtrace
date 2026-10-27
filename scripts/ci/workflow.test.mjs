@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -56,6 +56,7 @@ test('routine CI is Linux-only and native work is explicit release preparation',
     'ci-ok',
     'policy',
     'security',
+    'selection',
     'ui',
     'ui-extras',
   ]);
@@ -105,6 +106,55 @@ test('routine CI is Linux-only and native work is explicit release preparation',
   }
 });
 
+test('browser setup changes only the Azure Ubuntu mirror in legacy and deb822 sources', async () => {
+  const scripts = [jobs.ui, jobs['ui-extras']].map((job) =>
+    job
+      .match(/- name: Prepare Ubuntu package sources[\s\S]*?run: \|\n([\s\S]*?)(?=\n {6}-)/)[1]
+      .replace(/^ {10}/gm, ''),
+  );
+  assert.equal(scripts[0], scripts[1]);
+  assert.equal(spawnSync('bash', ['-n'], { input: scripts[0] }).status, 0);
+  const directory = await mkdtemp(join(tmpdir(), 'xtrace-ci-apt-'));
+  try {
+    await mkdir(join(directory, 'sources.list.d'));
+    const fixtures = {
+      'apt-mirrors.txt':
+        'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n',
+      'sources.list.d/runner.sources':
+        'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble noble-updates noble-backports noble-security\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',
+      'sources.list': 'deb http://azure.archive.ubuntu.com/ubuntu noble main restricted\n',
+      'sources.list.d/ubuntu.sources':
+        'Types: deb\nURIs: https://azure.archive.ubuntu.com/ubuntu http://security.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',
+      'sources.list.d/legacy.list':
+        'deb [arch=amd64 signed-by=/keys/ubuntu.gpg] https://azure.archive.ubuntu.com/ubuntu noble-backports multiverse\n',
+      'sources.list.d/other.sources':
+        'Types: deb\nURIs: https://archive.ubuntu.com/ubuntu https://mirror.example/ubuntu https://azure.archive.ubuntu.com.example/ubuntu\nSuites: noble-security\nComponents: main\nSigned-By: /keys/other.gpg\n',
+    };
+    for (const [file, contents] of Object.entries(fixtures))
+      await writeFile(join(directory, file), contents);
+    await writeFile(join(directory, 'sources.list.d/google-chrome.list'), 'unused browser source');
+    // Run the actual workflow shell on temporary files; adapt only sudo and BSD sed's -i spelling.
+    const sudo =
+      process.platform === 'darwin'
+        ? 'sudo() { if [[ "$1" == sed && "$2" == -i ]]; then shift 2; command sed -i "" "$@"; else command "$@"; fi; };\n'
+        : 'sudo() { command "$@"; };\n';
+    const script = scripts[0].replaceAll('/etc/apt', `'${directory.replaceAll("'", "'\\''")}'`);
+    const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', sudo + script], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    for (const [file, contents] of Object.entries(fixtures)) {
+      const expected = contents
+        .replaceAll('http://azure.archive.ubuntu.com/', 'http://archive.ubuntu.com/')
+        .replaceAll('https://azure.archive.ubuntu.com/', 'https://archive.ubuntu.com/');
+      assert.equal(await readFile(join(directory, file), 'utf8'), expected, file);
+    }
+    await assert.rejects(access(join(directory, 'sources.list.d/google-chrome.list')));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('routine CI checks once and covers every browser gate across four independent WebKit shards', () => {
   const commands = (job) => [...job.matchAll(/^ {6}- run: (.+)$/gm)].map((match) => match[1]);
   assert.deepEqual(
@@ -138,11 +188,25 @@ test('routine CI checks once and covers every browser gate across four independe
     // Each browser test can use up to three minutes. Setup and the remaining
     // tests need time too; the job must not expire at an individual test limit.
     assert.ok(Number(job.match(/timeout-minutes: (\d+)/)[1]) > 3, name);
-    assert.doesNotMatch(job, /^ {4}if:|continue-on-error|--(?:grep|timeout|retries|max-failures)/m);
+    assert.doesNotMatch(job, /continue-on-error|--(?:grep|timeout|retries|max-failures)/m);
+    if (name === 'check') assert.doesNotMatch(job, /^ {4}(?:if|needs):/m);
   }
   assert.doesNotMatch(jobs.ui + jobs['ui-extras'], /chromium|matrix\.browser/);
   assert.match(jobs['ci-ok'], /if: \$\{\{ always\(\) \}\}/);
   assert.doesNotMatch(jobs['ci-ok'], /continue-on-error/);
+});
+
+test('only browser jobs depend on a dependency-free, credential-free selector', () => {
+  assert.match(jobs.selection, /fetch-depth: 0/);
+  assert.match(jobs.selection, /run_ui: \$\{\{ steps\.select\.outputs\.run_ui \}\}/);
+  assert.match(jobs.selection, /- id: select\n {8}run: node scripts\/ci\/select-ui\.mjs/);
+  assert.doesNotMatch(jobs.selection, /pnpm|install|cache:|GITHUB_TOKEN|GH_TOKEN/);
+  for (const name of ['ui', 'ui-extras']) {
+    assert.match(jobs[name], /^ {4}needs: selection$/m);
+    assert.match(jobs[name], /^ {4}if: \$\{\{ needs\.selection\.outputs\.run_ui == 'true' \}\}$/m);
+  }
+  for (const name of ['policy', 'check', 'security', 'selection'])
+    assert.doesNotMatch(jobs[name], /^ {4}(?:if|needs):/m);
 });
 
 test('actual release shell guards accept only default history or matching reviewed tags', async (t) => {
@@ -500,6 +564,7 @@ test('the actual aggregate rejects every missing, skipped, cancelled or failed w
   const declared = jobs['ci-ok'].match(/needs: \[([^\]]+)\]/)[1].split(', ');
   assert.deepEqual(declared.sort(), [...required].sort());
   const good = Object.fromEntries(required.map((name) => [name, { result: 'success' }]));
+  good.selection.outputs = { run_ui: 'true' };
   const aggregate = (needs) =>
     spawnSync(process.execPath, [new URL('./aggregate.mjs', import.meta.url).pathname], {
       env: { ...process.env, NEEDS_JSON: JSON.stringify(needs) },
@@ -515,6 +580,32 @@ test('the actual aggregate rejects every missing, skipped, cancelled or failed w
       assert.equal(aggregate({ ...good, [name]: { result } }).status, 1, `${name}: ${result}`);
     }
   }
+  const noUi = {
+    ...good,
+    selection: { result: 'success', outputs: { run_ui: 'false' } },
+    ui: { result: 'skipped' },
+    'ui-extras': { result: 'skipped' },
+  };
+  assert.equal(aggregate(noUi).status, 0);
+  for (const name of required) {
+    const missing = { ...noUi };
+    delete missing[name];
+    assert.equal(aggregate(missing).status, 1, `unselected missing ${name}`);
+    for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
+      if (['ui', 'ui-extras'].includes(name) && result === 'skipped') continue;
+      assert.equal(
+        aggregate({ ...noUi, [name]: { ...noUi[name], result } }).status,
+        1,
+        `unselected ${name}: ${result}`,
+      );
+    }
+  }
+  for (const run_ui of [undefined, '', 'TRUE', 'False', true, false, 'false\n'])
+    assert.equal(
+      aggregate({ ...noUi, selection: { result: 'success', outputs: { run_ui } } }).status,
+      1,
+    );
+  assert.equal(aggregate({ ...noUi, selection: { result: 'success' } }).status, 1);
 });
 
 test('text edits run metadata only; target-branch edits call the full CI and cannot cancel it', () => {

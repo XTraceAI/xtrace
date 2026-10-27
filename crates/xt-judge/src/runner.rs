@@ -12,18 +12,24 @@
 //!   claude -p <prompt>
 //!     --tools Read,Write,Edit,Bash,Glob,Grep --permission-mode dontAsk
 //!     --setting-sources ""
-//!     --settings {"disableAllHooks":true,"sandbox":{"enabled":true,
-//!       "failIfUnavailable":true,"allowUnsandboxedCommands":false,
-//!       "filesystem":{"denyWrite":["<P>"],"allowWrite":["<G>"]},
+//!     --settings {"disableAllHooks":true,"permissions":{"deny":[<R>]},
+//!       "sandbox":{"enabled":true,"failIfUnavailable":true,
+//!       "allowUnsandboxedCommands":false,"filesystem":{"denyWrite":["<P>"],
+//!       "allowWrite":["<G>"],"denyRead":[<D>]},
 //!       "network":{"allowedDomains":[]}}}
 //!     --strict-mcp-config --no-session-persistence
 //!     --allowedTools Edit(/<G>/**) --disallowedTools Edit(/<P>/**)
 //!     --add-dir <G> <S>
+//!     --output-format stream-json --verbose
 //!   ```
 //!
 //!   `P` is the resolved project folder, `G` the resolved grade folder and
 //!   `S` the resolved skill folder, all absolute, so `Edit(/<G>/**)` reads
 //!   `Edit(//Users/…/**)`: Claude Code's `//` prefix for an absolute path.
+//!   `D` is [`SECRET_LOCATIONS`], well-known places that hold secrets, and
+//!   `R` their `Read` deny rules ([`secret_read_rules`]): the sandbox refuses
+//!   reads there by every command, and the deny rules refuse Claude Code's own
+//!   file tools, which the sandbox does not cover.
 //!   No settings file is loaded (no user, project or local settings, so none
 //!   of the user's personal permission rules, sandbox exceptions, hooks or
 //!   plugins); the settings on the command line are the only settings, and
@@ -62,7 +68,12 @@
 //!   are written there as soon as it starts, before the run is awaited.
 //! * Both output streams are drained and capped and never reported; standard
 //!   error is only looked at for Claude Code's sandbox refusal
-//!   ([`SANDBOX_REFUSALS`]). A deadline ([`DEFAULT_DEADLINE`]) or a cancel
+//!   ([`SANDBOX_REFUSALS`]). Standard output is Claude Code's stream-json, one
+//!   JSON object per line; with [`GradeRun::step`], each line is read as it
+//!   comes for the step the run is on ([`crate::step`]), which keeps only a
+//!   short label. A line longer than
+//!   [`xt_probes::process::MAX_OBSERVED_LINE_BYTES`] (a very large file
+//!   written in one go, say) is skipped. A deadline ([`DEFAULT_DEADLINE`]) or a cancel
 //!   ends the whole group and reaps it ([`xt_probes::process`]): `SIGTERM`
 //!   first, then `SIGKILL` after [`DEFAULT_TERM_GRACE`], so a member that
 //!   ignores the request still goes.
@@ -84,6 +95,7 @@
 use crate::{
     protocol::{self, GradeResult, ResultError},
     skill::GradingSkill,
+    step::StepCell,
 };
 use std::{
     ffi::{OsStr, OsString},
@@ -245,6 +257,9 @@ pub struct GradeRun<'a> {
     /// cannot be observed, the run is ended and fails
     /// ([`GradeError::Prepare`]). `None` records nothing.
     pub leader_record: Option<&'a Path>,
+    /// Where the step the run is on is kept while it runs
+    /// ([`crate::step`]). `None` reads no step.
+    pub step: Option<&'a StepCell>,
 }
 
 /// The resolved folders of a run.
@@ -272,6 +287,8 @@ pub(crate) struct Launch<'a> {
     pub inherited_env: &'a [(OsString, OsString)],
     pub limits: Limits,
     pub leader_record: Option<&'a Path>,
+    /// Where the child's latest step is kept ([`crate::step`]).
+    pub step: Option<&'a StepCell>,
 }
 
 /// Resolve and check the folders: both exist, the grade folder is empty, and
@@ -366,16 +383,104 @@ fn utf8(path: &Path) -> &str {
 
 /// The settings given on the command line, the only settings: hooks off,
 /// and the sandbox on and required, with the project `project` read-only,
-/// the grade folder `grade` writable and no network. Both paths are
+/// the grade folder `grade` writable, no network, and the
+/// [`SECRET_LOCATIONS`] unreadable ([`secret_read_rules`]). Both paths are
 /// resolved and UTF-8.
 pub fn settings(project: &str, grade: &str) -> String {
     let (project, grade) = (
         serde_json::Value::from(project),
         serde_json::Value::from(grade),
     );
+    let deny_read = serde_json::Value::from(SECRET_LOCATIONS.to_vec());
+    let read_rules = serde_json::Value::from(secret_read_rules());
     format!(
-        r#"{{"disableAllHooks":true,"sandbox":{{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"filesystem":{{"denyWrite":[{project}],"allowWrite":[{grade}]}},"network":{{"allowedDomains":[]}}}}}}"#
+        r#"{{"disableAllHooks":true,"permissions":{{"deny":{read_rules}}},"sandbox":{{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"filesystem":{{"denyWrite":[{project}],"allowWrite":[{grade}],"denyRead":{deny_read}}},"network":{{"allowedDomains":[]}}}}}}"#
     )
+}
+
+/// Well-known places on the user's computer that hold secrets: keys,
+/// cloud and package-registry credentials, other coding tools' sign-ins,
+/// keychains and browser profiles. No grading or rubric-making run may read
+/// them, whatever the skill or the project's own instructions ask. Each is
+/// relative to the home folder (`~/`), and covers everything inside it.
+///
+/// The bundled claude-md-doctor skill reads `~/.claude/projects`,
+/// `~/.claude/CLAUDE.md`, `~/.claude/rules` and `~/.claude/settings.json`;
+/// none of them is covered. A secret location a run would need to read is
+/// a skill that cannot be graded. On macOS the sandbox also hides whether
+/// anything there exists, so a project instruction that names such a path
+/// (say `~/.aws/config`) reads as a missing file to the run.
+///
+/// Claude Code takes them twice, and both are needed: as the sandbox's
+/// `denyRead`, which the operating system enforces on every command and the
+/// programs it starts, and as `Read` deny rules ([`secret_read_rules`]),
+/// which Claude Code's own file tools (Read, Grep, Glob) follow; the sandbox
+/// does not cover those tools.
+pub const SECRET_LOCATIONS: [&str; 47] = [
+    // Keys and signing.
+    "~/.ssh",
+    "~/.gnupg",
+    "~/.password-store",
+    // Cloud, cluster and container credentials.
+    "~/.aws",
+    "~/.azure",
+    "~/.config/gcloud",
+    "~/.kube",
+    "~/.docker",
+    "~/.vault-token",
+    "~/.terraform.d/credentials.tfrc.json",
+    "~/.config/op",
+    // Git hosting and package registries.
+    "~/.config/gh",
+    "~/.config/hub",
+    "~/.git-credentials",
+    "~/.config/git/credentials",
+    "~/.netrc",
+    "~/.npmrc",
+    "~/.pypirc",
+    "~/.cargo/credentials",
+    "~/.cargo/credentials.toml",
+    "~/.gem/credentials",
+    // Database passwords.
+    "~/.pgpass",
+    "~/.my.cnf",
+    // Other coding tools' sign-ins.
+    "~/.claude.json",
+    "~/.claude/.credentials.json",
+    "~/.codex/auth.json",
+    "~/.gemini",
+    "~/.config/github-copilot",
+    // Keychains.
+    "~/Library/Keychains",
+    "~/.local/share/keyrings",
+    // Browser profiles, cookies and saved passwords.
+    "~/Library/Cookies",
+    "~/Library/Safari",
+    "~/Library/Application Support/Google/Chrome",
+    "~/Library/Application Support/Chromium",
+    "~/Library/Application Support/BraveSoftware",
+    "~/Library/Application Support/Microsoft Edge",
+    "~/Library/Application Support/Arc",
+    "~/Library/Application Support/Firefox",
+    "~/Library/Application Support/com.operasoftware.Opera",
+    "~/Library/Application Support/Vivaldi",
+    "~/.mozilla",
+    "~/.config/google-chrome",
+    "~/.config/chromium",
+    "~/.config/BraveSoftware",
+    "~/.config/microsoft-edge",
+    "~/.config/opera",
+    "~/.config/vivaldi",
+];
+
+/// The `Read` deny rules for [`SECRET_LOCATIONS`]: for each, the location
+/// itself and everything inside it (`~/.ssh` gives `Read(~/.ssh)` and
+/// `Read(~/.ssh/**)`).
+pub fn secret_read_rules() -> Vec<String> {
+    SECRET_LOCATIONS
+        .iter()
+        .flat_map(|location| [format!("Read({location})"), format!("Read({location}/**)")])
+        .collect()
 }
 
 /// The exact argument vector, `argv[0]` first.
@@ -392,7 +497,9 @@ pub fn argv(claude: &Path, skill: &GradingSkill, folders: &Folders) -> Vec<OsStr
 /// folder, all resolved, absolute and UTF-8. A grading run passes the
 /// examined project, its grade folder and the grading skill; a rubric-making
 /// run ([`crate::maker`]) the staged copy of the skill it writes a rubric
-/// for, its output folder and the staged helper skill.
+/// for, its output folder and the staged helper skill. Output is stream-json
+/// (with `--verbose`, which Claude Code requires for it in `-p` mode), so the
+/// run's step can be read while it goes ([`crate::step`]).
 pub fn command_line(
     claude: &Path,
     prompt: String,
@@ -421,6 +528,10 @@ pub fn command_line(
         "--add-dir".into(),
         grade.into(),
         skill_dir.into(),
+        // One JSON object per line as the run goes, read for its step.
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
     ]
     .into_iter()
     .collect()
@@ -484,6 +595,7 @@ pub fn run(spec: &GradeRun<'_>, cancel: Option<&CancelFlag>) -> Result<GradeResu
         inherited_env: spec.inherited_env,
         limits: spec.limits,
         leader_record: spec.leader_record,
+        step: spec.step,
     };
     check_claude_version(&launch, cancel)?;
     std::fs::create_dir(&folders.work).map_err(|_| GradeError::Prepare)?;
@@ -608,12 +720,17 @@ pub(crate) fn spawn_and_wait(
         exit_grace: Some(spec.limits.exit_grace),
         term_grace: Some(spec.limits.term_grace),
     };
-    let finished = process::collect(child, bounds, cancel).map_err(|ended| match ended {
-        Ended::Cancelled if !recorded => GradeError::Prepare,
-        Ended::Timeout => GradeError::Timeout,
-        Ended::Cancelled => GradeError::Cancelled,
-        Ended::OutputTooLarge | Ended::Unobservable => GradeError::Unobservable,
-    })?;
+    let observer = spec
+        .step
+        .cloned()
+        .map(|cell| -> process::LineObserver { Box::new(move |line: &[u8]| cell.observe(line)) });
+    let finished =
+        process::collect_with(child, bounds, cancel, observer).map_err(|ended| match ended {
+            Ended::Cancelled if !recorded => GradeError::Prepare,
+            Ended::Timeout => GradeError::Timeout,
+            Ended::Cancelled => GradeError::Cancelled,
+            Ended::OutputTooLarge | Ended::Unobservable => GradeError::Unobservable,
+        })?;
     if !finished.status.success() {
         if sandbox_refused(&finished.stderr.bytes) {
             return Err(GradeError::SandboxUnavailable);

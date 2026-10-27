@@ -19,6 +19,7 @@ import { scenario, type Scenario } from '../src/app/scores/scores.synthetic';
 import { DataProvider } from '../src/data/DataProvider';
 import type { GradingControls } from '../src/data/DataSource';
 import { FixtureDataSource } from '../src/data/FixtureDataSource';
+import { events } from '../src/data/ipc-names';
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
 import { ThemeProvider } from '../src/theme/ThemeProvider';
 import '../src/index.css';
@@ -42,6 +43,7 @@ import '../src/index.css';
  * is recorded too. A run's details are the synthetic answer for that run
  * (`details.synthetic.json`), or the one `?details=` names; Open full report
  * is answered as `?report=` says (`opened` by default) and recorded.
+ * `window.__progress(payload)` sends a `grading://progress` report.
  */
 const params = new URLSearchParams(location.search);
 let name = (params.get('scenario') ?? 'graded') as Scenario;
@@ -155,6 +157,10 @@ const controls: GradingControls = {
 };
 const source = new FixtureDataSource(fixture as FixtureExport);
 Object.defineProperty(source, 'grading', { value: controls });
+// The spec sends a `grading://progress` report, as the app would, with this.
+Object.assign(window, {
+  __progress: (payload: unknown) => source.emit(events.gradingProgress, payload),
+});
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

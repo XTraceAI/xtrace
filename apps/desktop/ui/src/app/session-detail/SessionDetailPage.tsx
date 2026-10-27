@@ -1,5 +1,6 @@
+import { RepeatNavigation, type ConversationMarker } from './ConversationActivity';
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { useData } from '../../data/DataProvider';
 import { queryKeys } from '../../data/query-client';
@@ -19,10 +20,16 @@ import { DefinitionInfo } from '../dashboard/DefinitionInfo';
 import { useSelectedRange } from '../dashboard/range';
 import { agentTime } from '../agent-duration';
 import { evidenceWords } from '../session-cells';
-import { contextLead, contextTitle, modelLabel } from '../session-context';
+import { contextLead, contextTitle, modelLabel, shortId } from '../session-context';
 import { listState } from '../session-search';
 import { SessionTimeline, type TimelineQuery } from './SessionTimeline';
 import { SessionTranscript } from './SessionTranscript';
+import {
+  CodexPagedTranscript,
+  type CodexPageIntent,
+  type CodexPageFeedback,
+  type CodexRepeatCandidate,
+} from './CodexPagedTranscript';
 import { type TranscriptProps, transcriptProps } from './transcript-adapter';
 import { jumpUnavailableText, type JumpUnavailable, resolveJump } from './timeline-jump';
 import type { RevealOutcome, RevealRequest } from './transcript-reveal';
@@ -132,7 +139,7 @@ function pressText(
   pressed: Press,
   result: { token: number; outcome: RevealOutcome } | null,
 ): string | null {
-  const stretch = `stretch ${pressed.index + 1}`;
+  const stretch = `activity period ${pressed.index + 1}`;
   const which = pressed.call === 'first' ? 'The first tool call' : 'The repeated call';
   if (pressed.kind === 'unavailable') {
     return `${which} of ${stretch} cannot be shown. ${jumpUnavailableText(pressed.reason)}`;
@@ -144,7 +151,20 @@ function pressText(
   const tool = pressed.tool ? `: ${pressed.tool}` : '';
   return pressed.call === 'first'
     ? `Showing the first tool call of ${stretch}${tool}.`
-    : `Showing the earliest of the repeated calls in ${stretch}${tool}.`;
+    : `Showing the earliest matching call${tool}.`;
+}
+
+function pageFeedbackText(feedback: CodexPageFeedback | null): string | null {
+  if (!feedback) return null;
+  const { intent, target, outcome, unavailable } = feedback;
+  const which = intent.call === 'first' ? 'The first tool call' : 'The repeated call';
+  if (unavailable)
+    return `${which} of activity period ${intent.index + 1} cannot be shown. ${unavailable}`;
+  if (!target || !outcome) return null;
+  if (outcome !== 'revealed') return `${which} could not be revealed in the conversation.`;
+  return intent.call === 'first'
+    ? `Showing the first tool call of activity period ${intent.index + 1}: ${target.tool}.`
+    : `Showing the earliest matching call: ${target.tool}.`;
 }
 
 /** What a press was made against. Replace any of it and the press is void. */
@@ -157,7 +177,7 @@ interface PressScope {
 }
 
 /** Whether a press still means what it meant when it was made. */
-const holds = (press: Press | null, scope: PressScope) =>
+const holds = (press: { readonly scope: PressScope } | null, scope: PressScope) =>
   press !== null &&
   press.scope.sessionId === scope.sessionId &&
   press.scope.days === scope.days &&
@@ -180,14 +200,13 @@ const prName = (link: SessionPrLink) =>
  * opens the network; the app has no page of its own for one pull request.
  */
 function LinkedPrs({ links }: { links: SessionPrLink[] }) {
-  const label = useId();
   if (links.length === 0) return null;
   return (
-    <div className="xt-session-detail-prs">
-      <span id={label} className="xt-session-detail-prs-label">
-        {links.length === 1 ? 'Linked PR' : 'Linked PRs'}
-      </span>
-      <ul aria-labelledby={label}>
+    <details className="xt-session-detail-prs">
+      <summary>
+        {links.length} {links.length === 1 ? 'linked PR' : 'linked PRs'}
+      </summary>
+      <ul tabIndex={0} aria-label={links.length === 1 ? 'Linked PR' : 'Linked PRs'}>
         {links.map((link) => (
           <li key={link.url}>
             <span
@@ -207,7 +226,7 @@ function LinkedPrs({ links }: { links: SessionPrLink[] }) {
           </li>
         ))}
       </ul>
-    </div>
+    </details>
   );
 }
 
@@ -223,6 +242,7 @@ function LinkedPrs({ links }: { links: SessionPrLink[] }) {
 export function SessionDetailPage() {
   const { sessionId } = useParams();
   const { source } = useData();
+  const conversationBody = useRef<HTMLDivElement>(null);
   const range = useSelectedRange();
   const days = rangeDays[range];
   // The list's filters travel in this page's own address, so going back
@@ -244,6 +264,22 @@ export function SessionDetailPage() {
     enabled: source.kind !== 'preview' && !!sessionId,
   });
   const row = listed.data ?? null;
+  // A pending range query must not replace this session’s bounded reader.
+  const [acceptedHost, setAcceptedHost] = useState<{
+    sessionId: string | undefined;
+    source: typeof source;
+    host: string | null;
+  }>({ sessionId, source, host: null });
+  const sameHostOwner = acceptedHost.sessionId === sessionId && acceptedHost.source === source;
+  const host =
+    listed.isSuccess && !listed.isFetching
+      ? (row?.host ?? null)
+      : sameHostOwner
+        ? acceptedHost.host
+        : null;
+  if (!sameHostOwner || acceptedHost.host !== host) {
+    setAcceptedHost({ sessionId, source, host });
+  }
   // Only an answer that is current says which pull requests are linked: while
   // the row is being read or read again, after a read failed or when there is
   // no such session, no badge is drawn rather than one that might not hold. A
@@ -251,6 +287,27 @@ export function SessionDetailPage() {
   // its title, so the cached answer's links are not shown while it is out.
   const prLinks = listed.isSuccess && !listed.isFetching && row ? row.pr_links : [];
   const { read, retry } = useSessionTranscript(sessionId);
+  const paged =
+    host === 'codex' &&
+    !!source.codexTranscriptPage &&
+    read.phase === 'read' &&
+    read.status.state === 'unavailable' &&
+    ((read.status.reason.reason === 'reader_limit' &&
+      ['source_bytes', 'output_bytes'].includes(read.status.reason.limit)) ||
+      (read.status.reason.reason === 'too_large' && read.status.reason.limit === 'bytes'));
+  const [pageIntent, setPageIntent] = useState<{
+    intent: CodexPageIntent;
+    scope: PressScope;
+  } | null>(null);
+  const [pageFeedback, setPageFeedback] = useState<CodexPageFeedback | null>(null);
+  const onPageFeedback = useCallback(
+    (feedback: CodexPageFeedback | null) => setPageFeedback(feedback),
+    [],
+  );
+  const clearPageSelection = useCallback(() => {
+    setPageIntent(null);
+    setPageFeedback(null);
+  }, []);
 
   // M-09's stretches for this session over this window. Metadata, cached like
   // the row above and invalidated with it; a change of range re-reads this and
@@ -272,8 +329,13 @@ export function SessionDetailPage() {
   // Each stretch's first call, confirmed against the transcript as it was read
   // for this open — or the reason it cannot be.
   const jumps = useMemo(
-    () => stretches.map((stretch) => resolveJump(stretch.first_tool, read)),
-    [stretches, read],
+    () =>
+      stretches.map((stretch) =>
+        paged && stretch.first_tool
+          ? { kind: 'loadable' as const }
+          : resolveJump(stretch.first_tool, read),
+      ),
+    [stretches, read, paged],
   );
   // Each stretch's most repeated call (M-20), by the earliest of its calls, put
   // through the very same check — or `null` when M-20 names no repeated call.
@@ -281,10 +343,12 @@ export function SessionDetailPage() {
     () =>
       stretches.map((stretch) =>
         stretch.repeats.state === 'measured' && stretch.repeats.worst
-          ? resolveJump(stretch.repeats.worst.representative, read)
+          ? paged
+            ? { kind: 'loadable' as const }
+            : resolveJump(stretch.repeats.worst.representative, read)
           : null,
       ),
-    [stretches, read],
+    [stretches, read, paged],
   );
 
   const tokens = useRef(0);
@@ -294,7 +358,10 @@ export function SessionDetailPage() {
   // Read during render, so a press whose scope has been replaced is never
   // painted, not even for the frame before the effect below runs.
   const pressed = holds(press, { sessionId, days, read, stretches: answer }) ? press : null;
-  const selected = pressed?.index ?? null;
+  const ownedPageIntent =
+    paged && holds(pageIntent, { sessionId, days, read, stretches: answer }) ? pageIntent : null;
+  const selected = ownedPageIntent?.intent.index ?? pressed?.index ?? null;
+  const selectedCall = ownedPageIntent?.intent.call ?? pressed?.call;
   const reveal = pressed?.kind === 'reveal' ? pressed.request : null;
   // And destroyed, so it cannot come back. Returning `current` unchanged when
   // it still holds leaves the state identical and re-renders nothing.
@@ -304,12 +371,35 @@ export function SessionDetailPage() {
     );
     // A result is only ever read beside a live press of the same token; with
     // the scope replaced there is none, so it goes with it.
+    setPageIntent((current) =>
+      holds(current, { sessionId, days, read, stretches: answer }) ? current : null,
+    );
+    setPageFeedback(null);
     setResult(null);
   }, [sessionId, days, read, answer]);
   const pressCall = useCallback(
     (index: number, call: PressedCall) => {
+      const stretch = stretches[index];
+      const locator =
+        call === 'first'
+          ? stretch?.first_tool
+          : stretch?.repeats.state === 'measured'
+            ? stretch.repeats.worst?.representative
+            : null;
+      if (paged && locator) {
+        tokens.current += 1;
+        setPress(null);
+        setResult(null);
+        setPageFeedback(null);
+        setPageIntent({
+          scope: { sessionId, days, read, stretches: answer },
+          intent: { token: tokens.current, locator, index, call },
+        });
+        return;
+      }
       const jump = call === 'first' ? jumps[index] : repeatJumps[index];
-      if (!jump) return;
+      if (!jump || jump.kind === 'loadable') return;
+      clearPageSelection();
       tokens.current += 1;
       // The scope this render resolved both lists against, recorded with the press.
       const scope: PressScope = { sessionId, days, read, stretches: answer };
@@ -326,7 +416,7 @@ export function SessionDetailPage() {
           : { kind: 'unavailable', index, call, reason: jump.reason, scope },
       );
     },
-    [jumps, repeatJumps, sessionId, days, read, answer],
+    [jumps, repeatJumps, sessionId, days, read, answer, stretches, paged, clearPageSelection],
   );
   const onSelect = useCallback((index: number) => pressCall(index, 'first'), [pressCall]);
   const onShowRepeat = useCallback((index: number) => pressCall(index, 'repeated'), [pressCall]);
@@ -336,7 +426,13 @@ export function SessionDetailPage() {
     (token: number, outcome: RevealOutcome) => setResult({ token, outcome }),
     [],
   );
-  const announcement = pressed ? pressText(pressed, result) : null;
+  const ownedFeedback =
+    ownedPageIntent && pageFeedback?.intent === ownedPageIntent.intent ? pageFeedback : null;
+  const announcement = ownedPageIntent
+    ? pageFeedbackText(ownedFeedback)
+    : pressed
+      ? pressText(pressed, result)
+      : null;
   // A command that failed is not a session that cannot be shown, but it looks
   // the same to a reader, so it is said in the same place — with its own
   // sentence, and with the one thing a reader can do about it beside it.
@@ -354,6 +450,41 @@ export function SessionDetailPage() {
           ? GENERATION.appended
           : null
       : null;
+
+  const repeatCandidates = useMemo<CodexRepeatCandidate[]>(
+    () =>
+      stretches.flatMap((stretch, index) =>
+        stretch.repeats.state === 'measured' && stretch.repeats.worst
+          ? [
+              {
+                index,
+                locator: stretch.repeats.worst.representative,
+                tool: stretch.repeats.worst.tool_name,
+                count: stretch.repeats.worst.count,
+                circling: stretch.circling === true,
+              },
+            ]
+          : [],
+      ),
+    [stretches],
+  );
+  const repeatedIndexes = repeatCandidates.map((candidate) => candidate.index);
+  const markers: ConversationMarker[] = repeatedIndexes.flatMap((index) => {
+    const stretch = stretches[index]!;
+    const jump = repeatJumps[index];
+    if (jump?.kind !== 'target' || stretch.repeats.state !== 'measured' || !stretch.repeats.worst)
+      return [];
+    return [
+      {
+        index,
+        blockId: jump.blockId,
+        tool: stretch.repeats.worst.tool_name,
+        count: stretch.repeats.worst.count,
+        circling: stretch.circling === true,
+        selected: selectedCall === 'repeated' && selected === index,
+      },
+    ];
+  });
 
   if (source.kind === 'preview') {
     return (
@@ -375,18 +506,24 @@ export function SessionDetailPage() {
             <h1 title={row ? contextTitle(row.repo, row.branch) : undefined}>
               {row ? contextLead(row.repo, row.branch) : 'Session'}
             </h1>
-            <p className="xt-session-detail-meta">
-              <span className="xt-session-mono">{sessionId}</span>
-              {row && (
-                <>
-                  <span aria-hidden="true"> · </span>
-                  <span>{modelLabel(row.model, row.other_models)}</span>
-                </>
-              )}
-            </p>
+            <details className="xt-session-detail-meta">
+              <summary>
+                <span>{shortId(sessionId ?? '')}</span>
+                {row && (
+                  <>
+                    <span aria-hidden="true"> · </span>
+                    <span>{modelLabel(row.model, row.other_models)}</span>
+                  </>
+                )}
+              </summary>
+              <p className="xt-session-mono">{sessionId}</p>
+            </details>
           </div>
         </div>
-        <LinkedPrs links={prLinks} />
+        <div className="xt-session-header-facts">
+          {row && <span>{row.record_count.toLocaleString()} indexed records · whole session</span>}
+          <LinkedPrs links={prLinks} />
+        </div>
       </div>
 
       {listed.isError ? (
@@ -408,10 +545,11 @@ export function SessionDetailPage() {
           <Link to={backHref}>Back to all sessions</Link>
         </p>
       ) : (
-        <SectionCard
-          title="Measured in this range"
-          meta={`Records ${row.record_count.toLocaleString()} · measured over the last ${range.replace('d', ' days')}`}
-        >
+        <section className="xt-session-overview" aria-label="Measured in this range">
+          <div>
+            <h2>Measured in this range</h2>
+            <span>Last {range.replace('d', ' days')}</span>
+          </div>
           <dl className="xt-session-measures">
             {MEASURES.map((measure) => (
               <div key={measure.key} className="xt-session-measure">
@@ -436,51 +574,95 @@ export function SessionDetailPage() {
               </div>
             ))}
           </dl>
-        </SectionCard>
+        </section>
       )}
 
-      <SectionCard
-        title="Hands-off stretches"
-        meta={`Measured over the last ${range.replace('d', ' days')}`}
-        // The definition sits behind the same compact control as the
-        // Dashboard's cards; the rule ID is read only inside it.
-        right={<DefinitionInfo ruleId="M-09" name="Hands-off stretches" />}
-      >
-        <SessionTimeline
-          query={timeline}
-          jumps={jumps}
-          selected={selected}
-          onSelect={onSelect}
-          announcement={announcement}
-          reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
-          repeatJumps={repeatJumps}
-          onShowRepeat={onShowRepeat}
-        />
-      </SectionCard>
-
-      <SectionCard
-        title="Transcript"
-        meta="Read from this session’s own file when you open it. Nothing is stored."
-        right={
-          read.phase === 'failed' ? (
-            <Button variant="outline" height={28} onClick={retry}>
-              Try again
-            </Button>
-          ) : undefined
-        }
-      >
-        {generation && (
-          <p className="xt-session-detail-notice" role="note">
-            {generation}
+      <details className="xt-session-stretches">
+        <summary>Agent activity · Last {range.replace('d', ' days')}</summary>
+        <SectionCard
+          title="Hands-off stretches"
+          meta={`Measured over the last ${range.replace('d', ' days')}`}
+          right={<DefinitionInfo ruleId="M-09" name="Hands-off stretches" />}
+        >
+          <SessionTimeline
+            query={timeline}
+            jumps={jumps}
+            selected={selected}
+            onSelect={onSelect}
+            announcement={null}
+            reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+            repeatJumps={repeatJumps}
+            onShowRepeat={onShowRepeat}
+          />
+        </SectionCard>
+      </details>
+      <div className="xt-session-conversation">
+        <SectionCard
+          title="Conversation"
+          meta="Read-only history from this session’s own files. Nothing is stored."
+          right={
+            read.phase === 'failed' ? (
+              <Button variant="outline" height={28} onClick={retry}>
+                Try again
+              </Button>
+            ) : timeline.phase === 'ready' && timeline.stretches.state === 'measured' ? (
+              <RepeatNavigation
+                indexes={repeatedIndexes}
+                selected={selectedCall === 'repeated' ? selected : null}
+                onSelect={onShowRepeat}
+              />
+            ) : undefined
+          }
+        >
+          <p
+            className="xt-timeline-note"
+            role="status"
+            aria-live="polite"
+            data-reason={pressed?.kind === 'unavailable' ? pressed.reason : undefined}
+          >
+            {announcement ?? ''}
           </p>
-        )}
-        <SessionTranscript
-          records={transcript.records}
-          state={transcript.state}
-          reveal={reveal}
-          onReveal={onReveal}
-        />
-      </SectionCard>
+          <div
+            ref={conversationBody}
+            className="xt-conversation-body"
+            role="region"
+            aria-label="Conversation content"
+            tabIndex={0}
+          >
+            {!paged && generation && (
+              <p className="xt-session-detail-notice" role="note">
+                {generation}
+              </p>
+            )}
+            {paged && sessionId ? (
+              <CodexPagedTranscript
+                key={sessionId}
+                sessionId={sessionId}
+                intent={ownedPageIntent?.intent ?? null}
+                repeatCandidates={repeatCandidates}
+                onFeedback={onPageFeedback}
+                onReset={clearPageSelection}
+                revealOwner={conversationBody}
+              />
+            ) : (
+              <SessionTranscript
+                revealOwner={conversationBody}
+                conversation
+                markers={markers}
+                groupAdjacentActivity={
+                  read.phase === 'read' &&
+                  read.status.state === 'loaded' &&
+                  read.status.sources === 1
+                }
+                records={transcript.records}
+                state={transcript.state}
+                reveal={reveal}
+                onReveal={onReveal}
+              />
+            )}
+          </div>
+        </SectionCard>
+      </div>
     </section>
   );
 }

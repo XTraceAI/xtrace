@@ -1,7 +1,8 @@
 import { useContext, useId, useLayoutEffect, useRef, useState } from 'react';
+import { RepeatNotice, type ConversationMarker } from './ConversationActivity';
 import { StatePill } from '../../kit';
 import { CodeSurface } from './TranscriptText';
-import { prefersReducedMotion, RevealContext } from './transcript-reveal';
+import { RevealContext } from './transcript-reveal';
 import {
   type ToolBlock,
   type TranscriptPayload,
@@ -126,6 +127,11 @@ export function ToolCallCard({
         </p>
       ) : null}
 
+      {outcome.state === 'not_checked' ? (
+        <p className="xt-tool-note">
+          Results for this call are not checked across the whole conversation.
+        </p>
+      ) : null}
       {outcome.state === 'unrecorded' ? (
         <p className="xt-tool-note">No result for this call is in the record.</p>
       ) : null}
@@ -138,7 +144,9 @@ export function ToolCallCard({
       ) : null}
 
       {block.kind === 'tool_call' ? <ToolPayload label="Input" payload={block.input} /> : null}
-      {outcome.state === 'unrecorded' || outcome.state === 'ambiguous' ? null : (
+      {outcome.state === 'unrecorded' ||
+      outcome.state === 'ambiguous' ||
+      outcome.state === 'not_checked' ? null : (
         // A failed call's output is not an error message: it is what the command printed
         // before it gave up, and colouring it red would restate the failure as the content.
         <ToolPayload label="Output" payload={outcome.output} />
@@ -220,7 +228,7 @@ function ToolStripRow({ blocks }: { blocks: ToolBlock[] }) {
   const panelId = useId();
   const failures = toolFailureCount(blocks);
   const detail = toolDetail(blocks);
-  const { request, report } = useContext(RevealContext);
+  const { request, report, scroll } = useContext(RevealContext);
   // This row's own cards, by position. Filled as cards mount and emptied as they unmount,
   // so after an open commits the card at a position is the one standing there now.
   const cards = useRef(new Map<number, HTMLDivElement>());
@@ -254,15 +262,9 @@ function ToolStripRow({ blocks }: { blocks: ToolBlock[] }) {
       return;
     }
     setRevealed(request.token);
-    // jsdom has no layout, and so no scrolling to do.
-    if (typeof card.scrollIntoView === 'function') {
-      card.scrollIntoView({
-        block: 'center',
-        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-      });
-    }
+    scroll(card);
     report(request.token, 'revealed');
-  }, [request, place, places.length, open, report]);
+  }, [request, place, places.length, open, report, scroll]);
 
   return (
     <div className="xt-tool-group">
@@ -308,14 +310,45 @@ function ToolStripRow({ blocks }: { blocks: ToolBlock[] }) {
 }
 
 /** A stretch of tool work inside one record, as rows that open in place. */
-export function ToolActivityStrip({ blocks }: { blocks: ToolBlock[] }) {
-  const groups = toolGroups(blocks);
+export function ToolActivityStrip({
+  blocks,
+  ordered = false,
+  markers = [],
+}: {
+  blocks: ToolBlock[];
+  ordered?: boolean;
+  markers?: readonly ConversationMarker[];
+}) {
+  const groups: ToolBlock[][] = [];
+  if (ordered) {
+    for (const block of blocks) {
+      const last = groups.at(-1);
+      if (
+        last &&
+        toolLabel(last[0]!) === toolLabel(block) &&
+        !markers.some((marker) => marker.blockId === block.id)
+      )
+        last.push(block);
+      else groups.push([block]);
+    }
+  } else groups.push(...toolGroups(blocks));
 
   return (
     <div className="xt-tool-strip">
-      {groups.map((group, index) => (
-        <ToolStripRow key={`${index}:${group[0]?.id ?? ''}`} blocks={group} />
-      ))}
+      {groups.map((group, index) =>
+        ordered ? (
+          <div key={`${index}:${group[0]?.id ?? ''}`}>
+            {markers
+              .filter((marker) => marker.blockId === group[0]?.id)
+              .map((marker) => (
+                <RepeatNotice key={marker.index} marker={marker} />
+              ))}
+            <ToolStripRow blocks={group} />
+          </div>
+        ) : (
+          <ToolStripRow key={`${index}:${group[0]?.id ?? ''}`} blocks={group} />
+        ),
+      )}
     </div>
   );
 }

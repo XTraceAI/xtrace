@@ -250,7 +250,7 @@ def prefix_usage(source, cutoff, ordinal, inherited):
 
 
 def read(group, acquire, *, title_index=None, record_guard=None, origin=None, human=None,
-         automated=None, references=()):
+         automated=None, references=(), row_provider=None, record_projection=None, retention_guard=None):
     """Normalize every physical segment once, including abandoned tails.
 
     ``acquire`` is the caller's bounded source acquisition, called as
@@ -309,7 +309,8 @@ def read(group, acquire, *, title_index=None, record_guard=None, origin=None, hu
         for rid, _, _, _, base in group:
             seed = inherited(base)
             seeds[rid] = seed
-            rows = codex.load_rollout(copies[rid], strict=True)
+            rows = (codex.load_rollout(copies[rid], strict=True) if row_provider is None
+                    else row_provider(copies[rid]))
             if (not rows or rows[0].get('type') != 'session_meta'
                     or rows[0].get('payload', {}).get('id') != session_id
                     or rows[0]['payload'].get('history_mode') != 'paginated'
@@ -344,7 +345,8 @@ def read(group, acquire, *, title_index=None, record_guard=None, origin=None, hu
                     initial_usage_total=seed,
                     usage_baseline_unknown=base is not None and seed is None,
                     record_sources=record_sources, usage_targets=usage_targets,
-                    record_guard=segment_guard, record_origins=record_origins)
+                    record_guard=segment_guard, record_origins=record_origins,
+                    record_projection=record_projection, retention_guard=retention_guard)
             converted, meta = convert(rows)
             parsed = rows
             rows, converted, own_meta, context = project_context(rows, converted, record_sources, convert)
@@ -355,7 +357,7 @@ def read(group, acquire, *, title_index=None, record_guard=None, origin=None, hu
             ledger_base = len(records) + len(context)
             converted = codex_usage.apply(rows, converted, record_sources, usage_targets,
                 session_id=session_id, namespace=namespace, seen=seen_responses,
-                record_guard=(None if record_guard is None
+                retention_guard=retention_guard, record_guard=(None if record_guard is None
                               else lambda count: record_guard(ledger_base + count)))
             records.extend(context)
             records.extend(converted)

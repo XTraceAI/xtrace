@@ -10,4 +10,10 @@ export type GradingRubricProgress = { job_id: string, location: string, state: G
 /**
  * Whole seconds since the job started.
  */
-elapsed_seconds: number, };
+elapsed_seconds: number, 
+/**
+ * The step the job is on, as the one rule in `xt_judge::step` words
+ * it ("Reading SKILL.md"); `None` before its first step and in the last
+ * report.
+ */
+step: string | null, };

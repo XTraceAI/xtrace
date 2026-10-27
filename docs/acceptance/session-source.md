@@ -223,3 +223,31 @@ used for the saved measurements.
 Codex group and configured roots that are symlinks: every JSONL session equals
 the ordinary export record for record, the store is refused, and nothing on
 disk changes.
+
+## Conversation presentation
+
+Session detail opts into conversation presentation without changing this reader,
+its generation checks, size refusals, cancellation, adapter or tool/result pairing.
+Original records and blocks stay in native read order. Adjacent activity records
+may share a disclosure only for the native sources=1 contract. Legacy multi-source
+reads retain per-record groups because their answer does not provide boundaries;
+no source labels are inferred. Default shared transcript presentation is unchanged.
+Exact tool-block reveals still use held refs and preserve caller focus.
+
+## Bounded Codex conversation portions
+
+The producer remains the sole Codex converter. Its version 1 context mode
+supports one flat original rollout or one original paginated root, without
+forks, inherited history or multiple rollout files. Those unsupported shapes
+are refused explicitly. The pinned source is a public reader snapshot; it does
+not upgrade the installed MemHub plugin or change marketplace releases.
+
+Each request keeps at most 200 complete records and 1 MiB of encoded producer
+output. The producer also bounds retained bodies, metadata, source discovery,
+row sizes, source bytes, cumulative scanning, passes and elapsed time. Rust
+reuses the existing supervised process and canonical parser, opts into the
+page header only for this read, and checks identity, roots, interval, digest,
+anchor and cursor boundary. A changed generation, missing/ambiguous target,
+invalid cursor, oversized required record, unsupported history or other reader
+refusal returns no records. The DTO independently bounds encoded output,
+trimming only an edge while preserving the target and advancing cursors.

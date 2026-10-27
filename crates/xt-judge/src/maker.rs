@@ -20,7 +20,8 @@
 //!   working folder (`denyWrite`, and `Edit` refused there), the output
 //!   folder the only writable one (`allowWrite`, and `Edit` allowed there),
 //!   the helper's copy the skill folder; no settings file is loaded, hooks,
-//!   MCP servers and the network are off, the transcript is not saved, and
+//!   MCP servers and the network are off, the secret locations are
+//!   unreadable ([`runner::SECRET_LOCATIONS`]), the transcript is not saved, and
 //!   Claude Code's sandbox is required. The same minimum Claude Code version
 //!   is checked first, and the child runs in its own process group with the
 //!   same allow-listed environment, a deadline ([`DEFAULT_DEADLINE`]),
@@ -53,6 +54,7 @@ use crate::{
     runner::{self, GradeError, Launch, Limits},
     skill::{INSTRUCTIONS_FILE, MAX_INSTRUCTIONS_BYTES, SKILL_DIR_PLACEHOLDER},
     staging::{self, CopyLimits},
+    step::StepCell,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -462,6 +464,9 @@ pub struct MakeRun<'a> {
     pub limits: Limits,
     /// Why the skill's current rubric is refused, when it is made again.
     pub existing: Option<RubricError>,
+    /// Where the step the run is on is kept ([`crate::step`]); `None` reads
+    /// no step.
+    pub step: Option<&'a StepCell>,
 }
 
 /// A rubric the run wrote that the reader accepts.
@@ -549,6 +554,7 @@ pub fn run(spec: &MakeRun<'_>, cancel: Option<&CancelFlag>) -> Result<Written, M
             inherited_env: spec.inherited_env,
             limits: spec.limits,
             leader_record: Some(&record),
+            step: spec.step,
         };
         if index == 0 {
             runner::check_claude_version(&launch, cancel).map_err(MakeError::Run)?;
@@ -614,6 +620,8 @@ pub struct Job<'a> {
     /// The environment this process received.
     pub inherited_env: &'a [(OsString, OsString)],
     pub limits: Limits,
+    /// Where the step the job is on is kept ([`crate::step`]).
+    pub step: Option<&'a StepCell>,
 }
 
 /// Run one job: stage the skill (for a remake, with the refused rubric in
@@ -640,6 +648,7 @@ pub fn make(job: &Job<'_>, cancel: Option<&CancelFlag>) -> Result<Written, MakeE
             inherited_env: job.inherited_env,
             limits: job.limits,
             existing: job.replaced.map(|replaced| replaced.error),
+            step: job.step,
         },
         cancel,
     );

@@ -15,7 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 use xt_judge::{
-    CancelFlag, GradeError, GradeRun, GradingSkill, Limits, ResultError, Severity, runner, skill,
+    CancelFlag, GradeError, GradeRun, GradingSkill, Limits, ResultError, Severity, StepCell,
+    runner, skill,
 };
 
 fn vendor() -> PathBuf {
@@ -165,6 +166,7 @@ impl Case {
                 inherited_env: &env,
                 limits,
                 leader_record: None,
+                step: None,
             },
             cancel,
         )
@@ -172,6 +174,25 @@ impl Case {
 
     fn run(&self) -> Result<xt_judge::GradeResult, GradeError> {
         self.run_with(quick(Duration::from_secs(60)), None)
+    }
+
+    /// A run that keeps its step in `step`.
+    fn run_stepping(&self, step: &StepCell) -> Result<xt_judge::GradeResult, GradeError> {
+        let skill = bundled();
+        let env = self.env();
+        runner::run(
+            &GradeRun {
+                claude: &self.claude,
+                skill: &skill,
+                project: &self.project,
+                grade_dir: &self.grade,
+                inherited_env: &env,
+                limits: quick(Duration::from_secs(60)),
+                leader_record: None,
+                step: Some(step),
+            },
+            None,
+        )
     }
 
     /// A run that records its Claude Code process at `leader`.
@@ -193,6 +214,7 @@ impl Case {
                 inherited_env: &env,
                 limits: quick(Duration::from_secs(60)),
                 leader_record: Some(leader),
+                step: None,
             },
             None,
         )
@@ -255,6 +277,119 @@ fn good_run_returns_the_validated_result() {
     assert!(case.grade.join("work").is_dir());
 }
 
+/// The fake prints Claude Code's stream-json as a run goes: the start, a text
+/// message, a script run, a large tool result, then waits on `go` before the
+/// result. The step is read while it waits.
+const STREAMING: &str = r#"
+def say(value):
+    print(json.dumps(value), flush=True)
+say({'type': 'system', 'subtype': 'init', 'cwd': os.getcwd(), 'tools': ['Bash']})
+say({'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': 'Reading things'}]}})
+say({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': 't1', 'name': 'Bash',
+     'input': {'command': 'cd ' + os.getcwd() + ' && python3 /skill/scripts/analyze.py --x'}}]}})
+say({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 't1',
+     'content': 'x' * 400000}]}})
+open(os.path.join(G, 'waiting'), 'w').close()
+while not os.path.exists(os.path.join(G, 'go')):
+    time.sleep(0.02)
+write('report.html', '<p>report</p>')
+write('result.json', GOOD)
+say({'type': 'result', 'subtype': 'success', 'result': 'done'})
+"#;
+
+#[test]
+fn the_step_is_read_from_the_output_while_the_run_goes() {
+    let case = Case::new(STREAMING);
+    let step = StepCell::new();
+    let grade = case.grade.clone();
+    let seen = std::thread::scope(|scope| {
+        let run = scope.spawn(|| case.run_stepping(&step));
+        let until = Instant::now() + Duration::from_secs(30);
+        while !grade.join("waiting").exists() {
+            assert!(Instant::now() < until, "the fake never got to its wait");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // The lines before the wait were flushed before it began; the drain
+        // reads them a moment later.
+        let mut seen = step.get();
+        while seen.as_deref() != Some("Running analyze.py") && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+            seen = step.get();
+        }
+        fs::write(grade.join("go"), "").unwrap();
+        run.join().unwrap().unwrap();
+        seen
+    });
+    // Running the script, while the run waited; neither the text message nor
+    // the large tool result changed it.
+    assert_eq!(seen.as_deref(), Some("Running analyze.py"));
+    assert_eq!(step.get().as_deref(), Some("Finishing"));
+}
+
+/// The read-deny list: well-known secret places, each home-relative and
+/// given to both the sandbox and the file tools, with nothing the bundled
+/// skill reads covered.
+#[test]
+fn settings_deny_reading_secret_locations_and_spare_what_the_skill_reads() {
+    let parsed: serde_json::Value = serde_json::from_str(&runner::settings("/p", "/g")).unwrap();
+    let deny_read: Vec<&str> = parsed["sandbox"]["filesystem"]["denyRead"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry.as_str().unwrap())
+        .collect();
+    assert_eq!(deny_read, runner::SECRET_LOCATIONS);
+    for secret in [
+        "~/.ssh",
+        "~/.aws",
+        "~/.gnupg",
+        "~/.config/gh",
+        "~/Library/Keychains",
+        "~/Library/Application Support/Google/Chrome",
+        "~/.claude/.credentials.json",
+    ] {
+        assert!(deny_read.contains(&secret), "{secret}");
+    }
+    let rules: Vec<&str> = parsed["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rule| rule.as_str().unwrap())
+        .collect();
+    assert_eq!(rules.len(), 2 * runner::SECRET_LOCATIONS.len());
+    for location in runner::SECRET_LOCATIONS {
+        // Home-relative, one plain location each: no glob, no trailing
+        // slash, no `..`, no repeat.
+        assert!(location.starts_with("~/"), "{location}");
+        assert!(!location.ends_with('/'), "{location}");
+        assert!(!location.contains(['*', '?', '[']), "{location}");
+        assert!(!location.contains(".."), "{location}");
+        assert_eq!(
+            deny_read.iter().filter(|entry| **entry == location).count(),
+            1,
+            "{location}"
+        );
+        assert!(rules.contains(&format!("Read({location})").as_str()));
+        assert!(rules.contains(&format!("Read({location}/**)").as_str()));
+    }
+    // What the bundled claude-md-doctor reads stays readable: no location
+    // is one of these or a folder holding one.
+    for needed in [
+        "~/.claude",
+        "~/.claude/projects",
+        "~/.claude/CLAUDE.md",
+        "~/.claude/rules",
+        "~/.claude/settings.json",
+    ] {
+        for location in runner::SECRET_LOCATIONS {
+            assert!(
+                !(needed == location || needed.starts_with(&format!("{location}/"))),
+                "{location} covers {needed}"
+            );
+        }
+    }
+}
+
 #[test]
 fn command_line_environment_and_folder_are_exact() {
     let case = Case::new(WRITE_GOOD);
@@ -270,8 +405,12 @@ fn command_line_environment_and_folder_are_exact() {
         .collect();
     let project = case.project.to_str().unwrap();
     let prompt = skill.prompt(project, grade, &format!("{grade}/work"));
+    let (deny_read, read_rules) = (
+        serde_json::to_string(&runner::SECRET_LOCATIONS[..]).unwrap(),
+        serde_json::to_string(&runner::secret_read_rules()).unwrap(),
+    );
     let settings = format!(
-        r#"{{"disableAllHooks":true,"sandbox":{{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"filesystem":{{"denyWrite":["{project}"],"allowWrite":["{grade}"]}},"network":{{"allowedDomains":[]}}}}}}"#
+        r#"{{"disableAllHooks":true,"permissions":{{"deny":{read_rules}}},"sandbox":{{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"filesystem":{{"denyWrite":["{project}"],"allowWrite":["{grade}"],"denyRead":{deny_read}}},"network":{{"allowedDomains":[]}}}}}}"#
     );
     let expected: Vec<String> = [
         case.claude.to_str().unwrap(),
@@ -294,6 +433,9 @@ fn command_line_environment_and_folder_are_exact() {
         "--add-dir",
         grade,
         skill_dir,
+        "--output-format",
+        "stream-json",
+        "--verbose",
     ]
     .iter()
     .map(|arg| (*arg).to_owned())
@@ -316,6 +458,15 @@ fn command_line_environment_and_folder_are_exact() {
         serde_json::json!([])
     );
     assert_eq!(parsed["disableAllHooks"], true);
+    // The secret locations are unreadable to commands and to the file tools.
+    assert_eq!(
+        parsed["sandbox"]["filesystem"]["denyRead"],
+        serde_json::json!(runner::SECRET_LOCATIONS[..])
+    );
+    assert_eq!(
+        parsed["permissions"]["deny"],
+        serde_json::json!(runner::secret_read_rules())
+    );
     // No command needs a rule of its own: the sandbox contains them all.
     assert!(!argv.iter().any(|arg| arg.starts_with("Bash(")));
     assert!(prompt.starts_with(&format!(
@@ -726,6 +877,7 @@ fn folder_paths_with_whitespace_are_refused_before_anything_runs() {
                 inherited_env: &env,
                 limits: Limits::default(),
                 leader_record: None,
+                step: None,
             },
             None,
         )
@@ -780,6 +932,7 @@ fn folders_are_checked_before_anything_runs() {
                 inherited_env: &env,
                 limits: Limits::default(),
                 leader_record: None,
+                step: None,
             },
             None,
         )

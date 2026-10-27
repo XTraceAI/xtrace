@@ -1,8 +1,8 @@
 # Session detail timeline acceptance
 
-One session's page shows the M-09 hands-off stretches it contributed in the
-selected window, above its transcript, and lets a reader go from a stretch to
-the tool call it started with. Each stretch also says what M-20 measured about
+One session's page shows a continuous, read-only conversation. M-09 hands-off
+stretches for the selected window remain available under Agent activity, where
+a reader can go to the tool call an activity period started with. Each stretch also says what M-20 measured about
 it: its active time, how many of its calls repeated an earlier one, which tool
 repeated most, and whether it was circling. The stretches come from
 [session-stretches.md](session-stretches.md); the transcript from
@@ -11,15 +11,78 @@ repeated most, and whether it was circling. The stretches come from
 Run `pnpm --dir apps/desktop/ui exec vitest run src/app/session-detail
 src/data/DataSource.test.ts` and `pnpm check`.
 
+## Conversation and repeated activity
+
+- User-role records appear in bubbles labelled User; the role does not establish
+  who typed them. Agent text is plain. System, unsupported and empty records keep
+  their honest labels. Default shared and gallery presentation stays unchanged.
+- Tool-only and empty-agent records collapse into activity disclosures. Adjacent
+  records may share one disclosure only when the native answer states sources=1.
+  That is the reader's source grouping contract, not a physical-file count for
+  every host. For legacy multi-source reads without boundaries, groups remain
+  per record and the view invents no source separator labels. Native read order,
+  original blocks and result locations remain unchanged; nothing sorts by time.
+- Marked records stop adjacent groups. Mixed text/tool records split rows at the
+  exact marked block, including consecutive calls of the same tool. Multiple
+  native groups sharing a representative remain separate notices.
+- Previous/Next counts every native measured non-null most-repeated group, in
+  native order, including unavailable representatives. It starts unselected,
+  jumps only after a press and never filters the conversation. Boundary controls
+  use guarded aria-disabled behavior so the pressed caller keeps focus.
+- Notices require the existing exact block-position proof. Counts describe
+  matching calls, not total repeats or identical complete arguments. Only native
+  circling=true gives warning styling. Titles reuse the tool-name formatter;
+  details keep the raw name. Each notice marks the earliest matching call and
+  does not claim to enumerate its whole group.
+- Opening an activity for a reveal happens once per request token; readers may
+  close it afterward. One page-level live status states the result, including
+  unavailable reasons, even with Agent activity open. Standalone timeline
+  announcements remain unchanged. Existing session/range/read/answer ownership
+  destroys old selection rather than restoring it on return.
+
+Session detail keeps a compact header and range metrics above one bounded
+conversation scroll area. Session identity, linked PRs, and Agent activity open
+on demand. The linked PR list has its own keyboard scroll and visible focus.
+Repeated-activity navigation stays in the conversation header; jumps open the
+containing activity and exact tool row, scroll the exact card in the conversation,
+and keep focus on the pressed control. Oversized cards align their top edge.
+The combined browser fixture checks those behaviors together in both themes at
+1120×720, 1120×900, and 1440×900, plus clipped and fully visible scroll areas.
+
+## Large Codex conversations
+
+A Codex whole read refused for source bytes, converted output bytes or the
+consumer byte ceiling opens bounded portions. The reader states the shown
+message interval and total, and leaves cross-portion call/result pairing
+unchecked. Small Codex, Claude and Cursor whole reads keep their existing path.
+
+One portion stays in memory without a query cache. Earlier/Later replace it;
+replacing a request or leaving cancels its read and discards late responses.
+Portions share the existing conversation scroll area and exact-card reveal
+owner. First/repeated controls load and confirm an exact saved record and tool
+block before marking it; the global navigation, caller focus and single
+header announcement contracts above apply. A loadable locator is not a notice.
+
+Only a settled, successful row answer can replace the accepted host. Pending,
+refetching or failed metadata keeps the same session/source's portion and any
+changed-source refusal; range/background refreshes clear stale selection and
+highlighting without restarting the read. A settled null or non-Codex row ends
+it; a new session or provider replaces the owner. A changed-source refusal
+requires explicit reload. Portion generations connect successive reads; they
+do not prove that the source still matches the index's saved measurements.
+
+The remaining measurement and segment contracts apply inside Agent activity.
+
 ## The query
 
 - `sessionStretches(sessionId, windowDays)` is a metadata query, cached under
   the `sessions` prefix beside the session's row and invalidated with it by
   every ingest event.
-- Changing the range re-reads the stretches for the new window and **never**
-  re-reads the transcript, whose read is keyed by the session alone. The
-  session page owns the range control, because its row and its stretches are
-  both measured over the window.
+- Changing the range re-reads the stretches for the new window and never
+  repeats the whole-transcript read, which is keyed by the session alone.
+  A bounded Codex portion clears highlights owned by the previous range while
+  preserving its active read. The session page owns the range control,
+  because its row and its stretches are both measured over the window.
 - The same answer carries M-20. The app reads M-09's stretches and M-20's
   repeats **inside one database snapshot over the same selected window**, so
   the stretches M-20 counted are the stretches M-09 states even while the
@@ -109,12 +172,16 @@ src/data/DataSource.test.ts` and `pnpm check`.
 repeated call` button appears under the stretches. It goes to the
   **earliest** call of that group, through exactly the path a first call
   takes: the same position check against the loaded transcript, the same
-  reasons when it cannot, and the same reveal request. Nothing new is looked
-  up, and there is no fallback.
-- Its accessible name says why the call cannot be shown before it is pressed;
+  reasons when it cannot, and the same reveal request. Whole transcripts use
+  the records already held. Large Codex conversations load a bounded portion
+  around that exact saved record and block, then validate and reveal it.
+  Neither path substitutes a nearby call.
+- A bounded Codex target is labeled as needing a read and check. Otherwise,
+  its accessible name says why the call cannot be shown before it is pressed;
   pressed, the reason is on screen. Focus stays on the button, the stretch
-  stays selected, and the live region says `Showing the earliest of the
-repeated calls in stretch N: Tool.`
+  stays selected, and the conversation's single live region says
+  `Showing the earliest matching call: Tool.` Standalone timeline wording
+  remains unchanged.
 - When the repeated call is the call the stretch started with, pressing it
   reveals that call again as a new request.
 - The press belongs to the same session, window, transcript read and accepted
@@ -216,3 +283,19 @@ check found the repeat line cut off at both widths, which is why it now wraps.
 - A start label is shortened with an ellipsis when its segment is narrow; the
   full time is in the segment's accessible name. The repeat line wraps instead,
   so the most repeated tool and its count are never cut off.
+
+## Session reading layout
+
+The header discloses the full saved identifier and recorded PR links; the shared
+model label stays visible. The record count covers the whole session, while the
+compact measurements explicitly name the selected range. Agent activity opens
+in a disclosure without changing its measurements or target checks.
+
+The conversation has one keyboard-scrollable reading area, including generation
+and partial-history notices. Revealing a tool call scrolls that area; when expanded
+activity puts it outside the window, the page also brings the area into view.
+Caller focus stays on the stretch. Targets taller than the area reveal their
+beginning. Standalone transcripts retain their existing page-scroll behavior.
+The synthetic `session-layout.spec.ts` checks both themes at 1120×720, 1120×900
+and 1440×900 in Chromium and WebKit. This layout adds no warning, diagnosis or
+paged-history features.

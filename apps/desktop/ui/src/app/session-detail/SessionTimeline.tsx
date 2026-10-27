@@ -174,7 +174,9 @@ function segmentLabel(
   parts.push(
     jump.kind === 'target'
       ? 'shows its first tool call in the transcript'
-      : `its first tool call cannot be shown: ${jumpUnavailableText(jump.reason)}`,
+      : jump.kind === 'loadable'
+        ? 'loads and checks its saved first tool call in the conversation'
+        : `its first tool call cannot be shown: ${jumpUnavailableText(jump.reason)}`,
   );
   return parts.join(', ');
 }
@@ -307,7 +309,13 @@ export function SessionTimeline({
                 className="xt-timeline-segment"
                 aria-pressed={selected === index}
                 aria-label={segmentLabel(stretch, index, stretches.length, jump)}
-                data-jump={jump.kind === 'target' ? 'available' : jump.reason}
+                data-jump={
+                  jump.kind === 'target'
+                    ? 'available'
+                    : jump.kind === 'loadable'
+                      ? 'loadable'
+                      : jump.reason
+                }
                 // Only the metric's own `true` sets a stretch apart. Unknown is
                 // not "not circling" and is not drawn as either.
                 data-circling={stretch.circling === true ? 'true' : undefined}
@@ -337,7 +345,7 @@ export function SessionTimeline({
             {chosen.repeats.state === 'unknown'
               ? `Stretch ${selected + 1}: repeats not counted. ${unknownRepeatsText(chosen.repeats.reason)}`
               : worst
-                ? `Stretch ${selected + 1}: the most repeated call was ${worst.tool_name}, ${plural(worst.count, 'call', 'calls')} with the same argument.`
+                ? `Stretch ${selected + 1}: the most repeated call was ${worst.tool_name}, ${plural(worst.count, 'call', 'calls')} with the same command, path or pattern.`
                 : `Stretch ${selected + 1}: no call repeated an earlier one.`}
           </p>
           {worst && onShowRepeat && (
@@ -345,11 +353,17 @@ export function SessionTimeline({
               variant="outline"
               height={28}
               aria-label={
-                repeatJump?.kind === 'target'
+                repeatJump?.kind === 'target' || repeatJump?.kind === 'loadable'
                   ? `Show repeated call: ${worst.tool_name}, stretch ${selected + 1}`
                   : `Show repeated call: ${worst.tool_name}, stretch ${selected + 1}. It cannot be shown: ${jumpUnavailableText(repeatJump?.reason ?? 'transcript_loading')}`
               }
-              data-jump={repeatJump?.kind === 'target' ? 'available' : repeatJump?.reason}
+              data-jump={
+                repeatJump?.kind === 'target'
+                  ? 'available'
+                  : repeatJump?.kind === 'loadable'
+                    ? 'loadable'
+                    : repeatJump?.reason
+              }
               onClick={() => onShowRepeat(selected)}
             >
               Show repeated call

@@ -21,6 +21,22 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
 jobs:
+  selection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run_ui: ${{ steps.select.outputs.run_ui }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - id: select
+        run: node scripts/ci/select-ui.mjs
+
   policy:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -71,6 +87,8 @@ jobs:
       - run: pnpm check
 
   ui:
+    needs: selection
+    if: ${{ needs.selection.outputs.run_ui == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -92,18 +110,26 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-ubuntu-24.04-x64-webkit-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Remove unused Chrome package sources
-        # Playwright downloads its pinned browsers separately. The runner's
-        # preinstalled Chrome repository must not block Ubuntu dependency updates.
+      - name: Prepare Ubuntu package sources
+        # Playwright supplies its own browser; install its system packages
+        # from the standard Ubuntu archive.
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome*.list \
             /etc/apt/sources.list.d/google-chrome*.sources
+          for source in /etc/apt/apt-mirrors.txt /etc/apt/sources.list \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [[ -f "$source" ]]; then
+              sudo sed -i 's|://azure\.archive\.ubuntu\.com/|://archive.ubuntu.com/|g' "$source"
+            fi
+          done
       - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps webkit
       - run: pnpm e2e --project=webkit --shard=${{ matrix.shard }}/4
         env:
           E2E_PORT: '5174'
 
   ui-extras:
+    needs: selection
+    if: ${{ needs.selection.outputs.run_ui == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -121,12 +147,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-ubuntu-24.04-x64-webkit-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Remove unused Chrome package sources
-        # Playwright downloads its pinned browsers separately. The runner's
-        # preinstalled Chrome repository must not block Ubuntu dependency updates.
+      - name: Prepare Ubuntu package sources
+        # Playwright supplies its own browser; install its system packages
+        # from the standard Ubuntu archive.
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome*.list \
             /etc/apt/sources.list.d/google-chrome*.sources
+          for source in /etc/apt/apt-mirrors.txt /etc/apt/sources.list \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [[ -f "$source" ]]; then
+              sudo sed -i 's|://azure\.archive\.ubuntu\.com/|://archive.ubuntu.com/|g' "$source"
+            fi
+          done
       - run: pnpm --dir apps/desktop/ui exec playwright install --with-deps webkit
       - run: pnpm e2e:gallery:smoke --project=webkit
       - run: pnpm e2e:production --project=webkit
@@ -157,7 +189,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: ${{ always() }}
-    needs: [policy, check, ui, ui-extras, security]
+    needs: [selection, policy, check, ui, ui-extras, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

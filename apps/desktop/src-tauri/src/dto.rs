@@ -1,5 +1,6 @@
 //! Serialized IPC and fixture contracts. Integer constructors enforce JSON precision.
 pub use crate::account_usage_dto::*;
+pub use crate::codex_page_dto::*;
 pub use crate::dashboard_dto::*;
 pub use crate::grading_dto::*;
 pub use crate::grading_link_dto::*;
@@ -307,6 +308,8 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     TokensByHost::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionPage::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     MetricSessionStretches::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    CodexPageStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
+    CodexPageRequest::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionSourceStatus::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionTitles::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;
     SessionCompactions::export_all(&ts_rs::Config::new().with_out_dir(directory.as_ref()))?;

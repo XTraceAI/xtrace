@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 from contextlib import closing, contextmanager
 import datetime
+import hashlib
 import io
 import itertools
 import json
@@ -21,6 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from readers import codex_history, codex_origin, codex_witness, reader_for, validate_canonical
+from codex_context import ContextRefusal
 from readers.strict_json import loads as load_json
 from readers.jsonl import readline_bytes
 
@@ -664,12 +666,16 @@ class DetailBudget:
         if not count % DETAIL_DEADLINE_STRIDE:
             self.check()
 
-    def begin_probe(self, observed) -> None:
-        """Count one identity probe and remember what the file was when probed."""
+    def count_probe(self) -> None:
+        """Charge a probe without changing any earlier acquisition stamp."""
         self.check()
         self.probes += 1
         if self.probes > self.max_probes:
             raise DetailLimit("detail_limit_probes")
+
+    def begin_probe(self, observed) -> None:
+        """Count one identity probe and remember what the file was when probed."""
+        self.count_probe()
         key, stamp = identity(observed), file_stamp(observed)
         if self.probed.setdefault(key, stamp) != stamp:
             raise SourceChanged("a source changed between two probes of it")
@@ -778,12 +784,13 @@ class ProbeReader(io.RawIOBase):
     buffer rather than what was read. So it refuses a buffered handle.
     """
 
-    def __init__(self, handle, observed, budget: DetailBudget):
+    def __init__(self, handle, observed, budget: DetailBudget, digest=None):
         if isinstance(handle, io.BufferedIOBase):
             raise TypeError("a probe must read the descriptor, not a buffer over it")
         super().__init__()
         self.handle, self.size, self.budget = handle, observed.st_size, budget
         self.consumed = 0
+        self.digest = digest
 
     def readable(self) -> bool:
         return True
@@ -795,17 +802,73 @@ class ProbeReader(io.RawIOBase):
         self.budget.check()
         view = memoryview(buffer)[:min(len(buffer), allowed, self.size - self.consumed)]
         read = self.handle.readinto(view)
+        if self.digest is not None:
+            self.digest.update(view[:read])
         self.consumed += read
         self.budget.probe_bytes += read
         return read
 
 
-def probe_header(reader, handle, observed, budget):
+def probe_header(reader, handle, observed, budget, proof=None):
     """The reader's header probe, under the probe budget when there is one."""
     if budget is None:
         return reader._session_header(handle)
     budget.begin_probe(observed)
-    return reader._session_header(io.BufferedReader(ProbeReader(handle, observed, budget)))
+    digest = hashlib.sha256() if proof is not None else None
+    raw = ProbeReader(handle, observed, budget, digest)
+    header = reader._session_header(io.BufferedReader(raw))
+    if proof is not None:
+        proof.update(size=observed.st_size, length=raw.consumed, digest=digest.digest(),
+                     identity=identity(observed))
+    return header
+
+
+class ContextObservation:
+    """Keep every context revision/open observation bound to its first file.
+
+    Growth raises the size floor. A later healthy observation cannot erase a
+    different identity or a smaller size that this read already observed.
+    """
+
+    def __init__(self, entry):
+        self.identity, self.size = entry_identity(entry), entry[1]
+
+    def observe(self, key, size):
+        if key != self.identity or size < self.size:
+            raise SourceChanged("context source identity changed or size decreased")
+        self.size = size
+
+    def revision(self, revision):
+        self.observe(entry_identity(revision[0]), revision[0][1])
+
+    def opened(self, observed):
+        self.observe(identity(observed), observed.st_size)
+
+
+def context_prefix_held(path, proof, observation, budget):
+    """Recheck a changed foreign file's original identity bytes, not its body.
+
+    The initial header probe established its native SID. A later append does
+    not invalidate that ownership if the same anchored file still holds every
+    byte the probe actually consumed. This proof spends the original probe
+    budget without replacing the stamp used to acquire selected bodies.
+    """
+    with regular_source(path, proof["identity"], buffered=False) as (handle, observed):
+        observation.opened(observed)
+        budget.count_probe()
+        digest = hashlib.sha256()
+        raw = ProbeReader(handle, observed, budget, digest)
+        buffer = bytearray(io.DEFAULT_BUFFER_SIZE)
+        while raw.consumed < proof["length"]:
+            remaining = proof["length"] - raw.consumed
+            if not raw.readinto(memoryview(buffer)[:min(len(buffer), remaining)]):
+                raise SourceChanged("context identity prefix disappeared")
+        observation.opened(os.fstat(handle.fileno()))
+        if digest.digest() != proof["digest"]:
+            raise SourceChanged("context identity prefix changed")
+    with regular_source(path, proof["identity"]) as (_, after):
+        observation.opened(after)
+    budget.check()
 
 
 def reserve_selected(budget: DetailBudget, members) -> None:
@@ -1214,6 +1277,7 @@ def main(argv=None) -> int:
                         help="Select one native session ID, latest, or an explicit path")
     parser.add_argument("--exact-detail", action="store_true",
                         help="Read one identified JSONL session whole, in memory, under fixed ceilings")
+    parser.add_argument("--context-page", help="Versioned bounded complete-record page of a flat Codex session")
     parser.add_argument("--deadline-seconds", type=deadline_seconds,
                         help="Refuse an --exact-detail read that is still working after this long")
     parser.add_argument("--source-witness", action="store_true",
@@ -1253,6 +1317,17 @@ def main(argv=None) -> int:
         parser.error("--origin-evidence reads one session with --exact-detail --session, "
                      "or the full Codex export; --session, --since and --metadata-only "
                      "do not apply to the export")
+    context_request = None
+    if args.context_page is not None:
+        if (not args.exact_detail or args.host != "codex" or args.source_witness or
+                args.origin_evidence or args.session is None or
+                codex_witness.session_id(args.session) is None):
+            parser.error("--context-page requires --host codex --exact-detail --session UUID alone")
+        from codex_context import selection
+        try:
+            context_request = selection(args.context_page)
+        except ContextRefusal:
+            parser.error("invalid versioned context-page selection")
     # The exact mode's claims refuse the request over any doubt about the one
     # session selected. The export's claims are made only once discovery and
     # every header have been counted, and are withheld per session instead.
@@ -1271,6 +1346,9 @@ def main(argv=None) -> int:
     elif args.deadline_seconds is not None:
         parser.error("--deadline-seconds applies to --exact-detail")
     budget = DetailBudget(args.deadline_seconds) if args.exact_detail else None
+    if context_request is not None:
+        from codex_context import MAX_SOURCE_BYTES
+        budget.max_source_bytes = MAX_SOURCE_BYTES
     detail_emitted = False
     reader = reader_for(args.host)
     explicit_path = False
@@ -1476,6 +1554,18 @@ def main(argv=None) -> int:
         diagnostic("discovery_incomplete")
         return 2
 
+    context_snapshot = None
+    context_proofs = {}
+    context_observations = {}
+    if context_request is not None:
+        try:
+            context_snapshot = {str(Path(row["path"])): source_revision(Path(row["path"]), "codex")
+                                for row in sessions}
+            context_observations = {name: ContextObservation(revision[0])
+                                    for name, revision in context_snapshot.items()}
+        except (OSError, ValueError, TypeError):
+            diagnostic("discovery_incomplete")
+            return 2
     if args.host == "cursor" and args.session and args.session != "latest" and not explicit_path:
         # Cursor identities are defined by the native path, unlike Codex.
         # Keep all same-ID copies for ambiguity checks, but never parse an
@@ -1515,6 +1605,7 @@ def main(argv=None) -> int:
     origin_disputed = set()
     for session in sessions:
         path = Path(session["path"])
+        context_name = str(path)
         probed = False
         try:
             if budget is not None:
@@ -1528,6 +1619,8 @@ def main(argv=None) -> int:
                 path, anchor = path.resolve(strict=True), None
             else:
                 path, anchor = discovered_path(path_reader, path, anchors)
+                if context_snapshot is not None and anchor != entry_identity(context_snapshot[context_name][0]):
+                    raise SourceChanged("context source identity changed before preparation")
                 if args.source_witness:
                     names = codex_witness.rollout_name(path.name)
                     if names is None:
@@ -1556,6 +1649,8 @@ def main(argv=None) -> int:
                     if anchor is None:
                         raise ValueError("saved Cursor source was excluded by discovery")
             revision = source_revision(path, args.host, expect=anchor)
+            if context_snapshot is not None:
+                context_observations[context_name].revision(revision)
             if latest_basis is not None and not basis_unchanged(latest_basis):
                 # The clock this selection was ranked on changed before the
                 # baseline: a fresh invocation might rank another session.
@@ -1582,7 +1677,11 @@ def main(argv=None) -> int:
                 # other values; malformed duplicates must not appear unique.
                 with regular_source(path, revision_identity(revision, path),
                                     buffered=budget is None) as (handle, observed):
-                    source_header = probe_header(reader, handle, observed, budget)
+                    proof = {} if context_snapshot is not None else None
+                    if proof is not None:
+                        context_observations[context_name].opened(observed)
+                    source_header = (probe_header(reader, handle, observed, budget) if proof is None else
+                                     probe_header(reader, handle, observed, budget, proof))
                 if bulk_evidence:
                     origin_disputed |= origin_dispute(path, source_header)
                     probed = True
@@ -1596,6 +1695,12 @@ def main(argv=None) -> int:
                     if selection and args.source_witness:
                         witness_flat(path, source_header, source_header["payload"]["id"])
                 sid = native_text(source_header.get("payload", {}).get("id"), required=True)
+                if proof is not None:
+                    proof.update(path=path, sid=sid)
+                    context_proofs[context_name] = proof
+                    if sid == args.session and (revision[0][1:] != context_snapshot[context_name][0][1:]
+                            or file_stamp(observed) != (revision[0][1], revision[0][2], revision[0][5])):
+                        raise SourceChanged("selected context source changed before preparation")
                 if explicit_basis is not None and sid != args.session:
                     raise ValueError("paginated filename and native identity disagree")
                 # Every identified rollout, whichever session it names: a fork
@@ -1637,6 +1742,8 @@ def main(argv=None) -> int:
                 native = reader._metadata_from_header(source_header)
             header = header_for(reader, path, mtime, native)
             prepared.append((path, revision, header))
+        except ContextRefusal as refused:
+            diagnostic(refused.code, path)
         except DetailLimit as limit:
             diagnostic(limit.code, path)
         except DetailUnsupported:
@@ -1741,6 +1848,45 @@ def main(argv=None) -> int:
             if titles is None and args.since is not None and header["mtime"] < args.since:
                 if current_revision(path) != revision:
                     diagnostic("source_changed", path)
+                continue
+            if context_request is not None:
+                from codex_context import read
+                import sys as context_sys
+                encoded = read(reader, path, revision, header, context_request, budget,
+                               context_sys.modules[__name__], history_groups.get(path))
+                budget.check()
+                try:
+                    witness_root_held(reader, anchors)
+                except WitnessUnowned:
+                    raise SourceChanged("context root changed") from None
+                current = reader._rollout_files(
+                    on_error=lambda error: diagnostic("discovery_incomplete"), observe=budget.observe)
+                snapshot = {}
+                for current_path in current:
+                    budget.check()
+                    name = str(current_path)
+                    snapshot[name] = source_revision(current_path, "codex")
+                    if name in context_observations:
+                        context_observations[name].revision(snapshot[name])
+                if incomplete or snapshot.keys() != context_snapshot.keys():
+                    raise SourceChanged("context sources changed")
+                for name, original in context_snapshot.items():
+                    budget.check()
+                    proof = context_proofs[name]
+                    resolved, anchor = discovered_path(reader, name, anchors)
+                    if (resolved != proof["path"] or anchor != entry_identity(original[0])
+                            or anchor != proof["identity"]):
+                        raise SourceChanged("context source identity changed")
+                    if snapshot[name] != original:
+                        if proof["sid"] == args.session:
+                            raise SourceChanged("selected context source changed")
+                        context_prefix_held(resolved, proof, context_observations[name], budget)
+                if current_revision(path) != revision:
+                    raise SourceChanged("context selected sources changed")
+                budget.check()
+                sys.stdout.write(encoded)
+                sys.stdout.flush()
+                detail_emitted = True
                 continue
             records = []
             used_title = []
@@ -1904,6 +2050,8 @@ def main(argv=None) -> int:
                     notice(ORIGIN_WITHHELD, path)
                 for line in lines:
                     print(line)
+        except ContextRefusal as refused:
+            diagnostic(refused.code, path)
         except DetailLimit as limit:
             diagnostic(limit.code, path)
         except DetailUnsupported:

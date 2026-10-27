@@ -33,7 +33,12 @@ the verified pinned reader's `--exact-detail` mode and a Python 3.10+
 interpreter resolved for that open. Reads are bounded and cancellable, hold
 records in memory, and write no transcript cache or staged source copy. Reader
 setup and execution failures return a closed unavailable reason; Cursor SQLite
-stores remain unsupported. See [session source](acceptance/session-source.md).
+stores remain unsupported. Large Codex conversations can use the pinned
+producer's opt-in context protocol through `session_source::load_codex_page`.
+This API returns complete-record portions with generation-bound cursors and
+exact saved tool-call targets. Its separate `codex_transcript_page` command
+never labels a portion as a whole transcript. Ordinary imports, small full
+reads, Claude and Cursor retain their existing readers. See [session source](acceptance/session-source.md).
 The session page shows the M-09
 hands-off stretches that session contributed in the selected window, read from
 `xt-metrics` as metadata only, and reveals a stretch's first tool call only when
@@ -50,8 +55,8 @@ metrics through typed native commands.
 or a skill the user installed and added to Scores because its folder has a valid
 rubric) headless with the user's Claude Code on one project folder, without the user's
 personal Claude Code settings, inside Claude Code's sandbox (the project
-read-only, writes only in the run's grade folder, the network always off, no
-hooks or MCP servers, no saved transcript; Claude Code 2.1.296 or newer). A final step of the same run judges the skill's output against the
+read-only, writes only in the run's grade folder, the network always off,
+well-known secret locations unreadable, no hooks or MCP servers, no saved transcript; Claude Code 2.1.296 or newer). A final step of the same run judges the skill's output against the
 skill's rubric, `xtrace-rubric.md` ([format](GRADING-RUBRIC.md)), and writes
 `result.json`, which one strict protocol v1 reader checks. The score rule
 belongs to the rubric; XTrace never recomputes it. The app stores grades and

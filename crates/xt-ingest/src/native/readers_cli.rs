@@ -937,6 +937,7 @@ pub enum DetailLimit {
 /// code. Nothing else of what it wrote is kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DetailRefusal {
+    Context(ContextRefusal),
     Limit(DetailLimit),
     /// The deadline the producer was handed passed while it worked.
     Deadline,
@@ -954,9 +955,25 @@ pub enum DetailRefusal {
     DiscoveryIncomplete,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextRefusal {
+    Changed,
+    InvalidCursor,
+    TargetMissing,
+    TargetAmbiguous,
+    BlockMissing,
+    RecordTooLarge,
+}
+
 impl DetailRefusal {
     fn from_code(code: &str) -> Option<Self> {
         Some(match code {
+            "context_changed" => Self::Context(ContextRefusal::Changed),
+            "context_invalid_cursor" => Self::Context(ContextRefusal::InvalidCursor),
+            "context_target_missing" => Self::Context(ContextRefusal::TargetMissing),
+            "context_target_ambiguous" => Self::Context(ContextRefusal::TargetAmbiguous),
+            "context_block_missing" => Self::Context(ContextRefusal::BlockMissing),
+            "context_record_too_large" => Self::Context(ContextRefusal::RecordTooLarge),
             "detail_limit_source_bytes" => Self::Limit(DetailLimit::SourceBytes),
             "detail_limit_files" => Self::Limit(DetailLimit::Files),
             "detail_limit_native_rows" => Self::Limit(DetailLimit::NativeRows),
@@ -1145,15 +1162,67 @@ pub fn run_exact_detail(
     bounds: DetailBounds,
     cancel: Option<&CancelToken>,
 ) -> Result<Vec<u8>, DetailFailure> {
+    run_detail(
+        python,
+        producer,
+        home,
+        native_session_id,
+        bounds,
+        cancel,
+        DetailMode::Whole(host),
+    )
+}
+
+pub fn run_context_detail(
+    python: &OsStr,
+    producer: &PinnedProducer,
+    home: &Path,
+    native_session_id: &str,
+    bounds: DetailBounds,
+    cancel: Option<&CancelToken>,
+    selection: &str,
+) -> Result<Vec<u8>, DetailFailure> {
+    run_detail(
+        python,
+        producer,
+        home,
+        native_session_id,
+        bounds,
+        cancel,
+        DetailMode::Context(selection),
+    )
+}
+
+enum DetailMode<'a> {
+    Whole(Host),
+    Context(&'a str),
+}
+
+fn run_detail(
+    python: &OsStr,
+    producer: &PinnedProducer,
+    home: &Path,
+    native_session_id: &str,
+    bounds: DetailBounds,
+    cancel: Option<&CancelToken>,
+    mode: DetailMode<'_>,
+) -> Result<Vec<u8>, DetailFailure> {
     if cancel.is_some_and(CancelToken::is_cancelled) {
         return Err(DetailFailure::Cancelled);
     }
+    let (host, selection) = match mode {
+        DetailMode::Whole(host) => (host, None),
+        DetailMode::Context(selection) => (Host::Codex, Some(selection)),
+    };
     let mut command = reader_command(python, producer, host, home);
     command
         .arg("--exact-detail")
         .arg(format!("--session={native_session_id}"))
         .arg("--deadline-seconds")
         .arg(format!("{:.3}", bounds.deadline.as_secs_f64()));
+    if let Some(selection) = selection {
+        command.arg(format!("--context-page={selection}"));
+    }
     let hard = Instant::now() + bounds.deadline + bounds.grace;
     let mut child = spawn_grouped(&mut command).map_err(|_| DetailFailure::Start)?;
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
