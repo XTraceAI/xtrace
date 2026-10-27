@@ -20,7 +20,7 @@ export const commands = {
   dismissSessionWarning: 'dismiss_session_warning',
   restoreSessionWarning: 'restore_session_warning',
   sessionTranscript: 'session_transcript',
-  codexTranscriptPage: 'codex_transcript_page',
+  sessionTranscriptPage: 'session_transcript_page',
   cancelSessionTranscript: 'cancel_session_transcript',
   sessionTitles: 'session_titles',
   cancelSessionTitles: 'cancel_session_titles',

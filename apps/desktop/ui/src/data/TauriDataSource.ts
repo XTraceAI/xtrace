@@ -1,8 +1,8 @@
 import type { DashboardWarnings } from './generated/DashboardWarnings';
 import type { SessionWarningsList } from './generated/SessionWarningsList';
 import type { SessionWarningDismissal } from './generated/SessionWarningDismissal';
-import type { CodexPageRequest } from './generated/CodexPageRequest';
-import type { CodexPageStatus } from './generated/CodexPageStatus';
+import type { SessionPageSelection } from './generated/SessionPageSelection';
+import type { SessionPageStatus } from './generated/SessionPageStatus';
 import type { DashboardMetrics } from './generated/DashboardMetrics';
 import type { TokensByHost } from './generated/TokensByHost';
 import type { SessionPage } from './generated/SessionPage';
@@ -235,8 +235,12 @@ export class TauriDataSource implements DataSource {
       timezone,
     });
   }
-  codexTranscriptPage(sessionId: string, selection: CodexPageRequest, readId: string) {
-    return invoke<CodexPageStatus>(commands.codexTranscriptPage, { sessionId, selection, readId });
+  sessionTranscriptPage(sessionId: string, selection: SessionPageSelection, readId: string) {
+    return invoke<SessionPageStatus>(commands.sessionTranscriptPage, {
+      sessionId,
+      selection,
+      readId,
+    });
   }
 
   sessionTranscript(sessionId: string, readId: string) {

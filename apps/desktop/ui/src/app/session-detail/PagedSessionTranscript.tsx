@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useData } from '../../data/DataProvider';
-import type { CodexPageRequest } from '../../data/generated/CodexPageRequest';
-import type { CodexPageReason } from '../../data/generated/CodexPageReason';
+import type { SessionPageSelection } from '../../data/generated/SessionPageSelection';
+import type { SessionPageReason } from '../../data/generated/SessionPageReason';
 import type { MetricToolBlock } from '../../data/generated/MetricToolBlock';
 import type { SessionSourceStatus } from '../../data/generated/SessionSourceStatus';
 import { Button } from '../../kit/Button';
@@ -12,50 +12,62 @@ import { transcriptProps, unavailableNote } from './transcript-adapter';
 import type { RevealOutcome } from './transcript-reveal';
 import { useSourceRead } from './useSessionTranscript';
 
-export interface CodexPageIntent {
+export interface PageIntent {
   token: number;
   locator: MetricToolBlock;
   index: number;
   call: 'first' | 'repeated';
 }
-export interface CodexRepeatCandidate {
+export interface PageRepeatCandidate {
   index: number;
   locator: MetricToolBlock;
   tool: string;
   count: number;
   circling: boolean;
 }
-export interface CodexPageFeedback {
-  intent: CodexPageIntent;
+export interface PageFeedback {
+  intent: PageIntent;
   target: { blockId: string; tool: string } | null;
   outcome: RevealOutcome | null;
   unavailable: string | null;
 }
-const FIRST: CodexPageRequest = { kind: 'first' };
-export function codexPageReason(reason: CodexPageReason): string {
+const FIRST: SessionPageSelection = { kind: 'first' };
+export function pageReason(reason: SessionPageReason, host: 'claude' | 'codex'): string {
   switch (reason.reason) {
-    case 'source':
-      return unavailableNote(reason.detail);
     case 'changed':
       return 'This conversation changed while you were reading it. Load it again to continue.';
     case 'invalid_cursor':
       return 'This conversation portion can no longer be opened. Load it again.';
-    case 'target_missing':
-      return 'The saved tool call could not be found in this conversation.';
-    case 'target_ambiguous':
-      return 'More than one message has this saved message ID, so the exact call cannot be selected.';
-    case 'block_missing':
-      return 'The saved tool call could not be confirmed in its message.';
-    case 'unsupported_history':
-      return 'This view can read one original Codex rollout. Forked conversations, inherited history and conversations spread across several rollouts are not supported here.';
     case 'record_too_large':
       return 'One saved message is too large to show as a complete message in this view.';
+    case 'read': {
+      const detail = reason.detail;
+      switch (detail.reason) {
+        case 'source':
+          return detail.source.reason === 'unsupported_history' && host === 'codex'
+            ? 'This view can read one original Codex rollout. Forked conversations, inherited history and conversations spread across several rollouts are not supported here.'
+            : unavailableNote(detail.source);
+        case 'target_missing':
+          return 'The saved tool call could not be found in this conversation.';
+        case 'target_ambiguous':
+          return 'More than one message has this saved message ID, so the exact call cannot be selected.';
+        case 'block_missing':
+          return 'The saved tool call could not be confirmed in its message.';
+        case 'deadline':
+          return 'Reading this conversation portion took too long. Try again.';
+        case 'incomplete':
+          return 'The complete set of conversation files could not be checked, so this portion cannot be shown.';
+        case 'limit':
+          return 'This conversation exceeds the amount this view can check in one read.';
+      }
+    }
   }
 }
 
 /** Each owned read replaces the last; no transcript cache or accumulation. */
-export function CodexPagedTranscript({
+export function PagedSessionTranscript({
   sessionId,
+  host,
   intent,
   repeatCandidates,
   onFeedback,
@@ -63,15 +75,16 @@ export function CodexPagedTranscript({
   revealOwner,
 }: {
   sessionId: string;
-  intent: CodexPageIntent | null;
-  repeatCandidates: readonly CodexRepeatCandidate[];
-  onFeedback: (feedback: CodexPageFeedback | null) => void;
+  host: 'claude' | 'codex';
+  intent: PageIntent | null;
+  repeatCandidates: readonly PageRepeatCandidate[];
+  onFeedback: (feedback: PageFeedback | null) => void;
   onReset: () => void;
   revealOwner: RefObject<HTMLElement | null>;
 }) {
   const { source } = useData();
   const digest = useRef<string | null>(null);
-  const [held, setHeld] = useState<{ token: number | null; selection: CodexPageRequest }>({
+  const [held, setHeld] = useState<{ token: number | null; selection: SessionPageSelection }>({
     token: null,
     selection: FIRST,
   });
@@ -81,7 +94,8 @@ export function CodexPagedTranscript({
     setHeld({
       token: intent.token,
       selection: {
-        kind: 'tool_call',
+        kind: 'anchor',
+        expected: 'tool_call',
         record_uuid: intent.locator.record_uuid,
         block: intent.locator.block_index,
         generation: digest.current,
@@ -92,8 +106,9 @@ export function CodexPagedTranscript({
   const identity = JSON.stringify([sessionId, held.token, selection, restart]);
   const load = useCallback(
     (id: string) => {
-      if (!source.codexTranscriptPage) return Promise.reject(new Error('Page reader unavailable'));
-      return source.codexTranscriptPage(sessionId, selection, id);
+      if (!source.sessionTranscriptPage)
+        return Promise.reject(new Error('Page reader unavailable'));
+      return source.sessionTranscriptPage(sessionId, selection, id);
     },
     [source, sessionId, selection],
   );
@@ -107,12 +122,12 @@ export function CodexPagedTranscript({
     if (!page) return null;
     const status: SessionSourceStatus = {
       state: 'loaded',
-      generation: { generation: 'unrecorded' },
-      sources: 1,
-      record_ranges: [{ start: 0, end: page.records.length }],
+      generation: page.generation,
+      sources: page.record_ranges.length,
+      record_ranges: page.record_ranges,
       records: page.records,
       gaps: [],
-      dropped_records: 0,
+      dropped_records: page.dropped_records,
     };
     return { status, transcript: transcriptProps(status, false) };
   }, [page]);
@@ -121,12 +136,16 @@ export function CodexPagedTranscript({
       !page ||
       !view ||
       page.target === null ||
-      selection.kind !== 'tool_call' ||
+      selection.kind !== 'anchor' ||
       !intent ||
       held.token !== intent.token
     )
       return null;
-    if (page.records[page.target]?.id !== intent.locator.record_uuid) return null;
+    if (
+      page.records[page.target.record]?.id !== intent.locator.record_uuid ||
+      page.target.block !== intent.locator.block_index
+    )
+      return null;
     const jump = resolveJump(intent.locator, { phase: 'read', status: view.status });
     return jump.kind === 'target' ? { blockId: jump.blockId, tool: jump.tool } : null;
   }, [page, view, selection, intent, held.token]);
@@ -173,11 +192,11 @@ export function CodexPagedTranscript({
     read.phase === 'failed'
       ? 'This conversation portion could not be read just now.'
       : read.phase === 'read' && read.status.state === 'unavailable'
-        ? codexPageReason(read.status.reason)
+        ? pageReason(read.status.reason, host)
         : null;
-  const feedback = useMemo<CodexPageFeedback | null>(
+  const feedback = useMemo<PageFeedback | null>(
     () =>
-      intent && held.token === intent.token && selection.kind === 'tool_call'
+      intent && held.token === intent.token && selection.kind === 'anchor'
         ? {
             intent,
             target,
@@ -220,9 +239,9 @@ export function CodexPagedTranscript({
       </nav>
       {page && (
         <p role="status">
-          {page.total === 0
+          {page.total_records === 0
             ? 'No saved messages were found.'
-            : `Showing messages ${page.start + 1}–${page.end} of ${page.total}.`}
+            : `Showing messages ${page.start + 1}–${page.end} of ${page.total_records}.`}
         </p>
       )}
       {read.phase === 'loading' ? (
@@ -232,6 +251,7 @@ export function CodexPagedTranscript({
           conversation
           revealOwner={revealOwner}
           groupAdjacentActivity
+          sourceStarts={page?.record_ranges.map((range) => range.start)}
           markers={markers}
           records={view.transcript.records}
           state={view.transcript.state}

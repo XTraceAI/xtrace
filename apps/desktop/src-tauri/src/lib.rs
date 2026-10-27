@@ -14,7 +14,6 @@ mod account_usage_dto;
 mod account_usage_history;
 mod account_usage_process;
 mod bundle_rename;
-mod codex_page_dto;
 pub mod dashboard;
 mod dashboard_dto;
 pub mod dto;
@@ -490,37 +489,6 @@ async fn session_transcript(
     state
         .session_transcript(&session_id, read.token(), index.detail_readers())
         .map_err(|error| error.to_string())
-}
-
-/// One bounded portion of a Codex conversation, under this open's cancel token.
-#[tauri::command]
-async fn codex_transcript_page(
-    app: tauri::AppHandle,
-    session_id: String,
-    read_id: String,
-    selection: dto::CodexPageRequest,
-) -> Result<dto::CodexPageStatus, String> {
-    on_worker(READ_WORKER_FAILED, move || {
-        let reads = app
-            .try_state::<transcript_reads::TranscriptReads>()
-            .ok_or(state::StateError::Closed)?;
-        let read = reads
-            .begin(&read_id)
-            .map_err(|_| state::StateError::ReadRefused)?;
-        let state = app
-            .try_state::<state::AppState>()
-            .ok_or(state::StateError::Closed)?;
-        let index = app
-            .try_state::<native_index::NativeIndex>()
-            .ok_or(state::StateError::Closed)?;
-        state.codex_transcript_page(
-            &session_id,
-            &selection,
-            read.token(),
-            index.detail_readers(),
-        )
-    })
-    .await
 }
 
 /// One bounded page, read on the worker and cancelled by the view's read ID.
@@ -1719,7 +1687,6 @@ pub fn run() {
             restore_session_warning,
             save_suggested_skill,
             session_transcript,
-            codex_transcript_page,
             session_transcript_page,
             session_warning_context,
             cancel_session_transcript,

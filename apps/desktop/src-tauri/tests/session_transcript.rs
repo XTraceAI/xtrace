@@ -979,18 +979,6 @@ fn native_pages_refuse_unsupported_missing_invalid_and_cancelled_reads_before_pr
         serde_json::to_value(status).unwrap()["reason"]["detail"]["source"]["reason"],
         "cancelled"
     );
-    let old = state
-        .codex_transcript_page(
-            "claude-no-native",
-            &xtrace_desktop::dto::CodexPageRequest::First,
-            &CancelToken::new(),
-            &bundle_with(&python),
-        )
-        .unwrap();
-    assert_eq!(
-        serde_json::to_value(old).unwrap()["reason"]["detail"]["reason"],
-        "unsupported_host"
-    );
     assert!(!marker.exists());
 }
 
@@ -1032,17 +1020,6 @@ fn native_codex_page_and_bounded_warning_context_share_pinned_resolution() {
             )
             .unwrap(),
         P::Loaded { .. }
-    ));
-    assert!(matches!(
-        state
-            .codex_transcript_page(
-                "codex-c0de",
-                &xtrace_desktop::dto::CodexPageRequest::First,
-                &CancelToken::new(),
-                &bundle_with(&python)
-            )
-            .unwrap(),
-        xtrace_desktop::dto::CodexPageStatus::Loaded { .. }
     ));
     let status = state
         .session_warning_context(
