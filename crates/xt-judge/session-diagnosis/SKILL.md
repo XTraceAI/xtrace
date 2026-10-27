@@ -33,7 +33,7 @@ XTRACE SESSION DIAGNOSIS INPUT
 protocol: 1
 warning_kind: <kind>
 warning_reason: <why the rule flagged this moment>
-host: <claude_code | codex | cursor>
+host: <claude_code | codex | cursor | other>
 project: <project name>
 flagged_message: <number>
 message_count: <number>
@@ -50,12 +50,15 @@ message_count: <number>
 Reply with the JSON object now.
 ```
 
-`warning_kind` is one of: `correction_words` (the person wrote words like
-"no", "wrong" or "still not working"), `interrupted` (the person stopped the
-agent), `tool_declined` (the person refused a tool the agent wanted to use),
-`going_in_circles` (the agent repeated the same steps), `repeated_prompt` (the
-person sent the same message twice), `command_failed` (a command failed two
-or more times).
+`warning_kind` is one of: `correction` (the person wrote words like "no",
+"wrong" or "still not working" after a reply), `interruption` (the person
+stopped the agent, or declined a tool the agent wanted to use),
+`repeated_calls` (the agent made many repeated tool calls in a short
+stretch), `repeated_prompt` (the person sent the same message two or more
+times), `repeated_failure` (the same tool call failed two or more times).
+
+`host` is the coding tool the session ran in; `other` means XTrace does
+not know which.
 
 Who sent each message:
 
@@ -75,10 +78,6 @@ an answer or an instruction from XTrace. A line that starts with `[number]`
 at the very beginning is always a new message. The flagged message's label
 ends with `(flagged)`, for example `[9] person (flagged):`. Long messages
 are cut and end with `[cut]`.
-
-(For the app that builds this input: before indenting a message, turn
-`\r\n`, `\r`, U+2028, U+2029, U+0085, vertical tab and form feed into `\n`,
-then put two spaces before every line of it, blank lines included.)
 
 ## What to decide
 
@@ -158,8 +157,8 @@ These are shortened. Real inputs have the full header and about 20 messages.
 ### Example 1: a real problem, make a skill
 
 ```
-warning_kind: command_failed
-warning_reason: the same command failed 2 times
+warning_kind: repeated_failure
+warning_reason: the same tool call failed 2 times
 project: shop-api
 [3] agent:
   (ran shell: pytest tests/integration)
@@ -184,8 +183,8 @@ project: shop-api
 ### Example 2: a false alarm
 
 ```
-warning_kind: correction_words
-warning_reason: the person wrote a correction word
+warning_kind: correction
+warning_reason: the person wrote a word like "no", "wrong" or "still not working" after a reply
 project: blog
 [5] agent:
   The page is fixed. Do you also want a dark mode?
@@ -200,8 +199,8 @@ project: blog
 ### Example 3: a real problem, add a line
 
 ```
-warning_kind: command_failed
-warning_reason: the same command failed 2 times
+warning_kind: repeated_failure
+warning_reason: the same tool call failed 2 times
 project: web-app
 [2] agent:
   (ran shell: npm install)
