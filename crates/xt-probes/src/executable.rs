@@ -277,11 +277,20 @@ mod tests {
         assert_eq!(select(None), Ok(bundled.clone()));
         assert_eq!(select(Some(named.as_os_str())), Ok(named.clone()));
         assert_eq!(
+            select(Some(OsStr::new(""))),
+            Err(Unavailable::OverrideNotAbsolute)
+        );
+        assert_eq!(
             select(Some(OsStr::new("relative/codex"))),
             Err(Unavailable::OverrideNotAbsolute)
         );
         assert_eq!(
             select(Some(missing.as_os_str())),
+            Err(Unavailable::OverrideNotExecutable)
+        );
+        std::fs::set_permissions(&named, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            select(Some(named.as_os_str())),
             Err(Unavailable::OverrideNotExecutable)
         );
         std::fs::remove_file(&bundled).unwrap();

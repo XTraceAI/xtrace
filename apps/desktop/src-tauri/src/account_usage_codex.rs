@@ -162,11 +162,12 @@ fn kill_group_and_reap(child: &mut Child) {
 }
 
 /// The one Codex resolver ([`xt_probes::executable::resolve_codex`]), over
-/// this process's `PATH` and `HOME`, with no override.
+/// this process's `XTRACE_CODEX`, `PATH` and `HOME`.
 fn resolve_codex() -> Option<PathBuf> {
+    let explicit = std::env::var_os(xt_judge::diagnosis::agents::CODEX_ENV);
     let home = std::env::var_os("HOME");
     xt_probes::executable::resolve_codex(
-        None,
+        explicit.as_deref(),
         std::env::var_os("PATH").as_deref(),
         home.as_deref().map(Path::new),
     )
@@ -177,9 +178,7 @@ fn resolve_codex() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn waits_for_initialize_then_async_rate_limits_reply_without_closing_stdin() {
-        let fake = r#"
+    const FAKE_APP_SERVER: &str = r#"
 import json, select, sys, time
 assert json.loads(sys.stdin.readline())['method'] == 'initialize'
 print(json.dumps({'id': 1, 'result': {}}), flush=True)
@@ -192,13 +191,111 @@ if select.select([sys.stdin], [], [], 0)[0] and sys.stdin.read(1) == '':
     sys.exit(0)
 print(json.dumps({'id': 2, 'result': {'rateLimits': {'primary': {'usedPercent': 29, 'windowDurationMins': 10080, 'resetsAt': 1791050717}, 'secondary': None}}}), flush=True)
 "#;
+
+    #[test]
+    fn waits_for_initialize_then_async_rate_limits_reply_without_closing_stdin() {
         let mut command = Command::new("python3");
-        command.args(["-u", "-c", fake]);
+        command.args(["-u", "-c", FAKE_APP_SERVER]);
         let reply = exchange(&mut command, Duration::from_secs(2)).unwrap();
         let windows = parse_codex(&reply).unwrap();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].used_percent, 29.0);
         assert_eq!(windows[0].window, "Week");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn override_reads_fake_account_limits_and_invalid_overrides_stop() {
+        use crate::account_usage_dto::AccountUsageState;
+        use std::{
+            ffi::OsStr,
+            os::unix::{fs::PermissionsExt, process::CommandExt},
+        };
+
+        const CHILD_RESULT: &str = "XTRACE_ACCOUNT_USAGE_TEST_RESULT";
+        if let Some(expected) = std::env::var_os(CHILD_RESULT) {
+            let resolved = resolve_codex();
+            if expected == "available" {
+                let fake = std::env::var_os(xt_judge::diagnosis::agents::CODEX_ENV).unwrap();
+                // Check before read() so even an unfixed resolver cannot run a real CLI.
+                assert_eq!(resolved.as_deref(), Some(Path::new(&fake)));
+                let usage = read();
+                assert_eq!(usage.state, AccountUsageState::Available);
+                assert_eq!(usage.windows.len(), 1);
+                assert_eq!(usage.windows[0].used_percent, 29.0);
+                assert_eq!(usage.windows[0].window, "Week");
+            } else {
+                assert_eq!(resolved, None, "invalid override must not fall back");
+                let usage = read();
+                assert_eq!(usage.state, AccountUsageState::Unavailable);
+                assert_eq!(usage.issue, Some(AccountUsageIssue::SourceUnavailable));
+            }
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let codex_home = root.path().join("codex-home");
+        let path = root.path().join("bin");
+        for directory in [&home, &codex_home, &path] {
+            std::fs::create_dir(directory).unwrap();
+        }
+        let python = xt_probes::executable::resolve_within(
+            "python3",
+            None,
+            std::env::var_os("PATH").as_deref(),
+            &[Path::new("/usr/bin")],
+        )
+        .unwrap();
+        let fake = root.path().join("fake-codex");
+        std::fs::write(
+            &fake,
+            format!("#!{} -u\n{FAKE_APP_SERVER}", python.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fallback = path.join("codex");
+        std::fs::write(&fallback, "#!/bin/sh\nexit 99\n").unwrap();
+        std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let non_executable = root.path().join("non-executable");
+        std::fs::write(&non_executable, "not executable").unwrap();
+        std::fs::set_permissions(&non_executable, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let missing = root.path().join("missing");
+        for (expected, explicit) in [
+            ("available", fake.as_os_str()),
+            ("unavailable", OsStr::new("")),
+            ("unavailable", OsStr::new("relative/codex")),
+            ("unavailable", missing.as_os_str()),
+            ("unavailable", non_executable.as_os_str()),
+        ] {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "account_usage_codex::tests::override_reads_fake_account_limits_and_invalid_overrides_stop",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CHILD_RESULT, expected)
+                .env(xt_judge::diagnosis::agents::CODEX_ENV, explicit)
+                .env("HOME", &home)
+                .env("CODEX_HOME", &codex_home)
+                .env("PATH", &path)
+                .process_group(0);
+            let mut child = command.spawn().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(12);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "override case {explicit:?} failed");
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    kill_group_and_reap(&mut child);
+                    panic!("override case {explicit:?} timed out");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
     }
 
     #[cfg(unix)]
