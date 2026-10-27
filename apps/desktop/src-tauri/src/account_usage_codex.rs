@@ -161,33 +161,16 @@ fn kill_group_and_reap(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// The one Codex resolver ([`xt_probes::executable::resolve_codex`]), over
+/// this process's `PATH` and `HOME`, with no override.
 fn resolve_codex() -> Option<PathBuf> {
-    // Prefer the CLI bundled with the installed ChatGPT app: this is the
-    // account source the desktop app can read even with Finder's short PATH.
-    let mut candidates = vec![PathBuf::from(
-        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
-    )];
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(
-            std::env::split_paths(&path)
-                .filter(|directory| directory.is_absolute())
-                .map(|directory| directory.join("codex")),
-        );
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(PathBuf::from(home).join(".local/bin/codex"));
-    }
-    candidates.extend([
-        PathBuf::from("/opt/homebrew/bin/codex"),
-        PathBuf::from("/usr/local/bin/codex"),
-    ]);
-    candidates.into_iter().find(|path| is_executable(path))
-}
-
-/// An absolute path to a regular file with an execute bit; the one check is
-/// [`xt_probes::executable::is_executable`].
-pub(super) fn is_executable(path: &Path) -> bool {
-    xt_probes::executable::is_executable(path)
+    let home = std::env::var_os("HOME");
+    xt_probes::executable::resolve_codex(
+        None,
+        std::env::var_os("PATH").as_deref(),
+        home.as_deref().map(Path::new),
+    )
+    .ok()
 }
 
 #[cfg(test)]
