@@ -1389,3 +1389,120 @@ fn conformance_exact_detail() {
         bundled.commit, bundled.plugin_version
     );
 }
+
+#[test]
+fn bounded_codex_pages_validate_positions_exact_tool_blocks_and_cancellation() {
+    use xt_ingest::native::session_source::{CodexPageError, CodexPageSelection, load_codex_page};
+    let scene = scene();
+    let producer = producer();
+    let make = |metadata: serde_json::Value, body: Vec<serde_json::Value>| {
+        let mut header = header_for(CODEX, &scene.home);
+        header["context_page"] = metadata;
+        let mut lines = vec![header];
+        lines.extend(body);
+        fake(&scene, &prints(&lines))
+    };
+    let mut tool = record(1);
+    tool["message"]["role"] = json!("assistant");
+    tool["message"]["content"] = json!([{"type":"tool_use","id":"synthetic-call","name":"Bash","input":{"command":"synthetic"}}]);
+    let metadata =
+        json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":11});
+    let selection = CodexPageSelection::ToolCall {
+        record_uuid: tool["uuid"].as_str().unwrap().into(),
+        block: 0,
+        generation: Some("a".repeat(64)),
+    };
+    let read = |python: &OsString, selection: &CodexPageSelection, cancel: Option<&CancelToken>| {
+        load_codex_page(
+            &SessionSourceRequest {
+                home: &scene.home,
+                host: Host::Codex,
+                native_session_id: CODEX,
+                indexed: &[],
+                cancel,
+                limits: SourceLimits::default(),
+            },
+            selection,
+            Some(&DetailReader {
+                python,
+                producer: &producer,
+                bounds: DetailBounds::default(),
+            }),
+        )
+    };
+    let python = make(metadata.clone(), vec![record(0), tool.clone()]);
+    let page = read(&python, &selection, None).unwrap();
+    assert_eq!(page.start, 10);
+    assert_eq!(page.target, Some(11));
+    // The ordinary full reader must never accept an opt-in page as a whole transcript.
+    assert!(matches!(
+        load_session_source_with(
+            &SessionSourceRequest {
+                home: &scene.home,
+                host: Host::Codex,
+                native_session_id: CODEX,
+                indexed: &[],
+                cancel: None,
+                limits: SourceLimits::default()
+            },
+            Some(&DetailReader {
+                python: &python,
+                producer: &producer,
+                bounds: DetailBounds::default()
+            })
+        ),
+        SessionSourceOutcome::Unavailable(SourceUnavailable::Reader(DetailFailure::Protocol(_)))
+    ));
+    for (key, value) in [
+        ("version", json!(2)),
+        ("end", json!(13)),
+        ("target", json!(99)),
+        ("digest", json!("BAD")),
+    ] {
+        let mut malformed = metadata.clone();
+        malformed[key] = value;
+        let python = make(malformed, vec![record(0), tool.clone()]);
+        assert!(matches!(
+            read(&python, &selection, None),
+            Err(CodexPageError::Source(SourceUnavailable::Reader(
+                DetailFailure::Protocol(_)
+            )))
+        ));
+    }
+    let unsupported = fake(
+        &scene,
+        &format!(
+            "printf '%s\\n' '{}' >&2\nexit 2\n",
+            json!({"type":"diagnostic","host":"codex","code":"detail_prerequisite_unsupported","path":null})
+        ),
+    );
+    assert!(matches!(
+        read(&unsupported, &selection, None),
+        Err(CodexPageError::UnsupportedHistory)
+    ));
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        read(&python, &selection, Some(&cancelled)),
+        Err(CodexPageError::Source(SourceUnavailable::Cancelled))
+    ));
+    let wrong = make(metadata.clone(), vec![record(0), record(2)]);
+    assert!(read(&wrong, &selection, None).is_err());
+    let mut foreign = tool.clone();
+    foreign["sessionId"] = json!("other");
+    let wrong = make(metadata, vec![record(0), foreign]);
+    assert!(read(&wrong, &selection, None).is_err());
+    let duplicate_meta =
+        json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":11});
+    let duplicate = make(duplicate_meta, vec![tool.clone(), tool.clone()]);
+    assert!(read(&duplicate, &selection, None).is_err());
+    let first_meta =
+        json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":null});
+    let first = make(first_meta, vec![record(0), tool.clone()]);
+    assert!(read(&first, &CodexPageSelection::First, None).is_err());
+    let cursor = CodexPageSelection::Cursor(format!("v1:after:9:{}", "a".repeat(64)));
+    let meta =
+        json!({"version":1,"digest":"a".repeat(64),"start":10,"end":12,"total":30,"target":null});
+    let wrong = make(meta, vec![record(0), tool]);
+    assert!(read(&wrong, &cursor, None).is_err());
+}

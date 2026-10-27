@@ -33,6 +33,15 @@ pub struct SessionHeader {
     /// ordinary stream rejects its presence as the unknown key it is there.
     #[serde(default)]
     pub origin_evidence: OriginMarker,
+    /// Presence is allowed only by the bounded page parser, never by import.
+    #[serde(default, deserialize_with = "context_page_present")]
+    pub context_page: bool,
+}
+fn context_page_present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
 }
 
 impl SessionHeader {
@@ -123,6 +132,7 @@ pub enum StreamEvent {
 /// Incremental splitter: feed the stream one line at a time. `host` is the host
 /// the caller asked the producer for; a header claiming another host is malformed.
 pub struct StreamEvents {
+    context_page: bool,
     host: Host,
     source: SessionSource,
     context: Option<(String, SourceContext)>,
@@ -140,6 +150,7 @@ pub struct StreamEvents {
 impl StreamEvents {
     pub fn new(host: Host, source: SessionSource) -> Self {
         Self {
+            context_page: false,
             host,
             source,
             context: None,
@@ -148,6 +159,11 @@ impl StreamEvents {
             origin: None,
             tool_sent: false,
         }
+    }
+
+    pub(super) fn with_context_page(mut self) -> Self {
+        self.context_page = true;
+        self
     }
 
     /// A stream read with the reader's opt-in automated-input evidence
@@ -309,6 +325,9 @@ impl StreamEvents {
             reason: "session header does not match the shared stream contract",
         };
         let header = serde_json::from_str::<SessionHeader>(line).map_err(|_| malformed())?;
+        if header.context_page != self.context_page {
+            return Err(Box::new(malformed()));
+        }
         if self.origin.is_none() && header.origin_evidence != OriginMarker::Absent {
             return Err(Box::new(malformed()));
         }
