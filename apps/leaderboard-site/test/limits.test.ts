@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { clientIp } from '../src/limits.js';
+import { createHash } from 'node:crypto';
+import { clientIp, ipLimitKey } from '../src/limits.js';
 import {
   HOUR,
   harness,
@@ -52,14 +53,38 @@ describe('POST /api/join', () => {
     assert.equal((await postJoin('ip9', 'ip9@example.com', '192.0.2.9')).status, 202);
   });
 
-  test('3 per hour per email, from any IP', async () => {
+  test('3 per hour per email from one IP; other IPs can still join with that email', async () => {
     for (let i = 1; i <= 3; i += 1)
-      assert.equal((await postJoin('mailer', 'Same@example.com', `192.0.2.${i}`)).status, 202);
-    await expectLimited(await postJoin('mailer', 'same@EXAMPLE.com', '192.0.2.4'), 3600);
-    assert.equal((await postJoin('mailer', 'other@example.com', '192.0.2.5')).status, 202);
-    assert.equal(h.mailer.sent.filter((item) => item.to === 'same@example.com').length, 3);
+      assert.equal((await postJoin('mailer', 'Same@example.com', '192.0.2.1')).status, 202);
+    await expectLimited(await postJoin('mailer', 'same@EXAMPLE.com', '192.0.2.1'), 3600);
+    assert.equal((await postJoin('mailer', 'same@example.com', '192.0.2.2')).status, 202);
+    assert.equal((await postJoin('mailer', 'other@example.com', '192.0.2.1')).status, 202);
     h.advance(HOUR);
-    assert.equal((await postJoin('mailer', 'same@example.com', '192.0.2.6')).status, 202);
+    assert.equal((await postJoin('mailer', 'same@example.com', '192.0.2.1')).status, 202);
+  });
+
+  test('10 per day per email, from any IPs (UTC days)', async () => {
+    for (let i = 1; i <= 10; i += 1)
+      assert.equal((await postJoin('daily', 'daily@example.com', `192.0.2.${i}`)).status, 202);
+    // START is 12:00 UTC, so the day window ends in 12 hours.
+    await expectLimited(await postJoin('daily', 'daily@example.com', '192.0.2.11'), 12 * 3600);
+    assert.equal(h.mailer.sent.filter((item) => item.to === 'daily@example.com').length, 10);
+    h.advance(12 * HOUR);
+    assert.equal((await postJoin('daily', 'daily@example.com', '192.0.2.12')).status, 202);
+  });
+
+  test("an attacker cannot 429 someone else's email before the daily cap", async () => {
+    // One attacker IP gets 3 per hour for this email, then 429.
+    for (let i = 1; i <= 3; i += 1)
+      assert.equal((await postJoin('attacker', 'victim@example.com', '198.51.100.66')).status, 202);
+    await expectLimited(await postJoin('attacker', 'victim@example.com', '198.51.100.66'), 3600);
+    // Even spread over several IPs, the victim (on their own IP) still gets
+    // through until the email's daily total of 10 is reached.
+    for (const ip of ['198.51.100.67', '198.51.100.68'])
+      for (let i = 1; i <= 3; i += 1)
+        assert.equal((await postJoin('attacker', 'victim@example.com', ip)).status, 202);
+    assert.equal((await postJoin('Victim', 'victim@example.com', '192.0.2.200')).status, 202);
+    await expectLimited(await postJoin('Victim', 'victim@example.com', '192.0.2.200'), 12 * 3600);
   });
 
   test('invalid bodies do not use up the join limit', async () => {
@@ -144,6 +169,36 @@ describe('client IP', () => {
     assert.equal(at({ 'x-forwarded-for': ' 192.0.2.2 , 10.0.0.1' }), '192.0.2.2');
   });
 
+  test('IPv6 addresses are limited by their /64; IPv4-mapped ones as IPv4', () => {
+    const cases: [string, string][] = [
+      ['192.0.2.1', '192.0.2.1'],
+      ['2001:db8:1:2:3:4:5:6', '2001:db8:1:2::/64'],
+      ['2001:db8:1:2::9', '2001:db8:1:2::/64'],
+      ['2001:DB8:0001:0002:ffff::', '2001:db8:1:2::/64'],
+      ['[2001:db8::1]', '2001:db8:0:0::/64'],
+      ['fe80::1%eth0', 'fe80:0:0:0::/64'],
+      ['::', '0:0:0:0::/64'],
+      ['2001:db8:1:2:3:4:192.0.2.1', '2001:db8:1:2::/64'],
+      ['::ffff:192.0.2.7', '192.0.2.7'],
+      ['::ffff:c000:207', '192.0.2.7'],
+      ['unknown', 'unknown'],
+    ];
+    for (const [ip, key] of cases) assert.equal(ipLimitKey(ip), key, ip);
+  });
+
+  test('two addresses in one /64 share the join limit; another /64 does not', async () => {
+    for (let i = 1; i <= 5; i += 1)
+      assert.equal(
+        (await postJoin(`v6_${i}`, `v6_${i}@example.com`, `2001:db8:a:b::${i}`)).status,
+        202,
+      );
+    await expectLimited(
+      await postJoin('v6_6', 'v6_6@example.com', '2001:db8:a:b:ffff:1:2:3'),
+      3600,
+    );
+    assert.equal((await postJoin('v6_7', 'v6_7@example.com', '2001:db8:a:c::1')).status, 202);
+  });
+
   test('the IP is stored only as an HMAC, and the email only as a hash', async () => {
     await postJoin('hashed', 'hashed.person@example.com', '203.0.113.77');
     await h.app.me.GET(request('GET', '/api/me', { ip: '203.0.113.77' }));
@@ -160,8 +215,12 @@ describe('client IP', () => {
     );
     assert.ok(buckets.length >= 3);
     for (const bucket of buckets) {
-      assert.match(bucket, /^[a-z]+:[a-z]+:[0-9a-f]{64}$/);
+      assert.match(bucket, /^[a-z]+:[a-z-]+:[0-9a-f]{64}(?::[0-9a-f]{64})?$/);
       assert.ok(!bucket.includes('hashed.person'));
+      // Keyed: the plain SHA-256 of the email is not used either.
+      assert.ok(
+        !bucket.includes(createHash('sha256').update('hashed.person@example.com').digest('hex')),
+      );
     }
   });
 });
@@ -173,6 +232,18 @@ describe('cleanup', () => {
     await startJoin(h, 'fresh', 'fresh@example.com');
     const pending = await h.query('select email from pending_joins');
     assert.deepEqual(pending, [{ email: 'fresh@example.com' }]);
+    const old = await h.query(
+      `select count(*)::int as n from rate_counters where window_start < $1::timestamptz`,
+      [new Date(h.now().getTime() - 24 * HOUR).toISOString()],
+    );
+    assert.equal(old[0]!.n, 0);
+  });
+
+  test("any limited endpoint cleans up on an IP's first request of the hour", async () => {
+    await startJoin(h, 'stale2', 'stale2@example.com');
+    h.advance(24 * HOUR + 16 * MINUTE);
+    await h.app.me.GET(request('GET', '/api/me', { ip: '192.0.2.99' }));
+    assert.deepEqual(await h.query('select email from pending_joins'), []);
     const old = await h.query(
       `select count(*)::int as n from rate_counters where window_start < $1::timestamptz`,
       [new Date(h.now().getTime() - 24 * HOUR).toISOString()],

@@ -3,7 +3,6 @@
 import type { Clock, Query } from './db.js';
 import { fail, json } from './http.js';
 import { hashCode, newCode, newKey, newPendingId } from './keys.js';
-import { CLEANUP_AFTER_SECONDS } from './limits.js';
 import type { Mailer } from './mail.js';
 import type { Nickname } from './validate.js';
 
@@ -18,13 +17,6 @@ export type JoinContext = {
   log: (message: string) => void;
 };
 
-/** Removes counter rows and expired pending joins older than a day. */
-async function cleanUp(query: Query, now: Date): Promise<void> {
-  const cutoff = new Date(now.getTime() - CLEANUP_AFTER_SECONDS * 1000).toISOString();
-  await query('delete from rate_counters where window_start < $1::timestamptz', [cutoff]);
-  await query('delete from pending_joins where expires_at < $1::timestamptz', [cutoff]);
-}
-
 /** Step 1. The body has been validated and the join limits counted. */
 export async function startJoin(
   { query, clock, mailer, log }: JoinContext,
@@ -32,14 +24,13 @@ export async function startJoin(
   email: string,
 ): Promise<Response> {
   const now = clock();
-  await cleanUp(query, now);
   // Nickname availability is not checked here: the answer must be the same
   // whether or not the email already belongs to a member. Verify checks it.
   const id = newPendingId();
   const code = newCode();
   const expires = new Date(now.getTime() + CODE_LIFETIME_MINUTES * 60_000);
-  // Only the newest code for an email works.
-  await query('delete from pending_joins where email = $1', [email]);
+  // Earlier codes for this email stay valid until they expire or use up their
+  // attempts, so someone else's joins cannot cancel the owner's code.
   await query(
     `insert into pending_joins (id, nickname, nickname_key, email, code_hash, expires_at, created_at)
      values ($1, $2, $3, $4, decode($5, 'hex'), $6::timestamptz, $7::timestamptz)`,
@@ -97,8 +88,13 @@ export async function verifyJoin(
   );
   const pending = claimed[0];
   if (!pending) {
-    // Unknown, expired or used up.
-    await query('delete from pending_joins where id = $1', [pendingId]);
+    // Unknown, expired or used up. Remove it only if it really is dead: a live
+    // row here was just put back by a racing 409 and must stay.
+    await query(
+      `delete from pending_joins
+       where id = $1 and (expires_at <= $2::timestamptz or attempts >= ${MAX_CODE_ATTEMPTS})`,
+      [pendingId, now],
+    );
     return fail(410, 'code_expired');
   }
 
@@ -129,16 +125,17 @@ export async function verifyJoin(
   // This email may have joined in the meantime.
   const late = await signBackIn();
   if (late) return late;
-  // The nickname is taken. Put the pending join back unchanged (same code,
-  // expiry and attempts), unless a newer join for this email replaced it.
+  // The nickname is taken. Put the pending join back with the same code, expiry
+  // and attempts, and with the nickname just tried, so a later verify without
+  // `nickname` uses it.
   await query(
     `insert into pending_joins (id, nickname, nickname_key, email, code_hash, attempts, expires_at, created_at)
-     select $1, $2, $3, $4, decode($5, 'hex'), $6, $7::timestamptz, $8::timestamptz
-     where not exists (select 1 from pending_joins where email = $4)`,
+     values ($1, $2, $3, $4, decode($5, 'hex'), $6, $7::timestamptz, $8::timestamptz)
+     on conflict (id) do nothing`,
     [
       pending.id,
-      pending.nickname,
-      pending.nickname_key,
+      nickname.nickname,
+      nickname.nicknameKey,
       email,
       pending.code_hash,
       pending.attempts,

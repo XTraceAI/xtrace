@@ -4,6 +4,8 @@
 const NICKNAME = /^[A-Za-z0-9_-]{3,20}$/;
 export const MAX_LEVERAGE_TENTHS = 1_000_000_000;
 const MAX_EMAIL_LENGTH = 254;
+const EMAIL_LOCAL = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/;
+const EMAIL_DOMAIN = /^[A-Za-z0-9.-]+$/;
 
 export type Nickname = { nickname: string; nicknameKey: string };
 
@@ -21,7 +23,8 @@ export function parseEmail(value: string): string | null {
   const parts = email.split('@');
   if (parts.length !== 2) return null;
   const [local, domain] = parts as [string, string];
-  if (local.length === 0) return null;
+  // A plain address only: no display names, quotes, brackets, commas, spaces or control characters.
+  if (!EMAIL_LOCAL.test(local) || !EMAIL_DOMAIN.test(domain)) return null;
   if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) return null;
   return email.toLowerCase();
 }

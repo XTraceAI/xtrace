@@ -5,7 +5,7 @@ import { isUniqueViolation, type Clock, type Query } from './db.js';
 import { fail, json, noContent, readJsonObject } from './http.js';
 import { CODE_FORMAT, startJoin, verifyJoin } from './joining.js';
 import { bearerKeyHash } from './keys.js';
-import { emailSubject, hitLimit, ipSubject, LIMITS, type Limit } from './limits.js';
+import { cleanUp, emailSubject, hitLimit, ipSubject, LIMITS, type Limit } from './limits.js';
 import { listedMembers, memberStanding } from './listing.js';
 import { unavailableMailer, type Mailer } from './mail.js';
 import { pageResponse } from './page.js';
@@ -66,16 +66,24 @@ export function createApp({
   ipHashSecret,
 }: AppOptions): App {
   const joinContext = { query, clock, mailer, log };
-  const limit = (rule: Limit, subject: string) => hitLimit(query, clock(), rule, subject);
+  /** Seconds to wait when over `rule`, else null. */
+  const limit = async (rule: Limit, subject: string) =>
+    (await hitLimit(query, clock(), rule, subject)).retryAfterSeconds;
 
-  /** The per-IP API limit, failing closed without a secret. Runs before anything else. */
+  /**
+   * The per-IP API limit, failing closed without a secret. Runs before anything
+   * else. An IP's first request in each hour also removes old counters and
+   * expired pending joins, so cleanup happens now and then on every endpoint.
+   */
   const limitedByIp =
-    (handler: (request: Request, ip: string) => Promise<Response>): Handler =>
+    (handler: (request: Request, ip: string, secret: string) => Promise<Response>): Handler =>
     async (request) => {
       if (!ipHashSecret) return fail(503, 'server_misconfigured');
       const ip = ipSubject(request, ipHashSecret);
-      const wait = await limit(LIMITS.api, ip);
-      return wait === null ? handler(request, ip) : rateLimited(wait);
+      const hit = await hitLimit(query, clock(), LIMITS.api, ip);
+      if (hit.retryAfterSeconds !== null) return rateLimited(hit.retryAfterSeconds);
+      if (hit.count === 1) await cleanUp(query, clock());
+      return handler(request, ip, ipHashSecret);
     };
 
   /** The member id for a key, or null. */
@@ -87,7 +95,7 @@ export function createApp({
     return rows[0] ? String(rows[0].id) : null;
   };
 
-  const join = limitedByIp(async (request, ip) => {
+  const join = limitedByIp(async (request, ip, secret) => {
     const body = await readJsonObject(request);
     if (!body.ok) return body.response;
     const { nickname: rawNickname, email: rawEmail } = body.value;
@@ -99,7 +107,10 @@ export function createApp({
     if (email === null) return fail(400, 'invalid_email');
     const ipWait = await limit(LIMITS.joinPerIp, ip);
     if (ipWait !== null) return rateLimited(ipWait);
-    const emailWait = await limit(LIMITS.joinPerEmail, emailSubject(email));
+    const emailKey = emailSubject(email, secret);
+    const pairWait = await limit(LIMITS.joinPerEmailAndIp, `${emailKey}:${ip}`);
+    if (pairWait !== null) return rateLimited(pairWait);
+    const emailWait = await limit(LIMITS.joinPerEmail, emailKey);
     if (emailWait !== null) return rateLimited(emailWait);
     return startJoin(joinContext, nickname, email);
   });

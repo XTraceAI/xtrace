@@ -91,6 +91,21 @@ describe('Resend', () => {
     assert.equal(codeEmail('000001').subject, 'Your XTrace leaderboard code: 000001');
   });
 
+  test('the Resend response body is cancelled, not read', async () => {
+    let cancelled = false;
+    const fetchStub = (async () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    await resendMailer({ apiKey: 're_123', fetch: fetchStub }).sendCode('to@example.com', '1');
+    assert.equal(cancelled, true);
+  });
+
   test('LEADERBOARD_FROM_EMAIL replaces the sender', async () => {
     const calls: Call[] = [];
     await resendMailer({

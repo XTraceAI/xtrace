@@ -83,10 +83,36 @@ describe('POST /api/join checks the body first', () => {
       'a b@c.co',
       'a@b .co',
       `${'a'.repeat(250)}@b.co`,
+      // Only plain addresses: no display names, quotes, brackets, separators or controls.
+      'x<attacker@evil.com>',
+      'Name <a@b.co>',
+      '<a@b.co>',
+      '"quoted"@example.com',
+      'a(b)@example.com',
+      'a,b@example.com',
+      'a;b@example.com',
+      'a:b@example.com',
+      'a[b]@example.com',
+      'a\\b@example.com',
+      'a\tb@example.com',
+      'a\u0000b@example.com',
+      'a\u007fb@example.com',
+      'a@exa_mple.com',
+      'a@exa,mple.com',
+      'a@example.com>',
+      'ä@example.com',
+      'a@exämple.com',
     ];
     for (const [index, email] of bad.entries())
       await expectError(await post({ nickname: `bad${index}`, email }), 400, 'invalid_email');
-    const good = ['a@b.co', 'first.last+tag@sub.example.org', `${'a'.repeat(249)}@b.co`];
+    assert.deepEqual(h.mailer.sent, []);
+    const good = [
+      'a@b.co',
+      'first.last+tag@sub.example.org',
+      `${'a'.repeat(249)}@b.co`,
+      "o'brien@example.com",
+      "a!#$%&'*+/=?^_`{|}~-z@my-host.example.com",
+    ];
     for (const [index, email] of good.entries())
       assert.equal((await post({ nickname: `good${index}`, email })).status, 202, email);
   });

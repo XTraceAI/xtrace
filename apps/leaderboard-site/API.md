@@ -15,7 +15,8 @@ Rank: standard competition ranking over listed members (equal leverage shares a 
 
 - nickname: trimmed; 3–20 characters, each `A–Z a–z 0–9 _ -`. Unique case-insensitively. Stored as typed (after trim).
 - email: trimmed; at most 254 characters; exactly one `@` with something before it, and a domain after it containing a dot
-  that neither starts nor ends the domain; no spaces. Stored lowercased. Not unique. Never returned by any endpoint or shown.
+  that neither starts nor ends the domain; no spaces. Stored lowercased. ~~Not unique.~~ Never returned by any endpoint or shown.
+  _v2 makes `members.email` unique; v2.2 also requires a plain address (see the end of this document)._
 
 ## Key
 
@@ -101,25 +102,28 @@ Tristan asked for both. Everything above still holds unless replaced here.
 Body `{"nickname": string, "email": string}` (same validation as v1).
 
 - If the email already belongs to a member, the nickname is validated but otherwise ignored (see "Signing back in").
-- Otherwise, if the nickname belongs to another member: 409 `nickname_taken` (nicknames are public, so this reveals nothing private).
+- ~~Otherwise, if the nickname belongs to another member: 409 `nickname_taken` (nicknames are public, so this reveals nothing private).~~
+  _Replaced by v2.1: join never checks the nickname._
 - Creates a _pending join_: random id (16 bytes, base64url, no padding), nickname, email (lowercased), SHA-256 of a
   6-digit code (000000–999999, from a CSPRNG), `expires_at = now() + 15 minutes`, `attempts = 0`.
-  Any earlier pending join for the same email is deleted (only the newest code works).
+  ~~Any earlier pending join for the same email is deleted (only the newest code works).~~
+  _Replaced by v2.2: earlier live codes stay valid._
 - Emails the code (see "Email"). If sending fails or email is not configured: delete the pending join, 503 `email_unavailable`.
 - 202 `{"pending_id": string}`
 - The response never says whether the email is already a member.
 
 ### POST /api/join/verify
 
-Body `{"pending_id": string, "code": string}` (code: exactly 6 ASCII digits, else 400 `invalid_code` without counting an attempt).
+Body `{"pending_id": string, "code": string}` (v2.1 adds an optional `"nickname"`) (code: exactly 6 ASCII digits, else 400 `invalid_code` without counting an attempt).
 
 - Unknown pending id, expired, or already 5 wrong attempts: 410 `code_expired` (and the pending join is deleted).
 - Wrong code: attempts += 1; 400 `invalid_code`. The 5th wrong attempt deletes the pending join.
-- Right code: delete the pending join, then
+- Right code: delete the pending join (v2.1: put back unchanged on 409), then
   - email already a member → _signing back in_: give that member a new key (old key stops working), keep their nickname
     and score. 201 `{"key", "nickname", "rejoined": true}`.
   - otherwise create the member (as v1 join did). 201 `{"key", "nickname", "rejoined": false}`.
-    If the nickname was taken meanwhile: 409 `nickname_taken` (pending join deleted; the person starts again).
+    ~~If the nickname was taken meanwhile: 409 `nickname_taken` (pending join deleted; the person starts again).~~
+    _Replaced by v2.1/v2.2: 409 `nickname_taken`, and the pending join is kept with the nickname just tried._
 - Codes are compared by hash; only the hash is stored.
 
 ### Signing back in
@@ -144,7 +148,8 @@ The local dev server never sends real email: it prints `code for <email>: <code>
 429 `{"error": "rate_limited", "retry_after_seconds": N}` with a `Retry-After: N` header.
 Fixed windows; the one rule lives in one module.
 
-- POST /api/join: 5 per hour per IP, and 3 per hour per email.
+- ~~POST /api/join: 5 per hour per IP, and 3 per hour per email.~~
+  _Replaced by v2.2: 5 per hour per IP; 3 per hour per (email, IP); 10 per day per email._
 - POST /api/join/verify: 20 per hour per IP (on top of the 5-attempts-per-code rule).
 - PUT /api/score: 12 per hour per member.
 - PATCH /api/me: 10 per day per member.
@@ -169,14 +174,15 @@ create table if not exists pending_joins (
   created_at timestamptz not null default now()
 );
 create table if not exists rate_counters (
-  bucket text not null,          -- e.g. 'join:ip:<hmac hex>' / 'join:email:<sha256 hex>' / 'score:member:<id>'
+  bucket text not null,          -- e.g. 'join:ip:<hmac hex>' / 'join:email:<hmac hex>' / 'score:member:<id>'
   window_start timestamptz not null,
   count integer not null,
   primary key (bucket, window_start)
 );
 ```
 
-(Email buckets use SHA-256 of the lowercased email, not the email itself.)
+~~(Email buckets use SHA-256 of the lowercased email, not the email itself.)~~
+_Replaced by v2.2: email buckets use HMAC(lowercased email, IP_HASH_SECRET)._
 
 ## README (deploy) additions
 
@@ -196,13 +202,25 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
   This attempt does not count toward the 5 wrong attempts (only wrong codes count).
 - Right code for a member's email → signs back in as before (nickname ignored).
 
+## v2.2 (2026-10-27, after review): stop one IP locking out or flooding someone else's email
+
+- Email must be a plain address: local part and domain made only of letters, digits and `.!#$%&'*+/=?^_`{|}~-`(local) / letters, digits,`-`and`.` (domain); no display names, quotes, angle brackets, commas, semicolons, spaces
+  or control characters. Else 400 invalid_email.
+- A new join no longer deletes earlier live codes for the same email: every pending join keeps working until it
+  expires or uses its 5 wrong attempts. (Replaces "only the newest code works".)
+- Join limits: 5 per hour per IP (unchanged); 3 per hour per (email, IP) pair; 10 per day per email (inbox protection).
+- IPv6 addresses are limited by their /64 prefix. Email counter buckets use HMAC(email, IP_HASH_SECRET), not plain SHA-256.
+- A nickname given at verify that gets 409 is saved on the kept pending join (so a later verify without `nickname` uses it).
+
 ## Details the contract above leaves open (as built)
 
 - A body over 4 KB means more than 4096 bytes. The 413 body is `{"error": "body_too_large"}`.
 - Order of checks in a rate-limited endpoint: the per-IP API limit (600 per hour), then the body
-  (413 / 400), then the key (401), then the endpoint's own limit, then the work.
-  - `POST /api/join`: the per-IP and per-email join limits count only requests whose body passed the
-    checks. Invalid bodies use up only the 600-per-hour API limit.
+  (413 / 400), then the key (401), then the endpoint's own limits, then the work.
+  `POST /api/join` checks its limits in this order: per IP, per (email, IP), per email per day. A request
+  stopped by one limit is not counted by the later ones.
+  - `POST /api/join`: the join limits count only requests whose body passed the checks. Invalid bodies
+    use up only the 600-per-hour API limit.
   - `POST /api/join/verify`: the 20-per-hour limit counts only requests whose code is 6 digits and whose
     optional `nickname` is valid.
   - `PUT /api/score` and `PATCH /api/me` count against the member only when the key is known.
@@ -211,7 +229,10 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
 - The 600-per-hour API limit covers `POST /api/join`, `POST /api/join/verify`, `PUT /api/score` and
   `GET`/`PATCH`/`DELETE /api/me`. `GET /api/leaderboard` and the public page (`GET`/`HEAD /`, served by
   `/api/page`) are not limited.
-- A request without `x-real-ip` or `x-forwarded-for` is counted under the IP `unknown`. The local server
+- A request without `x-real-ip` or `x-forwarded-for` is counted under the IP `unknown`. IPv6 addresses are
+  grouped by their first 64 bits (written `a:b:c:d::/64`); IPv4-mapped IPv6 addresses (`::ffff:1.2.3.4`)
+  count as the IPv4 address. Bucket names: `<limit>:<hmac>` for IPs and emails, `<limit>:<member id>` for
+  members, and `join:email-ip:<email hmac>:<ip hmac>` for the email-and-IP pair. The local server
   sets `x-real-ip` from the socket address and drops any client-sent `x-real-ip` / `x-forwarded-for`,
   as Vercel's proxy does.
 - An empty `IP_HASH_SECRET` counts as missing.
@@ -223,14 +244,17 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
   statement, so concurrent guesses cannot count past 5 or get a guess through after the 5th wrong one.
 - A right code claims the pending join by deleting it, so only one of several identical requests goes on;
   the others get 410 `code_expired`. On 409 `nickname_taken` the pending join is put back unchanged (same
-  id, code, attempts and expiry), unless a newer join for the same email has replaced it in the meantime.
-  While it is being put back, a second identical request can get 410.
-- Opportunistic cleanup runs on each `POST /api/join`: counter rows whose window started more than a day
-  ago, and pending joins that expired more than a day ago, are deleted.
+  id, code, attempts and expiry), with the nickname just tried. While it is being put back, a second
+  identical request can get 410; that 410 deletes a pending join only if it is expired or used up, so it
+  never removes one that was just put back.
+- Opportunistic cleanup runs on any rate-limited endpoint when it is an IP's first request of the hour:
+  counter rows whose window started more than a day ago, and pending joins that expired more than a day
+  ago, are deleted.
 - `PUT /api/score`: a body that is not a JSON object gets 400 `invalid_request`. A JSON object whose
   `leverage_tenths` is missing, not an integer or out of range gets 400 `invalid_leverage`.
 - "Within the last 48 hours" includes exactly 48 hours: a score written 48 h ago is still listed; 48 h and
   1 ms ago is not.
+- The Resend response body is cancelled without being read.
 - An unexpected server or database failure gives 500 `{"error": "server_error"}`. Logs never contain
   request bodies, emails, keys or codes. A failed email send logs only `email not sent (<error kind>)`.
 - `/api/*` responses send `Cache-Control: no-store`.

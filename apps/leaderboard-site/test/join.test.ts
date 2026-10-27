@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { after, before, beforeEach, describe, test } from 'node:test';
+import { createApp } from '../src/app.js';
 import {
   harness,
   join,
@@ -11,6 +12,7 @@ import {
   score,
   START,
   startJoin,
+  TEST_IP_SECRET,
   verify,
   type Harness,
 } from './support.js';
@@ -212,14 +214,106 @@ describe('POST /api/join/verify', () => {
     assert.equal((await verify(h, pendingId, code)).status, 201);
   });
 
-  test('only the newest code for an email works', async () => {
+  test('a new join does not cancel earlier live codes for the same email', async () => {
     const first = await startJoin(h, 'twice', 't@example.com');
     const firstCode = h.mailer.lastCodeFor('t@example.com');
     const second = await startJoin(h, 'twice', 'T@Example.com');
     const secondCode = h.mailer.lastCodeFor('t@example.com');
+    assert.equal((await pendingRows()).length, 2);
+    const a = await verify(h, first, firstCode);
+    assert.equal(a.status, 201);
+    assert.equal(((await readJson(a)) as { rejoined: boolean }).rejoined, false);
+    // The second code still works; the email is now a member, so it signs back in.
+    const b = await verify(h, second, secondCode);
+    assert.equal(b.status, 201);
+    assert.equal(((await readJson(b)) as { rejoined: boolean }).rejoined, true);
+    assert.equal(await memberCount(), 1);
+  });
+
+  test("someone else's joins for my email do not break my code", async () => {
+    const mine = await startJoin(h, 'Victim', 'victim@example.com', '192.0.2.200');
+    const myCode = h.mailer.lastCodeFor('victim@example.com');
+    for (let i = 0; i < 3; i += 1)
+      assert.equal(
+        (
+          await h.app.join.POST(
+            request('POST', '/api/join', {
+              body: { nickname: 'Attacker', email: 'victim@example.com' },
+              ip: '198.51.100.66',
+            }),
+          )
+        ).status,
+        202,
+      );
+    const response = await verify(h, mine, myCode, '192.0.2.200');
+    assert.equal(response.status, 201);
+    assert.equal(((await readJson(response)) as { nickname: string }).nickname, 'Victim');
+  });
+
+  test('a nickname tried at verify and refused with 409 is kept for the next try', async () => {
+    const holder = await join(h, 'Wanted');
+    const pendingId = await startJoin(h, 'First_Pick', 'kept@example.com');
+    const code = h.mailer.lastCodeFor('kept@example.com');
+    await expectError(
+      await verifyWith(pendingId, code, { nickname: 'wanted' }),
+      409,
+      'nickname_taken',
+    );
+    const rows = await pendingRows();
+    assert.equal(rows[0]!.nickname, 'wanted');
+    assert.equal(rows[0]!.nickname_key, 'wanted');
+    // Once the nickname is free, a verify without `nickname` uses the saved one.
+    assert.equal(
+      (await h.app.me.DELETE(request('DELETE', '/api/me', { key: holder }))).status,
+      204,
+    );
+    const response = await verify(h, pendingId, code);
+    assert.equal(response.status, 201);
+    assert.equal(((await readJson(response)) as { nickname: string }).nickname, 'wanted');
+  });
+
+  test('a racing 410 does not remove a pending join that a 409 just put back', async () => {
+    await join(h, 'Busy');
+    const pendingId = await startJoin(h, 'busy', 'race@example.com');
+    const code = h.mailer.lastCodeFor('race@example.com');
+    // Order the two requests' statements: A claims the row; B's claim then finds
+    // nothing; A puts the row back; only then does B's 410 cleanup run.
+    let claimed!: () => void;
+    let missed!: () => void;
+    let putBack!: () => void;
+    const claimedP = new Promise<void>((resolve) => (claimed = resolve));
+    const missedP = new Promise<void>((resolve) => (missed = resolve));
+    const putBackP = new Promise<void>((resolve) => (putBack = resolve));
+    const gated = createApp({
+      query: async (text, params) => {
+        const isClaim =
+          /delete from pending_joins where id = \$1 and expires_at > .* returning id,/s.test(text);
+        const isPutBack = /on conflict \(id\) do nothing/.test(text);
+        const isDeadCleanup =
+          /^\s*delete from pending_joins\s+where id = \$1 and \(expires_at/.test(text);
+        if (isPutBack) await missedP;
+        if (isDeadCleanup) await putBackP;
+        const rows = await h.query(text, params);
+        if (isClaim) (rows.length ? claimed : missed)();
+        if (isPutBack) putBack();
+        return rows;
+      },
+      clock: h.now,
+      mailer: h.mailer,
+      ipHashSecret: TEST_IP_SECRET,
+    });
+    const post = (ip: string) =>
+      gated.verify.POST(
+        request('POST', '/api/join/verify', { body: { pending_id: pendingId, code }, ip }),
+      );
+    const a = post('192.0.2.210');
+    await claimedP;
+    const b = post('192.0.2.211');
+    const [ra, rb] = await Promise.all([a, b]);
+    assert.equal(ra.status, 409);
+    assert.equal(rb.status, 410);
     assert.equal((await pendingRows()).length, 1);
-    await expectError(await verify(h, first, firstCode), 410, 'code_expired');
-    assert.equal((await verify(h, second, secondCode)).status, 201);
+    assert.equal((await verifyWith(pendingId, code, { nickname: 'not_busy' })).status, 201);
   });
 
   test('a taken nickname at verify is 409; the pending join stays for another try', async () => {

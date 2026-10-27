@@ -25,7 +25,8 @@ The exact API is in [API.md](API.md).
 - Email goes through a small `Mailer` in `src/mail.ts`: Resend over plain `fetch` in production,
   a fake in tests, and a printout on the local server.
 - Every rate limit is in `src/limits.ts`. Counts live in Postgres, so all Vercel instances share them.
-  IP addresses are stored only as a keyed hash (HMAC with `IP_HASH_SECRET`).
+  IP addresses and emails in the counters are stored only as keyed hashes (HMAC with `IP_HASH_SECRET`).
+  IPv6 addresses are limited by their /64 prefix.
 - The database tables are in `schema.sql`.
 
 ## Run the tests
@@ -69,8 +70,10 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
 3. Open the project's **Storage** tab, add **Neon** from the Marketplace, and connect it to the project.
    This sets `DATABASE_URL` for the project.
 4. Set up email with Resend. MemHub already sends from the domain `emails.xtrace.ai` through Resend,
-   so you can reuse that Resend account and domain.
-   In Resend, create an API key that can send email. Then, in the Vercel project's
+   so you can reuse that Resend account and its verified domain.
+   Sharing the account means a flood of joins would share MemHub's sending limits and reputation.
+   So create a separate API key for the leaderboard (same verified domain), with sending access only.
+   If it is ever abused, you can revoke that key without touching MemHub. Then, in the Vercel project's
    **Settings → Environment Variables**, add:
    - `RESEND_API_KEY`: that key.
    - `LEADERBOARD_FROM_EMAIL` (optional): the sender. It defaults to
@@ -91,9 +94,10 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
 
 6. Deploy. Open the deployment's address and check that the page says "No one is listed yet."
 7. In the project's **Domains** settings, add `leaderboard.xtrace.ai`, then add the DNS record Vercel shows you.
-8. Add an outer layer against floods. In the project's **Firewall**, add a rate-limit rule for the path
-   `/api/join` (for example 10 requests per minute per IP). The site has its own limits too;
-   this rule stops a flood before it reaches the functions and the database.
+8. Add an outer layer against floods. In the project's **Firewall**, add a rate-limit rule for paths
+   starting with `/api/` (for example 60 requests per minute per IP), and a stricter one for `/api/join`
+   (for example 10 per minute per IP). The site has its own limits too;
+   these rules stop a flood before it reaches the functions and the database.
 9. In the Vercel team's **Settings → Billing**, set a spend limit, so a flood cannot run up a bill.
    In Resend, check the plan's sending limit too.
 

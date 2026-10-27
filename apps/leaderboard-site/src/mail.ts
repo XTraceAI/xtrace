@@ -51,7 +51,8 @@ export function resendMailer(options: {
         body: JSON.stringify({ from, to: [to], subject, text }),
         signal: AbortSignal.timeout(10_000),
       });
-      // The status is safe to report; the response body is not read or logged.
+      // The status is safe to report; the response body is never read or logged.
+      await response.body?.cancel();
       if (!response.ok) throw new MailError(`Resend answered ${response.status}`);
     },
   };
