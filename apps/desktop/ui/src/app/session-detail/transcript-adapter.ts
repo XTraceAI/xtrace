@@ -110,6 +110,8 @@ export function unavailableNote(reason: SessionSourceReason): string {
         : `This session is larger than XTrace reads at once (${bodyLimit[reason.limit]}), so none of its text is shown.`;
     case 'reader_deadline':
       return 'Reading this transcript took longer than XTrace allows, so it was stopped and none of it was kept.';
+    case 'unsupported_history':
+      return 'XTrace cannot read this session’s history format.';
     case 'store_unsupported':
       return 'This Cursor session is kept in a database XTrace does not read transcripts from, so only what was measured is shown.';
     case 'reader_protocol':
