@@ -7,6 +7,7 @@ import type { DataSource } from '../../data/DataSource';
 import { FixtureDataSource } from '../../data/FixtureDataSource';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { SessionExcerptStatus } from '../../data/generated/SessionExcerptStatus';
+import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
 import { WarningContext } from './WarningContext';
 import { contextExcerpt, contextFixture } from './warning-context.synthetic';
 
@@ -63,7 +64,10 @@ it('reads the exact saved point once, and shows only the native bounded records'
   await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
   expect(h.read).toHaveBeenCalledWith('session-a', 'target', null, expect.any(String));
   await act(async () => h.calls[0]!.resolve(excerpt()));
-  expect(screen.getByText('Issue message')).toBeTruthy();
+  // The warning's own message is tagged with its kind, once.
+  expect(screen.getByTestId('warning-context-flag').textContent).toBe(
+    SESSION_WARNINGS_TEXT.message_tags[point.kind],
+  );
   expect(screen.getByText(/Still not fixed/)).toBeTruthy();
   expect(screen.queryByText(/unrelated message/)).toBeNull();
   expect(screen.getByTestId('warning-context').querySelectorAll('[data-record-id]')).toHaveLength(
@@ -116,14 +120,16 @@ it('retries a failed read with a new ID and clears the old failure', async () =>
   expect(screen.getByText(/Still not fixed/)).toBeTruthy();
 });
 
-it('shows omitted blocks with a neutral User caption and never invents a person from text', async () => {
+it('shows omitted blocks under the native "You" caption and never invents a person from text', async () => {
   const h = mount();
   await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
   const status = excerpt();
   if (status.state !== 'loaded') throw Error('Missing fixture');
   status.records = [{ ...status.records[1]!, omitted_blocks: true, only_tool_results: false }];
   await act(async () => h.calls[0]!.resolve(status));
-  expect(screen.getByText('User')).toBeTruthy();
+  // What was saved under the user role is captioned with the native word for
+  // it, never a name read from the text.
+  expect(screen.getByText(SESSION_WARNINGS_TEXT.you)).toBeTruthy();
   expect(screen.queryByText('Person')).toBeNull();
   expect(
     screen.getByText('Other blocks in this message are not shown in this excerpt.'),

@@ -13,8 +13,9 @@ import '../styles/session-diagnosis.css';
  * the warning. Which messages are sent, to which tool, every sentence of the
  * answer and every refusal are the native side's (`SessionDiagnosis`,
  * `SavedSkill`, `SESSION_WARNINGS_TEXT.diagnose`); nothing here decides or
- * words one. One diagnosis runs at a time. An answer is kept in memory for
- * the page (the query cache, outside every key an ingest re-reads) and
+ * words one. One diagnosis runs at a time, owned by the source runtime
+ * (`DiagnosisRuns`), so closing a view leaves it running. An answer is kept
+ * in memory (the query cache, outside every key an ingest re-reads) and
  * nothing is stored.
  */
 const WORDS = SESSION_WARNINGS_TEXT.diagnose;
@@ -23,9 +24,12 @@ const WORDS = SESSION_WARNINGS_TEXT.diagnose;
 export function DiagnoseButton({
   diagnose,
   warning,
+  primary = false,
 }: {
   diagnose: Diagnose;
   warning: SessionWarningItem;
+  /** The window's main action: drawn as the primary button, with its mark. */
+  primary?: boolean;
 }) {
   const kept = useKept(diagnose.sessionId, warning.id);
   // One at a time: every Diagnose button waits while any is asked or runs,
@@ -37,6 +41,7 @@ export function DiagnoseButton({
       type="button"
       className="xt-warning-action"
       data-action="diagnose"
+      data-variant={primary ? 'primary' : undefined}
       aria-label={
         shown
           ? `${WORDS.close}: ${warning.label}`
@@ -54,16 +59,56 @@ export function DiagnoseButton({
             : () => diagnose.ask(warning.id)
       }
     >
+      {primary && !shown && (
+        <span className="xt-diagnosis-mark" aria-hidden="true">
+          ✧
+        </span>
+      )}
       {shown ? WORDS.close : WORDS.button}
     </button>
   );
 }
 
 /** The row's Diagnose button, found from inside the row. */
-const rowButton = (from: Element | null) =>
-  from
-    ?.closest('[data-warning-id]')
-    ?.querySelector<HTMLElement>('[data-action="diagnose"], [data-action="restore"]') ?? null;
+const rowButton = (row: Element | null) =>
+  row?.querySelector<HTMLElement>('[data-action="diagnose"], [data-action="restore"]') ?? null;
+
+/**
+ * Gives focus back to the row's Diagnose button once a panel has gone. Where
+ * the panel stood in for the button (the Dashboard's window), the button is
+ * drawn again only after the panel's state has changed, so this waits a few
+ * frames for it. `now` focuses a button already there at once.
+ */
+function refocusRow(from: Element | null, now: boolean) {
+  const row = from?.closest('[data-warning-id]') ?? null;
+  const there = rowButton(row);
+  if (now && there?.isConnected) {
+    there.focus();
+    return;
+  }
+  let frames = 0;
+  const attempt = () => {
+    const button = rowButton(row);
+    if (button?.isConnected) button.focus();
+    else if (++frames < 5 && row?.isConnected) requestAnimationFrame(attempt);
+  };
+  requestAnimationFrame(attempt);
+}
+
+/**
+ * Whether the panel under a warning shows something (the sentence before
+ * sending, the running diagnosis, or a kept answer), so a layout that puts
+ * the panel in place of the warning's text knows when to.
+ */
+export function usePanelShown(diagnose: Diagnose | null, warning: SessionWarningItem) {
+  const kept = useKept(diagnose?.sessionId ?? '', warning.id);
+  if (!diagnose) return false;
+  const stage = diagnose.stage;
+  return (
+    (stage?.sessionId === diagnose.sessionId && stage.warningId === warning.id) ||
+    kept !== undefined
+  );
+}
 
 /**
  * Under a warning: the sentence before sending with its confirm, the run in
@@ -82,7 +127,7 @@ export function DiagnosisPanel({
       ? diagnose.stage
       : null;
   if (stage?.kind === 'confirm') return <Confirm diagnose={diagnose} warningId={warning.id} />;
-  if (stage?.kind === 'running') return <Running diagnose={diagnose} />;
+  if (stage?.kind === 'running') return <Running diagnose={diagnose} readId={stage.readId} />;
   if (!kept) return null;
   return (
     <Result
@@ -106,17 +151,21 @@ export function DetachedDiagnosis({
   diagnose,
   warnings,
   visibleWarningId,
+  only,
 }: {
   diagnose: Diagnose;
   warnings: readonly SessionWarningItem[] | undefined;
   visibleWarningId?: string | null;
+  /** Shows only this warning's run, wherever it is. */
+  only?: { sessionId: string; warningId: string };
 }) {
   const stage = diagnose.stage;
   return stage?.kind === 'running' &&
+    (!only || (stage.sessionId === only.sessionId && stage.warningId === only.warningId)) &&
     (stage.sessionId !== diagnose.sessionId ||
       (visibleWarningId !== undefined && stage.warningId !== visibleWarningId) ||
       !warnings?.some((warning) => warning.id === stage.warningId)) ? (
-    <Running diagnose={diagnose} key={stage.readId} />
+    <Running diagnose={diagnose} readId={stage.readId} key={stage.readId} />
   ) : null;
 }
 
@@ -125,9 +174,9 @@ function Confirm({ diagnose, warningId }: { diagnose: Diagnose; warningId: strin
   const confirm = useRef<HTMLButtonElement>(null);
   useEffect(() => confirm.current?.focus(), []);
   const back = () => {
-    const button = rowButton(confirm.current);
+    const from = confirm.current;
     diagnose.notNow();
-    button?.focus();
+    refocusRow(from, true);
   };
   return (
     <div
@@ -163,10 +212,15 @@ function Confirm({ diagnose, warningId }: { diagnose: Diagnose; warningId: strin
   );
 }
 
-function Running({ diagnose }: { diagnose: Diagnose }) {
+function Running({ diagnose, readId }: { diagnose: Diagnose; readId: string }) {
   const stop = useRef<HTMLButtonElement>(null);
   const [stopping, setStopping] = useState(false);
-  useEffect(() => stop.current?.focus(), []);
+  // Stop takes focus right after this view's own send; a view opened while
+  // the diagnosis runs leaves focus where it is.
+  const sentHere = diagnose.sentHere === readId;
+  useEffect(() => {
+    if (sentHere) stop.current?.focus();
+  }, [sentHere]);
   return (
     <div className="xt-diagnosis" data-testid="diagnosis-running" aria-busy="true">
       <p className="xt-diagnosis-running" role="status">
@@ -245,10 +299,11 @@ function Result({
   // Focus moves into the answer when it arrives, so a reader hears it.
   useEffect(() => heading.current?.focus({ preventScroll: false }), []);
   const close = () => {
-    const button = rowButton(heading.current);
+    const from = heading.current;
     diagnose.close(warningId);
-    // The button is told it may be pressed again on the next draw.
-    requestAnimationFrame(() => button?.focus());
+    // The button is told it may be pressed again (or drawn again) on the
+    // next draw.
+    refocusRow(from, false);
   };
   const answer = 'answer' in kept ? kept.answer : null;
   return (

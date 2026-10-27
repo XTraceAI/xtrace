@@ -86,7 +86,9 @@ it('encodes saved identifiers and carries only supported list state', () => {
 });
 
 it('names a linked dot, shows its supplied line on focus, and follows its link', async () => {
-  await show(<WarningDot warning={warning} left={0.5} to={warningHref('s', warning.id)} />);
+  await show(
+    <WarningDot sessionId="s" warning={warning} left={0.5} to={warningHref('s', warning.id)} />,
+  );
   const dot = screen.getByRole('link', { name: warning.name });
   expect(dot.style.left).toBe('50%');
   expect(dot.tabIndex).toBe(0);
@@ -104,7 +106,7 @@ it('opens a button dot with its own button and supports tooltip suppression', as
   const parent = vi.fn();
   await show(
     <div onClick={parent}>
-      <WarningDot warning={warning} left={0} onOpen={open} suppressTooltip />
+      <WarningDot sessionId="s" warning={warning} left={0} onOpen={open} suppressTooltip />
     </div>,
   );
   const dot = screen.getByRole('button', { name: warning.name });

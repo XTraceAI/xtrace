@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { SESSION_WARNINGS_TEXT } from '../src/data/generated/SessionWarningsText';
+import { warning } from './session-warnings.data';
 
 type Calls = { reads: unknown[][]; cancels: string[] };
 for (const scheme of ['light', 'dark'] as const) {
@@ -17,7 +19,9 @@ for (const scheme of ['light', 'dark'] as const) {
         );
         await expect(context.locator('[data-record-id]')).toHaveCount(0);
       } else {
-        await expect(context.getByText('Issue message', { exact: true })).toHaveCount(1);
+        await expect(context.getByTestId('warning-context-flag')).toHaveText(
+          SESSION_WARNINGS_TEXT.message_tags[warning.kind],
+        );
         await expect(context).not.toContainText(
           'This unrelated message must stay outside the excerpt.',
         );
@@ -30,7 +34,7 @@ for (const scheme of ['light', 'dark'] as const) {
           await expect(context.locator('[data-highlighted]')).toHaveCount(1);
         } else {
           await expect(context.locator('[data-record-id]')).toHaveCount(3);
-          await expect(context).toContainText('User');
+          await expect(context).toContainText(SESSION_WARNINGS_TEXT.you);
         }
       }
       expect(await context.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);

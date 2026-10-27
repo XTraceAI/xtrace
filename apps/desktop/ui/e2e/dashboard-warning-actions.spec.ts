@@ -18,10 +18,7 @@ const answer = (page: Page, key: string) =>
     key,
   );
 const modal = (page: Page) => page.getByTestId('dashboard-warning-modal');
-const close = (page: Page) =>
-  modal(page)
-    .locator('header.xt-dash-modal-header')
-    .getByRole('button', { name: 'Close', exact: true });
+const close = (page: Page) => modal(page).getByRole('button', { name: 'Close', exact: true });
 async function open(page: Page, theme: 'light' | 'dark', deferred = false) {
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.emulateMedia({ colorScheme: theme });
@@ -43,9 +40,10 @@ async function dot(page: Page, surface: 'lane' | 'effort') {
   await expect(target).toBeAttached();
   if (surface === 'effort') {
     const name = await target.getAttribute('aria-label');
+    // The name gains the diagnosis state at its end while one runs or is kept.
     return page
       .getByTestId('day-warning-dot')
-      .and(page.locator(`[aria-label=${JSON.stringify(name)}]`));
+      .and(page.locator(`[aria-label^=${JSON.stringify(name)}]`));
   }
   return target;
 }
@@ -104,7 +102,9 @@ for (const theme of ['light', 'dark'] as const) {
       expect(presses).toEqual({ dismiss: [['s-warned', id]], restore: [['s-warned', id]] });
     });
 
-    test(`Dashboard ${surface} modal asks first and keeps Stop until a close request actually settles, ${theme}`, async ({
+    // Closing the window leaves the diagnosis running: the dot circles with
+    // an arc and its hint says how long it has run, then that it is ready.
+    test(`Dashboard ${surface} modal asks first, keeps running after Close and shows it on the dot, ${theme}`, async ({
       page,
     }) => {
       await open(page, theme, true);
@@ -128,6 +128,12 @@ for (const theme of ['light', 'dark'] as const) {
       await target.focus();
       await page.keyboard.press('Enter');
       await expect(modal(page).getByTestId('diagnosis-confirm')).toHaveCount(0);
+      if (process.env.WARNING_SHOTS) {
+        await expect(modal(page).getByTestId('warning-context')).toContainText('Still not fixed.');
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-modal-before-${theme}.png`,
+        });
+      }
       await button.click();
       if (process.env.WARNING_SHOTS)
         await page.screenshot({
@@ -139,15 +145,61 @@ for (const theme of ['light', 'dark'] as const) {
       const sent = (await calls(page)).runs;
       expect(sent).toHaveLength(1);
       expect(sent[0]!.slice(0, 3)).toEqual(['s-warned', id, 'UTC']);
+      if (process.env.WARNING_SHOTS)
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-modal-running-${theme}.png`,
+        });
       if (surface === 'lane') await close(page).click();
       else await page.keyboard.press('Escape');
-      await expect.poll(async () => (await calls(page)).stops).toEqual([sent[0]![3]]);
-      await expect(modal(page)).toBeVisible();
-      await expect(stop).toBeVisible();
-      await expect(close(page)).toHaveAttribute('aria-disabled', 'true');
-      await answer(page, 'cancelled');
       await expect(modal(page)).toHaveCount(0);
       await expect(target).toBeFocused();
+      expect((await calls(page)).stops).toEqual([]);
+      await expect(target).toHaveAttribute('data-diagnosis', 'running');
+      await expect(target).toHaveAccessibleName(new RegExp(`; ${words.dot_running_name}$`));
+      const hint =
+        surface === 'lane' ? page.getByTestId('warning-tip') : page.getByTestId('day-warning-tip');
+      // A lane dot's hint opens on hover; an Effort dot's on focus.
+      // Its right side sits under the neighbouring dot, so point at its left edge.
+      if (surface === 'lane') await target.hover({ position: { x: 1, y: 5 } });
+      await expect(hint.getByTestId('diagnosis-status')).toHaveText(/^Diagnosing… 0:0\d$/);
+      if (process.env.WARNING_SHOTS) {
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-dot-running-${theme}.png`,
+        });
+        // Close up: the arc around the dot, and its hint.
+        const box = (await target.boundingBox())!;
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-dot-running-closeup-${theme}.png`,
+          clip: {
+            x: Math.max(0, Math.min(box.x - 300, 500)),
+            y: Math.max(0, box.y - 150),
+            width: 600,
+            height: 220,
+          },
+        });
+      }
+      // Reopened, it shows the same run with Stop, and focus stays at Close.
+      await page.keyboard.press('Enter');
+      await expect(stop).toBeVisible();
+      await expect(stop).not.toBeFocused();
+      await close(page).click();
+      await expect(target).toBeFocused();
+      // The answer arrives while the window is closed: the dot says it is ready.
+      await answer(page, 'make_skill');
+      await expect(target).toHaveAttribute('data-diagnosis', 'ready');
+      await expect(target).toHaveAccessibleName(new RegExp(`; ${words.dot_ready}$`));
+      if (surface === 'lane') {
+        await page.mouse.move(0, 0);
+        await target.hover({ position: { x: 1, y: 5 } });
+      }
+      await expect(hint.getByTestId('diagnosis-status')).toHaveText(words.dot_ready);
+      if (process.env.WARNING_SHOTS)
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-dot-ready-${theme}.png`,
+        });
+      await page.keyboard.press('Enter');
+      await expect(modal(page).getByTestId('diagnosis-result')).toBeVisible();
+      expect((await calls(page)).stops).toEqual([]);
     });
   }
 

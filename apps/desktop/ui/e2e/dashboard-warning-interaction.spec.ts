@@ -33,9 +33,15 @@ for (const scheme of ['light', 'dark'] as const) {
     const { x, y } = await centre(page, sep3.getByTestId('day-warning-dot'));
     await page.mouse.move(x, y);
     const tip = page.getByTestId('day-warning-tip');
+    // The session (host mark and name), the kind, then the short reason; no day.
     await expect(tip.getByTestId('day-warning-tip-line')).toHaveText([
-      'Rename the config moduleSep 3 Correction you wrote "wrong" after a reply (09:30)',
+      'Rename the config moduleCorrectionAfter an agent reply',
     ]);
+    // The hint is hidden from the accessibility tree (the dot's name says it all).
+    await expect(tip.locator('.xt-host-glyph-mark')).toHaveAttribute(
+      'data-host',
+      /^(claude|codex|cursor)$/,
+    );
     await expect(tip).not.toContainText(SESSION_WARNINGS_TEXT.open_hint);
     // The day's own card gives way while a dot's warning shows.
     await expect(page.getByTestId('day-warning')).toHaveCount(0);
@@ -47,8 +53,8 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.mouse.move(at.x, at.y);
     const lines = tip.getByTestId('day-warning-tip-line');
     await expect(lines).toHaveText([
-      'Fix the flaky buildSep 7 Repeated failure the same Bash call failed twice (14:02, 14:04)',
-      'Fix the flaky buildSep 7 Interruption you declined a call to Edit (14:06)',
+      'Fix the flaky buildRepeated failurethe same Bash call failed twice',
+      'Fix the flaky buildInterruptionDeclined Edit',
     ]);
     if (shots) await page.screenshot({ path: `${shots}/effort-dots-overlap-${scheme}.png` });
     // Off the dots, on the same day: the day's card again.

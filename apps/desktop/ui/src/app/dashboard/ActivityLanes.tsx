@@ -643,6 +643,7 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
           {laneWarnings(lane).inside.map((warning) => (
             <WarningDot
               key={warning.id}
+              sessionId={lane.sessionId}
               warning={warning}
               left={position(warning.at_ms)}
               suppressTooltip={selected !== null}
@@ -654,6 +655,7 @@ export function ActivityLanes({ report, range }: { report: DashboardMetrics; ran
                   warning,
                   name: nameOf(lane),
                   sessionId: lane.sessionId,
+                  host: lane.host,
                   timezone: window.timezone,
                 });
               }}

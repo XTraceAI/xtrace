@@ -195,8 +195,11 @@ it('keeps a refused dismissal honest and retryable', async () => {
   }
 });
 
+// Closing the window no longer stops a running diagnosis: it belongs to the
+// source runtime, and the warning's dot shows it running. Reopening the
+// warning shows Stop, then the kept answer.
 for (const from of ['Close', 'Escape'] as const)
-  it(`${from} retains Stop until the diagnosis actually settles after cancellation acknowledgement`, async () => {
+  it(`${from} closes at once and leaves the diagnosis running for the reopened warning`, async () => {
     const test = setup();
     await run(test);
     expect(vi.mocked(test.controls.diagnose).mock.calls[0]!.slice(0, 3)).toEqual([
@@ -206,52 +209,58 @@ for (const from of ['Close', 'Escape'] as const)
     ]);
     if (from === 'Close') fireEvent.click(close());
     else fireEvent.keyDown(screen.getByRole('button', { name: words.stop }), { key: 'Escape' });
-    await waitFor(() => expect(test.controls.cancel).toHaveBeenCalledOnce());
-    expect(test.controls.cancel).toHaveBeenCalledWith(
-      vi.mocked(test.controls.diagnose).mock.calls[0]![3],
-    );
-    expect(test.onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: words.stop })).toBeTruthy();
-    await test.answer(answers.cancelled!);
     await waitFor(() => expect(test.onClose).toHaveBeenCalledOnce());
+    expect(test.controls.cancel).not.toHaveBeenCalled();
+    test.select(selected);
+    expect(await screen.findByRole('button', { name: words.stop })).toBeTruthy();
+    // Focus stays with the reopened window, not on Stop.
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: words.stop }));
+    await test.answer(answers.make_skill!);
+    expect(await screen.findByTestId('diagnosis-result')).toBeTruthy();
+    expect(test.controls.cancel).not.toHaveBeenCalled();
   });
 
-it('keeps Close and Stop retryable after refused and failed cancellation', async () => {
+it('keeps Stop retryable after refused and failed cancellation', async () => {
   const test = setup();
   vi.mocked(test.controls.cancel)
     .mockResolvedValueOnce(false)
     .mockRejectedValueOnce(new Error('IPC'));
   await run(test);
-  for (let count = 1; count <= 2; count++) {
-    fireEvent.click(close());
-    await waitFor(() => expect(close().getAttribute('aria-disabled')).toBeNull());
-    expect(test.controls.cancel).toHaveBeenCalledTimes(count);
-    expect(test.onClose).not.toHaveBeenCalled();
+  const stop = () => screen.getByRole('button', { name: words.stop });
+  for (let count = 1; count <= 3; count++) {
+    fireEvent.click(stop());
+    await waitFor(() => expect(test.controls.cancel).toHaveBeenCalledTimes(count));
+    if (count < 3) await waitFor(() => expect(stop().getAttribute('aria-disabled')).toBeNull());
   }
-  fireEvent.click(screen.getByRole('button', { name: words.stop }));
-  await waitFor(() => expect(test.controls.cancel).toHaveBeenCalledTimes(3));
   await test.answer(answers.cancelled!);
   expect(test.onClose).not.toHaveBeenCalled();
   expect(screen.getByTestId('diagnosis-result').dataset.state).toBe('cancelled');
 });
 
 for (const replace of [false, true])
-  it(`cancels its own run on ${replace ? 'forced selection replacement' : 'view disappearance'} and discards late results`, async () => {
+  it(`keeps its run on ${replace ? 'selection replacement' : 'view disappearance'} and keeps the answer for its warning`, async () => {
     const test = setup();
     await run(test);
-    const readId = vi.mocked(test.controls.diagnose).mock.calls[0]![3];
-    const replacement = { ...test.controls, cancel: vi.fn(async () => true) };
-    Object.defineProperty(test.source, 'diagnosis', { value: replacement });
-    if (replace) test.select({ ...selected, warning: read.warnings[0]! });
-    else test.show(false);
-    expect(test.controls.cancel).toHaveBeenCalledWith(readId);
-    expect(replacement.cancel).not.toHaveBeenCalled();
+    const other = read.warnings.find((one) => one.id !== selected.warning.id)!;
+    if (replace) {
+      test.select({ ...selected, warning: other });
+      // One runs at a time: the other warning waits, and says why.
+      expect(await screen.findByTestId('diagnosis-busy')).toBeTruthy();
+      expect(
+        screen
+          .getByRole('button', { name: /^Diagnose this warning:/ })
+          .getAttribute('aria-disabled'),
+      ).toBe('true');
+      expect(screen.queryByRole('button', { name: words.stop })).toBeNull();
+    } else test.show(false);
+    expect(test.controls.cancel).not.toHaveBeenCalled();
     await test.answer(answers.make_skill!);
     expect(
       test.client().getQueryData(['session-diagnosis', selected.sessionId, selected.warning.id]),
-    ).toBeUndefined();
-    expect(screen.queryByTestId('diagnosis-result')).toBeNull();
+    ).toMatchObject({ answer: answers.make_skill });
     if (!replace) test.show(true);
+    test.select(selected);
+    expect(await screen.findByTestId('diagnosis-result')).toBeTruthy();
     expect(test.controls.saveSkill).not.toHaveBeenCalled();
   });
 
@@ -493,7 +502,7 @@ it('opens the current issue with its saved warning ID and range', async () => {
   );
 });
 
-it('keeps a dismissed issue link and prevents full-session navigation while diagnosis stops', async () => {
+it('keeps a dismissed issue link, and opens the full session while a diagnosis runs without stopping it', async () => {
   const dismissed = setup();
   dismissed.warnings.mockResolvedValue(
     structuredClone(synthetic.after_dismissal.session_warnings) as SessionWarningsList,
@@ -505,13 +514,9 @@ it('keeps a dismissed issue link and prevents full-session navigation while diag
   const test = setup();
   await run(test);
   const link = screen.getByRole('link', { name: 'View in full session' });
-  expect(link.getAttribute('aria-disabled')).toBe('true');
-  expect(link.hasAttribute('href')).toBe(false);
+  expect(link.getAttribute('aria-disabled')).toBeNull();
   fireEvent.click(link);
-  expect(test.onClose).not.toHaveBeenCalled();
-  fireEvent.click(close());
-  await waitFor(() => expect(test.controls.cancel).toHaveBeenCalled());
-  expect(link.getAttribute('aria-disabled')).toBe('true');
-  await test.answer(answers.cancelled!);
-  await waitFor(() => expect(test.onClose).toHaveBeenCalledOnce());
+  expect(test.onClose).toHaveBeenCalledOnce();
+  expect(screen.getByTestId('current-location').textContent).toContain('/sessions/s-warned');
+  expect(test.controls.cancel).not.toHaveBeenCalled();
 });
