@@ -39,7 +39,7 @@ import { requireFreshBaseline, requireProbeHost } from './hosted-validation.mjs'
 
 // The candidate's public updater archive and signature, from the one set of
 // build values in hosted-release.mjs. The lock is this checkout's Cargo.lock
-// (0.1.8 product source), which the tests-only SDK helper is built from.
+// (the harness source), which the tests-only SDK helper is built from.
 export const fixture = Object.freeze({
   archive: release.archive,
   bytes: release.archiveBytes,
@@ -48,15 +48,15 @@ export const fixture = Object.freeze({
   signatureSha256: release.signatureSha256,
   members: release.inventoryEntries,
   root: basename(release.bundle),
-  lockSha256: '6fc4133ae9ee10cdb4e8785d62843de3862b0578781a88055c5cf58e52a7ab7d',
+  lockSha256: 'bccafd510d0631a164d2c743eff2829b8df50cd35aa69e620ed68e0f7af140fc',
 });
 // The synthetic old app reports the published earlier version and sits in the
-// earlier folder name, as a 0.1.7 install does. The "version" case announces a
+// same XTrace.app folder name, as a 0.1.8 install does. The "version" case announces a
 // version the signed archive was not signed for.
 export const versions = Object.freeze({
   old: previousRelease.version,
   target: release.version,
-  mismatch: '0.1.9',
+  mismatch: '0.1.10',
 });
 const oldBundleName = basename(previousRelease.bundle);
 export const limits = Object.freeze({ workMs: 16 * 60_000, cleanupMs: 2 * 60_000 });

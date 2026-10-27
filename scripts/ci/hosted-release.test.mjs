@@ -321,7 +321,7 @@ test('the candidate inventory names paths after XTrace.app wherever the folder i
       ),
     );
     const values = { ...syntheticValues(), inventorySha256: labelled.sha256 };
-    // The updater writes the candidate into the earlier folder; a quit renames it.
+    // Inventory normalization also supports a caller changing the folder name.
     assert.deepEqual(await verifyAppInventory(earlier, values), labelled);
     const renamed = join(temporary, 'XTrace.app');
     await rename(earlier, renamed);

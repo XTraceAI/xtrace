@@ -149,34 +149,34 @@ each release. They remain unverified unless that release's notes record the exac
 checks and results. Signed packaging, native fixture/source checks and updater
 download checks do not establish those results.
 
-## Prepared 0.1.8 acceptance
+## Prepared 0.1.9 acceptance
 
-The hosted harness targets the 0.1.8 candidate from source
-`75d49d54f6717d32d72eeb7a933eebb13f5be148`, installed as `XTrace.app`, and uses
-the published 0.1.7 (`XTrace Desktop.app`, archive
-`XTrace-Desktop-0.1.7-macos-arm64.app.tar.gz`, 11,064,049 bytes, 79 entries) as
-the update starting point. The update check covers the rename described above:
-after Restart to update the folder keeps its earlier name; after a normal quit
-only `XTrace.app` remains, with identical signed contents; reopening it opens the
-Dashboard without Welcome.
+The hosted harness targets the 0.1.9 candidate from source
+`8bbc6c96d56780337cdc1644a0deebfde56514f1`, installed as `XTrace.app`, and uses
+the published 0.1.8 (`XTrace.app`, archive
+`XTrace-0.1.8-macos-arm64.app.tar.gz`, 11,843,476 bytes, 101 entries) as
+the update starting point. Both releases use `/Applications/XTrace.app`.
+After Restart to update, a distinct successor must show the Dashboard. After a
+normal quit, the same folder must hold identical signed contents; reopening it
+must show the Dashboard without Welcome. Every phase rejects extra app copies.
 
 ### Signed build values
 
 The ten signed build values are in the `release` object of
 `scripts/ci/hosted-release.mjs`, between `BEGIN SIGNED BUILD VALUES` and `END
-SIGNED BUILD VALUES`. They were computed from the files published on the v0.1.8
-pre-release, downloaded anonymously: DMG 12,527,084 bytes, app inventory 101
-entries, updater archive 11,843,476 bytes, signature 448 bytes, `latest.json`
-1,500 bytes. If any value is missing or malformed, every hosted runner (first
+SIGNED BUILD VALUES`. They identify the final signed 0.1.9 files: DMG 13,279,128
+bytes, app inventory 102 entries, updater archive 12,597,709 bytes, signature 448
+bytes, and `latest.json` 958 bytes. Runtime requires the exact public files and
+source tag. If any value is missing or malformed, every hosted runner (first
 launch, telemetry, updater failures and update) refuses before it downloads,
-installs or launches anything. Each value comes from the published file:
+installs or launches anything. Each value comes from the matching signed file:
 
 | Value                                 | Computed from                                                               |
 | ------------------------------------- | --------------------------------------------------------------------------- |
-| `bytes`, `sha256`                     | `XTrace-0.1.8-macos-arm64.dmg`: `stat -f %z` and `shasum -a 256`            |
+| `bytes`, `sha256`                     | `XTrace-0.1.9-macos-arm64.dmg`: `stat -f %z` and `shasum -a 256`            |
 | `inventoryEntries`, `inventorySha256` | `XTrace.app` inside that DMG, mounted read-only                             |
-| `archiveBytes`, `archiveSha256`       | `XTrace-0.1.8-macos-arm64.app.tar.gz`: `stat -f %z` and `shasum -a 256`     |
-| `signatureBytes`, `signatureSha256`   | `XTrace-0.1.8-macos-arm64.app.tar.gz.sig`: `stat -f %z` and `shasum -a 256` |
+| `archiveBytes`, `archiveSha256`       | `XTrace-0.1.9-macos-arm64.app.tar.gz`: `stat -f %z` and `shasum -a 256`     |
+| `signatureBytes`, `signatureSha256`   | `XTrace-0.1.9-macos-arm64.app.tar.gz.sig`: `stat -f %z` and `shasum -a 256` |
 | `feedBytes`, `feedSha256`             | `latest.json`: `stat -f %z` and `shasum -a 256`                             |
 
 Compute the inventory with the harness's own function, from the repository root:
@@ -186,13 +186,15 @@ node --input-type=module -e 'import { appInventory } from "./scripts/ci/hosted-r
 ```
 
 The app that `/usr/bin/tar -xzf` extracts from the updater archive gives the same
-result (0.1.7: 79 entries; 0.1.8: 101 entries, the same SHA-256 as the DMG app),
+result (0.1.8: 101 entries; 0.1.9: 102 entries, the same SHA-256 as the DMG app),
 and the archive holds exactly `inventoryEntries` members under one `XTrace.app`
-folder. `scripts/ci/fixtures/hosted-update-latest.json` holds the exact published
+folder. `scripts/ci/fixtures/hosted-update-latest.json` holds the exact candidate
 `latest.json` bytes; the tests require it to match `feedBytes` and `feedSha256`,
-name version 0.1.8, and point only at the public v0.1.8 archive. `fixture.lockSha256` in `scripts/ci/hosted-updater-failures.mjs`
-is this checkout's `Cargo.lock` (the 0.1.8 product lock); change it only if the
-harness branch changes `Cargo.lock`.
+name version 0.1.9, and point only at the public v0.1.9 archive.
+`fixture.lockSha256` in `scripts/ci/hosted-updater-failures.mjs` is the actual
+harness checkout's `Cargo.lock`, which a unit test also compares with the pin.
+The SDK helper is built from this harness checkout, separately from the fixed
+0.1.9 product source. Change that pin only if the harness's `Cargo.lock` changes.
 
 ### Limits
 
@@ -201,11 +203,10 @@ except the separate telemetry mode. This suppresses the default telemetry notice
 as well as telemetry sending. Their reports and success messages identify that
 scope.
 
-0.1.8 is published as a pre-release; none of its hosted checks have run yet.
-They require the existing reviewed workflow guards and exact public assets; the
-update additionally requires separate authorization to promote the pinned
-production feed. Not covered by the update check: a Mac that already has
+These pins prepare 0.1.9 acceptance; they do not establish successful hosted
+checks. The checks require the existing reviewed workflow guards and exact public
+assets; the update additionally requires separate authorization to promote the
+pinned production feed. Not covered by the update check: a Mac that already has
 `XTrace.app` next to `XTrace Desktop.app` (both should stay unchanged), an account
-that cannot change `/Applications`, quitting from the menu-bar item, the Dock or
-Login Item entries after the rename, browser-download quarantine, and real-history
-migration.
+that cannot change `/Applications`, quitting from the menu-bar item, existing Dock
+or Login Item entries, browser-download quarantine, and real-history migration.

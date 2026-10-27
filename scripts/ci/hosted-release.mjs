@@ -3,34 +3,34 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { baselinePaths, probeEnvironment, requireProbeHost } from './hosted-validation.mjs';
 
-// The 0.1.8 candidate. Runtime still requires the matching public tag and the
+// The 0.1.9 candidate. Runtime still requires the matching public tag and the
 // exact public DMG, archive, signature and feed bytes. The harness commit is
 // separate from the released product source commit.
 //
-// The ten build values below were computed from the published v0.1.8 files
+// The ten build values below were computed from the signed v0.1.9 files
 // (docs/UPDATES.md says how). requireReleaseValues() refuses before any
 // download, install or launch if any is missing or malformed. This object is
 // the only place these build values are written.
 export const release = Object.freeze({
-  version: '0.1.8',
-  tag: 'v0.1.8',
-  source: '75d49d54f6717d32d72eeb7a933eebb13f5be148',
+  version: '0.1.9',
+  tag: 'v0.1.9',
+  source: '8bbc6c96d56780337cdc1644a0deebfde56514f1',
   identifier: 'ai.xtrace.app',
   bundle: '/Applications/XTrace.app',
   team: '3C8BCX5J3H',
-  dmg: 'XTrace-0.1.8-macos-arm64.dmg',
-  archive: 'XTrace-0.1.8-macos-arm64.app.tar.gz',
+  dmg: 'XTrace-0.1.9-macos-arm64.dmg',
+  archive: 'XTrace-0.1.9-macos-arm64.app.tar.gz',
   // BEGIN SIGNED BUILD VALUES
-  bytes: 12527084, // DMG size in bytes
-  sha256: 'fa0931c6fb71f3a9cd7f6c330d3a3f3c3182a5022bdb1e8fc3b626f2be6ef595', // DMG SHA-256
-  inventoryEntries: 101, // appInventory() of the DMG's XTrace.app
-  inventorySha256: '68c08e83836c518fcc27f1571bb28114b3ca3435c01a2a9b53cd0312bf4df524',
-  archiveBytes: 11843476, // updater archive size in bytes
-  archiveSha256: 'ba52098989d15ab6aab7600609b030460c2840d0757dff06e88beab5f5412c2e',
+  bytes: 13279128, // DMG size in bytes
+  sha256: '1e85356568f08e6007f2b87ba93d46afca9a645cced527a879f5a641f9cdc8bd', // DMG SHA-256
+  inventoryEntries: 102, // appInventory() of the DMG's XTrace.app
+  inventorySha256: '7e4a76b78bd3d83a7c9474b26a7e1e2b0ba1e2d1dcc62e8f521698456c52420f',
+  archiveBytes: 12597709, // updater archive size in bytes
+  archiveSha256: '05f73f2f7af4b5b0b698b4603ad3b97cb1487a1b6fa3b28104bd9d43f6b1238e',
   signatureBytes: 448, // the archive's .sig file
-  signatureSha256: '8057249f3a267fe136c991001dacdce70aad94fff81d16d93318c23c86d2769a',
-  feedBytes: 1500, // latest.json, byte-identical to fixtures/hosted-update-latest.json
-  feedSha256: 'e20c172e23ed0b36701f80715ab8840f7c634fd4136d6e77104e2e20fee757bf',
+  signatureSha256: '3064e4b99913b16a17118a7e7c124719b213fdabf2ce782c0fcb2a0bffdd4512',
+  feedBytes: 958, // latest.json, byte-identical to fixtures/hosted-update-latest.json
+  feedSha256: 'aa8515579c8b6c899edbd742df750d6a71028b41261a50dc4dfcf7e858f61825',
   // END SIGNED BUILD VALUES
 });
 

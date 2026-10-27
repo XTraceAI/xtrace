@@ -157,7 +157,7 @@ while Date() < deadline {
         } else if updateMode {
             if nativeError(last) { finish(6, "Released app displayed an error or dialog", last) }
             if mode == "updated-dashboard" || mode == "reopened-dashboard" {
-                // Completed Welcome must survive the update and the rename; the
+                // Completed Welcome must survive the update and reopening; the
                 // start page never shows Welcome first when it was completed.
                 if sawWebContent && hasText("Welcome to XTrace") {
                     finish(6, "Welcome was shown again after the update", last)
@@ -165,7 +165,7 @@ while Date() < deadline {
                 if updateDashboard(last, Release.candidate) {
                     finish(0, mode == "updated-dashboard"
                         ? "Observed usable native \(Release.candidate) Dashboard after restart and retained completed Welcome"
-                        : "Observed usable native \(Release.candidate) Dashboard after reopening the renamed app without Welcome", last)
+                        : "Observed usable native \(Release.candidate) Dashboard after reopening \(URL(fileURLWithPath: Release.candidateBundle).lastPathComponent) without Welcome", last)
                 }
             } else if updateReady(last) {
                 if mode == "update-ready" {

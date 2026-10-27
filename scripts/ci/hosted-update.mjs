@@ -29,10 +29,9 @@ import {
 } from './hosted-update-checks.mjs';
 
 const systemEnvironment = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8' };
-// The published earlier app is installed, and updated in place, here; a
-// normal quit of the updated app renames it to the candidate's folder.
+// The published earlier app is installed and updated in place at XTrace.app.
 const earlierBundle = previousRelease.bundle;
-const renamedBundle = release.bundle;
+const candidateBundle = release.bundle;
 async function exists(path) {
   try {
     await lstat(path);
@@ -344,7 +343,7 @@ async function main() {
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (failure) throw failure;
   console.log(
-    `Pinned signed ${previousRelease.version} updated through its real UI to ${release.version} with synthetic data and telemetry disabled: distinct restart in "${basename(earlierBundle)}", rename to "${basename(renamedBundle)}" on a normal quit with identical signed contents, reopened Dashboard without Welcome, retained sentinel and database, no updater copies left. The default telemetry notice and default telemetry behavior were not validated.`,
+    `Pinned signed ${previousRelease.version} updated through its real UI to ${release.version} with synthetic data and telemetry disabled: distinct restart in "${basename(earlierBundle)}", normal quit at "${basename(candidateBundle)}" with identical signed contents, reopened Dashboard without Welcome, retained sentinel and database, no updater copies left. The default telemetry notice and default telemetry behavior were not validated.`,
   );
 }
 
