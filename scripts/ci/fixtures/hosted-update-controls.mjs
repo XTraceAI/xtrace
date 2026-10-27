@@ -1,10 +1,12 @@
+import assert from 'node:assert/strict';
 import { previousRelease } from '../hosted-update-checks.mjs';
 import { runUpdateLifecycle } from '../hosted-update-lifecycle.mjs';
 
 export function updateControl({ failAt, prepare = async () => {}, defaultDatabase = false } = {}) {
   const calls = [];
   const report = { quarantine: {} };
-  let applicationReads = 0;
+  let inventoryReads = 0;
+  const inventoryPhases = ['restarted', 'afterQuit', 'reopened'];
   const record = (name) => {
     calls.push(name);
     if (name === failAt) throw new Error(name);
@@ -44,8 +46,10 @@ export function updateControl({ failAt, prepare = async () => {}, defaultDatabas
     },
     dataKept: async (step) => record(`data:${step}`),
     markAttempt: (kind) => record(`attempt:${kind}`),
-    appIdentity: async (bundle) =>
-      record(`identity:${bundle === previousRelease.bundle ? 'earlier' : 'renamed'}`),
+    appIdentity: async (bundle, _version, phase) => {
+      assert.equal(bundle, previousRelease.bundle);
+      record(`identity:${phase}`);
+    },
     validateSignature: async (_bundle, name) => record(`signature:${name}`),
     quarantineAt: async (_bundle, name) => record(`quarantine:${name}`),
   };
@@ -56,16 +60,16 @@ export function updateControl({ failAt, prepare = async () => {}, defaultDatabas
     },
     readdir: async (path) => {
       record(`entries:${path}`);
-      return path === '/Applications'
-        ? [++applicationReads === 1 ? 'XTrace Desktop.app' : 'XTrace.app']
-        : [];
+      return path === '/Applications' ? ['XTrace.app'] : [];
     },
     verifyPreviousInventory: async () => {
       record('previousInventory');
       return { old: true };
     },
     verifyAppInventory: async (bundle) => {
-      record(`inventory:${bundle === previousRelease.bundle ? 'earlier' : 'renamed'}`);
+      assert.equal(bundle, previousRelease.bundle);
+      assert.ok(inventoryReads < inventoryPhases.length);
+      record(`inventory:${inventoryPhases[inventoryReads++]}`);
       return { candidate: true };
     },
     ...(!defaultDatabase

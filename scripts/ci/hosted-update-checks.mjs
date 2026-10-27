@@ -2,22 +2,20 @@ import { basename } from 'node:path';
 import { release, sha256, appInventory } from './hosted-release.mjs';
 import { requireProbeHost } from './hosted-validation.mjs';
 
-// The published 0.1.7 that users run today, installed as "XTrace Desktop.app".
-// Its public archive (11,064,049 bytes) and the 79 paths/bytes/modes that
-// /usr/bin/tar extracts from it were checked independently; the same 79-entry
-// inventory is the one the 0.1.6 to 0.1.7 hosted update installed.
+// The published 0.1.8 baseline, installed as "XTrace.app". Its public archive
+// and all 101 paths/bytes/modes were checked independently against its DMG.
 export const previousRelease = Object.freeze({
   identifier: release.identifier,
-  bundle: '/Applications/XTrace Desktop.app',
+  bundle: '/Applications/XTrace.app',
   team: release.team,
-  inventoryEntries: 79,
-  version: '0.1.7',
-  tag: 'v0.1.7',
-  source: 'e743e900fb40d32bdbe90709bd54b7d9bde32540',
-  archive: 'XTrace-Desktop-0.1.7-macos-arm64.app.tar.gz',
-  bytes: 11064049,
-  sha256: 'cef0e375a22290b6064c5871920ab8710107cc9d802e4ff3227c9b1dea7a151f',
-  inventorySha256: '250d82fc255fd691aac182207dde84f39abeeef1d49ca603dd1965f54fd891bd',
+  inventoryEntries: 101,
+  version: '0.1.8',
+  tag: 'v0.1.8',
+  source: '75d49d54f6717d32d72eeb7a933eebb13f5be148',
+  archive: 'XTrace-0.1.8-macos-arm64.app.tar.gz',
+  bytes: 11843476,
+  sha256: 'ba52098989d15ab6aab7600609b030460c2840d0757dff06e88beab5f5412c2e',
+  inventorySha256: '68c08e83836c518fcc27f1571bb28114b3ca3435c01a2a9b53cd0312bf4df524',
 });
 export const updateBudget = Object.freeze({ workMs: 14 * 60_000, cleanupMs: 2 * 60_000 });
 export const productionFeed =
@@ -76,9 +74,8 @@ export function xtraceEntries(names) {
 }
 
 // The one rule for which folder holds the app after each step of the update:
-// after Restart to update the updater has written the candidate into the
-// earlier folder and nothing is renamed; after a normal quit only the
-// candidate's folder name is left.
+// both releases use XTrace.app. Each phase independently requires that one
+// folder, with no backup or extracted updater copies beside it.
 export const bundleSteps = Object.freeze({
   installed: [basename(previousRelease.bundle)],
   restarted: [basename(previousRelease.bundle)],
