@@ -57,6 +57,10 @@ export function trappedSource(read: () => Promise<PrList>) {
     sessionsList: trap('sessionsList'),
     sessionRow: trap('sessionRow'),
     sessionStretches: trap('sessionStretches'),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: trap('sessionTranscript'),
     cancelSessionTranscript: trap('cancelSessionTranscript'),
     dbCounts: trap('dbCounts'),

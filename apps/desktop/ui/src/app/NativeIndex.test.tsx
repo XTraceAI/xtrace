@@ -105,6 +105,10 @@ it('shows the typed native index status as reported and refreshes it on its even
     // These screens open no transcript; the seam is answered, never called.
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     pullRequests: unavailable,
@@ -177,6 +181,10 @@ it('polls a transient status until it settles, so a ready event that precedes th
     // These screens open no transcript; the seam is answered, never called.
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     pullRequests: unavailable,
@@ -233,6 +241,10 @@ it('reconciles the data queries when the first status seen is already settled', 
     // These screens open no transcript; the seam is answered, never called.
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     pullRequests: unavailable,
@@ -277,6 +289,10 @@ it('says a host state covers the supported source scan, and that Cursor IDE data
     // These screens open no transcript; the seam is answered, never called.
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     pullRequests: unavailable,
@@ -432,6 +448,10 @@ it('says which Codex histories the sub-session launch search skipped, and only w
     // These screens open no transcript; the seam is answered, never called.
     sessionRow: async () => null,
     sessionStretches: async () => ({ state: 'missing' }),
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: async () => ({ state: 'unavailable', reason: { reason: 'not_indexed' } }),
     cancelSessionTranscript: async () => {},
     pullRequests: unavailable,

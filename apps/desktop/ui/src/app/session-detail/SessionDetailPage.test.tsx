@@ -132,6 +132,10 @@ function harness(
       };
       return typeof given === 'function' ? given(days) : given;
     },
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: (sessionId, readId) => {
       opened.push({ sessionId, readId });
       if (options.auto !== undefined && options.auto !== null) {

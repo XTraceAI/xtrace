@@ -1,3 +1,4 @@
+import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
 import type { SessionDiagnosis } from './generated/SessionDiagnosis';
 import type { SavedSkill } from './generated/SavedSkill';
 import type { SessionPageSelection } from './generated/SessionPageSelection';
@@ -371,6 +372,13 @@ export interface DataSource {
    * read is resolved behind this seam, from what the index recorded — a view
    * that could name a path could name any path, and this read opens files.
    */
+  /** A bounded original-source excerpt around the saved warning point; never cached. */
+  sessionWarningContext(
+    sessionId: string,
+    recordUuid: string,
+    block: number | null,
+    readId: string,
+  ): Promise<SessionExcerptStatus>;
   sessionTranscriptPage?(
     sessionId: string,
     selection: SessionPageSelection,

@@ -258,3 +258,159 @@
 .xt-session-title-line .xt-warning-marker {
   align-self: center;
 }
+
+.xt-warning-context {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.xt-warning-context-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  justify-content: space-between;
+}
+.xt-warning-context-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.xt-warning-context-head > span,
+.xt-warning-context-note,
+.xt-warning-context-tool-time {
+  margin: 0;
+  color: var(--meta);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.xt-warning-context-message {
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.xt-warning-context-message:last-child {
+  border-bottom: 0;
+}
+.xt-warning-context-trigger {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--meta);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.xt-warning-context .xt-turn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.xt-warning-context .xt-transcript {
+  gap: 0;
+  padding: 0;
+}
+.xt-warning-context .xt-tx-text {
+  font-size: 12px;
+}
+.xt-warning-context .xt-tool-card[data-highlighted] {
+  box-shadow: none;
+}
+
+.xt-warning-pointed {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.xt-warning-session {
+  display: block;
+  color: var(--meta);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Effort card's day rows: a dot at each warning's time of day. The row
+   is the tab stop; Right arrow reaches its dots, each a button. The pointer is
+   matched to dots by distance from their centres (DOT_REACH_PX), so the dot itself
+   takes no pointer events and dots drawn over one another all answer. */
+.xt-human-warning {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 1.5px var(--surface);
+  pointer-events: none;
+}
+.xt-human-warning[data-pointed] {
+  width: 9px;
+  height: 9px;
+}
+.xt-human-warning:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.xt-human-track[data-on-warning] {
+  cursor: pointer;
+}
+.xt-lane-name .xt-warning-marker {
+  align-self: center;
+}
+
+/* One selected warning, using the Dashboard's existing scrolling modal. */
+.xt-warning-modal {
+  overflow-wrap: anywhere;
+}
+.xt-warning-modal-session {
+  margin: 0;
+  color: var(--meta);
+}
+.xt-warning-modal .xt-dash-modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+}
+.xt-warning-modal-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.xt-warning-modal-day {
+  margin: -10px 0 0;
+  color: var(--meta);
+  font-size: 11px;
+}
+.xt-warning-modal .xt-warnings-list > li {
+  display: grid;
+  gap: 16px;
+  padding: 0;
+}
+.xt-warning-modal .xt-warnings-list > li::before {
+  content: none;
+}
+.xt-warning-modal-reason {
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+  line-height: 1.6;
+}
+.xt-warning-modal .xt-warning-actions {
+  justify-content: flex-end;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.xt-warning-modal .xt-warning-action {
+  height: 30px;
+  padding-inline: 12px;
+  font-size: 12px;
+}

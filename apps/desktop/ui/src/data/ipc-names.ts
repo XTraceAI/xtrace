@@ -24,6 +24,7 @@ export const commands = {
   restoreSessionWarning: 'restore_session_warning',
   sessionTranscript: 'session_transcript',
   sessionTranscriptPage: 'session_transcript_page',
+  sessionWarningContext: 'session_warning_context',
   cancelSessionTranscript: 'cancel_session_transcript',
   sessionTitles: 'session_titles',
   cancelSessionTitles: 'cancel_session_titles',

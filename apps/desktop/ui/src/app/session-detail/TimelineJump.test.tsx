@@ -159,6 +159,10 @@ function source(options: {
       const given = options.stretches;
       return typeof given === 'function' ? given(days, stretchReads.length) : (given ?? measured);
     },
+    sessionWarningContext: async () => ({
+      state: 'unavailable' as const,
+      reason: { reason: 'source' as const, source: { reason: 'not_indexed' as const } },
+    }),
     sessionTranscript: (sessionId) => {
       opened.push(sessionId);
       const given = options.transcripts?.[sessionId] ?? options.transcript ?? loaded();

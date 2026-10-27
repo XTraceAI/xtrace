@@ -36,7 +36,7 @@ import {
   type PageFeedback,
   type PageRepeatCandidate,
 } from './PagedSessionTranscript';
-import { type TranscriptProps, transcriptProps } from './transcript-adapter';
+import { type TranscriptProps, transcriptProps, generationNote } from './transcript-adapter';
 import {
   jumpUnavailableText,
   type JumpUnavailable,
@@ -58,18 +58,6 @@ import './session-detail.css';
  */
 /** The read itself failed, which is this app's problem and not the file's. */
 const FAILED = 'This session’s text could not be read just now.';
-
-const GENERATION = {
-  // Says what is true of the *measurements*, and nothing about whether the
-  // text is whole. Whether it is whole is the transcript's own statement, made
-  // beside this one — and a session can perfectly well have grown since it was
-  // indexed *and* be missing part of itself, in which case a sentence here
-  // calling the text complete would contradict the notice underneath it.
-  appended:
-    'This session has been written to since it was last indexed. The measurements beside it describe the part that was indexed.',
-  unrecorded:
-    'This text is not tied to a measurement: at least one of this session’s files has no recorded reading.',
-} as const;
 
 /** The measured columns, with the same definitions the list states (S2). */
 const MEASURES: {
@@ -591,14 +579,7 @@ export function SessionDetailPage() {
       : read.phase === 'failed'
         ? { records: [], state: { kind: 'unavailable', note: FAILED } }
         : { records: [], state: { kind: 'loading' } };
-  const generation =
-    read.phase === 'read' && read.status.state === 'loaded'
-      ? read.status.generation.generation === 'unrecorded'
-        ? GENERATION.unrecorded
-        : read.status.generation.appended
-          ? GENERATION.appended
-          : null
-      : null;
+  const generation = read.phase === 'read' ? generationNote(read.status) : null;
 
   const repeatCandidates = useMemo<PageRepeatCandidate[]>(
     () =>

@@ -38,6 +38,7 @@ export async function createDataSource(): Promise<DataSource> {
     sessionRow: unavailable,
     sessionStretches: unavailable,
     sessionTranscript: unavailable,
+    sessionWarningContext: unavailable,
     // Nothing was started, so there is nothing to abandon.
     cancelSessionTranscript: async () => {},
     appInfo: unavailable,

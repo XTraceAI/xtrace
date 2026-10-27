@@ -469,7 +469,11 @@ fn an_explicit_block_refuses_text_and_tools_in_the_wrong_role() {
                 .is_none(),
                 "{role} {records:?}"
             );
-            assert!(conversation(&records, &HashMap::new(), &flag(2)).is_some());
+            assert_eq!(
+                conversation(&records, &HashMap::new(), &flag(2)).is_some(),
+                role == "user",
+                "whole-record warnings require the user role"
+            );
         }
     }
 }
@@ -1597,4 +1601,123 @@ fn bounded_diagnosis_context_keeps_a_late_flag_and_only_its_subagent_messages() 
     );
     state.shutdown();
     drop(root);
+}
+
+#[test]
+fn a_whole_record_warning_whose_source_changed_to_assistant_stops_before_the_tool() {
+    let lines = vec![
+        json!({"uuid":uuid(1),"type":"assistant","timestamp":at(1),"message":{"role":"assistant","content":[{"type":"text","text":"I updated the first step."}]}}),
+        json!({"uuid":uuid(2),"type":"user","timestamp":at(2),"message":{"role":"user","content":[{"type":"text","text":"no, the other step"}]}}),
+    ];
+    let (root, state, sid, home) = native_diagnosis_scene(&lines);
+    state
+        .with_store(|store| {
+            store.set_retention_mode(xt_store::retention::RetentionMode::FullContent)?;
+            store.upsert_records(
+                &sid,
+                &lines
+                    .iter()
+                    .cloned()
+                    .map(|line| record(line).canonical)
+                    .collect::<Vec<_>>(),
+                true,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let warning_id = format!("correction:{}", uuid(2));
+    let original = state
+        .session_warning(&sid, &warning_id, "UTC")
+        .unwrap()
+        .expect("the indexed user correction is a warning")
+        .0;
+    assert_eq!(original.points_at(), flag(2));
+    let mut changed = lines;
+    for line in &mut changed {
+        line["sessionId"] = json!(sid);
+    }
+    changed[1]["type"] = json!("assistant");
+    changed[1]["message"]["role"] = json!("assistant");
+    std::fs::write(
+        home.join(".claude/projects/-diagnose-run-fixture")
+            .join(format!("{sid}.jsonl")),
+        changed
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    assert!(
+        state
+            .session_warning(&sid, &warning_id, "UTC")
+            .unwrap()
+            .is_some(),
+        "the indexed warning remains unchanged"
+    );
+    let readers = crate::native_index::DetailReaders::disabled();
+    let loaded = state
+        .loaded_source(&sid, &CancelToken::new(), &readers)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        loaded.generation,
+        xt_ingest::native::session_source::GenerationBasis::Unrecorded
+    );
+    assert_eq!(
+        SourceRecord::try_from(&loaded.records[1]).unwrap().role,
+        crate::transcript_dto::RecordRole::Assistant
+    );
+    drop(loaded);
+    let environment = synthetic_agent(root.path(), &home, false);
+    let runs = Arc::new(DiagnosisRuns::default());
+    let request = Request {
+        session_id: &sid,
+        warning_id: &warning_id,
+        timezone: "UTC",
+        read_id: "changed-role",
+    };
+    let found = diagnose(
+        &state,
+        reserve(&runs, &request).unwrap().unwrap(),
+        &readers,
+        &environment,
+        &request,
+    )
+    .unwrap();
+    let called = home.join("model-started").exists();
+    let staged = root.path().join("xtrace-grading").exists();
+    assert!(
+        matches!(found, SessionDiagnosis::FlaggedMessageNotFound { .. }) && !called && !staged,
+        "outcome={found:?}; fake_tool_called={called}; staging_started={staged}"
+    );
+    state.shutdown();
+}
+
+#[test]
+fn role_checks_keep_automatic_user_interruptions_and_explicit_assistant_calls() {
+    let records = vec![person(1, "[Request interrupted by user]")];
+    let (messages, flagged) = conversation(&records, &HashMap::new(), &flag(1)).unwrap();
+    assert_eq!(flagged, 0);
+    assert_eq!(messages[0].sender, Sender::Automatic);
+    let records = vec![agent(
+        2,
+        "call",
+        json!([{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"/synthetic/a"}}]),
+    )];
+    let (messages, flagged) = conversation(
+        &records,
+        &HashMap::new(),
+        &WarningPoint {
+            record_uuid: uuid(2),
+            block: Some(0),
+        },
+    )
+    .unwrap();
+    assert_eq!(flagged, 0);
+    assert_eq!(messages[0].sender, Sender::Agent);
+    assert!(messages[0].text.starts_with("(ran Read:"));
+    let records = vec![result(3, "read", "synthetic result", false)];
+    let (messages, flagged) = conversation(&records, &HashMap::new(), &flag(3)).unwrap();
+    assert_eq!(flagged, 0);
+    assert_eq!(messages[0].sender, Sender::ToolResult { tool: None });
 }

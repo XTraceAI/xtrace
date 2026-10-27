@@ -1,3 +1,4 @@
+import type { SessionExcerptStatus } from './generated/SessionExcerptStatus';
 import type { SessionDiagnosis } from './generated/SessionDiagnosis';
 import type { SavedSkill } from './generated/SavedSkill';
 import type { DashboardWarnings } from './generated/DashboardWarnings';
@@ -247,6 +248,19 @@ export class TauriDataSource implements DataSource {
       windowDays,
       windowEndMs,
       timezone,
+    });
+  }
+  sessionWarningContext(
+    sessionId: string,
+    recordUuid: string,
+    block: number | null,
+    readId: string,
+  ) {
+    return invoke<SessionExcerptStatus>(commands.sessionWarningContext, {
+      sessionId,
+      recordUuid,
+      block,
+      readId,
     });
   }
   sessionTranscriptPage(sessionId: string, selection: SessionPageSelection, readId: string) {
