@@ -24,6 +24,8 @@ import { contextLead, contextTitle, modelLabel, shortId } from '../session-conte
 import { WARNING_PARAM, listState } from '../session-search';
 import { localZone, useSessionWarning } from '../session-warnings';
 import { SessionReview } from './SessionReview';
+import { DiagnoseButton, DiagnosisPanel, DetachedDiagnosis } from '../session-diagnosis';
+import { useDiagnose } from '../useSessionDiagnosis';
 import { SessionTimeline, type TimelineQuery } from './SessionTimeline';
 import { SessionTranscript } from './SessionTranscript';
 import {
@@ -301,6 +303,7 @@ export function SessionDetailPage() {
   const warnings = useSessionWarning(sessionId, zone);
   const activeWarnings = warnings.data?.state === 'read' ? warnings.data.warnings : undefined;
   const warningId = params.get(WARNING_PARAM) ?? activeWarnings?.[0]?.id ?? null;
+  const diagnose = useDiagnose(sessionId ?? '', zone, activeWarnings, warningId);
   const selectWarning = useCallback(
     (id: string) => {
       warningNavigation.current = {
@@ -703,6 +706,13 @@ export function SessionDetailPage() {
           />
         </SectionCard>
       </details>
+      {diagnose && (
+        <DetachedDiagnosis
+          diagnose={diagnose}
+          warnings={activeWarnings}
+          visibleWarningId={warningId}
+        />
+      )}
       <SessionReview
         key={sessionId}
         sessionId={sessionId ?? ''}
@@ -713,6 +723,16 @@ export function SessionDetailPage() {
         onSelect={selectWarning}
         onReadbackSelect={readbackSelectWarning}
         navigationGeneration={warningNavigation.current.generation}
+        actions={
+          diagnose
+            ? (warning) => <DiagnoseButton diagnose={diagnose} warning={warning} />
+            : undefined
+        }
+        below={
+          diagnose
+            ? (warning) => <DiagnosisPanel diagnose={diagnose} warning={warning} />
+            : undefined
+        }
       >
         {conversation}
       </SessionReview>

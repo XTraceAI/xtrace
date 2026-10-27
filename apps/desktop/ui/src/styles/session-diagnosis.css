@@ -1,0 +1,232 @@
+/* Diagnose under a warning on its session's page: the sentence before
+   sending, the run in progress, or the answer. It takes the warning row's
+   whole width under its line and never widens the card: long words wrap and
+   the skill draft scrolls inside its own box. */
+.xt-diagnosis {
+  display: grid;
+  flex: 1 0 100%;
+  gap: 8px;
+  min-width: 0;
+  margin: 4px 0 6px;
+  padding: 12px 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--body);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.xt-diagnosis p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.xt-diagnosis-buttons {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.xt-warning-action[data-variant='primary'] {
+  border-color: var(--accent-border);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+}
+.xt-warning-action[data-variant='primary']:hover {
+  background: var(--accent-tint);
+  color: var(--ink);
+}
+.xt-diagnosis-running {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.xt-diagnosis-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--track);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: xt-diagnosis-spin 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .xt-diagnosis-spinner {
+    animation: none;
+  }
+}
+@keyframes xt-diagnosis-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.xt-diagnosis-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.xt-diagnosis-head h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.xt-diagnosis-head h4:focus {
+  outline: none;
+}
+.xt-diagnosis-head h4:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.xt-diagnosis-ran {
+  color: var(--meta);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.xt-diagnosis-parts {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.xt-diagnosis-part {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.xt-diagnosis-label {
+  color: var(--meta);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.xt-diagnosis-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.xt-diagnosis-verdict {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.xt-diagnosis-parts {
+  gap: 16px;
+  max-width: 74ch;
+}
+.xt-diagnosis-details,
+.xt-diagnosis-evidence {
+  min-width: 0;
+}
+.xt-diagnosis-details > summary,
+.xt-diagnosis-evidence > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--accent-ink);
+}
+.xt-diagnosis-details > .xt-diagnosis-parts,
+.xt-diagnosis-evidence > .xt-diagnosis-note {
+  margin-top: 10px;
+}
+.xt-diagnosis-reference {
+  display: inline;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.xt-diagnosis-reference:focus-visible,
+.xt-diagnosis-details > summary:focus-visible,
+.xt-diagnosis-evidence > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.xt-diagnosis-messages article {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  scroll-margin-block: 80px;
+}
+.xt-diagnosis-messages article[data-selected] {
+  box-shadow: inset 2px 0 0 var(--accent);
+  padding-inline-start: 10px;
+}
+.xt-diagnosis-messages article:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.xt-diagnosis-messages h5 {
+  margin: 0 0 6px;
+  color: var(--meta);
+  font-size: 11px;
+  font-weight: 500;
+}
+.xt-diagnosis-messages p {
+  white-space: pre-wrap;
+}
+
+.xt-diagnosis-verdict [data-value='yes'] {
+  border-color: var(--danger);
+  background: var(--danger-tint);
+}
+.xt-diagnosis-draft,
+.xt-diagnosis-line {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--subtle);
+  color: var(--ink);
+  font:
+    400 11.5px/17px 'Geist Mono',
+    Menlo,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The whole draft, in a box of its own that scrolls. */
+.xt-diagnosis-draft {
+  max-height: 260px;
+  overflow: auto;
+}
+.xt-diagnosis-draft:focus-visible,
+.xt-diagnosis-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.xt-diagnosis-path code {
+  color: var(--ink);
+  font:
+    400 11.5px/17px 'Geist Mono',
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+}
+.xt-diagnosis-note {
+  color: var(--secondary);
+}
+.xt-diagnosis-saved {
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
+.xt-diagnosis-saved[data-state='saved'] {
+  color: var(--success);
+}
+.xt-diagnosis-saved[data-state='refused'],
+.xt-diagnosis-saved[data-state='failed'] {
+  color: var(--danger);
+}
+.xt-diagnosis-tried {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--secondary);
+}
+.xt-diagnosis-text {
+  color: var(--ink);
+}

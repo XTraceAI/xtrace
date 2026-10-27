@@ -1,0 +1,552 @@
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useKept, type Diagnose, type Kept } from './useSessionDiagnosis';
+import type { DiagnosisToolTried } from '../data/generated/DiagnosisToolTried';
+import type { SavedSkill } from '../data/generated/SavedSkill';
+import type { SessionDiagnosis } from '../data/generated/SessionDiagnosis';
+import type { SessionWarningItem } from '../data/generated/SessionWarningItem';
+import { SESSION_WARNINGS_TEXT } from '../data/generated/SessionWarningsText';
+import '../styles/session-diagnosis.css';
+
+/**
+ * Diagnose on a session's page: one warning's moment is sent, on a confirmed
+ * click, to one coding tool's hosted model, and its answer is shown under
+ * the warning. Which messages are sent, to which tool, every sentence of the
+ * answer and every refusal are the native side's (`SessionDiagnosis`,
+ * `SavedSkill`, `SESSION_WARNINGS_TEXT.diagnose`); nothing here decides or
+ * words one. One diagnosis runs at a time. An answer is kept in memory for
+ * the page (the query cache, outside every key an ingest re-reads) and
+ * nothing is stored.
+ */
+const WORDS = SESSION_WARNINGS_TEXT.diagnose;
+
+/** The warning's own Diagnose button, in its row's buttons. */
+export function DiagnoseButton({
+  diagnose,
+  warning,
+}: {
+  diagnose: Diagnose;
+  warning: SessionWarningItem;
+}) {
+  const kept = useKept(diagnose.sessionId, warning.id);
+  // One at a time: every Diagnose button waits while any is asked or runs,
+  // and this one while its answer is shown.
+  const waiting = diagnose.stage !== null;
+  const shown = kept !== undefined;
+  return (
+    <button
+      type="button"
+      className="xt-warning-action"
+      data-action="diagnose"
+      aria-label={
+        shown
+          ? `${WORDS.close}: ${warning.label}`
+          : WORDS.button_name.replace('{label}', warning.label)
+      }
+      aria-disabled={(!shown && waiting) || undefined}
+      aria-expanded={diagnose.stage?.warningId === warning.id || kept !== undefined}
+      // WebKit leaves buttons out of the Tab order unless told.
+      tabIndex={0}
+      onClick={
+        shown
+          ? () => diagnose.close(warning.id)
+          : waiting
+            ? undefined
+            : () => diagnose.ask(warning.id)
+      }
+    >
+      {shown ? WORDS.close : WORDS.button}
+    </button>
+  );
+}
+
+/** The row's Diagnose button, found from inside the row. */
+const rowButton = (from: Element | null) =>
+  from
+    ?.closest('[data-warning-id]')
+    ?.querySelector<HTMLElement>('[data-action="diagnose"], [data-action="restore"]') ?? null;
+
+/**
+ * Under a warning: the sentence before sending with its confirm, the run in
+ * progress with Stop, or the answer.
+ */
+export function DiagnosisPanel({
+  diagnose,
+  warning,
+}: {
+  diagnose: Diagnose;
+  warning: SessionWarningItem;
+}) {
+  const kept = useKept(diagnose.sessionId, warning.id);
+  const stage =
+    diagnose.stage?.sessionId === diagnose.sessionId && diagnose.stage.warningId === warning.id
+      ? diagnose.stage
+      : null;
+  if (stage?.kind === 'confirm') return <Confirm diagnose={diagnose} warningId={warning.id} />;
+  if (stage?.kind === 'running') return <Running diagnose={diagnose} />;
+  if (!kept) return null;
+  return (
+    <Result
+      kept={kept}
+      diagnose={diagnose}
+      warningId={warning.id}
+      // A new answer is a new result, focused when it arrives.
+      key={JSON.stringify([
+        diagnose.sessionId,
+        warning.id,
+        warning.points_at.record_uuid,
+        warning.points_at.block,
+        kept.readId,
+      ])}
+    />
+  );
+}
+
+/** Keep Stop available when navigation or a dismissal removes the running row. */
+export function DetachedDiagnosis({
+  diagnose,
+  warnings,
+  visibleWarningId,
+}: {
+  diagnose: Diagnose;
+  warnings: readonly SessionWarningItem[] | undefined;
+  visibleWarningId?: string | null;
+}) {
+  const stage = diagnose.stage;
+  return stage?.kind === 'running' &&
+    (stage.sessionId !== diagnose.sessionId ||
+      (visibleWarningId !== undefined && stage.warningId !== visibleWarningId) ||
+      !warnings?.some((warning) => warning.id === stage.warningId)) ? (
+    <Running diagnose={diagnose} key={stage.readId} />
+  ) : null;
+}
+
+function Confirm({ diagnose, warningId }: { diagnose: Diagnose; warningId: string }) {
+  const sentence = useId();
+  const confirm = useRef<HTMLButtonElement>(null);
+  useEffect(() => confirm.current?.focus(), []);
+  const back = () => {
+    const button = rowButton(confirm.current);
+    diagnose.notNow();
+    button?.focus();
+  };
+  return (
+    <div
+      className="xt-diagnosis"
+      data-testid="diagnosis-confirm"
+      role="group"
+      aria-labelledby={sentence}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        back();
+      }}
+    >
+      <p id={sentence} className="xt-diagnosis-before">
+        {SESSION_WARNINGS_TEXT.diagnose_before_sending}
+      </p>
+      <span className="xt-diagnosis-buttons">
+        <button
+          ref={confirm}
+          type="button"
+          className="xt-warning-action"
+          data-variant="primary"
+          tabIndex={0}
+          onClick={() => diagnose.send(warningId)}
+        >
+          {WORDS.confirm}
+        </button>
+        <button type="button" className="xt-warning-action" tabIndex={0} onClick={back}>
+          {WORDS.not_now}
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function Running({ diagnose }: { diagnose: Diagnose }) {
+  const stop = useRef<HTMLButtonElement>(null);
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => stop.current?.focus(), []);
+  return (
+    <div className="xt-diagnosis" data-testid="diagnosis-running" aria-busy="true">
+      <p className="xt-diagnosis-running" role="status">
+        <span className="xt-diagnosis-spinner" aria-hidden="true" />
+        {WORDS.running}
+      </p>
+      <span className="xt-diagnosis-buttons">
+        <button
+          ref={stop}
+          type="button"
+          className="xt-warning-action"
+          tabIndex={0}
+          aria-disabled={stopping || undefined}
+          onClick={
+            stopping
+              ? undefined
+              : () => {
+                  setStopping(true);
+                  void diagnose.stop().then((cancelled) => {
+                    if (!cancelled) setStopping(false);
+                  });
+                }
+          }
+        >
+          {WORDS.stop}
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/** The tools not used, and why, as the native side says it. */
+function Tried({ tried }: { tried: readonly DiagnosisToolTried[] }) {
+  if (tried.length === 0) return null;
+  return (
+    <ul className="xt-diagnosis-tried" data-testid="diagnosis-tried">
+      {tried.map((one) => (
+        <li key={`${one.tool}:${one.text}`}>{one.text}</li>
+      ))}
+    </ul>
+  );
+}
+
+/** One labelled part of an answer. */
+function Part({
+  label,
+  children,
+  testId,
+}: {
+  label: string;
+  children: ReactNode;
+  testId?: string;
+}) {
+  const id = useId();
+  return (
+    <div className="xt-diagnosis-part" data-testid={testId} role="group" aria-labelledby={id}>
+      <span id={id} className="xt-diagnosis-label">
+        {label}
+      </span>
+      <div className="xt-diagnosis-body">{children}</div>
+    </div>
+  );
+}
+
+function Result({
+  kept,
+  diagnose,
+  warningId,
+}: {
+  kept: Kept;
+  diagnose: Diagnose;
+  warningId: string;
+}) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  const title = useId();
+  // Focus moves into the answer when it arrives, so a reader hears it.
+  useEffect(() => heading.current?.focus({ preventScroll: false }), []);
+  const close = () => {
+    const button = rowButton(heading.current);
+    diagnose.close(warningId);
+    // The button is told it may be pressed again on the next draw.
+    requestAnimationFrame(() => button?.focus());
+  };
+  const answer = 'answer' in kept ? kept.answer : null;
+  return (
+    <section
+      className="xt-diagnosis"
+      data-testid="diagnosis-result"
+      data-state={answer?.state ?? 'failed'}
+      aria-labelledby={title}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        close();
+      }}
+    >
+      <header className="xt-diagnosis-head">
+        <h4 id={title} ref={heading} tabIndex={-1}>
+          {WORDS.heading}
+        </h4>
+      </header>
+      {answer ? <Answer answer={answer} diagnose={diagnose} /> : <p>{WORDS.failed}</p>}
+      {answer && <RunDetails answer={answer} />}
+      <span className="xt-diagnosis-buttons">
+        <button type="button" className="xt-warning-action" tabIndex={0} onClick={close}>
+          {WORDS.close}
+        </button>
+      </span>
+    </section>
+  );
+}
+
+function RunDetails({ answer }: { answer: SessionDiagnosis }) {
+  if (
+    answer.state !== 'diagnosed' &&
+    answer.state !== 'no_agent_tool' &&
+    answer.state !== 'answer_refused' &&
+    answer.state !== 'run_failed'
+  )
+    return null;
+  return (
+    <details className="xt-diagnosis-details" data-testid="diagnosis-details">
+      <summary tabIndex={0}>{WORDS.details}</summary>
+      <div className="xt-diagnosis-parts">
+        {'ran' in answer && (
+          <p className="xt-diagnosis-ran" data-testid="diagnosis-ran">
+            {answer.ran}
+          </p>
+        )}
+        {'reason' in answer && <Part label={WORDS.reason}>{String(answer.reason)}</Part>}
+        {'sent' in answer && answer.sent && (
+          <Part label={WORDS.sent} testId="diagnosis-sent">
+            <p>{answer.sent.text}</p>
+          </Part>
+        )}
+        <Tried tried={answer.tried} />
+        {'limits' in answer && answer.limits.length > 0 && (
+          <ul className="xt-diagnosis-tried" data-testid="diagnosis-limits">
+            {answer.limits.map((limit) => (
+              <li key={limit.kind}>{limit.text}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function Answer({ answer, diagnose }: { answer: SessionDiagnosis; diagnose: Diagnose }) {
+  if (answer.state !== 'diagnosed')
+    return (
+      <p className="xt-diagnosis-text" data-testid="diagnosis-text">
+        {answer.text}
+      </p>
+    );
+  return (
+    <div className="xt-diagnosis-parts">
+      <p
+        className="xt-diagnosis-verdict"
+        data-testid="diagnosis-real"
+        data-value={answer.real_problem}
+      >
+        {answer.real_problem_text}
+      </p>
+      <Part label={WORDS.what_happened} testId="diagnosis-what">
+        {answer.what_happened}
+      </Part>
+      <Evidence answer={answer} />
+      <Part label={WORDS.next_action}>
+        <p data-testid="diagnosis-suggestion">{answer.suggestion_text}</p>
+        {answer.draft_kind === 'skill' && (
+          <Part label={WORDS.skill_draft} testId="diagnosis-skill">
+            <SkillDraft answer={answer} diagnose={diagnose} />
+          </Part>
+        )}
+        {answer.draft_kind === 'instruction_line' && (
+          <Part
+            label={
+              answer.instruction_file
+                ? WORDS.line_for_file.replace('{file}', answer.instruction_file)
+                : WORDS.line_no_file
+            }
+            testId="diagnosis-line"
+          >
+            <InstructionLine line={answer.draft} />
+          </Part>
+        )}
+      </Part>
+    </div>
+  );
+}
+
+function Evidence({ answer }: { answer: Extract<SessionDiagnosis, { state: 'diagnosed' }> }) {
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  const messages = useRef(new Map<number, HTMLElement>());
+  const frame = useRef<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  useEffect(
+    () => () => {
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+    },
+    [],
+  );
+  const show = (number: number) => {
+    if (!disclosure.current) return;
+    disclosure.current.open = true;
+    setSelected(number);
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => {
+      messages.current.get(number)?.focus();
+      frame.current = null;
+    });
+  };
+  return (
+    <Part label={WORDS.why} testId="diagnosis-why">
+      <p className="xt-diagnosis-explanation">
+        {answer.why_parts.map((part, index) =>
+          part.kind === 'message' ? (
+            <button
+              key={index}
+              type="button"
+              className="xt-diagnosis-reference"
+              tabIndex={0}
+              onClick={() => show(part.number)}
+            >
+              {part.text}
+            </button>
+          ) : part.kind === 'unavailable' ? (
+            <span key={index} title={WORDS.reference_unavailable}>
+              {part.text}
+            </span>
+          ) : (
+            <span key={index}>{part.text}</span>
+          ),
+        )}
+      </p>
+      {answer.why_parts.some((part) => part.kind === 'unavailable') && (
+        <p className="xt-diagnosis-note">{WORDS.reference_unavailable}</p>
+      )}
+      <details ref={disclosure} className="xt-diagnosis-evidence" data-testid="diagnosis-evidence">
+        <summary tabIndex={0}>{WORDS.evidence}</summary>
+        <p className="xt-diagnosis-note">{WORDS.evidence_note}</p>
+        <div className="xt-diagnosis-messages">
+          {answer.messages.map((message) => (
+            <article
+              key={message.number}
+              ref={(element) => {
+                if (element) messages.current.set(message.number, element);
+                else messages.current.delete(message.number);
+              }}
+              tabIndex={-1}
+              aria-label={message.label}
+              data-testid="diagnosis-message"
+              data-number={message.number}
+              data-selected={selected === message.number || undefined}
+            >
+              <h5>{message.label}</h5>
+              <p>{message.text}</p>
+            </article>
+          ))}
+        </div>
+      </details>
+    </Part>
+  );
+}
+
+/** The whole suggested `SKILL.md`, where it would be saved, and Save. */
+function SkillDraft({
+  answer,
+  diagnose,
+}: {
+  answer: Extract<SessionDiagnosis, { state: 'diagnosed' }>;
+  diagnose: Diagnose;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<SavedSkill | 'failed' | null>(null);
+  const name = answer.skill_name;
+  const save = () => {
+    if (saving || !name) return;
+    setSaving(true);
+    diagnose.controls
+      .saveSkill(diagnose.sessionId, name, answer.draft)
+      .then(
+        (result) => setSaved(result),
+        () => setSaved('failed'),
+      )
+      .finally(() => setSaving(false));
+  };
+  const done = saved !== null && saved !== 'failed' && saved.state === 'saved';
+  return (
+    <>
+      <pre
+        className="xt-diagnosis-draft"
+        data-testid="diagnosis-draft"
+        // A scrolling region the keyboard can reach and scroll.
+        tabIndex={0}
+        aria-label={WORDS.skill_draft}
+      >
+        {answer.draft}
+      </pre>
+      {answer.skill_path ? (
+        <p className="xt-diagnosis-path" data-testid="diagnosis-path">
+          {WORDS.skill_path} <code>{answer.skill_path}</code>
+        </p>
+      ) : (
+        <p className="xt-diagnosis-path">{WORDS.skill_no_path}</p>
+      )}
+      {answer.skill_note && (
+        <p className="xt-diagnosis-note" data-testid="diagnosis-note">
+          {answer.skill_note}
+        </p>
+      )}
+      {answer.skill_path && name && (
+        <span className="xt-diagnosis-buttons">
+          <button
+            type="button"
+            className="xt-warning-action"
+            data-variant="primary"
+            data-action="save-skill"
+            tabIndex={0}
+            aria-disabled={saving || done || undefined}
+            onClick={saving || done ? undefined : save}
+          >
+            {saving ? WORDS.saving : WORDS.save_skill}
+          </button>
+          {saved && (
+            <span
+              className="xt-diagnosis-saved"
+              role="status"
+              data-testid="diagnosis-saved"
+              data-state={saved === 'failed' ? 'failed' : saved.state}
+            >
+              {saved === 'failed'
+                ? WORDS.save_failed
+                : saved.state === 'saved'
+                  ? `${saved.text} ${saved.path}`
+                  : saved.text}
+            </span>
+          )}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** One line for the project's instruction file, to copy; nothing is written. */
+function InstructionLine({ line }: { line: string }) {
+  const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
+  const copy = () => {
+    const done = navigator.clipboard?.writeText(line);
+    if (!done) {
+      setCopied('failed');
+      return;
+    }
+    done.then(
+      () => setCopied('copied'),
+      () => setCopied('failed'),
+    );
+  };
+  return (
+    <>
+      <pre className="xt-diagnosis-line" data-testid="diagnosis-line-text" tabIndex={0}>
+        {line}
+      </pre>
+      <span className="xt-diagnosis-buttons">
+        <button
+          type="button"
+          className="xt-warning-action"
+          data-action="copy-line"
+          tabIndex={0}
+          onClick={copy}
+        >
+          {WORDS.copy}
+        </button>
+        {copied && (
+          <span className="xt-diagnosis-saved" role="status" data-testid="diagnosis-copied">
+            {copied === 'copied' ? WORDS.copied : WORDS.copy_failed}
+          </span>
+        )}
+      </span>
+    </>
+  );
+}

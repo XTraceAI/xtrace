@@ -12,7 +12,7 @@ type Stage = { readonly sessionId: string } & (
 );
 
 /** A kept answer, or that the diagnosis could not be asked for at all. */
-type Kept = { readonly readId: string } & (
+export type Kept = { readonly readId: string } & (
   { readonly answer: SessionDiagnosis } | { readonly failed: true }
 );
 
