@@ -1,23 +1,94 @@
-//! Tool discovery, fixed command plans and sign-in rules for diagnosis.
+//! One diagnosis run: a small hosted model reads one built input
+//! ([`super::input`]) with the bundled skill's instructions and answers with
+//! one JSON object, checked by [`super::answer`].
 //!
-//! The default tool order is Claude Code, then Codex ([`ORDER`]). Cursor
-//! requires an explicit choice because its prompt goes on the command
-//! line and its run has not been verified end to end ([`Tool::limits`]).
-//! This module builds plans and reads supplied output; it starts no child
-//! process. A caller must check versions, sign-in and Codex's shell feature
-//! before using a plan.
+//! **Which tool.** Claude Code first, then Codex ([`ORDER`]). A tool is
+//! skipped, with the reason kept ([`Tried`]), only while it has not been
+//! given the messages: it is not installed, too old, its own sign-in check
+//! says it is signed out ([`claude_signed_out`], [`codex_signed_out`];
+//! Cursor: its model list fails), its shell cannot be turned off (Codex),
+//! or it cannot be started at all; the next one is tried. A sign-in check
+//! that gives no clear answer is not a reason to skip. Once a tool has been
+//! started with the prompt, it is the only one that ever gets these
+//! messages: its failure or timeout ends the run ([`DiagnoseError::Run`]),
+//! and its one retry after a broken answer is its own. When none can be used
+//! the run says so ([`DiagnoseError::NoTool`]).
+//!
+//! **Cursor is not tried automatically.** Its run is kept
+//! ([`cursor_plan`], [`pick_cursor_model`], [`diagnose_in_order`]) but is not
+//! in [`ORDER`], because: the prompt, with the messages, goes on its command
+//! line, where other programs on this Mac can read it; it was never seen
+//! working end to end; ask mode still has read tools and may load the
+//! person's MCP servers and rules; and its chat may be saved and then indexed
+//! again by XTrace.
+//!
+//! **How each is run.** From an empty private folder
+//! (`<tmp>/xtrace-grading/diagnose/<run id>/`, removed afterwards), with no
+//! standard input other than the prompt, in its own process group, with an
+//! allow-listed environment ([`agent_env`]), a deadline, capped output and
+//! cancel. The exact command lines:
+//!
+//! ```text
+//! claude -p --model haiku --tools "" --setting-sources ""
+//!   --settings {"disableAllHooks":true} --strict-mcp-config
+//!   --no-session-persistence --output-format json        (prompt on stdin)
+//!
+//! codex exec [-m <small model>] [-c model_reasoning_effort="low"]
+//!   -c web_search="disabled" [--disable <feature>]…
+//!   --sandbox read-only --ignore-user-config --ignore-rules
+//!   --skip-git-repo-check --ephemeral --color never -    (prompt on stdin)
+//!
+//! cursor-agent -p --mode ask --sandbox enabled --output-format text
+//!   [--model <small model>] <prompt>
+//! ```
+//!
+//! * Claude Code: no tools at all, no settings file (so none of the
+//!   person's permission rules, hooks or plugins), hooks off, no MCP server,
+//!   and the run's transcript not saved, so XTrace never indexes it. The
+//!   version is checked first with the grading runner's own check
+//!   ([`runner::check_claude_version`]), then its sign-in with
+//!   `claude auth status --json`, run like the run itself (same
+//!   environment, same empty folder). Its JSON result names the model
+//!   that answered when its `modelUsage` lists exactly one.
+//! * Codex: its model is chosen from what `codex debug models` reports
+//!   ([`pick_codex_model`]): the listed model whose description calls it
+//!   fast, not an older one, first by Codex's own priority; with none, no
+//!   `-m` is passed and Codex uses its default. `codex login status` is
+//!   checked first, like Claude Code's sign-in. Its features list
+//!   (`codex features list`) is read and every one of [`CODEX_DISABLED`]
+//!   that this Codex has is turned off (an unknown name would stop Codex),
+//!   so it has no shell, no apps, plugins, hooks or other agents. Codex is
+//!   run only when that list was read and names `shell_tool`, so its shell
+//!   is surely off ([`codex_shell_off`]); otherwise it is skipped
+//!   ([`Skip::ShellNotOff`]). Read-only sandbox, no user `config.toml`, no
+//!   rules files, nothing saved.
+//!   **Known limit:** Codex still loads the person's `~/.codex/AGENTS.md`
+//!   and its list of installed skills ([`Limit::CodexLoadsUserInstructions`]).
+//! * Cursor (only through [`diagnose_in_order`]): `cursor-agent
+//!   --list-models` must succeed first; it fails when Cursor's agent is not
+//!   signed in (`cursor-agent login`), and the tool is then skipped as not
+//!   signed in. Ask mode is read-only. **Known limits:**
+//!   the prompt, with the messages, is passed on the command line, where
+//!   other programs on this Mac can read it while it runs
+//!   ([`Limit::CursorPromptOnCommandLine`]); and this path was not seen
+//!   working end to end here ([`Limit::CursorUnverified`]).
+//!
+//! The prompt ([`prompt`]) is the skill's instructions, then (on the second
+//! try) why the first answer was refused, then the input.
+//!
+//! Only Unix hosts are supported.
 
 use super::answer::{self, Answer, AnswerError};
-use crate::runner;
+use crate::runner::{self, GradeError, Launch, Limits};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     time::Duration,
 };
-use xt_probes::executable::Unavailable;
+use xt_probes::{executable::Unavailable, process::CancelFlag};
 
 /// The tools a run uses, in the order they are tried. Cursor is left out on
-/// purpose: its prompt is passed on the command line and its run is unverified.
+/// purpose (see the module's notes).
 pub const ORDER: [Tool; 2] = [Tool::ClaudeCode, Tool::Codex];
 /// How many tries one tool gets: the first, and one with the reason the
 /// first answer was refused.
@@ -54,8 +125,14 @@ pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(150);
 pub const DEFAULT_CHECK_DEADLINE: Duration = Duration::from_secs(30);
 /// Retained output of a try; more fails the try as too large.
 pub const DEFAULT_MAX_STDOUT_BYTES: usize = 256 * 1024;
+/// Retained output of a check.
+const MAX_CHECK_STDOUT_BYTES: usize = 2 * 1024 * 1024;
 /// How long a sign-in check may take, at most.
 pub const SIGN_IN_CHECK_DEADLINE: Duration = Duration::from_secs(10);
+/// Output of a sign-in check read, at most, per stream.
+const MAX_SIGN_IN_BYTES: usize = 16 * 1024;
+/// Retained standard error; only looked at for a sign-in failure.
+const MAX_STDERR_BYTES: usize = 64 * 1024;
 /// Inherited variables kept for a Codex child beside the runner's list.
 const CODEX_KEPT_ENV: [&str; 1] = ["CODEX_HOME"];
 /// Words in a failed tool's own error lines that mean it is not signed in,
@@ -310,6 +387,132 @@ pub fn prompt(instructions: &str, input: &str, previous: Option<&AnswerError>) -
     )
 }
 
+/// Run one diagnosis with the tools of [`ORDER`], as the module says.
+pub fn diagnose(
+    job: &DiagnoseJob<'_>,
+    cancel: Option<&CancelFlag>,
+) -> Result<Diagnosis, DiagnoseError> {
+    diagnose_in_order(job, &ORDER, cancel)
+}
+
+/// Run one diagnosis trying `order`'s tools, under [`diagnose`]'s rules.
+/// The app uses [`ORDER`]; another order (Cursor's run) is for tests and a
+/// later, explicit choice.
+pub fn diagnose_in_order(
+    job: &DiagnoseJob<'_>,
+    order: &[Tool],
+    cancel: Option<&CancelFlag>,
+) -> Result<Diagnosis, DiagnoseError> {
+    if !cfg!(unix) {
+        return Err(DiagnoseError::UnsupportedPlatform);
+    }
+    let folder = RunFolder::create(job.temp_dir, job.run_id)?;
+    let mut tried = Vec::new();
+    for &tool in order {
+        if cancelled(cancel) {
+            return Err(DiagnoseError::Cancelled);
+        }
+        let Ok(binary) = job.tools.get(tool) else {
+            tried.push(Tried {
+                tool,
+                skip: Skip::NotInstalled,
+                given_prompt: false,
+            });
+            continue;
+        };
+        let context = Context {
+            binary,
+            cwd: folder.path(),
+            env: agent_env(tool, binary, job.inherited_env),
+            limits: job.limits,
+            cancel,
+        };
+        let plan = match plan(tool, &context) {
+            Ok(plan) => plan,
+            Err(Prepared::Skip(skip)) => {
+                tried.push(Tried {
+                    tool,
+                    skip,
+                    given_prompt: false,
+                });
+                continue;
+            }
+            Err(Prepared::Cancelled) => return Err(DiagnoseError::Cancelled),
+        };
+        let mut previous: Option<AnswerError> = None;
+        let mut model = Model {
+            asked: plan.model.clone(),
+            answered: None,
+        };
+        let mut given = false;
+        for index in 0..TRIES {
+            if cancelled(cancel) {
+                return Err(DiagnoseError::Cancelled);
+            }
+            let text = prompt(job.instructions, job.input, previous.as_ref());
+            let output = match run_try(tool, &plan, &context, &text) {
+                Ok(output) => output,
+                Err(TryEnd::Cancelled) => return Err(DiagnoseError::Cancelled),
+                // Never started, so never given the messages on this try:
+                // the next tool may be asked only if no earlier try was.
+                Err(TryEnd::NotStarted) if !given => {
+                    tried.push(Tried {
+                        tool,
+                        skip: Skip::CouldNotStart,
+                        given_prompt: false,
+                    });
+                    break;
+                }
+                Err(TryEnd::NotStarted) => {
+                    return Err(DiagnoseError::Run {
+                        tool,
+                        model,
+                        failure: RunFailure::Exited { code: None },
+                        tried,
+                    });
+                }
+                // Started with the prompt: this tool's failure is final, so
+                // the same messages never go to a second company.
+                Err(TryEnd::Failed(failure)) => {
+                    return Err(DiagnoseError::Run {
+                        tool,
+                        model,
+                        failure,
+                        tried,
+                    });
+                }
+            };
+            given = true;
+            model.answered = output.model;
+            match answer::parse(&output.text) {
+                Ok(answer) => {
+                    return Ok(Diagnosis {
+                        tool,
+                        model,
+                        answer,
+                        tries: index + 1,
+                        tried,
+                    });
+                }
+                Err(error) if index + 1 == TRIES => {
+                    return Err(DiagnoseError::Refused {
+                        tool,
+                        model,
+                        error,
+                        tried,
+                    });
+                }
+                Err(error) => previous = Some(error),
+            }
+        }
+    }
+    Err(DiagnoseError::NoTool { tried })
+}
+
+fn cancelled(cancel: Option<&CancelFlag>) -> bool {
+    cancel.is_some_and(CancelFlag::is_cancelled)
+}
+
 /// What one tool's run needs, decided before its first try.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
@@ -321,6 +524,83 @@ pub struct Plan {
     /// Whether the prompt goes on standard input; otherwise it is the last
     /// argument.
     pub prompt_on_stdin: bool,
+}
+
+struct Context<'a> {
+    binary: &'a Path,
+    cwd: &'a Path,
+    env: Vec<(OsString, OsString)>,
+    limits: AgentLimits,
+    cancel: Option<&'a CancelFlag>,
+}
+
+enum Prepared {
+    Skip(Skip),
+    Cancelled,
+}
+
+enum TryEnd {
+    /// The tool could not be started, so it was not given this prompt.
+    NotStarted,
+    /// It was started with the prompt and failed.
+    Failed(RunFailure),
+    Cancelled,
+}
+
+fn plan(tool: Tool, context: &Context<'_>) -> Result<Plan, Prepared> {
+    match tool {
+        Tool::ClaudeCode => {
+            // The runner's own version check, with the environment that
+            // reaches this tool's child.
+            let launch = Launch {
+                claude: context.binary,
+                argv: Vec::new(),
+                cwd: context.cwd,
+                grade_dir: context.cwd,
+                inherited_env: &context.env,
+                limits: Limits {
+                    version_deadline: context.limits.check_deadline,
+                    exit_grace: context.limits.exit_grace,
+                    term_grace: context.limits.term_grace,
+                    ..Limits::default()
+                },
+                leader_record: None,
+                step: None,
+            };
+            match runner::check_claude_version(&launch, context.cancel) {
+                Ok(()) => {}
+                Err(GradeError::Cancelled) => return Err(Prepared::Cancelled),
+                Err(GradeError::ClaudeTooOld) => return Err(Prepared::Skip(Skip::TooOld)),
+                Err(GradeError::Timeout) => return Err(Prepared::Skip(Skip::TimedOut)),
+                Err(_) => return Err(Prepared::Skip(Skip::CouldNotStart)),
+            }
+            match sign_in_check(context, &["auth", "status", "--json"])? {
+                Some(status) if claude_signed_out(&status) => {
+                    Err(Prepared::Skip(Skip::NotSignedIn))
+                }
+                _ => Ok(claude_plan()),
+            }
+        }
+        Tool::Codex => {
+            if sign_in_check(context, &["login", "status"])?
+                .is_some_and(|status| codex_signed_out(&status))
+            {
+                return Err(Prepared::Skip(Skip::NotSignedIn));
+            }
+            let features = check(context, &["features", "list"])?;
+            let available = features.map(|out| codex_features(&out)).unwrap_or_default();
+            if !codex_shell_off(&available) {
+                return Err(Prepared::Skip(Skip::ShellNotOff));
+            }
+            let models = check(context, &["debug", "models"])?;
+            let chosen = models.and_then(|out| pick_codex_model(&out));
+            Ok(codex_plan(chosen.as_ref(), &available))
+        }
+        Tool::Cursor => match check(context, &["--list-models"])? {
+            Some(out) => Ok(cursor_plan(pick_cursor_model(&out).as_deref())),
+            None => Err(Prepared::Skip(Skip::NotSignedIn)),
+        },
+    }
 }
 
 /// The Claude Code arguments.
@@ -514,11 +794,58 @@ pub fn pick_cursor_model(list: &[u8]) -> Option<String> {
         })
         .map(str::to_owned)
 }
+
+/// Run one check before a tool's run: its standard output when it exited
+/// well, `None` when it exited with a failure.
+fn check(context: &Context<'_>, args: &[&str]) -> Result<Option<Vec<u8>>, Prepared> {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let bounds = Bounds {
+        deadline: context.limits.check_deadline,
+        max_stdout_bytes: MAX_CHECK_STDOUT_BYTES,
+        max_stderr_bytes: MAX_STDERR_BYTES,
+        exit_grace: context.limits.exit_grace,
+        term_grace: context.limits.term_grace,
+    };
+    match run_child(context, &args, None, bounds) {
+        Ok(finished) if finished.success => Ok(Some(finished.stdout)),
+        Ok(_) => Ok(None),
+        Err(ChildEnd::Cancelled) => Err(Prepared::Cancelled),
+        Err(ChildEnd::Spawn) => Err(Prepared::Skip(Skip::CouldNotStart)),
+        Err(ChildEnd::Timeout) => Err(Prepared::Skip(Skip::TimedOut)),
+        Err(ChildEnd::TooLarge | ChildEnd::Unobservable) => Ok(None),
+    }
+}
+
 /// What a sign-in check printed, whatever its exit.
 pub struct SignInStatus {
     pub success: bool,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+/// Run a tool's own sign-in check with the run's environment and empty
+/// folder, a short deadline ([`SIGN_IN_CHECK_DEADLINE`] at most) and a small
+/// output cap. `None` when it gave nothing readable (could not start, took
+/// too long, printed too much): the sign-in is then unknown and the run goes
+/// ahead as before.
+fn sign_in_check(context: &Context<'_>, args: &[&str]) -> Result<Option<SignInStatus>, Prepared> {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let bounds = Bounds {
+        deadline: context.limits.check_deadline.min(SIGN_IN_CHECK_DEADLINE),
+        max_stdout_bytes: MAX_SIGN_IN_BYTES,
+        max_stderr_bytes: MAX_SIGN_IN_BYTES,
+        exit_grace: context.limits.exit_grace,
+        term_grace: context.limits.term_grace,
+    };
+    match run_child(context, &args, None, bounds) {
+        Ok(finished) => Ok(Some(SignInStatus {
+            success: finished.success,
+            stdout: finished.stdout,
+            stderr: finished.stderr,
+        })),
+        Err(ChildEnd::Cancelled) => Err(Prepared::Cancelled),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Whether `claude auth status --json` clearly says signed out: its output
@@ -542,6 +869,104 @@ pub fn codex_signed_out(status: &SignInStatus) -> bool {
                 .lines()
                 .any(|line| has_phrase(&line.to_ascii_lowercase(), "not logged in"))
         })
+}
+
+/// What a try gave back.
+struct Output {
+    text: String,
+    /// The model that answered, when the tool says.
+    model: Option<String>,
+}
+
+fn run_try(tool: Tool, plan: &Plan, context: &Context<'_>, prompt: &str) -> Result<Output, TryEnd> {
+    let mut args = plan.args.clone();
+    if !plan.prompt_on_stdin {
+        args.push(prompt.into());
+    }
+    let bounds = Bounds {
+        deadline: context.limits.deadline,
+        max_stdout_bytes: context.limits.max_stdout_bytes,
+        max_stderr_bytes: MAX_STDERR_BYTES,
+        exit_grace: context.limits.exit_grace,
+        term_grace: context.limits.term_grace,
+    };
+    let stdin = plan.prompt_on_stdin.then_some(prompt);
+    let finished = run_child(context, &args, stdin, bounds).map_err(|end| match end {
+        ChildEnd::Cancelled => TryEnd::Cancelled,
+        ChildEnd::Timeout => TryEnd::Failed(RunFailure::Timeout),
+        ChildEnd::TooLarge => TryEnd::Failed(RunFailure::OutputTooLarge),
+        ChildEnd::Spawn => TryEnd::NotStarted,
+        ChildEnd::Unobservable => TryEnd::Failed(RunFailure::Unobservable),
+    })?;
+    match tool {
+        Tool::ClaudeCode => claude_output(&finished, prompt),
+        Tool::Codex | Tool::Cursor => {
+            if !finished.success {
+                return Err(TryEnd::Failed(failure_of(&finished, prompt)));
+            }
+            let text = String::from_utf8(finished.stdout)
+                .map_err(|_| TryEnd::Failed(RunFailure::Unreadable))?;
+            Ok(Output { text, model: None })
+        }
+    }
+}
+
+/// Claude Code's `--output-format json` result: `result` is the answer's
+/// text; `is_error` whose error text says so ([`says_not_signed_in`]) is
+/// [`RunFailure::NotSignedIn`]. The model that answered is `modelUsage`'s
+/// key only when it has exactly one; otherwise none is named.
+fn claude_output(finished: &ChildFinished, prompt: &str) -> Result<Output, TryEnd> {
+    let value: Option<serde_json::Value> = serde_json::from_slice(&finished.stdout).ok();
+    let Some(value) = value.filter(serde_json::Value::is_object) else {
+        return Err(TryEnd::Failed(if finished.success {
+            RunFailure::Unreadable
+        } else {
+            failure_of(finished, prompt)
+        }));
+    };
+    let result = value
+        .get("result")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let is_error = value
+        .get("is_error")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if is_error || !finished.success {
+        return Err(TryEnd::Failed(if says_not_signed_in(result, prompt) {
+            RunFailure::NotSignedIn
+        } else {
+            failure_of(finished, prompt)
+        }));
+    }
+    let model = value
+        .get("modelUsage")
+        .and_then(serde_json::Value::as_object)
+        .filter(|usage| usage.len() == 1)
+        .and_then(|usage| usage.keys().next().cloned())
+        .filter(|name| {
+            name.len() <= 128
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '[' | ']'))
+        });
+    Ok(Output {
+        text: result.to_owned(),
+        model,
+    })
+}
+
+/// A failed exit: not signed in when one of its standard error lines says
+/// so ([`says_not_signed_in`]), otherwise the exit code. Standard output is
+/// never read for this: it may hold the model's text.
+fn failure_of(finished: &ChildFinished, prompt: &str) -> RunFailure {
+    if says_not_signed_in(&String::from_utf8_lossy(&finished.stderr), prompt) {
+        RunFailure::NotSignedIn
+    } else {
+        RunFailure::Exited {
+            code: finished.code,
+        }
+    }
 }
 
 /// Whether a tool's own error text says it is not signed in: a line of it
@@ -605,6 +1030,150 @@ pub fn agent_env(
     env.push(("DISABLE_AUTOUPDATER".into(), "1".into()));
     env.push(("NO_COLOR".into(), "1".into()));
     env
+}
+
+#[derive(Clone, Copy)]
+struct Bounds {
+    deadline: Duration,
+    max_stdout_bytes: usize,
+    max_stderr_bytes: usize,
+    exit_grace: Duration,
+    term_grace: Duration,
+}
+
+struct ChildFinished {
+    success: bool,
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+enum ChildEnd {
+    Spawn,
+    Cancelled,
+    Timeout,
+    TooLarge,
+    Unobservable,
+}
+
+/// Run the tool once from the empty folder, `stdin` written to it and then
+/// closed (or no standard input), bounded and cancellable, its group ended
+/// and reaped on every path.
+#[cfg(unix)]
+fn run_child(
+    context: &Context<'_>,
+    args: &[OsString],
+    stdin: Option<&str>,
+    bounds: Bounds,
+) -> Result<ChildFinished, ChildEnd> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use xt_probes::process::{self, Ended};
+
+    let mut command = Command::new(context.binary);
+    command
+        .args(args)
+        .current_dir(context.cwd)
+        .env_clear()
+        .envs(
+            context
+                .env
+                .iter()
+                .map(|(k, v)| (k.as_os_str(), v.as_os_str())),
+        )
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = process::spawn_grouped(&mut command).map_err(|_| ChildEnd::Spawn)?;
+    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        let text = text.to_owned();
+        // Written on its own detached thread, never joined: a child (or a
+        // descendant that left its group still holding the pipe) that does
+        // not read it can then hold neither the bounded wait, nor cancel,
+        // nor the one-at-a-time slot past the deadline. The thread ends when
+        // the write finishes or fails because every reader is gone.
+        drop(std::thread::spawn(move || {
+            let _ = pipe.write_all(text.as_bytes());
+        }));
+    }
+    let finished = process::collect(
+        child,
+        process::Bounds {
+            deadline: bounds.deadline,
+            max_stdout_bytes: bounds.max_stdout_bytes,
+            max_stderr_bytes: bounds.max_stderr_bytes,
+            stdout_overflow_ends: true,
+            exit_grace: Some(bounds.exit_grace),
+            term_grace: Some(bounds.term_grace),
+        },
+        context.cancel,
+    );
+    let finished = finished.map_err(|ended| match ended {
+        Ended::Timeout => ChildEnd::Timeout,
+        Ended::Cancelled => ChildEnd::Cancelled,
+        Ended::OutputTooLarge => ChildEnd::TooLarge,
+        Ended::Unobservable => ChildEnd::Unobservable,
+    })?;
+    Ok(ChildFinished {
+        success: finished.status.success(),
+        code: finished.status.code(),
+        stdout: finished.stdout.bytes,
+        stderr: finished.stderr.bytes,
+    })
+}
+
+#[cfg(not(unix))]
+fn run_child(
+    _: &Context<'_>,
+    _: &[OsString],
+    _: Option<&str>,
+    _: Bounds,
+) -> Result<ChildFinished, ChildEnd> {
+    Err(ChildEnd::Spawn)
+}
+
+/// The run's empty private folder, removed when dropped.
+struct RunFolder {
+    path: PathBuf,
+}
+
+impl RunFolder {
+    #[cfg(unix)]
+    fn create(temp_dir: &Path, run_id: &str) -> Result<Self, DiagnoseError> {
+        use std::os::unix::fs::DirBuilderExt;
+        if !crate::staging::is_run_id(run_id) {
+            return Err(DiagnoseError::Staging);
+        }
+        let parent =
+            crate::staging::make_private_parent(temp_dir).map_err(|_| DiagnoseError::Staging)?;
+        let parent = crate::staging::make_private_folder(&parent.join(DIAGNOSE_DIR))
+            .map_err(|_| DiagnoseError::Staging)?;
+        let path = parent.join(run_id);
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(|_| DiagnoseError::Staging)?;
+        Ok(Self { path })
+    }
+
+    #[cfg(not(unix))]
+    fn create(_: &Path, _: &str) -> Result<Self, DiagnoseError> {
+        Err(DiagnoseError::UnsupportedPlatform)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for RunFolder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 #[cfg(test)]
