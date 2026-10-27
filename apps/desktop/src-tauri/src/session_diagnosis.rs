@@ -1,4 +1,4 @@
-//! Diagnose outcomes, exact conversation messages and explicit project skill saves.
+//! Diagnose runs, outcomes, exact conversation messages and explicit project skill saves.
 
 use crate::session_diagnosis_dto::{
     self as dto, DiagnosisSent, SaveSkillRefusal, SavedSkill, SessionDiagnosis,
@@ -6,17 +6,260 @@ use crate::session_diagnosis_dto::{
 use crate::state::{AppState, StateError};
 use crate::transcript_dto::{SourceBlock, SourcePayload, SourceRecord, SourceResultPart};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 use xt_ingest::canonical::ParsedRecord;
+use xt_ingest::native::readers_cli::CancelToken;
+use xt_judge::CancelFlag;
 use xt_judge::diagnosis::{
-    agents::{self, DiagnoseError, Tool, Tried},
+    self,
+    agents::{self, AgentLimits, DiagnoseError, DiagnoseJob, Tool, Tried},
     answer,
     input::{self, HostName, Message, Sender},
 };
-use xt_metrics::WarningPoint;
+use xt_metrics::{WarningKind, WarningPoint};
 
 /// Characters of a tool call's input shown in `(ran <tool>: <input>)`.
 pub const MAX_CALL_INPUT_CHARS: usize = 200;
+
+/// The longest identifier a view may name a diagnosis with.
+const MAX_READ_ID: usize = 128;
+/// The longest warning identity accepted.
+const MAX_WARNING_ID: usize = 1024;
+
+/// How long quitting waits for a cancelled diagnosis to stop its tool.
+pub const SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
+
+/// The running diagnosis, if any: one at a time.
+#[derive(Default)]
+pub struct DiagnosisRuns {
+    active: Mutex<Runs>,
+    /// Signalled when a diagnosis ends.
+    ended: Condvar,
+}
+
+#[derive(Default)]
+struct Runs {
+    running: Option<Active>,
+    /// Set once by shutdown: nothing starts after it.
+    closed: bool,
+}
+
+struct Active {
+    read_id: String,
+    source: CancelToken,
+    agent: CancelFlag,
+}
+
+/// The running diagnosis's slot, freed when dropped.
+pub struct Slot {
+    runs: Arc<DiagnosisRuns>,
+    source: CancelToken,
+    agent: CancelFlag,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if let Ok(mut runs) = self.runs.active.lock() {
+            runs.running = None;
+        }
+        self.runs.ended.notify_all();
+    }
+}
+
+impl DiagnosisRuns {
+    fn begin(self: &Arc<Self>, read_id: &str) -> Option<Slot> {
+        let mut runs = self.active.lock().ok()?;
+        if runs.closed || runs.running.is_some() {
+            return None;
+        }
+        let (source, agent) = (CancelToken::new(), CancelFlag::new());
+        runs.running = Some(Active {
+            read_id: read_id.to_owned(),
+            source: source.clone(),
+            agent: agent.clone(),
+        });
+        Some(Slot {
+            runs: Arc::clone(self),
+            source,
+            agent,
+        })
+    }
+
+    /// Stop the diagnosis `read_id` if it is the one running. Returns
+    /// whether it was.
+    pub fn cancel(&self, read_id: &str) -> bool {
+        let Ok(runs) = self.active.lock() else {
+            return false;
+        };
+        match runs.running.as_ref() {
+            Some(run) if run.read_id == read_id => {
+                run.source.cancel();
+                run.agent.cancel();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The app is quitting: refuse new diagnoses, stop the running one, and
+    /// wait at most [`SHUTDOWN_BOUND`] for its tool's process group to be
+    /// ended and reaped.
+    pub fn shutdown(&self) {
+        let Ok(mut runs) = self.active.lock() else {
+            return;
+        };
+        runs.closed = true;
+        if let Some(run) = runs.running.as_ref() {
+            run.source.cancel();
+            run.agent.cancel();
+        }
+        let deadline = Instant::now() + SHUTDOWN_BOUND;
+        while runs.running.is_some() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            match self.ended.wait_timeout(runs, left) {
+                Ok((next, _)) => runs = next,
+                Err(_) => return,
+            }
+        }
+    }
+}
+
+/// Where a run looks for its tools and puts its private folder.
+pub struct RunEnvironment {
+    pub inherited_env: Vec<(OsString, OsString)>,
+    pub temp_dir: PathBuf,
+    pub limits: AgentLimits,
+}
+
+impl RunEnvironment {
+    /// This process's environment and temporary folder.
+    pub fn process() -> Self {
+        Self {
+            inherited_env: xt_judge::runner::inherited_env(),
+            temp_dir: std::env::temp_dir(),
+            limits: AgentLimits::default(),
+        }
+    }
+}
+
+/// One request.
+pub struct Request<'a> {
+    pub session_id: &'a str,
+    pub warning_id: &'a str,
+    pub timezone: &'a str,
+    pub read_id: &'a str,
+}
+
+/// Reserve the one run before dispatching its worker, so Stop can find it.
+pub fn reserve(
+    runs: &Arc<DiagnosisRuns>,
+    request: &Request<'_>,
+) -> Result<Option<Slot>, StateError> {
+    if !printable(request.read_id, MAX_READ_ID) || !printable(request.warning_id, MAX_WARNING_ID) {
+        return Err(StateError::InvalidWarningRequest);
+    }
+    Ok(runs.begin(request.read_id))
+}
+
+/// Run the reserved diagnosis, as the module says.
+pub fn diagnose(
+    state: &AppState,
+    slot: Slot,
+    readers: &crate::native_index::DetailReaders,
+    environment: &RunEnvironment,
+    request: &Request<'_>,
+) -> Result<SessionDiagnosis, StateError> {
+    if slot.source.is_cancelled() || slot.agent.is_cancelled() {
+        return Ok(SessionDiagnosis::Cancelled {
+            text: dto::CANCELLED.to_owned(),
+        });
+    }
+    let Some((warning, zone)) =
+        state.session_warning(request.session_id, request.warning_id, request.timezone)?
+    else {
+        return Ok(SessionDiagnosis::WarningNotFound {
+            text: dto::WARNING_NOT_FOUND.to_owned(),
+        });
+    };
+    let Some(facts) = state.with_store(|store| session_facts(store, request.session_id))? else {
+        return Ok(SessionDiagnosis::WarningNotFound {
+            text: dto::WARNING_NOT_FOUND.to_owned(),
+        });
+    };
+    let flag = warning.points_at();
+    let records = match state.diagnosis_context(request.session_id, &flag, &slot.source, readers)? {
+        Ok(loaded) => loaded,
+        Err(crate::dto::SessionSourceReason::Cancelled) => {
+            return Ok(SessionDiagnosis::Cancelled {
+                text: dto::CANCELLED.to_owned(),
+            });
+        }
+        Err(reason) => {
+            return Ok(SessionDiagnosis::SourceUnavailable {
+                reason,
+                text: dto::SOURCE_UNAVAILABLE.to_owned(),
+            });
+        }
+    };
+    let Some((messages, flagged)) = conversation(&records, &facts.records, &flag) else {
+        return Ok(SessionDiagnosis::FlaggedMessageNotFound {
+            text: dto::FLAGGED_NOT_FOUND.to_owned(),
+        });
+    };
+    drop(records);
+    let session = Session {
+        host: host(facts.host),
+        project: facts.project.clone(),
+    };
+    let header = input::Header {
+        kind: kind(warning.kind),
+        reason: input::reason(kind(warning.kind), warning.record_uuids.len()),
+        host: session.host,
+        project: facts
+            .project
+            .as_deref()
+            .and_then(|cwd| Path::new(cwd).file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    let Ok(built) = input::build(&header, &messages, flagged) else {
+        return Ok(SessionDiagnosis::FlaggedMessageNotFound {
+            text: dto::FLAGGED_NOT_FOUND.to_owned(),
+        });
+    };
+    drop(messages);
+    let Some(run_id) = crate::telemetry::random_uuid() else {
+        return Ok(SessionDiagnosis::Failed {
+            text: dto::PREPARE_FAILED.to_owned(),
+        });
+    };
+    let tools = agents::find_tools(&environment.inherited_env);
+    let outcome = agents::diagnose(
+        &DiagnoseJob {
+            tools: &tools,
+            instructions: diagnosis::instructions(),
+            input: &built.text,
+            temp_dir: &environment.temp_dir,
+            run_id: &run_id,
+            inherited_env: &environment.inherited_env,
+            limits: environment.limits,
+        },
+        Some(&slot.agent),
+    );
+    Ok(answer_dto(
+        outcome,
+        &built.sent,
+        built.messages,
+        &zone,
+        &session,
+    ))
+}
 
 /// What a diagnosis answer's wording needs about its session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,6 +427,64 @@ fn sent_dto(sent: &input::Sent, zone: &jiff::tz::TimeZone, tools: &[Tool]) -> Di
         tools: tools.iter().copied().map(Into::into).collect(),
         text: dto::sent_text(sent.messages, span, tools),
     }
+}
+
+fn printable(value: &str, cap: usize) -> bool {
+    !value.is_empty() && value.len() <= cap && !value.chars().any(char::is_control)
+}
+
+fn kind(kind: WarningKind) -> input::WarningKind {
+    match kind {
+        WarningKind::Correction => input::WarningKind::Correction,
+        WarningKind::Interruption => input::WarningKind::Interruption,
+        WarningKind::RepeatedCalls => input::WarningKind::RepeatedCalls,
+        WarningKind::RepeatedPrompt => input::WarningKind::RepeatedPrompt,
+        WarningKind::RepeatedFailure => input::WarningKind::RepeatedFailure,
+    }
+}
+
+fn host(host: xt_store::Host) -> HostName {
+    match host {
+        xt_store::Host::Claude => HostName::ClaudeCode,
+        xt_store::Host::Codex => HostName::Codex,
+        xt_store::Host::Cursor => HostName::Cursor,
+        xt_store::Host::Other => HostName::Other,
+    }
+}
+
+/// What the index says about one session for a diagnosis: metadata only.
+pub struct SessionFacts {
+    pub host: xt_store::Host,
+    /// The folder the session ran in.
+    pub project: Option<String>,
+    pub records: HashMap<String, RecordFacts>,
+}
+
+fn session_facts(
+    store: &mut xt_store::Store,
+    session_id: &str,
+) -> Result<Option<SessionFacts>, StateError> {
+    let Some(session) = store.session(session_id)? else {
+        return Ok(None);
+    };
+    let records = store
+        .records(session_id)?
+        .into_iter()
+        .map(|record| {
+            (
+                record.uuid,
+                RecordFacts {
+                    person: record.human_is_eligible,
+                    agent_id: record.identity.agent_id,
+                },
+            )
+        })
+        .collect();
+    Ok(Some(SessionFacts {
+        host: session.meta.host,
+        project: session.meta.cwd,
+        records,
+    }))
 }
 
 /// The index's facts about one record.

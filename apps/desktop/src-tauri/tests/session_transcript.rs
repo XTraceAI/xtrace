@@ -1206,3 +1206,71 @@ fn native_source_ranges_keep_empty_files_and_page_groups_while_excerpts_stay_in_
     assert!(records[0].target);
     assert_eq!(records[0].record.id, uuid(3));
 }
+
+#[test]
+fn diagnosis_context_falls_back_only_for_supported_byte_limit_refusals() {
+    let (_temp, root, db, state) = reader_scene();
+    let home = root.join("home");
+    let before = counts(&db);
+    for (index, id, host, native, code, fallback) in [
+        (
+            0,
+            "codex-c0de",
+            "codex",
+            CODEX,
+            "detail_limit_source_bytes",
+            true,
+        ),
+        (
+            1,
+            "codex-c0de",
+            "codex",
+            CODEX,
+            "detail_limit_native_rows",
+            false,
+        ),
+        (2, "codex-c0de", "codex", CODEX, "detail_deadline", false),
+        (
+            3,
+            "cursor-c0d5",
+            "cursor",
+            CURSOR,
+            "detail_limit_source_bytes",
+            false,
+        ),
+    ] {
+        let marker = root.join(format!("diagnosis-context-{index}"));
+        let page = reader_session(&home, host, native).replace(
+            "\"title\":null",
+            &format!(
+                "\"title\":null,\"context_page\":{}",
+                json!({"version":1,"digest":"a".repeat(64),"start":0,"end":2,"total":2,"target":1})
+            ),
+        );
+        let refusal = json!({"type":"diagnostic","host":host,"code":code,"path":null});
+        let script = format!(
+            "case \"$*\" in\n*--context-page*) {page} ;;\n*) printf '%s\\n' '{refusal}' >&2; exit 2 ;;\nesac"
+        );
+        let python = fake_python(&root, &marker, &script);
+        let result = state
+            .diagnosis_context(
+                id,
+                &xt_metrics::WarningPoint {
+                    record_uuid: uuid(1),
+                    block: None,
+                },
+                &CancelToken::new(),
+                &bundle_with(&python),
+            )
+            .unwrap();
+        if fallback {
+            assert_eq!(result.unwrap().len(), 2);
+        } else {
+            assert!(result.is_err(), "{id}: {code}");
+        }
+        let calls = fs::read_to_string(marker).unwrap();
+        assert_eq!(calls.contains("--context-page"), fallback, "{calls}");
+    }
+    assert_eq!(counts(&db), before);
+    state.shutdown();
+}

@@ -540,6 +540,12 @@ pub const NO_TOOL: &str =
     "No coding tool could run the diagnosis. Install Claude Code or Codex and sign in.";
 pub const REFUSED: &str = "The diagnosis gave no usable answer. Try again.";
 pub const RUN_FAILED: &str = "The diagnosis stopped before it answered. Try again.";
+pub const SOURCE_UNAVAILABLE: &str =
+    "This session's messages could not be read, so nothing was sent.";
+pub const WARNING_NOT_FOUND: &str = "This warning is no longer in the session.";
+pub const FLAGGED_NOT_FOUND: &str =
+    "The flagged message is not in this session's file, so nothing was sent.";
+pub const BUSY: &str = "Another diagnosis is running. Wait for it to finish.";
 pub const CANCELLED: &str = "The diagnosis was stopped.";
 pub const PREPARE_FAILED: &str = "The diagnosis could not start, so nothing was sent.";
 /// What a Diagnose click sends, said before the click. It matches
