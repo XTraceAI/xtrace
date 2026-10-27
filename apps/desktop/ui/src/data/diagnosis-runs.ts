@@ -60,6 +60,9 @@ export interface DiagnosisRuns {
   detach(): void;
 }
 
+/** How long a purge waits before asking its refused Stop again. */
+const PURGE_RETRY_MS = 1000;
+
 let counter = 0;
 /** A name for one run, unique in this window. */
 function nextReadId(): string {
@@ -91,36 +94,60 @@ export function createDiagnosisRuns(source: DataSource, client: QueryClient): Di
   let sentWith: DiagnosisControls | null = null;
   /** The purge epoch the running diagnosis was sent in. */
   let sentInEpoch = 0;
-  /** The purge epoch a Stop was last asked for on its own, once per purge. */
-  let purgeStopEpoch = -1;
+  /** The purge epoch the running diagnosis was last told about. */
+  let heardEpoch = 0;
+  /**
+   * The run a purge still owes a Stop: set when a purge comes after it was
+   * sent, and cleared only once a cancel for it is accepted or it ends. A
+   * refused or failed cancel (the user's or the purge's own) leaves it owed.
+   */
+  let purgeOwes: string | null = null;
+  /** The next try of a purge's refused Stop, paced so a refusal cannot spin. */
+  let retry: ReturnType<typeof setTimeout> | undefined;
   let live = true;
   let unwatch: (() => void) | null = null;
   const listeners = new Set<() => void>();
   const set = (next: DiagnosisRun | null) => {
     run = next;
-    if (!next) sentWith = null;
+    if (!next) {
+      sentWith = null;
+      purgeOwes = null;
+      clearTimeout(retry);
+      retry = undefined;
+    }
     listeners.forEach((listener) => listener());
   };
   /** Changes the Stop state of `current` while it is still the running one. */
   const stopState = (current: DiagnosisRun, stop: StopState) => {
     if (run?.readId === current.readId && run.stop !== stop) set({ ...run, stop });
   };
-  const stop = (): Promise<boolean> => {
+  /** Asks the purge's owed Stop, if Stop is free to be asked now. */
+  const payPurge = () => {
+    if (live && purgeOwes !== null && run?.readId === purgeOwes && run.stop === 'none')
+      void ask(true);
+  };
+  const ask = (byPurge: boolean): Promise<boolean> => {
     const current = run;
     const controls = sentWith;
     if (!current || !controls || current.stop !== 'none') return Promise.resolve(false);
     stopState(current, 'asking');
-    return controls.cancel(current.readId).then(
-      (accepted) => {
-        stopState(current, accepted ? 'accepted' : 'none');
-        return accepted;
-      },
-      () => {
-        stopState(current, 'none');
-        return false;
-      },
-    );
+    const settle = (accepted: boolean) => {
+      stopState(current, accepted ? 'accepted' : 'none');
+      if (accepted) {
+        if (purgeOwes === current.readId) purgeOwes = null;
+      } else if (purgeOwes === current.readId) {
+        // Still owed. After the user's refused Stop, ask at once; after the
+        // purge's own, try again shortly.
+        if (byPurge) {
+          clearTimeout(retry);
+          retry = setTimeout(payPurge, PURGE_RETRY_MS);
+        } else payPurge();
+      }
+      return accepted;
+    };
+    return controls.cancel(current.readId).then(settle, () => settle(false));
   };
+  const stop = () => ask(false);
   return {
     getRun: () => run,
     subscribe(listener) {
@@ -140,6 +167,7 @@ export function createDiagnosisRuns(source: DataSource, client: QueryClient): Di
       };
       sentWith = controls;
       sentInEpoch = purgeEpoch(client);
+      heardEpoch = sentInEpoch;
       const epoch = sentInEpoch;
       set(started);
       let request: Promise<SessionDiagnosis>;
@@ -167,9 +195,11 @@ export function createDiagnosisRuns(source: DataSource, client: QueryClient): Di
       live = true;
       unwatch ??= client.getQueryCache().subscribe(() => {
         const epoch = purgeEpoch(client);
-        if (!run || epoch === sentInEpoch || epoch === purgeStopEpoch) return;
-        purgeStopEpoch = epoch;
-        void stop();
+        if (epoch === heardEpoch) return;
+        heardEpoch = epoch;
+        if (!run || epoch === sentInEpoch) return;
+        purgeOwes = run.readId;
+        payPurge();
       });
     },
     detach() {
@@ -178,6 +208,8 @@ export function createDiagnosisRuns(source: DataSource, client: QueryClient): Di
       live = false;
       unwatch?.();
       unwatch = null;
+      clearTimeout(retry);
+      retry = undefined;
       if (!current || !controls) return;
       run = null;
       sentWith = null;

@@ -125,3 +125,57 @@ it('on "Delete stored content" puts kept answers away, stops the running diagnos
   await vi.waitFor(() => expect(h.runs.getRun()).toBeNull());
   expect(h.client.getQueryData(keptKey('session-a', 'warning-a'))).toBeUndefined();
 });
+
+// A purge's Stop stays owed until a cancel for the run is accepted: a refused
+// Stop, the user's or the purge's own, must not let the run quietly continue.
+it("asks the purge's Stop again once a refused user Stop frees it", async () => {
+  const h = setup();
+  let refuse!: (accepted: boolean) => void;
+  vi.mocked(h.controls.cancel).mockImplementationOnce(
+    () =>
+      new Promise<boolean>((resolve) => {
+        refuse = resolve;
+      }),
+  );
+  h.runs.start('session-a', 'warning-a', 'UTC');
+  const { readId } = h.runs.getRun()!;
+  const pressed = h.runs.stop();
+  expect(h.runs.getRun()!.stop).toBe('asking');
+  // The purge arrives while the user's Stop is still being asked.
+  discardStoredWords(h.client);
+  expect(h.controls.cancel).toHaveBeenCalledOnce();
+  refuse(false);
+  expect(await pressed).toBe(false);
+  await vi.waitFor(() => expect(h.controls.cancel).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(h.controls.cancel).mock.calls[1]).toEqual([readId]);
+  await vi.waitFor(() => expect(h.runs.getRun()!.stop).toBe('accepted'));
+});
+
+it('tries a refused or failed purge Stop again until one is accepted', async () => {
+  vi.useFakeTimers();
+  try {
+    const h = setup();
+    vi.mocked(h.controls.cancel)
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error('Synthetic IPC failure'));
+    h.runs.start('session-a', 'warning-a', 'UTC');
+    discardStoredWords(h.client);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.controls.cancel).toHaveBeenCalledOnce();
+    expect(h.runs.getRun()!.stop).toBe('none');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.controls.cancel).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.controls.cancel).toHaveBeenCalledTimes(3);
+    expect(h.runs.getRun()!.stop).toBe('accepted');
+    // Accepted: nothing more is asked.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.controls.cancel).toHaveBeenCalledTimes(3);
+    h.finish(answer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.runs.getRun()).toBeNull();
+    expect(h.client.getQueryData(keptKey('session-a', 'warning-a'))).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});

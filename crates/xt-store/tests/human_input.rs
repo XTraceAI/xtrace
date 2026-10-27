@@ -176,12 +176,28 @@ fn human_origins_and_input_adjustments_invalidate_saved_warnings_on_change() {
 
 #[test]
 fn record_persons_reads_the_same_m02_answer_as_records() {
-    let (_dir, store) = setup();
-    let persons = store
-        .record_persons("codex-child", &["input", "missing"])
+    let (_dir, mut store) = setup();
+    // A reply saved under the assistant role, and an injected reminder saved
+    // under the user role: neither is a person's message.
+    let reply: CanonicalRecord = serde_json::from_value(json!({"uuid":"reply","type":"assistant","timestamp":"2026-09-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}})).unwrap();
+    let reminder: CanonicalRecord = serde_json::from_value(json!({"uuid":"reminder","type":"user","isMeta":true,"timestamp":"2026-09-01T00:00:02Z","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>synthetic</system-reminder>"}]}})).unwrap();
+    store
+        .upsert_records("codex-child", &[reply, reminder], false)
         .unwrap();
-    let stored = store.records("codex-child").unwrap().remove(0);
-    assert_eq!(persons.get("input").copied(), stored.human_is_eligible);
+    let persons = store
+        .record_persons("codex-child", &["input", "reply", "reminder", "missing"])
+        .unwrap();
+    // Known answers, not just agreement with `records()`.
+    assert_eq!(persons.get("input"), Some(&true));
+    assert_eq!(persons.get("reminder"), Some(&false));
+    for stored in store.records("codex-child").unwrap() {
+        assert_eq!(
+            persons.get(&stored.uuid).copied(),
+            stored.human_is_eligible,
+            "{}",
+            stored.uuid
+        );
+    }
     assert!(!persons.contains_key("missing"));
     assert!(
         store

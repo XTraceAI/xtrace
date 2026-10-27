@@ -843,12 +843,16 @@ impl AppState {
             }
         };
         // Who sent each message is M-02's answer from the index, as the
-        // diagnosis evidence reads it; the excerpt's saved role never is.
+        // diagnosis evidence reads it; the excerpt's saved role never is. It
+        // only chooses a caption: when the index cannot answer, every record
+        // keeps `person: null` (the neutral caption) and the excerpt still
+        // shows, rather than the whole read failing over a caption.
         let ids = status.record_ids();
         let persons = if ids.is_empty() {
             Default::default()
         } else {
-            self.with_store(|store| Ok(store.record_persons(session_id, &ids)?))?
+            self.with_store(|store| Ok(store.record_persons(session_id, &ids)?))
+                .unwrap_or_default()
         };
         Ok(settled_excerpt(status.with_persons(&persons), cancel))
     }

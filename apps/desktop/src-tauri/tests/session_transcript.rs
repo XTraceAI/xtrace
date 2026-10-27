@@ -950,6 +950,27 @@ fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
     assert!(records.iter().any(|entry| entry.person.is_some()));
     assert!(!marker.exists());
     assert_eq!(counts(&db), before);
+    // When the index cannot answer who sent a message, the excerpt still
+    // shows, with every caption neutral. A synthetic break: the view M-02's
+    // answer is read from is gone.
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch("DROP VIEW v_human_inputs;")
+        .unwrap();
+    let E::Loaded { records, .. } = state
+        .session_warning_context(
+            &id,
+            &uuid(2),
+            Some(0),
+            &CancelToken::new(),
+            &bundle_with(&python),
+        )
+        .unwrap()
+    else {
+        panic!("excerpt without M-02's answer")
+    };
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|entry| entry.person.is_none()));
 }
 
 #[test]
