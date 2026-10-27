@@ -398,6 +398,45 @@ fn fixture_mode_is_isolated_and_native_commands_match_fixture_fields() {
             }
         })
         .collect();
+    // The warnings command for every session the pages and lanes name, in the
+    // reports' zone, and the window warnings command for every range.
+    let warned_ids: Vec<String> = sessions
+        .iter()
+        .flat_map(|page| page.rows.iter().map(|row| row.id.clone()))
+        .chain(dashboards.iter().flat_map(|report| {
+            report
+                .lanes
+                .iter()
+                .map(|lane| lane.session_id.clone())
+                .chain(
+                    report
+                        .lane_sessions
+                        .iter()
+                        .chain(&report.lane_sub_sessions)
+                        .map(|session| session.session_id.clone()),
+                )
+        }))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let session_warnings = first
+        .session_warnings(&warned_ids, &dashboards[0].window.timezone)
+        .unwrap();
+    let dashboard_warnings: Vec<_> = dashboards
+        .iter()
+        .map(|report| xtrace_desktop::dto::FixtureDashboardWarnings {
+            window_days: report.window.days,
+            window_end_ms: report.window.end_ms,
+            timezone: report.window.timezone.clone(),
+            warnings: first
+                .window_warnings(
+                    report.window.days,
+                    report.window.end_ms,
+                    &report.window.timezone,
+                )
+                .unwrap(),
+        })
+        .collect();
     macro_rules! native_field {
         ($name:literal, $value:expr) => {
             assert_field($name, serde_json::to_string(&$value).unwrap());
@@ -410,6 +449,8 @@ fn fixture_mode_is_isolated_and_native_commands_match_fixture_fields() {
     native_field!("session_stretches", session_stretches);
     native_field!("span_details", span_details);
     native_field!("day_sessions", day_sessions);
+    native_field!("session_warnings", session_warnings);
+    native_field!("dashboard_warnings", dashboard_warnings);
     native_field!("dashboards", dashboards);
     native_field!("pull_requests", pull_requests);
     native_field!("pr_refresh", pr_refresh);

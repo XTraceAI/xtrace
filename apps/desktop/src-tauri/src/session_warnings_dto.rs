@@ -751,6 +751,77 @@ pub fn window_warnings(
     })
 }
 
+/// One Dashboard range's warnings as a fixture carries them: the request
+/// that reads them (the report's range, window end and zone) and the answer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct FixtureDashboardWarnings {
+    pub window_days: u32,
+    #[ts(type = "number")]
+    pub window_end_ms: i64,
+    pub timezone: String,
+    pub warnings: DashboardWarnings,
+}
+
+/// Every session a fixture's Sessions pages and Dashboard lanes name, read
+/// through the same command path in the fixture's zone (UTC), so a fixture
+/// answers the same request the native command does.
+pub fn fixture_session_warnings(
+    path: &std::path::Path,
+    now_ms: i64,
+    prices: Option<&serde_json::Value>,
+) -> Result<SessionWarningsList, StateError> {
+    let metrics = xt_metrics::MetricsDb::open(path)?;
+    let mut ids = std::collections::BTreeSet::new();
+    for page in crate::dto::fixture_session_pages(path, now_ms, prices)? {
+        ids.extend(page.rows.into_iter().map(|row| row.id));
+    }
+    for report in crate::dashboard::fixture_reports(path, now_ms, prices)? {
+        ids.extend(report.lanes.into_iter().map(|lane| lane.session_id));
+        ids.extend(
+            report
+                .lane_sessions
+                .into_iter()
+                .chain(report.lane_sub_sessions)
+                .map(|session| session.session_id),
+        );
+    }
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let timezone =
+        crate::dashboard::zone_name(&jiff::tz::TimeZone::UTC, crate::dto::MetricClock::Fixture);
+    let mut list = SessionWarningsList {
+        timezone: timezone.clone(),
+        sessions: Vec::new(),
+    };
+    for chunk in ids.chunks(MAX_WARNING_SESSIONS) {
+        list.sessions.extend(
+            session_warnings(&metrics, chunk, &jiff::tz::TimeZone::UTC, timezone.clone())?.sessions,
+        );
+    }
+    Ok(list)
+}
+
+/// Every range's Effort warnings at the fixture's pinned instant, in UTC.
+pub fn fixture_dashboard_warnings(
+    path: &std::path::Path,
+    now_ms: i64,
+) -> Result<Vec<FixtureDashboardWarnings>, StateError> {
+    let metrics = xt_metrics::MetricsDb::open(path)?;
+    let zone = jiff::tz::TimeZone::UTC;
+    let timezone = crate::dashboard::zone_name(&zone, crate::dto::MetricClock::Fixture);
+    crate::dashboard::WINDOW_PRESETS
+        .into_iter()
+        .map(|days| {
+            let window = crate::dashboard::report_whole_days(days, now_ms, &zone)?;
+            Ok(FixtureDashboardWarnings {
+                window_days: days,
+                window_end_ms: now_ms,
+                timezone: timezone.clone(),
+                warnings: window_warnings(&metrics, window, &zone, timezone.clone())?,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

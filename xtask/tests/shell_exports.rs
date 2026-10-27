@@ -164,6 +164,29 @@ fn a_fixture_without_pull_requests_exports_empty_pull_request_sections() {
             String::from_utf8_lossy(&output.stderr)
         );
         let export: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(export["app_info"]["schema_version"], 29, "{id}");
+        assert_eq!(export["session_warnings"]["timezone"], "UTC", "{id}");
+        let warned = export["session_warnings"]["sessions"].as_array().unwrap();
+        for page in export["sessions"].as_array().unwrap() {
+            for row in page["rows"].as_array().unwrap() {
+                assert!(
+                    warned.iter().any(|entry| entry["session_id"] == row["id"]),
+                    "{id}: {}",
+                    row["id"]
+                );
+            }
+        }
+        let warnings = export["dashboard_warnings"].as_array().unwrap();
+        let dashboards = export["dashboards"].as_array().unwrap();
+        assert_eq!(warnings.len(), dashboards.len(), "{id}");
+        for (warnings, report) in warnings.iter().zip(dashboards) {
+            assert_eq!(warnings["window_days"], report["window"]["days"], "{id}");
+            assert_eq!(
+                warnings["window_end_ms"], report["window"]["end_ms"],
+                "{id}"
+            );
+            assert_eq!(warnings["timezone"], report["window"]["timezone"], "{id}");
+        }
         assert_eq!(
             export["pull_requests"],
             serde_json::json!({ "rows": [] }),

@@ -16,9 +16,9 @@ pub use crate::session_compactions::{
 pub use crate::session_source_dto::*;
 pub use crate::session_titles::{SessionTitle, SessionTitles};
 pub use crate::session_warnings_dto::{
-    DashboardDayWarning, DashboardWarningDay, DashboardWarnings, SessionWarningCheck,
-    SessionWarningDismissal, SessionWarningItem, SessionWarningKind, SessionWarningsAnswer,
-    SessionWarningsEntry, SessionWarningsList,
+    DashboardDayWarning, DashboardWarningDay, DashboardWarnings, FixtureDashboardWarnings,
+    SessionWarningCheck, SessionWarningDismissal, SessionWarningItem, SessionWarningKind,
+    SessionWarningsAnswer, SessionWarningsEntry, SessionWarningsList,
 };
 use serde::Serialize;
 use ts_rs::TS;
@@ -270,6 +270,12 @@ pub struct FixtureExport {
     /// The sessions behind every day of every range's report, as the day
     /// sessions command answers them for that report's window.
     pub day_sessions: Vec<FixtureDaySessions>,
+    /// M-21 for every session the pages and lanes name, each over its whole
+    /// history, as the warnings command answers it in the fixture's zone.
+    pub session_warnings: SessionWarningsList,
+    /// Each range's Effort warnings, as the window warnings command answers
+    /// them for that report's window.
+    pub dashboard_warnings: Vec<FixtureDashboardWarnings>,
     pub dashboards: Vec<DashboardMetrics>,
     /// The stored pull requests this fixture's sessions link, before anything
     /// refreshed them.
