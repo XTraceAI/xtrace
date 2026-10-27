@@ -353,3 +353,147 @@ for (const theme of ['light', 'dark'] as const) {
     expect(after).toEqual(before);
   });
 }
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`bounded pages reveal oversized exact cards inside visible and clipped readers, ${theme}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1120, height: 720 });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    await page.goto('/e2e/session-layout.html?mode=compact&paged');
+    const owner = page.getByRole('region', { name: 'Conversation content' });
+    await expect(owner).toContainText('Showing messages 1–3 of 3.');
+    const position = () =>
+      owner.evaluate((node) => [node.closest('.xt-shell-outlet')!.scrollTop, window.scrollY]);
+    const before = await position();
+    expect(
+      await owner.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const shell = node.closest('.xt-shell-outlet')!.getBoundingClientRect();
+        return box.top >= shell.top && box.bottom <= shell.bottom;
+      }),
+    ).toBe(true);
+    const next = page
+      .getByRole('navigation', { name: 'Repeated activity' })
+      .getByRole('button', { name: 'Next ↓' });
+    await next.focus();
+    await next.press('Enter');
+    const target = owner.locator('.xt-tool-card[data-block-id="exact-target:3"]');
+    const painted = () =>
+      target.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const body = node.closest('.xt-conversation-body')!.getBoundingClientRect();
+        const shell = node.closest('.xt-shell-outlet')!.getBoundingClientRect();
+        return (
+          box.top >= Math.max(0, body.top, shell.top) - 1 &&
+          box.top < Math.min(innerHeight, body.bottom, shell.bottom)
+        );
+      });
+    await expect(target).toHaveAttribute('data-highlighted', 'true');
+    await expect.poll(painted).toBe(true);
+    await expect(next).toBeFocused();
+    expect(await position()).toEqual(before);
+    expect(
+      await target.evaluate(
+        (node) => node.clientHeight > node.closest('.xt-conversation-body')!.clientHeight,
+      ),
+    ).toBe(true);
+    const activity = owner.getByRole('button', { name: 'Tool activity · 2 saved messages' });
+    await activity.click();
+    await next.focus();
+    await next.press('Enter');
+    await expect(activity).toHaveAttribute('aria-expanded', 'false');
+    await page.locator('.xt-session-stretches > summary').click();
+    await owner.evaluate((node) => {
+      const shell = node.closest('.xt-shell-outlet')!;
+      const spacer = document.createElement('div');
+      spacer.style.height = '200vh';
+      shell.append(spacer);
+      shell.scrollTop += node.getBoundingClientRect().top - shell.getBoundingClientRect().top + 20;
+    });
+    expect(
+      await owner.evaluate(
+        (node) =>
+          node.getBoundingClientRect().top <
+          node.closest('.xt-shell-outlet')!.getBoundingClientRect().top,
+      ),
+    ).toBe(true);
+    const stretch = page.locator('.xt-timeline-segment').first();
+    await stretch.evaluate((node: HTMLElement) => node.focus({ preventScroll: true }));
+    await page.keyboard.press('Enter');
+    await expect(target).toHaveAttribute('data-highlighted', 'true');
+    await expect.poll(painted).toBe(true);
+    await expect(stretch).toBeFocused();
+    await expect(
+      page.locator('.xt-session-conversation [role="status"][aria-live="polite"]'),
+    ).toHaveText('Showing the first tool call of activity period 1: Read.');
+  });
+
+  test(`bounded pages keep keyboard scrolling, paging and unavailable feedback in the compact reader, ${theme}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1120, height: 720 });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    await page.goto('/e2e/session-layout.html?mode=unavailable-repeat&paged');
+    const owner = page.getByRole('region', { name: 'Conversation content' });
+    await expect(owner).toContainText('Showing messages 1–31 of 62.');
+    const element = await owner.elementHandle();
+    const outer = () =>
+      owner.evaluate((node) => [node.closest('.xt-shell-outlet')!.scrollTop, window.scrollY]);
+    const before = await outer();
+    await owner.focus();
+    await owner.press('End');
+    await expect
+      .poll(() => owner.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
+      .toBe(0);
+    expect(await owner.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await expect(owner).toBeFocused();
+    expect(await outer()).toEqual(before);
+    await owner.press('Home');
+    await expect.poll(() => owner.evaluate((node) => node.scrollTop)).toBe(0);
+    const later = owner.getByRole('button', { name: 'Later messages' });
+    await later.focus();
+    await later.press('Enter');
+    await expect(owner).toContainText('Showing messages 32–62 of 62.');
+    await expect(later).toBeFocused();
+    const earlier = owner.getByRole('button', { name: 'Earlier messages' });
+    await earlier.focus();
+    await earlier.press('Enter');
+    await expect(owner).toContainText('Showing messages 1–31 of 62.');
+    await expect(earlier).toBeFocused();
+    expect(await owner.evaluate((node, original) => node === original, element)).toBe(true);
+    await owner.focus();
+    await owner.press('End');
+    await expect
+      .poll(() => owner.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
+      .toBe(0);
+    const next = page
+      .getByRole('navigation', { name: 'Repeated activity' })
+      .getByRole('button', { name: 'Next ↓' });
+    await next.focus();
+    await next.press('Enter');
+    const status = page.locator('.xt-session-conversation [role="status"][aria-live="polite"]');
+    await expect(status).toHaveCount(1);
+    await expect(status).toContainText(
+      'The saved tool call could not be found in this conversation.',
+    );
+    await expect(next).toBeFocused();
+    await expect(owner.locator('[data-record-id]')).toHaveCount(0);
+    expect(
+      await status.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        let top = 0,
+          bottom = innerHeight;
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (/auto|scroll|hidden|clip/.test(getComputedStyle(parent).overflowY)) {
+            const bounds = parent.getBoundingClientRect();
+            top = Math.max(top, bounds.top);
+            bottom = Math.min(bottom, bounds.bottom);
+          }
+        }
+        return box.height > 0 && box.top >= top && box.bottom <= bottom;
+      }),
+    ).toBe(true);
+    expect(await outer()).toEqual(before);
+  });
+}

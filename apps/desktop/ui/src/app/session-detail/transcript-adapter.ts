@@ -254,6 +254,7 @@ function resultPayload(parts: readonly SourceResultPart[]): TranscriptPayload | 
  * it happened and nothing appears twice.
  */
 function callOutcome(callId: string | null, paired: Paired): ToolOutcome {
+  if (!paired.complete) return { state: 'not_checked' };
   if (callId === null) return { state: 'unrecorded' };
   // More than one call under this identifier: even a single result cannot say
   // which of them it answered.
@@ -273,6 +274,7 @@ function callOutcome(callId: string | null, paired: Paired): ToolOutcome {
  * is actually known about it.
  */
 function resultName(callId: string | null, paired: Paired): string | null {
+  if (!paired.complete) return null;
   if (callId === null) return null;
   const call = paired.calls.get(callId);
   return call && call.count === 1 ? call.name : null;
@@ -316,6 +318,7 @@ function block(record: SourceRecord, source: SourceBlock, paired: Paired): Trans
 }
 
 interface Paired {
+  readonly complete: boolean;
   /** Call id → how many calls claimed it, and the first one's tool. */
   readonly calls: Map<string, { count: number; name: string }>;
   /** Call id → how many results named it, and whether the first one failed. */
@@ -333,7 +336,7 @@ interface Paired {
  * so the unique case can read them; nothing consults them when the count is
  * not one.
  */
-function pairs(records: readonly SourceRecord[]): Paired {
+function pairs(records: readonly SourceRecord[], complete: boolean): Paired {
   const calls = new Map<string, { count: number; name: string }>();
   const results = new Map<string, { count: number; failed: boolean }>();
   for (const record of records) {
@@ -350,7 +353,7 @@ function pairs(records: readonly SourceRecord[]): Paired {
       }
     }
   }
-  return { calls, results };
+  return { calls, results, complete };
 }
 
 /**
@@ -395,11 +398,11 @@ function record(source: SourceRecord, paired: Paired): TranscriptRecord {
  * about this app, and it has nothing to show, so it is unavailable and says
  * why in its own words.
  */
-export function transcriptProps(status: SessionSourceStatus): TranscriptProps {
+export function transcriptProps(status: SessionSourceStatus, complete = true): TranscriptProps {
   if (status.state === 'unavailable') {
     return { records: [], state: { kind: 'unavailable', note: unavailableNote(status.reason) } };
   }
-  const paired = pairs(status.records);
+  const paired = pairs(status.records, complete);
   const note = partialNote(status.gaps, status.dropped_records);
   return {
     records: status.records.map((source) => record(source, paired)),

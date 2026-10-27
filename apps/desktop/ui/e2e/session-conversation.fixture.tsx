@@ -1,3 +1,5 @@
+import type { DataSource } from '../src/data/DataSource';
+import type { CodexPageStatus } from '../src/data/generated/CodexPageStatus';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -100,6 +102,70 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
       repeated('mixed', 3, 7, true, 'mcp__workspace__update_plan'),
     ],
   });
+  if (new URLSearchParams(location.search).has('paged')) {
+    const data: DataSource = source;
+    const rowRead = source.sessionRow;
+    source.sessionRow = async (...args) => {
+      const found = await rowRead(...args);
+      return found ? { ...found, host: 'codex' } : null;
+    };
+    source.sessionTranscript = async () => ({
+      state: 'unavailable',
+      reason: { reason: 'reader_limit', limit: 'source_bytes' },
+    });
+    const stretchesRead = source.sessionStretches;
+    source.sessionStretches = async (...args) => {
+      const answer = await stretchesRead(...args);
+      return answer.state === 'measured'
+        ? {
+            ...answer,
+            stretches: [
+              ...answer.stretches,
+              repeated('missing-synthetic-call', 0, 6, false, 'Bash'),
+            ],
+          }
+        : answer;
+    };
+    const digest = 'a'.repeat(64);
+    data.codexTranscriptPage = async (_id, selection): Promise<CodexPageStatus> => {
+      if (
+        selection.kind === 'tool_call' &&
+        new URLSearchParams(location.search).has('paged-changed')
+      )
+        return { state: 'unavailable', reason: { reason: 'changed' } };
+      let start = 0,
+        end = 2,
+        target: number | null = null;
+      if (selection.kind === 'cursor' && selection.cursor.includes(':after:')) {
+        start = 2;
+        end = records.length;
+      }
+      if (selection.kind === 'tool_call') {
+        const found = records.findIndex((record) => record.id === selection.record_uuid);
+        if (found < 0) return { state: 'unavailable', reason: { reason: 'target_missing' } };
+        if (
+          !records[found]?.blocks.some(
+            (block) => block.index === selection.block && block.kind === 'tool_call',
+          )
+        )
+          return { state: 'unavailable', reason: { reason: 'block_missing' } };
+        start = Math.max(0, found - 1);
+        end = Math.min(records.length, found + 2);
+        target = found - start;
+      }
+      return {
+        state: 'loaded',
+        digest,
+        records: records.slice(start, end),
+        start,
+        end,
+        total: records.length,
+        previous: start > 0 ? `v1:before:${start}:${digest}` : null,
+        next: end < records.length ? `v1:after:${end}:${digest}` : null,
+        target,
+      };
+    };
+  }
 }
 
 const source = new FixtureDataSource(fixture as FixtureExport);

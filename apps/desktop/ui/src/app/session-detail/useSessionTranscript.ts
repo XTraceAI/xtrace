@@ -24,16 +24,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { useData } from '../../data/DataProvider';
 import type { SessionSourceStatus } from '../../data/generated/SessionSourceStatus';
 
-export type TranscriptRead =
+export type SourceRead<T> =
   | { readonly phase: 'loading' }
-  | { readonly phase: 'read'; readonly status: SessionSourceStatus }
+  | { readonly phase: 'read'; readonly status: T }
   /** The command itself failed — not a session that cannot be shown. */
   | { readonly phase: 'failed' };
 
-/** A read, and the session it is an answer about. */
-type HeldRead = TranscriptRead & { readonly of: string | undefined };
+export type TranscriptRead = SourceRead<SessionSourceStatus>;
 
-const LOADING: TranscriptRead = { phase: 'loading' };
+/** A read, and the session it is an answer about. */
+type HeldRead<T> = SourceRead<T> & { readonly of: string | undefined };
+
+const LOADING = { phase: 'loading' } as const;
 
 /**
  * What the caller may render for the session it is rendering now.
@@ -49,7 +51,7 @@ const LOADING: TranscriptRead = { phase: 'loading' };
  * that still matches. The comparison happens during render, which is when the
  * mismatch exists; a reset scheduled in an effect is by definition too late.
  */
-export function readFor(held: HeldRead, sessionId: string | undefined): TranscriptRead {
+export function readFor<T>(held: HeldRead<T>, sessionId: string | undefined): SourceRead<T> {
   return held.of === sessionId ? held : LOADING;
 }
 
@@ -70,13 +72,16 @@ function readId(): string {
   return `read-${reads}-${unique}`;
 }
 
-export function useSessionTranscript(sessionId: string | undefined): {
-  read: TranscriptRead;
+export function useSourceRead<T>(
+  sessionId: string | undefined,
+  load: (id: string) => Promise<T>,
+  cancel: (id: string) => Promise<void>,
+): {
+  read: SourceRead<T>;
   /** Ask again, as a new open: a new name, a new token, a new answer. */
   retry: () => void;
 } {
-  const { source } = useData();
-  const [held, setHeld] = useState<HeldRead>({ phase: 'loading', of: sessionId });
+  const [held, setHeld] = useState<HeldRead<T>>({ phase: 'loading', of: sessionId });
   /** Bumped to start the read over; the effect below is the whole of a read. */
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
@@ -86,8 +91,7 @@ export function useSessionTranscript(sessionId: string | undefined): {
     const id = readId();
     let open = true;
     setHeld({ phase: 'loading', of: sessionId });
-    source
-      .sessionTranscript(sessionId, id)
+    load(id)
       .then((status) => {
         if (open) setHeld({ phase: 'read', status, of: sessionId });
       })
@@ -99,12 +103,25 @@ export function useSessionTranscript(sessionId: string | undefined): {
       // The records this open held are dropped with the state below; this ends
       // the read that would otherwise still be filling them.
       setHeld({ phase: 'loading', of: sessionId });
-      void source.cancelSessionTranscript(id).catch(() => {
+      void cancel(id).catch(() => {
         // A cancel that cannot be delivered leaves a bounded read running and
         // an answer nobody reads. There is nothing to tell the reader.
       });
     };
-  }, [sessionId, source, attempt]);
+  }, [sessionId, load, cancel, attempt]);
 
   return { read: readFor(held, sessionId), retry };
+}
+
+export function useSessionTranscript(sessionId: string | undefined): {
+  read: TranscriptRead;
+  retry: () => void;
+} {
+  const { source } = useData();
+  const load = useCallback(
+    (id: string) => source.sessionTranscript(sessionId ?? '', id),
+    [source, sessionId],
+  );
+  const cancel = useCallback((id: string) => source.cancelSessionTranscript(id), [source]);
+  return useSourceRead(sessionId, load, cancel);
 }

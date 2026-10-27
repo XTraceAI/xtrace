@@ -69,6 +69,7 @@ export type ToolOutcome =
       readonly error?: string | null;
       readonly output?: TranscriptPayload;
     }
+  | { readonly state: 'not_checked' }
   | { readonly state: 'unrecorded' }
   | { readonly state: 'ambiguous' };
 

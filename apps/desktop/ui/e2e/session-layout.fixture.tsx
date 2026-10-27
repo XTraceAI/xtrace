@@ -1,3 +1,5 @@
+import type { DataSource } from '../src/data/DataSource';
+import type { CodexPageStatus } from '../src/data/generated/CodexPageStatus';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import fixture from '../fixtures/F1.json';
@@ -11,7 +13,9 @@ import '../src/index.css';
 
 // Generated words and identities only; no local history or provider is read.
 const source = new FixtureDataSource(fixture as FixtureExport);
-const mode = new URLSearchParams(location.search).get('mode');
+const parameters = new URLSearchParams(location.search);
+const mode = parameters.get('mode');
+const paged = parameters.has('paged');
 const row = {
   ...(fixture as FixtureExport).sessions[0].rows[0],
   id: 'synthetic-layout',
@@ -26,18 +30,21 @@ const row = {
     title: null,
   })),
 };
-const records: SourceRecord[] = Array.from({ length: mode === 'short' ? 1 : 60 }, (_, n) => ({
-  id: `record-${n}`,
-  role: 'assistant',
-  at: null,
-  blocks: [
-    {
-      kind: 'text',
-      index: 0,
-      text: `Synthetic message ${n}. ${'Readable sample text. '.repeat(8)}`,
-    },
-  ],
-}));
+const records: SourceRecord[] = Array.from(
+  { length: mode === 'short' || (paged && mode === 'compact') ? 1 : 60 },
+  (_, n) => ({
+    id: `record-${n}`,
+    role: 'assistant',
+    at: null,
+    blocks: [
+      {
+        kind: 'text',
+        index: 0,
+        text: `Synthetic message ${n}. ${'Readable sample text. '.repeat(8)}`,
+      },
+    ],
+  }),
+);
 records.push({
   id: 'exact-target',
   role: 'assistant',
@@ -58,7 +65,7 @@ records.push({
   at: null,
   blocks: [{ kind: 'tool_call', index: 0, name: 'Bash', call_id: 'adjacent-call', input: null }],
 });
-source.sessionRow = async () => row;
+source.sessionRow = async () => ({ ...row, host: paged ? 'codex' : row.host });
 source.sessionTranscript = async () =>
   mode === 'failed'
     ? { state: 'unavailable', reason: { reason: 'replaced' } }
@@ -99,6 +106,47 @@ source.sessionStretches = async () => ({
     circling: false,
   })),
 });
+if (paged) {
+  source.sessionTranscript = async () => ({
+    state: 'unavailable',
+    reason: { reason: 'reader_limit', limit: 'source_bytes' },
+  });
+  const data: DataSource = source;
+  const digest = 'b'.repeat(64);
+  data.codexTranscriptPage = async (_id, selection): Promise<CodexPageStatus> => {
+    let start = 0,
+      end = Math.min(31, records.length),
+      target: number | null = null;
+    if (selection.kind === 'cursor') {
+      const boundary = Number(selection.cursor.split(':')[2]);
+      start = selection.cursor.includes(':after:') ? boundary : Math.max(0, boundary - 31);
+      end = selection.cursor.includes(':after:') ? Math.min(records.length, start + 31) : boundary;
+    } else if (selection.kind === 'tool_call') {
+      const found = records.findIndex((record) => record.id === selection.record_uuid);
+      if (found < 0) return { state: 'unavailable', reason: { reason: 'target_missing' } };
+      if (
+        !records[found]!.blocks.some(
+          (block) => block.kind === 'tool_call' && block.index === selection.block,
+        )
+      )
+        return { state: 'unavailable', reason: { reason: 'block_missing' } };
+      start = Math.max(0, found - 16);
+      end = Math.min(records.length, found + 2);
+      target = found - start;
+    }
+    return {
+      state: 'loaded',
+      digest,
+      records: records.slice(start, end),
+      start,
+      end,
+      total: records.length,
+      previous: start > 0 ? `v1:before:${start}:${digest}` : null,
+      next: end < records.length ? `v1:after:${end}:${digest}` : null,
+      target,
+    };
+  };
+}
 source.nativeIndexStatus = () => new Promise(() => {});
 createRoot(document.getElementById('root')!).render(
   <ThemeProvider>

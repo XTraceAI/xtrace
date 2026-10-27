@@ -14,7 +14,9 @@
  *   is. No block there, more than one block there, or one block of another kind
  *   are each their own answer, and none of them is a jump.
  * - **No second guess.** There is no fallback to the host's call id, to the
- *   nearest call, or to the record the call would have been in. A position the
+ *   nearest call, or to the record the call would have been in. Large Codex
+ *   sessions first request that exact position through the bounded reader;
+ *   this function still confirms it against the returned records. A position the
  *   content does not confirm is a position this view does not show; the stretch
  *   itself is still shown, because it was measured whatever the text says.
  * - **Not against the page.** The document is where a confirmed target is
@@ -42,6 +44,7 @@ export type JumpUnavailable =
   | 'not_a_tool_call';
 
 export type JumpTarget =
+  | { readonly kind: 'loadable' }
   | {
       readonly kind: 'target';
       /** The presentation id the transcript puts on that block. */

@@ -1,3 +1,9 @@
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import { queryKeys } from '../../data/query-client';
+import { refreshQueries } from '../../data/subscribe-invalidation';
+import type { CodexPageRequest } from '../../data/generated/CodexPageRequest';
+import type { CodexPageStatus } from '../../data/generated/CodexPageStatus';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -185,11 +191,12 @@ function Go({ to }: { to: string }) {
   );
 }
 
-function mount(data: DataSource, path = `/sessions/${SESSION}`, to?: string) {
+function mount(data: DataSource, path = `/sessions/${SESSION}`, to?: string, probe?: ReactNode) {
   return render(
     <ThemeProvider>
       <DataProvider source={data}>
         <MemoryRouter initialEntries={[path]}>
+          {probe}
           {to && <Go to={to} />}
           <AppRoutes />
         </MemoryRouter>
@@ -860,3 +867,519 @@ it('enables adjacent record groups only for one native source, never for unknown
   );
   expect(screen.queryByRole('separator')).toBeNull();
 });
+
+const pageText = (text: string): SourceRecord[] => [
+  { id: text, role: 'user', at: null, blocks: [{ kind: 'text', index: 0, text }] },
+];
+function codexPage(selection: CodexPageRequest): CodexPageStatus {
+  const body =
+    selection.kind === 'tool_call'
+      ? records()
+      : pageText(selection.kind === 'first' ? 'synthetic beginning' : 'synthetic later portion');
+  const start = selection.kind === 'first' ? 0 : selection.kind === 'tool_call' ? 100 : 200;
+  return {
+    state: 'loaded',
+    digest: 'a'.repeat(64),
+    records: body,
+    start,
+    end: start + body.length,
+    total: 300,
+    previous: start ? 'previous-cursor' : null,
+    next: 'next-cursor',
+    target: selection.kind === 'tool_call' ? (selection.record_uuid === CALLER ? 0 : 1) : null,
+  };
+}
+function codexSource(limit: 'source_bytes' | 'output_bytes' = 'source_bytes') {
+  const first = stretch(0, { record_uuid: CALLER, block_index: 1 });
+  first.repeats = {
+    state: 'measured',
+    repeats: 8,
+    worst: { tool_name: 'Grep', count: 9, representative: { record_uuid: LATER, block_index: 0 } },
+  };
+  const h = source({
+    transcript: { state: 'unavailable', reason: { reason: 'reader_limit', limit } },
+    stretches: { state: 'measured', stretches: [first], repeat_thresholds: THRESHOLDS },
+  });
+  const originalRow = h.data.sessionRow;
+  h.data.sessionRow = async (...args) => {
+    const row = await originalRow(...args);
+    return row ? { ...row, host: 'codex' } : null;
+  };
+  const reads: { selection: CodexPageRequest; id: string }[] = [];
+  const cancelled: string[] = [];
+  h.data.codexTranscriptPage = async (_session, selection, id) => {
+    reads.push({ selection, id });
+    return codexPage(selection);
+  };
+  h.data.cancelSessionTranscript = async (id) => {
+    cancelled.push(id);
+  };
+  return { ...h, reads, cancelled };
+}
+it.each(['source_bytes', 'output_bytes'] as const)(
+  'pages large Codex conversations after %s refusal and checks exact first/repeated calls',
+  async (limit) => {
+    const h = codexSource(limit);
+    mount(h.data);
+    expect(await screen.findByText('synthetic beginning')).toBeTruthy();
+    expect(screen.getByText('Showing messages 1–1 of 300.')).toBeTruthy();
+    const later = screen.getByRole('button', { name: 'Later messages' });
+    later.focus();
+    fireEvent.click(later);
+    expect(await screen.findByText('synthetic later portion')).toBeTruthy();
+    expect(document.activeElement).toBe(later);
+    expect(h.reads[1].selection).toEqual({ kind: 'cursor', cursor: 'next-cursor' });
+    fireEvent.click(screen.getByRole('button', { name: 'Earlier messages' }));
+    await waitFor(() =>
+      expect(h.reads[2].selection).toEqual({ kind: 'cursor', cursor: 'previous-cursor' }),
+    );
+    const first = await segment(0);
+    expect(first.getAttribute('aria-label')).toContain('loads and checks');
+    first.focus();
+    fireEvent.click(first);
+    await screen.findByText('Showing the first tool call of activity period 1: Read.');
+    expect(highlighted()[0].getAttribute('data-block-id')).toBe(`${CALLER}:1`);
+    expect(document.activeElement).toBe(first);
+    expect(h.reads.at(-1)?.selection).toEqual({
+      kind: 'tool_call',
+      record_uuid: CALLER,
+      block: 1,
+      generation: 'a'.repeat(64),
+    });
+    expect(screen.queryByText('No result for this call is in the record.')).toBeNull();
+    const repeat = screen.getByRole('button', { name: 'Show repeated call: Grep, stretch 1' });
+    repeat.focus();
+    fireEvent.click(repeat);
+    await screen.findByText('Showing the earliest matching call: Grep.');
+    expect(highlighted()[0].getAttribute('data-block-id')).toBe(`${LATER}:0`);
+    expect(document.activeElement).toBe(repeat);
+    const before = h.reads.length;
+    fireEvent.click(repeat);
+    await waitFor(() => expect(h.reads.length).toBe(before + 1));
+    expect(h.reads.at(-1)?.selection).toEqual({
+      kind: 'tool_call',
+      record_uuid: LATER,
+      block: 0,
+      generation: 'a'.repeat(64),
+    });
+  },
+);
+it('drops a delayed page when a newer exact call takes over and cancels on exit', async () => {
+  const h = codexSource();
+  let old: (value: CodexPageStatus) => void = () => {};
+  h.data.codexTranscriptPage = async (_session, selection, id) => {
+    h.reads.push({ selection, id });
+    if (selection.kind === 'cursor')
+      return new Promise((resolve) => {
+        old = resolve;
+      });
+    return codexPage(selection);
+  };
+  mount(h.data, `/sessions/${SESSION}`, '/sessions');
+  await screen.findByText('synthetic beginning');
+  fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+  await waitFor(() => expect(h.reads).toHaveLength(2));
+  const pending = h.reads[1].id;
+  fireEvent.click(await segment(0));
+  await screen.findByText('Showing the first tool call of activity period 1: Read.');
+  expect(h.cancelled).toContain(pending);
+  await act(async () =>
+    old({
+      ...codexPage({ kind: 'first' }),
+      state: 'loaded',
+      records: pageText('obsolete delayed content'),
+      digest: 'a'.repeat(64),
+      start: 0,
+      end: 1,
+      total: 1,
+      previous: null,
+      next: null,
+      target: null,
+    }),
+  );
+  expect(screen.queryByText('obsolete delayed content')).toBeNull();
+  const current = h.reads.at(-1)!.id;
+  fireEvent.click(screen.getByRole('button', { name: 'go /sessions' }));
+  await waitFor(() => expect(h.cancelled).toContain(current));
+  expect(highlighted()).toHaveLength(0);
+});
+it('refuses a changed generation and explicitly starts a fresh one', async () => {
+  const h = codexSource();
+  h.data.codexTranscriptPage = async (_session, selection, id) => {
+    h.reads.push({ selection, id });
+    return selection.kind === 'first'
+      ? codexPage(selection)
+      : { state: 'unavailable', reason: { reason: 'changed' } };
+  };
+  mount(h.data);
+  await screen.findByText('synthetic beginning');
+  fireEvent.click(await segment(0));
+  await screen.findByText(
+    'This conversation changed while you were reading it. Load it again to continue.',
+  );
+  expect(screen.queryByText('synthetic beginning')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Load conversation again' }));
+  await screen.findByText('synthetic beginning');
+  expect(h.reads.at(-1)?.selection).toEqual({ kind: 'first' });
+});
+it('keeps an exact-anchor changed refusal across a changed background stretches answer until explicit reload', async () => {
+  const h = codexSource();
+  let anchorReply: (status: CodexPageStatus) => void = () => {};
+  let refreshed = false;
+  const originalStretches = h.data.sessionStretches;
+  h.data.sessionStretches = async (...args) => {
+    const answer = await originalStretches(...args);
+    return refreshed && answer.state === 'measured'
+      ? {
+          ...answer,
+          stretches: answer.stretches.map((stretch) => ({
+            ...stretch,
+            duration_ms: stretch.duration_ms + 60_000,
+          })),
+        }
+      : answer;
+  };
+  h.data.codexTranscriptPage = async (_session, selection, id) => {
+    h.reads.push({ selection, id });
+    return selection.kind === 'tool_call'
+      ? new Promise((resolve) => {
+          anchorReply = resolve;
+        })
+      : codexPage(selection);
+  };
+  mount(h.data);
+  await screen.findByText('synthetic beginning');
+  const first = await segment(0);
+  const originalLabel = first.getAttribute('aria-label');
+  fireEvent.click(first);
+  await waitFor(() => expect(h.reads).toHaveLength(2));
+  expect(h.reads[1].selection).toEqual({
+    kind: 'tool_call',
+    record_uuid: CALLER,
+    block: 1,
+    generation: 'a'.repeat(64),
+  });
+  await act(async () => anchorReply({ state: 'unavailable', reason: { reason: 'changed' } }));
+  const changed = 'This conversation changed while you were reading it. Load it again to continue.';
+  await screen.findByText(changed);
+  expect(first.getAttribute('aria-pressed')).toBe('true');
+  refreshed = true;
+  act(() => h.emit(events.turnCompleted));
+  await waitFor(() => expect(first.getAttribute('aria-label')).not.toBe(originalLabel));
+  await waitFor(() => expect(first.getAttribute('aria-pressed')).toBe('false'));
+  expect(h.reads).toHaveLength(2);
+  expect(h.reads.filter((read) => read.selection.kind === 'first')).toHaveLength(1);
+  expect(screen.getByText(changed)).toBeTruthy();
+  expect(screen.queryByText('synthetic beginning')).toBeNull();
+  expect(highlighted()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Load conversation again' }));
+  await screen.findByText('synthetic beginning');
+  expect(h.reads).toHaveLength(3);
+  expect(h.reads[2].selection).toEqual({ kind: 'first' });
+});
+it.each([
+  ['codex', loaded()],
+  [
+    'claude',
+    {
+      state: 'unavailable',
+      reason: { reason: 'too_large', limit: 'bytes', reached: 99, ceiling: 10 },
+    },
+  ],
+  ['cursor', { state: 'unavailable', reason: { reason: 'reader_limit', limit: 'source_bytes' } }],
+  ['codex', { state: 'unavailable', reason: { reason: 'reader_limit', limit: 'native_rows' } }],
+] as const)('keeps the existing full-reader behavior for %s / %#', async (host, status) => {
+  const h = source({ transcript: status as SessionSourceStatus });
+  const originalRow = h.data.sessionRow;
+  h.data.sessionRow = async (...args) => {
+    const row = await originalRow(...args);
+    return row ? { ...row, host } : null;
+  };
+  h.data.codexTranscriptPage = vi.fn(async () => codexPage({ kind: 'first' }));
+  mount(h.data);
+  await screen.findByRole('heading', { name: 'atlas · feat/timeline' });
+  await waitFor(() => expect(h.opened).toHaveLength(1));
+  expect(h.data.codexTranscriptPage).not.toHaveBeenCalled();
+  expect(screen.queryByRole('navigation', { name: 'Conversation portions' })).toBeNull();
+});
+
+it('pages every measured repeat group including unavailable calls, with checked notices and one conversation announcement', async () => {
+  const h = codexSource();
+  h.data.sessionStretches = async () => ({
+    state: 'measured',
+    repeat_thresholds: THRESHOLDS,
+    stretches: [
+      repeating(stretch(0, null), 'Read', 7, { record_uuid: CALLER, block_index: 1 }, false),
+      repeating(stretch(5, null), 'Grep', 9, { record_uuid: LATER, block_index: 0 }, true),
+      repeating(stretch(10, null), 'Missing', 8, { record_uuid: 'absent', block_index: 0 }, false),
+    ],
+  });
+  h.data.codexTranscriptPage = async (_session, selection, id) => {
+    h.reads.push({ selection, id });
+    return selection.kind === 'tool_call' && selection.record_uuid === 'absent'
+      ? { state: 'unavailable', reason: { reason: 'target_missing' } }
+      : codexPage(selection);
+  };
+  mount(h.data);
+  await screen.findByText('synthetic beginning');
+  const navigation = screen.getByRole('navigation', { name: 'Repeated activity' });
+  const next = within(navigation).getByRole('button', { name: 'Next ↓' });
+  const previous = within(navigation).getByRole('button', { name: '↑ Previous' });
+  expect(navigation.textContent).toContain('3 notices');
+  expect(document.querySelectorAll('[data-repeat-index]')).toHaveLength(0);
+  next.focus();
+  fireEvent.click(next);
+  await screen.findByText('Showing the earliest matching call: Read.');
+  expect(navigation.textContent).toContain('1 of 3');
+  expect(highlighted()[0]?.getAttribute('data-block-id')).toBe(`${CALLER}:1`);
+  expect(document.querySelectorAll('[data-repeat-index]')).toHaveLength(2);
+  expect(document.activeElement).toBe(next);
+  fireEvent.click(screen.getByText(/Agent activity · Last/));
+  fireEvent.click(next);
+  await screen.findByText('Showing the earliest matching call: Grep.');
+  expect(navigation.textContent).toContain('2 of 3');
+  expect(highlighted()[0]?.getAttribute('data-block-id')).toBe(`${LATER}:0`);
+  expect(
+    screen
+      .getAllByRole('status')
+      .filter((node) => node.textContent === 'Showing the earliest matching call: Grep.'),
+  ).toHaveLength(1);
+  expect(document.querySelector('.xt-timeline [role="status"]')?.textContent).toBe('');
+  fireEvent.click(next);
+  await screen.findByText(/The repeated call of activity period 3 cannot be shown/);
+  expect(navigation.textContent).toContain('3 of 3');
+  expect(highlighted()).toHaveLength(0);
+  previous.focus();
+  fireEvent.click(previous);
+  await screen.findByText('Showing the earliest matching call: Grep.');
+  expect(navigation.textContent).toContain('2 of 3');
+  expect(document.activeElement).toBe(previous);
+  expect(h.reads.filter((read) => read.selection.kind === 'first')).toHaveLength(1);
+});
+it('does not create a bounded inline notice from a loadable locator or a text block at that position', async () => {
+  const h = codexSource();
+  h.data.sessionStretches = async () => ({
+    state: 'measured',
+    repeat_thresholds: THRESHOLDS,
+    stretches: [
+      repeating(stretch(0, null), 'Read', 7, { record_uuid: CALLER, block_index: 1 }, false),
+    ],
+  });
+  h.data.codexTranscriptPage = async (_session, selection, id) => {
+    h.reads.push({ selection, id });
+    const page = codexPage(selection);
+    if (selection.kind === 'first' && page.state === 'loaded')
+      return {
+        ...page,
+        records: [
+          {
+            id: CALLER,
+            role: 'assistant',
+            at: null,
+            blocks: [{ kind: 'text', index: 1, text: 'synthetic text at the recorded position' }],
+          },
+        ],
+      };
+    return page;
+  };
+  mount(h.data);
+  await screen.findByText('synthetic text at the recorded position');
+  expect(document.querySelectorAll('[data-repeat-index]')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Next ↓' }));
+  await screen.findByText('Showing the earliest matching call: Read.');
+  expect(document.querySelectorAll('[data-repeat-index]')).toHaveLength(1);
+  expect(document.querySelector('[data-repeat-index]')?.getAttribute('data-current')).toBe('true');
+});
+
+it.each(['later', 'changed'] as const)(
+  'preserves the bounded %s state while an uncached range row is pending and after it settles',
+  async (state) => {
+    const h = codexSource();
+    const readRow = h.data.sessionRow;
+    let settleRow: ((row: Awaited<ReturnType<DataSource['sessionRow']>>) => void) | null = null;
+    h.data.sessionRow = (id, days) =>
+      days === 30
+        ? new Promise((resolve) => {
+            settleRow = resolve;
+          })
+        : readRow(id, days);
+    if (state === 'changed') {
+      h.data.codexTranscriptPage = async (_session, selection, id) => {
+        h.reads.push({ selection, id });
+        return selection.kind === 'first'
+          ? codexPage(selection)
+          : { state: 'unavailable', reason: { reason: 'changed' } };
+      };
+    }
+    mount(h.data, `/sessions/${SESSION}?range=7d`);
+    await screen.findByText('synthetic beginning');
+    fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+    const text =
+      state === 'later'
+        ? 'synthetic later portion'
+        : 'This conversation changed while you were reading it. Load it again to continue.';
+    await screen.findByText(text);
+    const activeRead = h.reads.at(-1)!.id;
+    fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+    await waitFor(() => expect(settleRow).not.toBeNull());
+    const whilePending = screen.queryByText(text);
+    const cancelledWhilePending = h.cancelled.includes(activeRead);
+    await act(async () => settleRow!(await readRow(SESSION, 30)));
+    await screen.findByText('Measured in this range');
+    expect({
+      visibleWhilePending: whilePending !== null,
+      cancelledWhilePending,
+      requests: h.reads.map((read) => read.selection.kind),
+    }).toEqual({
+      visibleWhilePending: true,
+      cancelledWhilePending: false,
+      requests: ['first', 'cursor'],
+    });
+    expect(screen.getByText(text)).toBeTruthy();
+    expect(h.reads.filter((read) => read.selection.kind === 'first')).toHaveLength(1);
+    if (state === 'changed') {
+      fireEvent.click(screen.getByRole('button', { name: 'Load conversation again' }));
+      await screen.findByText('synthetic beginning');
+      expect(h.reads.at(-1)!.selection).toEqual({ kind: 'first' });
+    }
+  },
+);
+
+it.each(['missing', 'claude'] as const)(
+  'ends the bounded read when a successful new range row is %s',
+  async (host) => {
+    const h = codexSource();
+    const readRow = h.data.sessionRow;
+    h.data.sessionRow = async (id, days) => {
+      const found = await readRow(id, days);
+      return days !== 30 ? found : host === 'missing' ? null : { ...found!, host };
+    };
+    mount(h.data, `/sessions/${SESSION}?range=7d`);
+    await screen.findByText('synthetic beginning');
+    fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+    await screen.findByText('synthetic later portion');
+    const activeRead = h.reads.at(-1)!.id;
+    fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+    await waitFor(() => expect(h.cancelled).toContain(activeRead));
+    expect(screen.queryByText('synthetic later portion')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Later messages' })).toBeNull();
+    expect(h.reads).toHaveLength(2);
+  },
+);
+
+it('starts a fresh bounded read when the actual session changes', async () => {
+  const h = codexSource();
+  const readPage = h.data.codexTranscriptPage!;
+  const sessions: string[] = [];
+  h.data.codexTranscriptPage = (session, selection, id) => {
+    sessions.push(session);
+    return readPage(session, selection, id);
+  };
+  const other = `/sessions/${OTHER_SESSION}`;
+  mount(h.data, `/sessions/${SESSION}`, other);
+  await screen.findByText('synthetic beginning');
+  fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+  await screen.findByText('synthetic later portion');
+  const activeRead = h.reads.at(-1)!.id;
+  fireEvent.click(screen.getByRole('button', { name: `go ${other}` }));
+  await screen.findByText('synthetic beginning');
+  expect(sessions).toEqual([SESSION, SESSION, OTHER_SESSION]);
+  expect(h.reads.at(-1)!.selection).toEqual({ kind: 'first' });
+  expect(h.cancelled).toContain(activeRead);
+  expect(highlighted()).toHaveLength(0);
+});
+
+it('retains the bounded portion when a new range row fails to load', async () => {
+  const h = codexSource();
+  const readRow = h.data.sessionRow;
+  h.data.sessionRow = (id, days) =>
+    days === 30 ? Promise.reject(new Error('Synthetic row read failure')) : readRow(id, days);
+  mount(h.data, `/sessions/${SESSION}?range=7d`);
+  await screen.findByText('synthetic beginning');
+  fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+  await screen.findByText('synthetic later portion');
+  const activeRead = h.reads.at(-1)!.id;
+  fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+  await screen.findByText(/This session’s measurements could not be loaded/);
+  expect(screen.getByText('synthetic later portion')).toBeTruthy();
+  expect(h.cancelled).not.toContain(activeRead);
+  expect(h.reads).toHaveLength(2);
+});
+
+it.each(['later', 'changed'] as const)(
+  'preserves the bounded %s state while a stale cached-null range row is refetching',
+  async (state) => {
+    const h = codexSource();
+    const readRow = h.data.sessionRow;
+    let settleRow: ((row: Awaited<ReturnType<DataSource['sessionRow']>>) => void) | null = null;
+    let rowReads = 0;
+    h.data.sessionRow = (id, days) =>
+      days === 30
+        ? new Promise((resolve) => {
+            rowReads += 1;
+            settleRow = resolve;
+          })
+        : readRow(id, days);
+    if (state === 'changed') {
+      h.data.codexTranscriptPage = async (_session, selection, id) => {
+        h.reads.push({ selection, id });
+        return selection.kind === 'first'
+          ? codexPage(selection)
+          : { state: 'unavailable', reason: { reason: 'changed' } };
+      };
+    }
+    let client: QueryClient | undefined;
+    function ClientProbe() {
+      client = useQueryClient();
+      return null;
+    }
+    mount(h.data, `/sessions/${SESSION}?range=7d`, undefined, <ClientProbe />);
+    await screen.findByText('synthetic beginning');
+    fireEvent.click(screen.getByRole('button', { name: 'Later messages' }));
+    const text =
+      state === 'later'
+        ? 'synthetic later portion'
+        : 'This conversation changed while you were reading it. Load it again to continue.';
+    await screen.findByText(text);
+    const activeRead = h.reads.at(-1)!.id;
+    const key = queryKeys.session(30, SESSION);
+    // An inactive answer from before discovery remains cached when the real refresh path invalidates it.
+    await act(async () => {
+      client!.setQueryData(key, null);
+      refreshQueries(client!, [key], () => {
+        throw new Error('Synthetic refresh failed');
+      });
+    });
+    expect(client!.getQueryState(key)).toMatchObject({
+      data: null,
+      status: 'success',
+      fetchStatus: 'idle',
+      isInvalidated: true,
+    });
+    expect(client!.getQueryCache().find({ queryKey: key })!.getObserversCount()).toBe(0);
+    expect(rowReads).toBe(0);
+    fireEvent.click(screen.getByRole('radio', { name: '30d' }));
+    await waitFor(() => expect(settleRow).not.toBeNull());
+    const cacheWhilePending = client!.getQueryState(key);
+    expect(cacheWhilePending).toMatchObject({
+      data: null,
+      status: 'success',
+      fetchStatus: 'fetching',
+    });
+    const visibleWhilePending = screen.queryByText(text) !== null;
+    const cancelledWhilePending = h.cancelled.includes(activeRead);
+    await act(async () => settleRow!(await readRow(SESSION, 30)));
+    await screen.findByText('Measured in this range');
+    expect({
+      visibleWhilePending,
+      cancelledWhilePending,
+      requests: h.reads.map((read) => read.selection.kind),
+    }).toEqual({
+      visibleWhilePending: true,
+      cancelledWhilePending: false,
+      requests: ['first', 'cursor'],
+    });
+    expect(screen.getByText(text)).toBeTruthy();
+    expect(rowReads).toBe(1);
+  },
+);

@@ -49,6 +49,28 @@ and keep focus on the pressed control. Oversized cards align their top edge.
 The combined browser fixture checks those behaviors together in both themes at
 1120×720, 1120×900, and 1440×900, plus clipped and fully visible scroll areas.
 
+## Large Codex conversations
+
+A Codex whole read refused for source bytes, converted output bytes or the
+consumer byte ceiling opens bounded portions. The reader states the shown
+message interval and total, and leaves cross-portion call/result pairing
+unchecked. Small Codex, Claude and Cursor whole reads keep their existing path.
+
+One portion stays in memory without a query cache. Earlier/Later replace it;
+replacing a request or leaving cancels its read and discards late responses.
+Portions share the existing conversation scroll area and exact-card reveal
+owner. First/repeated controls load and confirm an exact saved record and tool
+block before marking it; the global navigation, caller focus and single
+header announcement contracts above apply. A loadable locator is not a notice.
+
+Only a settled, successful row answer can replace the accepted host. Pending,
+refetching or failed metadata keeps the same session/source's portion and any
+changed-source refusal; range/background refreshes clear stale selection and
+highlighting without restarting the read. A settled null or non-Codex row ends
+it; a new session or provider replaces the owner. A changed-source refusal
+requires explicit reload. Portion generations connect successive reads; they
+do not prove that the source still matches the index's saved measurements.
+
 The remaining measurement and segment contracts apply inside Agent activity.
 
 ## The query
@@ -56,10 +78,11 @@ The remaining measurement and segment contracts apply inside Agent activity.
 - `sessionStretches(sessionId, windowDays)` is a metadata query, cached under
   the `sessions` prefix beside the session's row and invalidated with it by
   every ingest event.
-- Changing the range re-reads the stretches for the new window and **never**
-  re-reads the transcript, whose read is keyed by the session alone. The
-  session page owns the range control, because its row and its stretches are
-  both measured over the window.
+- Changing the range re-reads the stretches for the new window and never
+  repeats the whole-transcript read, which is keyed by the session alone.
+  A bounded Codex portion clears highlights owned by the previous range while
+  preserving its active read. The session page owns the range control,
+  because its row and its stretches are both measured over the window.
 - The same answer carries M-20. The app reads M-09's stretches and M-20's
   repeats **inside one database snapshot over the same selected window**, so
   the stretches M-20 counted are the stretches M-09 states even while the
@@ -145,12 +168,16 @@ The remaining measurement and segment contracts apply inside Agent activity.
 repeated call` button appears under the stretches. It goes to the
   **earliest** call of that group, through exactly the path a first call
   takes: the same position check against the loaded transcript, the same
-  reasons when it cannot, and the same reveal request. Nothing new is looked
-  up, and there is no fallback.
-- Its accessible name says why the call cannot be shown before it is pressed;
+  reasons when it cannot, and the same reveal request. Whole transcripts use
+  the records already held. Large Codex conversations load a bounded portion
+  around that exact saved record and block, then validate and reveal it.
+  Neither path substitutes a nearby call.
+- A bounded Codex target is labeled as needing a read and check. Otherwise,
+  its accessible name says why the call cannot be shown before it is pressed;
   pressed, the reason is on screen. Focus stays on the button, the stretch
-  stays selected, and the live region says `Showing the earliest of the
-repeated calls in stretch N: Tool.`
+  stays selected, and the conversation's single live region says
+  `Showing the earliest matching call: Tool.` Standalone timeline wording
+  remains unchanged.
 - When the repeated call is the call the stretch started with, pressing it
   reveals that call again as a new request.
 - The press belongs to the same session, window, transcript read and accepted

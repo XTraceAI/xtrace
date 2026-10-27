@@ -24,6 +24,12 @@ import { contextLead, contextTitle, modelLabel, shortId } from '../session-conte
 import { listState } from '../session-search';
 import { SessionTimeline, type TimelineQuery } from './SessionTimeline';
 import { SessionTranscript } from './SessionTranscript';
+import {
+  CodexPagedTranscript,
+  type CodexPageIntent,
+  type CodexPageFeedback,
+  type CodexRepeatCandidate,
+} from './CodexPagedTranscript';
 import { type TranscriptProps, transcriptProps } from './transcript-adapter';
 import { jumpUnavailableText, type JumpUnavailable, resolveJump } from './timeline-jump';
 import type { RevealOutcome, RevealRequest } from './transcript-reveal';
@@ -148,6 +154,19 @@ function pressText(
     : `Showing the earliest matching call${tool}.`;
 }
 
+function pageFeedbackText(feedback: CodexPageFeedback | null): string | null {
+  if (!feedback) return null;
+  const { intent, target, outcome, unavailable } = feedback;
+  const which = intent.call === 'first' ? 'The first tool call' : 'The repeated call';
+  if (unavailable)
+    return `${which} of activity period ${intent.index + 1} cannot be shown. ${unavailable}`;
+  if (!target || !outcome) return null;
+  if (outcome !== 'revealed') return `${which} could not be revealed in the conversation.`;
+  return intent.call === 'first'
+    ? `Showing the first tool call of activity period ${intent.index + 1}: ${target.tool}.`
+    : `Showing the earliest matching call: ${target.tool}.`;
+}
+
 /** What a press was made against. Replace any of it and the press is void. */
 interface PressScope {
   readonly sessionId: string | undefined;
@@ -158,7 +177,7 @@ interface PressScope {
 }
 
 /** Whether a press still means what it meant when it was made. */
-const holds = (press: Press | null, scope: PressScope) =>
+const holds = (press: { readonly scope: PressScope } | null, scope: PressScope) =>
   press !== null &&
   press.scope.sessionId === scope.sessionId &&
   press.scope.days === scope.days &&
@@ -245,6 +264,22 @@ export function SessionDetailPage() {
     enabled: source.kind !== 'preview' && !!sessionId,
   });
   const row = listed.data ?? null;
+  // A pending range query must not replace this session’s bounded reader.
+  const [acceptedHost, setAcceptedHost] = useState<{
+    sessionId: string | undefined;
+    source: typeof source;
+    host: string | null;
+  }>({ sessionId, source, host: null });
+  const sameHostOwner = acceptedHost.sessionId === sessionId && acceptedHost.source === source;
+  const host =
+    listed.isSuccess && !listed.isFetching
+      ? (row?.host ?? null)
+      : sameHostOwner
+        ? acceptedHost.host
+        : null;
+  if (!sameHostOwner || acceptedHost.host !== host) {
+    setAcceptedHost({ sessionId, source, host });
+  }
   // Only an answer that is current says which pull requests are linked: while
   // the row is being read or read again, after a read failed or when there is
   // no such session, no badge is drawn rather than one that might not hold. A
@@ -252,6 +287,27 @@ export function SessionDetailPage() {
   // its title, so the cached answer's links are not shown while it is out.
   const prLinks = listed.isSuccess && !listed.isFetching && row ? row.pr_links : [];
   const { read, retry } = useSessionTranscript(sessionId);
+  const paged =
+    host === 'codex' &&
+    !!source.codexTranscriptPage &&
+    read.phase === 'read' &&
+    read.status.state === 'unavailable' &&
+    ((read.status.reason.reason === 'reader_limit' &&
+      ['source_bytes', 'output_bytes'].includes(read.status.reason.limit)) ||
+      (read.status.reason.reason === 'too_large' && read.status.reason.limit === 'bytes'));
+  const [pageIntent, setPageIntent] = useState<{
+    intent: CodexPageIntent;
+    scope: PressScope;
+  } | null>(null);
+  const [pageFeedback, setPageFeedback] = useState<CodexPageFeedback | null>(null);
+  const onPageFeedback = useCallback(
+    (feedback: CodexPageFeedback | null) => setPageFeedback(feedback),
+    [],
+  );
+  const clearPageSelection = useCallback(() => {
+    setPageIntent(null);
+    setPageFeedback(null);
+  }, []);
 
   // M-09's stretches for this session over this window. Metadata, cached like
   // the row above and invalidated with it; a change of range re-reads this and
@@ -273,8 +329,13 @@ export function SessionDetailPage() {
   // Each stretch's first call, confirmed against the transcript as it was read
   // for this open — or the reason it cannot be.
   const jumps = useMemo(
-    () => stretches.map((stretch) => resolveJump(stretch.first_tool, read)),
-    [stretches, read],
+    () =>
+      stretches.map((stretch) =>
+        paged && stretch.first_tool
+          ? { kind: 'loadable' as const }
+          : resolveJump(stretch.first_tool, read),
+      ),
+    [stretches, read, paged],
   );
   // Each stretch's most repeated call (M-20), by the earliest of its calls, put
   // through the very same check — or `null` when M-20 names no repeated call.
@@ -282,10 +343,12 @@ export function SessionDetailPage() {
     () =>
       stretches.map((stretch) =>
         stretch.repeats.state === 'measured' && stretch.repeats.worst
-          ? resolveJump(stretch.repeats.worst.representative, read)
+          ? paged
+            ? { kind: 'loadable' as const }
+            : resolveJump(stretch.repeats.worst.representative, read)
           : null,
       ),
-    [stretches, read],
+    [stretches, read, paged],
   );
 
   const tokens = useRef(0);
@@ -295,7 +358,10 @@ export function SessionDetailPage() {
   // Read during render, so a press whose scope has been replaced is never
   // painted, not even for the frame before the effect below runs.
   const pressed = holds(press, { sessionId, days, read, stretches: answer }) ? press : null;
-  const selected = pressed?.index ?? null;
+  const ownedPageIntent =
+    paged && holds(pageIntent, { sessionId, days, read, stretches: answer }) ? pageIntent : null;
+  const selected = ownedPageIntent?.intent.index ?? pressed?.index ?? null;
+  const selectedCall = ownedPageIntent?.intent.call ?? pressed?.call;
   const reveal = pressed?.kind === 'reveal' ? pressed.request : null;
   // And destroyed, so it cannot come back. Returning `current` unchanged when
   // it still holds leaves the state identical and re-renders nothing.
@@ -305,12 +371,35 @@ export function SessionDetailPage() {
     );
     // A result is only ever read beside a live press of the same token; with
     // the scope replaced there is none, so it goes with it.
+    setPageIntent((current) =>
+      holds(current, { sessionId, days, read, stretches: answer }) ? current : null,
+    );
+    setPageFeedback(null);
     setResult(null);
   }, [sessionId, days, read, answer]);
   const pressCall = useCallback(
     (index: number, call: PressedCall) => {
+      const stretch = stretches[index];
+      const locator =
+        call === 'first'
+          ? stretch?.first_tool
+          : stretch?.repeats.state === 'measured'
+            ? stretch.repeats.worst?.representative
+            : null;
+      if (paged && locator) {
+        tokens.current += 1;
+        setPress(null);
+        setResult(null);
+        setPageFeedback(null);
+        setPageIntent({
+          scope: { sessionId, days, read, stretches: answer },
+          intent: { token: tokens.current, locator, index, call },
+        });
+        return;
+      }
       const jump = call === 'first' ? jumps[index] : repeatJumps[index];
-      if (!jump) return;
+      if (!jump || jump.kind === 'loadable') return;
+      clearPageSelection();
       tokens.current += 1;
       // The scope this render resolved both lists against, recorded with the press.
       const scope: PressScope = { sessionId, days, read, stretches: answer };
@@ -327,7 +416,7 @@ export function SessionDetailPage() {
           : { kind: 'unavailable', index, call, reason: jump.reason, scope },
       );
     },
-    [jumps, repeatJumps, sessionId, days, read, answer],
+    [jumps, repeatJumps, sessionId, days, read, answer, stretches, paged, clearPageSelection],
   );
   const onSelect = useCallback((index: number) => pressCall(index, 'first'), [pressCall]);
   const onShowRepeat = useCallback((index: number) => pressCall(index, 'repeated'), [pressCall]);
@@ -337,7 +426,13 @@ export function SessionDetailPage() {
     (token: number, outcome: RevealOutcome) => setResult({ token, outcome }),
     [],
   );
-  const announcement = pressed ? pressText(pressed, result) : null;
+  const ownedFeedback =
+    ownedPageIntent && pageFeedback?.intent === ownedPageIntent.intent ? pageFeedback : null;
+  const announcement = ownedPageIntent
+    ? pageFeedbackText(ownedFeedback)
+    : pressed
+      ? pressText(pressed, result)
+      : null;
   // A command that failed is not a session that cannot be shown, but it looks
   // the same to a reader, so it is said in the same place — with its own
   // sentence, and with the one thing a reader can do about it beside it.
@@ -356,9 +451,24 @@ export function SessionDetailPage() {
           : null
       : null;
 
-  const repeatedIndexes = stretches.flatMap((stretch, index) =>
-    stretch.repeats.state === 'measured' && stretch.repeats.worst ? [index] : [],
+  const repeatCandidates = useMemo<CodexRepeatCandidate[]>(
+    () =>
+      stretches.flatMap((stretch, index) =>
+        stretch.repeats.state === 'measured' && stretch.repeats.worst
+          ? [
+              {
+                index,
+                locator: stretch.repeats.worst.representative,
+                tool: stretch.repeats.worst.tool_name,
+                count: stretch.repeats.worst.count,
+                circling: stretch.circling === true,
+              },
+            ]
+          : [],
+      ),
+    [stretches],
   );
+  const repeatedIndexes = repeatCandidates.map((candidate) => candidate.index);
   const markers: ConversationMarker[] = repeatedIndexes.flatMap((index) => {
     const stretch = stretches[index]!;
     const jump = repeatJumps[index];
@@ -371,7 +481,7 @@ export function SessionDetailPage() {
         tool: stretch.repeats.worst.tool_name,
         count: stretch.repeats.worst.count,
         circling: stretch.circling === true,
-        selected: pressed?.call === 'repeated' && selected === index,
+        selected: selectedCall === 'repeated' && selected === index,
       },
     ];
   });
@@ -498,7 +608,7 @@ export function SessionDetailPage() {
             ) : timeline.phase === 'ready' && timeline.stretches.state === 'measured' ? (
               <RepeatNavigation
                 indexes={repeatedIndexes}
-                selected={pressed?.call === 'repeated' ? selected : null}
+                selected={selectedCall === 'repeated' ? selected : null}
                 onSelect={onShowRepeat}
               />
             ) : undefined
@@ -519,23 +629,37 @@ export function SessionDetailPage() {
             aria-label="Conversation content"
             tabIndex={0}
           >
-            {generation && (
+            {!paged && generation && (
               <p className="xt-session-detail-notice" role="note">
                 {generation}
               </p>
             )}
-            <SessionTranscript
-              revealOwner={conversationBody}
-              conversation
-              markers={markers}
-              groupAdjacentActivity={
-                read.phase === 'read' && read.status.state === 'loaded' && read.status.sources === 1
-              }
-              records={transcript.records}
-              state={transcript.state}
-              reveal={reveal}
-              onReveal={onReveal}
-            />
+            {paged && sessionId ? (
+              <CodexPagedTranscript
+                key={sessionId}
+                sessionId={sessionId}
+                intent={ownedPageIntent?.intent ?? null}
+                repeatCandidates={repeatCandidates}
+                onFeedback={onPageFeedback}
+                onReset={clearPageSelection}
+                revealOwner={conversationBody}
+              />
+            ) : (
+              <SessionTranscript
+                revealOwner={conversationBody}
+                conversation
+                markers={markers}
+                groupAdjacentActivity={
+                  read.phase === 'read' &&
+                  read.status.state === 'loaded' &&
+                  read.status.sources === 1
+                }
+                records={transcript.records}
+                state={transcript.state}
+                reveal={reveal}
+                onReveal={onReveal}
+              />
+            )}
           </div>
         </SectionCard>
       </div>

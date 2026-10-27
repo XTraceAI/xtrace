@@ -523,3 +523,27 @@ it('treats records the read could not identify as part of the record being missi
   expect(both).toContain('no longer on this Mac');
   expect(both).toContain('2 of its records');
 });
+
+it('keeps page call/result pairing unknown even when a matching ID is present locally', () => {
+  const source = read([
+    record(RECORD, [{ kind: 'tool_call', index: 0, name: 'Read', call_id: 'call', input: null }]),
+    record(ANSWER, [
+      {
+        kind: 'tool_result',
+        index: 0,
+        call_id: 'call',
+        failed: false,
+        parts: [{ kind: 'text', text: 'synthetic output' }],
+      },
+    ]),
+  ]);
+  const partial = transcriptProps(source, false);
+  const call = partial.records[0].blocks[0] as ToolCallBlock;
+  const result = partial.records[1].blocks[0] as ToolResultBlock;
+  expect(call.outcome).toEqual({ state: 'not_checked' });
+  expect(result.name).toBeNull();
+  expect(result.outcome).toEqual({
+    state: 'ok',
+    output: { kind: 'text', text: 'synthetic output' },
+  });
+});
