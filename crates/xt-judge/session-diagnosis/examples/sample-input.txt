@@ -1,7 +1,7 @@
 XTRACE SESSION DIAGNOSIS INPUT
 protocol: 1
-warning_kind: tool_declined
-warning_reason: the person declined a tool the agent wanted to run
+warning_kind: interruption
+warning_reason: the person stopped the agent, or declined a tool the agent wanted to run
 host: claude_code
 project: field-notes
 flagged_message: 14
