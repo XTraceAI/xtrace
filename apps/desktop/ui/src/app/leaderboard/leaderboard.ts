@@ -4,7 +4,15 @@ import { leverageText } from '../metric-format';
 
 /** What the page says before anyone joins, word for word. */
 export const JOIN_TEXT =
-  "Join the public XTrace leaderboard. It shows your nickname and your leverage for the last 7 days at leaderboard.xtrace.ai. We also keep your email so we can reach you; it is never shown. Like any web request, the leaderboard also sees your IP address and this app's version.";
+  "Join the public XTrace leaderboard. It shows your nickname and your leverage for the last 7 days at leaderboard.xtrace.ai. We email you a 6-digit code to check the email is yours, and keep the email so we can reach you; it is never shown. Joining again with the same email, for example on a new Mac, signs you back in to your entry. Like any web request, the leaderboard also sees your IP address and this app's version.";
+
+/** The code step's line, naming where the code went. */
+export const codeSentText = (email: string) =>
+  `We sent a 6-digit code to ${email}. Enter it below. It expires in 15 minutes.`;
+
+/** When the number is sent, in the order the app sends it. */
+export const SEND_TIMES =
+  'The app sends your number when it starts, when it first finishes reading your history, and every hour while it runs.';
 
 /** The confirmation Leave asks for. */
 export const LEAVE_QUESTION = 'Leave the leaderboard?';
@@ -51,6 +59,6 @@ export const refusalField = (error: unknown): LeaderboardField | null =>
   typeof error === 'object' &&
   error !== null &&
   'field' in error &&
-  (error.field === 'nickname' || error.field === 'email')
+  (error.field === 'nickname' || error.field === 'email' || error.field === 'code')
     ? error.field
     : null;

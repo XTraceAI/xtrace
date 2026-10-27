@@ -177,7 +177,16 @@ export interface TelemetryControls {
 export interface LeaderboardControls {
   /** Asks the leaderboard for the rank when joined. */
   read(): Promise<LeaderboardStatus>;
+  /** The first step: the leaderboard emails a 6-digit code (`code_sent`). */
   join(nickname: string, email: string): Promise<LeaderboardStatus>;
+  /**
+   * The second step: the emailed code. After the leaderboard said the
+   * nickname is taken (`code_sent.choose_nickname`), the same code again with
+   * another nickname.
+   */
+  confirm(code: string, nickname?: string): Promise<LeaderboardStatus>;
+  /** "Use a different email": forgets the code waiting to be entered. */
+  cancelCode(): Promise<LeaderboardStatus>;
   rename(nickname: string): Promise<LeaderboardStatus>;
   /** Deletes the member on the leaderboard, then forgets the saved membership. */
   leave(): Promise<LeaderboardStatus>;

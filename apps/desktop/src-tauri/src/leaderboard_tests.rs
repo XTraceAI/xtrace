@@ -9,6 +9,18 @@ use xt_store::Store;
 const KEY: &str = "k3y_k3y_k3y_k3y_k3y_k3y_k3y_k3y_k3y_k3y_k3y";
 const H: u64 = 3_600_000;
 const NOW: i64 = 1_800_000_000_000;
+const PENDING: &str = "pending-1";
+const CODE: &str = "123456";
+
+/// Both steps of joining, as the page does them.
+fn join(
+    service: &LeaderboardService,
+    nickname: &str,
+    email: &str,
+) -> Result<LeaderboardStatus, LeaderboardRefusal> {
+    service.join(nickname, email)?;
+    service.confirm(CODE, None)
+}
 
 /// The app's saved state over a test database, with a number to send.
 struct FakeHost {
@@ -138,10 +150,20 @@ fn error(status: u16, code: &str) -> Result<Answer, Unreachable> {
 /// A leaderboard that accepts everything, ranking the member second.
 fn accepting(request: &Request) -> Result<Answer, Unreachable> {
     match (request.method, request.path) {
-        (Method::Post, "/api/join") => answer(
-            201,
-            json!({ "key": KEY, "nickname": request.body.as_ref().unwrap()["nickname"] }),
-        ),
+        (Method::Post, "/api/join") => answer(202, json!({ "pending_id": PENDING })),
+        (Method::Post, "/api/join/verify") => {
+            let body = request.body.as_ref().unwrap();
+            if body["pending_id"] != PENDING {
+                error(410, "code_expired")
+            } else if body["code"] == CODE {
+                answer(
+                    201,
+                    json!({ "key": KEY, "nickname": "ada", "rejoined": false }),
+                )
+            } else {
+                error(400, "invalid_code")
+            }
+        }
         (Method::Put, "/api/score") => answer(204, Value::Null),
         (Method::Get, "/api/me") => answer(
             200,
@@ -292,10 +314,29 @@ fn the_address_is_the_default_unless_a_plain_https_or_local_http_origin_is_given
 #[test]
 fn joining_sends_the_nickname_and_email_saves_only_key_and_nickname_then_sends_the_number() {
     let rig = setup(FakeHost::new(Some(123)), FakeTransport::new(accepting));
-    let status = rig.service.join("ada", "ada@example.com").unwrap();
+    // Step one: a code is emailed; nothing is saved yet.
+    let waiting = rig.service.join("ada", "ada@example.com").unwrap();
+    assert!(!waiting.joined);
+    assert_eq!(
+        waiting.code_sent,
+        Some(LeaderboardCodeSent {
+            email: "ada@example.com".into(),
+            nickname: "ada".into(),
+            choose_nickname: false,
+        })
+    );
+    assert_eq!(rig.host.saved(), None);
+    assert_eq!(rig.joins.load(Ordering::SeqCst), 0);
+    // Step two: the code.
+    let status = rig.service.confirm(CODE, None).unwrap();
     assert_eq!(
         rig.transport.lines(),
-        ["Post /api/join", "Put /api/score", "Get /api/me"]
+        [
+            "Post /api/join",
+            "Post /api/join/verify",
+            "Put /api/score",
+            "Get /api/me"
+        ]
     );
     let seen = rig.transport.seen();
     assert_eq!(seen[0].key, None);
@@ -303,10 +344,15 @@ fn joining_sends_the_nickname_and_email_saves_only_key_and_nickname_then_sends_t
         seen[0].body,
         Some(json!({ "nickname": "ada", "email": "ada@example.com" }))
     );
-    assert_eq!(seen[1].key.as_deref(), Some(KEY));
-    assert_eq!(seen[1].body, Some(json!({ "leverage_tenths": 123 })));
+    assert_eq!(seen[1].key, None);
+    assert_eq!(
+        seen[1].body,
+        Some(json!({ "pending_id": PENDING, "code": CODE }))
+    );
     assert_eq!(seen[2].key.as_deref(), Some(KEY));
-    assert_eq!(seen[2].body, None);
+    assert_eq!(seen[2].body, Some(json!({ "leverage_tenths": 123 })));
+    assert_eq!(seen[3].key.as_deref(), Some(KEY));
+    assert_eq!(seen[3].body, None);
     let saved = rig.host.saved().unwrap();
     assert_eq!((saved.key.as_str(), saved.nickname.as_str()), (KEY, "ada"));
     assert_eq!(
@@ -336,11 +382,14 @@ fn joining_sends_the_nickname_and_email_saves_only_key_and_nickname_then_sends_t
             page_url: "https://leaderboard.xtrace.ai/".into(),
             error: None,
             notice: None,
+            code_sent: None,
+            welcome: None,
         }
     );
     // A second join is refused before anything is sent.
     assert!(rig.service.join("bob", "b@example.com").is_err());
-    assert_eq!(rig.transport.seen().len(), 3);
+    assert!(rig.service.confirm(CODE, None).is_err());
+    assert_eq!(rig.transport.seen().len(), 4);
 }
 
 #[test]
@@ -527,7 +576,7 @@ fn an_unknown_key_from_any_call_forgets_the_membership_and_says_so() {
         assert_eq!(status.notice.as_deref(), expected, "{name}");
         // Joining again clears the note.
         rig.transport.reroute(accepting);
-        let joined = rig.service.join("ada", "a@example.com").unwrap();
+        let joined = join(&rig.service, "ada", "a@example.com").unwrap();
         assert!(joined.joined && joined.notice.is_none(), "{name}");
     }
     // A 401 that is not the leaderboard's own answer forgets nothing.
@@ -582,10 +631,30 @@ fn a_join_whose_key_cannot_be_saved_is_deleted_again() {
         unreadable: Default::default(),
     });
     let rig = setup(host, FakeTransport::new(accepting));
-    assert!(rig.service.join("ada", "a@example.com").is_err());
-    assert_eq!(rig.transport.lines(), ["Post /api/join", "Delete /api/me"]);
-    assert_eq!(rig.transport.seen()[1].key.as_deref(), Some(KEY));
+    assert_eq!(
+        join(&rig.service, "ada", "a@example.com")
+            .unwrap_err()
+            .message,
+        "The leaderboard membership saved in this app could not be read or changed."
+    );
+    assert_eq!(
+        rig.transport.lines(),
+        ["Post /api/join", "Post /api/join/verify", "Delete /api/me"]
+    );
+    assert_eq!(rig.transport.seen()[2].key.as_deref(), Some(KEY));
     assert_eq!(rig.joins.load(Ordering::SeqCst), 0);
+    // When that delete fails too, the person is told the entry may remain.
+    rig.transport
+        .reroute(|request| match (request.method, request.path) {
+            (Method::Delete, _) => Err(Unreachable),
+            _ => accepting(request),
+        });
+    assert_eq!(
+        join(&rig.service, "ada", "a@example.com")
+            .unwrap_err()
+            .message,
+        "XTrace could not save your membership, and your entry may still be on the leaderboard. Joining again with the same email signs you back in to it."
+    );
 }
 
 /// Uploads never read the telemetry switch: with telemetry off they still
@@ -609,7 +678,7 @@ fn uploads_do_not_depend_on_the_telemetry_switch() {
         Arc::new(move || told.leaderboard_opted_in()),
         Arc::new(|| {}),
     );
-    service.join("ada", "a@example.com").unwrap();
+    join(&service, "ada", "a@example.com").unwrap();
     service.upload();
     service.upload();
     let puts = transport
@@ -669,6 +738,7 @@ fn a_blocked_copy_sends_nothing_and_says_so() {
         assert!(!status.available);
         assert_eq!(status.unavailable_reason.as_deref(), Some(reason));
         assert_eq!(blocked.join("a", "b").unwrap_err().message, reason);
+        assert_eq!(blocked.confirm(CODE, None).unwrap_err().message, reason);
         assert_eq!(blocked.rename("b").unwrap_err().message, reason);
         assert_eq!(blocked.leave().unwrap_err().message, reason);
         assert!(host.saved().is_some());
@@ -714,8 +784,18 @@ fn the_http_transport_sends_the_contract_request_shapes() {
             let request = line.trim().to_owned();
             let (status, reply) = if request.starts_with("PUT") {
                 ("401 Unauthorized", r#"{"error":"unknown_key"}"#)
+            } else if request.starts_with("POST /api/join/verify") {
+                (
+                    "201 Created",
+                    r#"{"key":"abc","nickname":"ada","rejoined":false}"#,
+                )
+            } else if request.starts_with("GET") {
+                (
+                    "429 Too Many Requests",
+                    r#"{"error":"rate_limited","retry_after_seconds":61}"#,
+                )
             } else {
-                ("201 Created", r#"{"key":"abc","nickname":"ada"}"#)
+                ("202 Accepted", r#"{"pending_id":"p1"}"#)
             };
             lock(&log).push((request, headers, String::from_utf8(body).unwrap()));
             let mut stream = stream;
@@ -730,13 +810,19 @@ fn the_http_transport_sends_the_contract_request_shapes() {
     });
     let transport = HttpTransport::new(&base_url(Some(&base))).unwrap();
     let api = Api(&transport);
-    let joined = api.join("ada", "ada@example.com").unwrap();
+    assert_eq!(api.join("ada", "ada@example.com").unwrap().pending_id, "p1");
+    let joined = api.verify("p1", "123456", None).unwrap();
     assert_eq!(
-        (joined.key.as_str(), joined.nickname.as_str()),
-        ("abc", "ada")
+        (
+            joined.key.as_str(),
+            joined.nickname.as_str(),
+            joined.rejoined
+        ),
+        ("abc", "ada", false)
     );
     let refused = api.put_score("abc", Some(123)).unwrap_err();
     assert!(refused.gone());
+    assert_eq!(api.me("abc").err(), Some(Refusal::RateLimited(Some(61))));
     let seen = lock(&seen).clone();
     assert_eq!(seen[0].0, "POST /api/join HTTP/1.1");
     let header = |n: usize, name: &str| {
@@ -755,14 +841,20 @@ fn the_http_transport_sends_the_contract_request_shapes() {
         serde_json::from_str::<Value>(&seen[0].2).unwrap(),
         json!({ "nickname": "ada", "email": "ada@example.com" })
     );
-    assert_eq!(seen[1].0, "PUT /api/score HTTP/1.1");
-    assert_eq!(header(1, "authorization").as_deref(), Some("Bearer abc"));
+    assert_eq!(seen[1].0, "POST /api/join/verify HTTP/1.1");
+    assert_eq!(header(1, "authorization"), None);
     assert_eq!(
         serde_json::from_str::<Value>(&seen[1].2).unwrap(),
+        json!({ "pending_id": "p1", "code": "123456" })
+    );
+    assert_eq!(seen[2].0, "PUT /api/score HTTP/1.1");
+    assert_eq!(header(2, "authorization").as_deref(), Some("Bearer abc"));
+    assert_eq!(
+        serde_json::from_str::<Value>(&seen[2].2).unwrap(),
         json!({ "leverage_tenths": 123 })
     );
     assert!(
-        header(1, "user-agent")
+        header(2, "user-agent")
             .unwrap()
             .starts_with("XTrace-Desktop/")
     );
@@ -803,7 +895,7 @@ fn background_uploads_tell_the_page_and_error_paths_are_shown() {
     // Not joined: nothing is tried, nothing announced.
     rig.service.upload();
     assert_eq!(rig.changes.load(Ordering::SeqCst), 0);
-    rig.service.join("ada", "a@example.com").unwrap();
+    join(&rig.service, "ada", "a@example.com").unwrap();
     rig.service.upload();
     assert_eq!(rig.changes.load(Ordering::SeqCst), 1);
     // A saved membership that cannot be read is shown, and announced.
@@ -840,22 +932,42 @@ fn background_uploads_tell_the_page_and_error_paths_are_shown() {
 
 #[test]
 fn a_join_answer_that_cannot_be_read_says_so() {
+    let unreadable = "The leaderboard answered in a way XTrace could not read.";
+    // The code step's answer.
     for body in [
         json!({ "nope": 1 }),
-        json!({ "key": "", "nickname": "ada" }),
+        json!({ "key": "", "nickname": "ada", "rejoined": false }),
+        json!({ "key": KEY, "nickname": "ada" }),
     ] {
         let rig = setup(
             FakeHost::new(None),
-            FakeTransport::new(move |_| answer(201, body.clone())),
+            FakeTransport::new(move |request| match request.path {
+                "/api/join/verify" => answer(201, body.clone()),
+                _ => accepting(request),
+            }),
+        );
+        assert_eq!(
+            join(&rig.service, "ada", "a@example.com")
+                .unwrap_err()
+                .message,
+            unreadable
+        );
+        assert_eq!(rig.host.saved(), None);
+    }
+    // The first step's answer.
+    for body in [json!({}), json!({ "pending_id": "" })] {
+        let rig = setup(
+            FakeHost::new(None),
+            FakeTransport::new(move |_| answer(202, body.clone())),
         );
         assert_eq!(
             rig.service
                 .join("ada", "a@example.com")
                 .unwrap_err()
                 .message,
-            "The leaderboard answered in a way XTrace could not read."
+            unreadable
         );
-        assert_eq!(rig.host.saved(), None);
+        assert_eq!(rig.service.status().code_sent, None);
     }
 }
 
@@ -870,4 +982,220 @@ fn a_request_never_shows_its_key_or_email_when_printed() {
     let text = format!("{request:?}");
     assert!(!text.contains(KEY) && !text.contains("example.com") && !text.contains("ada\""));
     assert!(text.contains("/api/join") && text.contains("email"));
+}
+
+#[test]
+fn every_code_step_answer_has_plain_words() {
+    for (status, code, message, field) in [
+        (
+            400,
+            "invalid_code",
+            "That code is not right. Check the email and try again.",
+            Some(LeaderboardField::Code),
+        ),
+        (
+            410,
+            "code_expired",
+            "That code has expired or was tried too many times. Send a new code.",
+            None,
+        ),
+        (
+            503,
+            "email_unavailable",
+            "The leaderboard can't send emails right now. Try again later.",
+            None,
+        ),
+        (
+            503,
+            "server_misconfigured",
+            "The leaderboard answered with an error (503). Try again later.",
+            None,
+        ),
+    ] {
+        let refused = LeaderboardRefusal::from(&Api::refusal(
+            status,
+            &serde_json::to_vec(&json!({ "error": code })).unwrap(),
+        ));
+        assert_eq!(refused.message, message, "{code}");
+        assert_eq!(refused.field, field, "{code}");
+    }
+    for (seconds, message) in [
+        (Some(1), "Too many tries. Try again in about 1 minute."),
+        (Some(60), "Too many tries. Try again in about 1 minute."),
+        (Some(61), "Too many tries. Try again in about 2 minutes."),
+        (Some(3600), "Too many tries. Try again in about 60 minutes."),
+        (Some(0), "Too many tries. Try again in about 1 minute."),
+        (None, "Too many tries. Try again later."),
+    ] {
+        assert_eq!(
+            refusal_message(&Refusal::RateLimited(seconds)),
+            message,
+            "{seconds:?}"
+        );
+    }
+}
+
+/// A wrong code keeps the code step; a code the leaderboard has thrown away
+/// (expired, or too many tries) starts over.
+#[test]
+fn the_code_step_keeps_or_ends_the_pending_join_as_the_leaderboard_does() {
+    let rig = setup(FakeHost::new(Some(1)), FakeTransport::new(accepting));
+    assert_eq!(
+        rig.service.confirm(CODE, None).unwrap_err().message,
+        "No code was sent in this session. Enter your nickname and email to get a new code."
+    );
+    rig.service.join("ada", "a@example.com").unwrap();
+    let wrong = rig.service.confirm("000000", None).unwrap_err();
+    assert_eq!(wrong.field, Some(LeaderboardField::Code));
+    assert!(rig.service.status().code_sent.is_some());
+    rig.transport.reroute(accepting);
+    rig.service.join("ada", "a@example.com").unwrap();
+    rig.transport.reroute(|_| error(410, "code_expired"));
+    assert!(rig.service.confirm(CODE, None).is_err());
+    assert_eq!(rig.service.status().code_sent, None);
+    // "Use a different email" forgets it too, keeping nothing saved.
+    rig.transport.reroute(accepting);
+    rig.service.join("ada", "a@example.com").unwrap();
+    assert_eq!(rig.service.cancel_code().code_sent, None);
+    assert!(rig.service.confirm(CODE, None).is_err());
+    // A rate-limited new code keeps the one already sent.
+    rig.service.join("ada", "a@example.com").unwrap();
+    rig.transport.reroute(|_| {
+        answer(
+            429,
+            json!({ "error": "rate_limited", "retry_after_seconds": 120 }),
+        )
+    });
+    assert_eq!(
+        rig.service
+            .join("ada", "a@example.com")
+            .unwrap_err()
+            .message,
+        "Too many tries. Try again in about 2 minutes."
+    );
+    assert!(rig.service.status().code_sent.is_some());
+    // Success clears it.
+    rig.transport.reroute(accepting);
+    let joined = rig.service.confirm(CODE, None).unwrap();
+    assert!(joined.joined && joined.code_sent.is_none());
+    assert_eq!(rig.service.status().code_sent, None);
+}
+
+/// The same email on another Mac signs back in to its entry: saved like a
+/// join, welcomed once, and no `leaderboard_opted_in` (that person already
+/// opted in).
+#[test]
+fn signing_back_in_saves_the_entry_welcomes_once_and_is_not_a_new_opt_in() {
+    let transport = FakeTransport::new(|request| match request.path {
+        "/api/join/verify" => answer(
+            201,
+            json!({ "key": KEY, "nickname": "Ada_Old", "rejoined": true }),
+        ),
+        _ => accepting(request),
+    });
+    let rig = setup(FakeHost::new(Some(7)), transport);
+    let status = join(&rig.service, "ignored", "a@example.com").unwrap();
+    assert_eq!(rig.host.saved().unwrap().nickname, "Ada_Old");
+    assert_eq!(
+        status.welcome.as_deref(),
+        Some("Welcome back. You are signed in to your existing entry as Ada_Old.")
+    );
+    assert_eq!(rig.service.status().welcome, None);
+    assert_eq!(rig.joins.load(Ordering::SeqCst), 0);
+    // A rejoin whose key cannot be saved never deletes the existing entry.
+    let host = Arc::new(FakeHost {
+        store: Mutex::new(Store::open_in_memory().unwrap()),
+        number: Mutex::new(Ok(Some(1))),
+        fail_join: true,
+        fail_record: false,
+        unreadable: Default::default(),
+    });
+    let rig = setup(host, rig.transport.clone());
+    let before = rig.transport.seen().len();
+    assert!(join(&rig.service, "x", "a@example.com").is_err());
+    assert!(
+        rig.transport.seen()[before..]
+            .iter()
+            .all(|request| request.method != Method::Delete)
+    );
+}
+
+#[test]
+fn a_rate_limited_hourly_upload_is_a_failed_upload() {
+    let rig = setup(
+        FakeHost::joined("ada", Some(3)),
+        FakeTransport::new(|request| match request.path {
+            "/api/score" => answer(
+                429,
+                json!({ "error": "rate_limited", "retry_after_seconds": 30 }),
+            ),
+            _ => accepting(request),
+        }),
+    );
+    rig.service.upload();
+    assert_eq!(rig.host.saved().unwrap().last_sent, None);
+    assert_eq!(
+        rig.service.status().error.as_deref(),
+        Some(
+            "The leaderboard asked XTrace to wait. Your number will be sent again within the hour."
+        )
+    );
+    rig.transport.reroute(accepting);
+    rig.service.upload();
+    assert_eq!(rig.service.status().error, None);
+}
+
+/// A right code with a taken nickname keeps the code step: the same code is
+/// sent again with another nickname, which the leaderboard then saves.
+#[test]
+fn a_taken_nickname_at_the_code_step_keeps_the_code_for_another_nickname() {
+    let transport = FakeTransport::new(|request| match request.path {
+        "/api/join/verify" => {
+            let body = request.body.as_ref().unwrap();
+            match body.get("nickname").and_then(Value::as_str) {
+                None | Some("taken_too") => error(409, "nickname_taken"),
+                Some(nickname) => answer(
+                    201,
+                    json!({ "key": KEY, "nickname": nickname, "rejoined": false }),
+                ),
+            }
+        }
+        _ => accepting(request),
+    });
+    let rig = setup(FakeHost::new(Some(4)), transport);
+    rig.service.join("ada", "a@example.com").unwrap();
+    let refused = rig.service.confirm(CODE, None).unwrap_err();
+    assert_eq!(
+        refused.message,
+        "That nickname is taken. Choose another one and confirm again."
+    );
+    assert_eq!(refused.field, Some(LeaderboardField::Nickname));
+    let waiting = rig.service.status().code_sent.unwrap();
+    assert!(waiting.choose_nickname);
+    assert_eq!(waiting.nickname, "ada");
+    // Another taken one: still waiting, now showing the newest nickname.
+    assert!(rig.service.confirm(CODE, Some("taken_too")).is_err());
+    assert_eq!(
+        rig.service.status().code_sent.unwrap().nickname,
+        "taken_too"
+    );
+    let joined = rig.service.confirm(CODE, Some("ada_2")).unwrap();
+    assert!(joined.joined && joined.code_sent.is_none());
+    assert_eq!(rig.host.saved().unwrap().nickname, "ada_2");
+    let verifies: Vec<_> = rig
+        .transport
+        .seen()
+        .into_iter()
+        .filter(|request| request.path == "/api/join/verify")
+        .map(|request| request.body.unwrap())
+        .collect();
+    assert_eq!(
+        verifies,
+        [
+            json!({ "pending_id": PENDING, "code": CODE }),
+            json!({ "pending_id": PENDING, "code": CODE, "nickname": "taken_too" }),
+            json!({ "pending_id": PENDING, "code": CODE, "nickname": "ada_2" }),
+        ]
+    );
+    assert_eq!(rig.joins.load(Ordering::SeqCst), 1);
 }

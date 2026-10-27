@@ -50,7 +50,7 @@ never sends anything either.
 | `plugin_detected`      | `host`                | Not sent yet.                                                                                            |
 | `plugin_installed`     | `host`                | Not sent yet.                                                                                            |
 | `rule_activated`       | `class`, `mode`       | Not sent yet.                                                                                            |
-| `leaderboard_opted_in` | none                  | Yes: when you join the public leaderboard on the Leaderboard page.                                       |
+| `leaderboard_opted_in` | none                  | Yes: when you join the public leaderboard on the Leaderboard page and your emailed code is accepted.     |
 | `cloud_connected`      | none                  | Not sent yet.                                                                                            |
 | `update_installed`     | none                  | Not sent yet.                                                                                            |
 
@@ -105,13 +105,17 @@ The public leaderboard at [leaderboard.xtrace.ai](https://leaderboard.xtrace.ai)
 is separate from telemetry. Nothing is sent to it unless you join it yourself on
 the app's **Leaderboard** page.
 
-- **When you join**, the app sends the nickname and the email you type. The
-  leaderboard shows your nickname and never shows your email; it keeps the
-  email only so XTrace can reach you. The app does not save the email.
+- **When you join**, the app sends the nickname and the email you type. To
+  check the email is yours, the leaderboard emails you a 6-digit code, which
+  you enter in the app within 15 minutes. The leaderboard shows your nickname
+  and never shows your email; it keeps the email only so XTrace can reach you.
+  The app does not save the email. Joining again with the same email (for
+  example on a new Mac) signs you back in to your existing entry.
 - **While you are joined**, the app sends one number: your leverage for the
   last 7 days, as the Dashboard shows it for the 7-day range, to one decimal
   (or no number when it has none). It is sent right after you join, when the
-  app starts, and once an hour while it runs. No sessions, projects, prompts
+  app starts, when the app first finishes reading your history, and once an
+  hour while it runs. No sessions, projects, prompts
   or other data from your history are sent. Like any web request, each one
   also lets the leaderboard see your IP address and the app's version.
 - **Change nickname** sends the new nickname.
@@ -122,12 +126,15 @@ the app's **Leaderboard** page.
 The app keeps the key the leaderboard gave it when you joined, your nickname
 and the last number it sent in its own database on this Mac. Only the app
 built with its own identifier and using its own data folder sends to the
-leaderboard; other copies, such as a test copy of the database, send nothing.
+leaderboard; other copies, such as a test copy of the database, send nothing
+to it. A copy started with `XTRACE_LEADERBOARD_URL` pointing at a leaderboard
+server on this Mac sends to that local server only.
 
 Turning telemetry off does not stop leaderboard updates, and leaving the
 leaderboard does not change telemetry. When you join with telemetry on, the
-`leaderboard_opted_in` event above is sent; it says only that someone joined,
-not who.
+`leaderboard_opted_in` event above is sent once your code is accepted; it says
+only that someone joined, not who. Signing back in to an existing entry does
+not send it.
 
 ## Retention
 

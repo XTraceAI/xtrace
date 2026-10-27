@@ -212,6 +212,9 @@ export class TauriDataSource implements DataSource {
     read: () => invoke<LeaderboardStatus>(commands.leaderboardStatus),
     join: (nickname: string, email: string) =>
       invoke<LeaderboardStatus>(commands.leaderboardJoin, { nickname, email }),
+    confirm: (code: string, nickname?: string) =>
+      invoke<LeaderboardStatus>(commands.leaderboardConfirm, { code, nickname: nickname ?? null }),
+    cancelCode: () => invoke<LeaderboardStatus>(commands.leaderboardCancelCode),
     rename: (nickname: string) =>
       invoke<LeaderboardStatus>(commands.leaderboardRename, { nickname }),
     leave: () => invoke<LeaderboardStatus>(commands.leaderboardLeave),

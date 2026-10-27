@@ -1,7 +1,9 @@
 //! The public leaderboard at leaderboard.xtrace.ai, which a person joins on
 //! purpose from the Leaderboard page with a nickname and an email.
 //!
-//! * **What is sent.** Joining sends the nickname and the email. After that
+//! * **What is sent.** Joining sends the nickname and the email; the
+//!   leaderboard emails a 6-digit code, and the code is sent back to finish
+//!   (the pending join's id is kept in memory only). After that
 //!   only the 7-day leverage number ([`leaderboard_tenths`]) is sent, right
 //!   after joining, when the app starts, when its index is first ready and
 //!   every hour while it runs ([`UPLOAD_INTERVAL`]); a failed upload is tried again at the next hour,
@@ -233,6 +235,8 @@ pub enum Refusal {
     Unreachable,
     /// The leaderboard refused with one of its error codes.
     Code(String),
+    /// Too many requests; try again after this many seconds, when it said.
+    RateLimited(Option<u64>),
     /// Any other answer status.
     Status(u16),
     /// The expected status with a body this build cannot read.
@@ -259,9 +263,23 @@ pub fn refusal_message(refusal: &Refusal) -> String {
             }
             "invalid_email" => "That email address does not look right.".into(),
             "invalid_leverage" => "The leaderboard did not accept your number.".into(),
+            "invalid_code" => "That code is not right. Check the email and try again.".into(),
+            "code_expired" => {
+                "That code has expired or was tried too many times. Send a new code.".into()
+            }
+            "email_unavailable" => {
+                "The leaderboard can't send emails right now. Try again later.".into()
+            }
             "unknown_key" => GONE.into(),
             _ => "The leaderboard did not accept the request.".into(),
         },
+        Refusal::RateLimited(Some(seconds)) => {
+            // Whole minutes, rounded up, at least one.
+            let minutes = seconds.div_ceil(60).max(1);
+            let unit = if minutes == 1 { "minute" } else { "minutes" };
+            format!("Too many tries. Try again in about {minutes} {unit}.")
+        }
+        Refusal::RateLimited(None) => "Too many tries. Try again later.".into(),
         Refusal::Status(413) => "That nickname or email is too long.".into(),
         Refusal::Unreadable => "The leaderboard answered in a way XTrace could not read.".into(),
         Refusal::Status(status) => {
@@ -276,6 +294,7 @@ pub fn refusal_message(refusal: &Refusal) -> String {
 pub enum LeaderboardField {
     Nickname,
     Email,
+    Code,
 }
 
 /// A refused change, as the page shows it: the words, and the field they
@@ -301,6 +320,7 @@ impl From<&Refusal> for LeaderboardRefusal {
             Refusal::Code(code) => match code.as_str() {
                 "nickname_taken" | "invalid_nickname" => Some(LeaderboardField::Nickname),
                 "invalid_email" => Some(LeaderboardField::Email),
+                "invalid_code" => Some(LeaderboardField::Code),
                 _ => None,
             },
             _ => None,
@@ -320,15 +340,36 @@ const NUMBER_UNREADABLE: &str =
     "Your 7-day leverage could not be read. It will be tried again within the hour.";
 /// Shown when the number was accepted but its record could not be saved.
 const RECORD_FAILED: &str = "Your number was sent, but XTrace could not save when it was sent.";
+/// Shown when the leaderboard asked the hourly upload to wait.
+const UPLOAD_RATE_LIMITED: &str =
+    "The leaderboard asked XTrace to wait. Your number will be sent again within the hour.";
+/// Shown when a join was accepted but its key could not be saved, and the
+/// entry could not be removed again either.
+const JOIN_NOT_SAVED_ENTRY_KEPT: &str = "XTrace could not save your membership, and your entry may still be on the leaderboard. Joining again with the same email signs you back in to it.";
+/// Shown when the code was right but the nickname is taken; the code stays
+/// valid.
+const NICKNAME_TAKEN_AT_CODE: &str =
+    "That nickname is taken. Choose another one and confirm again.";
+/// Shown when the code step was asked for with no code sent in this launch.
+const NO_CODE_SENT: &str =
+    "No code was sent in this session. Enter your nickname and email to get a new code.";
 /// Shown when an upload could not reach the leaderboard.
 const UPLOAD_UNREACHABLE: &str =
     "Could not reach the leaderboard. Your number will be sent again within the hour.";
 
-/// The leaderboard's answer to a join.
+/// The leaderboard's answer to a join: a code was emailed.
+#[derive(Deserialize)]
+struct CodeSent {
+    pending_id: String,
+}
+
+/// The leaderboard's answer to a right code.
 #[derive(Deserialize)]
 struct Joined {
     key: String,
     nickname: String,
+    /// The email already had an entry, which this signs back in to.
+    rejoined: bool,
 }
 
 /// The leaderboard's answer about the member.
@@ -353,15 +394,25 @@ impl Api<'_> {
         if answer.status == ok {
             return Ok(answer.body);
         }
+        Err(Self::refusal(answer.status, &answer.body))
+    }
+
+    /// What an answer other than the expected one means.
+    fn refusal(status: u16, body: &[u8]) -> Refusal {
         #[derive(Deserialize)]
         struct Error {
             error: String,
+            retry_after_seconds: Option<u64>,
         }
-        match serde_json::from_slice::<Error>(&answer.body) {
-            Ok(error) if (400..500).contains(&answer.status) && answer.status != 413 => {
-                Err(Refusal::Code(error.error))
-            }
-            _ => Err(Refusal::Status(answer.status)),
+        let error = serde_json::from_slice::<Error>(body).ok();
+        match (status, error) {
+            (429, error) => Refusal::RateLimited(error.and_then(|e| e.retry_after_seconds)),
+            (413, _) => Refusal::Status(413),
+            (400..=499, Some(error)) => Refusal::Code(error.error),
+            // Of the server's own failures, only this one says something the
+            // person can act on; the rest are a server error.
+            (503, Some(error)) if error.error == "email_unavailable" => Refusal::Code(error.error),
+            (status, _) => Refusal::Status(status),
         }
     }
 
@@ -369,13 +420,42 @@ impl Api<'_> {
         serde_json::from_slice(body).map_err(|_| Refusal::Unreadable)
     }
 
-    fn join(&self, nickname: &str, email: &str) -> Result<Joined, Refusal> {
+    /// Asks for a code by email.
+    fn join(&self, nickname: &str, email: &str) -> Result<CodeSent, Refusal> {
         let body = self.call(
             Request {
                 method: Method::Post,
                 path: "/api/join",
                 key: None,
                 body: Some(json!({ "nickname": nickname, "email": email })),
+            },
+            202,
+        )?;
+        let sent: CodeSent = Self::parse(&body)?;
+        if sent.pending_id.is_empty() || sent.pending_id.len() > 256 {
+            return Err(Refusal::Unreadable);
+        }
+        Ok(sent)
+    }
+
+    /// Gives the emailed code for a pending join, with a new nickname when
+    /// the one asked for was taken.
+    fn verify(
+        &self,
+        pending_id: &str,
+        code: &str,
+        nickname: Option<&str>,
+    ) -> Result<Joined, Refusal> {
+        let mut body = json!({ "pending_id": pending_id, "code": code });
+        if let Some(nickname) = nickname {
+            body["nickname"] = json!(nickname);
+        }
+        let body = self.call(
+            Request {
+                method: Method::Post,
+                path: "/api/join/verify",
+                key: None,
+                body: Some(body),
             },
             201,
         )?;
@@ -540,6 +620,35 @@ pub struct LeaderboardStatus {
     /// A one-line note about a change the app made on its own, such as
     /// forgetting a membership the leaderboard no longer has.
     pub notice: Option<String>,
+    /// While not joined: a code was emailed in this launch and waits to be
+    /// entered.
+    pub code_sent: Option<LeaderboardCodeSent>,
+    /// Said once, in the answer to the code that signed back in to an
+    /// existing entry.
+    pub welcome: Option<String>,
+}
+
+/// A join waiting for its emailed code, as the page shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct LeaderboardCodeSent {
+    /// Where the code went, as typed.
+    pub email: String,
+    /// The nickname asked for, kept for "Use a different email".
+    pub nickname: String,
+    /// The code was right but the nickname is taken: the same code is
+    /// confirmed again with another nickname.
+    pub choose_nickname: bool,
+}
+
+/// A join waiting for its code: the leaderboard's id for it and what was
+/// typed. Kept in memory only; a restart starts over.
+#[derive(Clone)]
+struct PendingJoin {
+    id: String,
+    nickname: String,
+    email: String,
+    /// The leaderboard said the nickname is taken after a right code.
+    nickname_taken: bool,
 }
 
 /// In-memory notes for the page; a restart starts with none.
@@ -547,6 +656,8 @@ pub struct LeaderboardStatus {
 struct Notes {
     upload_error: Option<String>,
     gone: bool,
+    pending: Option<PendingJoin>,
+    welcome: Option<String>,
 }
 
 /// Wall time in Unix milliseconds.
@@ -668,8 +779,9 @@ impl LeaderboardService {
         standing: Option<LeaderboardStanding>,
         error: Option<String>,
     ) -> LeaderboardStatus {
-        let notes = lock(&self.notes);
+        let mut notes = lock(&self.notes);
         let joined = membership.is_some();
+        let welcome = notes.welcome.take();
         LeaderboardStatus {
             available: self.transport.is_ok(),
             unavailable_reason: self.transport.as_ref().err().cloned(),
@@ -686,11 +798,20 @@ impl LeaderboardService {
             page_url: self.page_url.clone(),
             error: error.or_else(|| joined.then(|| notes.upload_error.clone()).flatten()),
             notice: (notes.gone && !joined).then(|| GONE.into()),
+            code_sent: notes.pending.as_ref().filter(|_| !joined).map(|pending| {
+                LeaderboardCodeSent {
+                    email: pending.email.clone(),
+                    nickname: pending.nickname.clone(),
+                    choose_nickname: pending.nickname_taken,
+                }
+            }),
+            welcome: welcome.filter(|_| joined),
         }
     }
 
-    /// Joins with the nickname and email as typed (the leaderboard checks
-    /// them), saves the key and nickname, then sends the number.
+    /// The first step of joining: asks the leaderboard to email a code for
+    /// the nickname and email as typed (it checks them). Asking again sends
+    /// a new code; only the newest works.
     pub fn join(
         &self,
         nickname: &str,
@@ -707,25 +828,114 @@ impl LeaderboardService {
             {
                 return Err(String::from("You have already joined the leaderboard.").into());
             }
-            let joined = api
+            let sent = api
                 .join(nickname, email)
                 .map_err(|refusal| LeaderboardRefusal::from(&refusal))?;
+            let mut notes = lock(&self.notes);
+            notes.gone = false;
+            notes.pending = Some(PendingJoin {
+                id: sent.pending_id,
+                nickname: nickname.to_owned(),
+                email: email.to_owned(),
+                nickname_taken: false,
+            });
+        }
+        Ok(self.status())
+    }
+
+    /// The second step: gives the emailed code, and a new nickname after the
+    /// leaderboard said the first one is taken. A right code saves the key
+    /// and nickname the leaderboard answers with, then sends the number. A
+    /// new entry tells the telemetry service it joined; signing back in to
+    /// an existing entry (the same email, on another Mac or after leaving
+    /// this app) does not, as that person already opted in.
+    pub fn confirm(
+        &self,
+        code: &str,
+        nickname: Option<&str>,
+    ) -> Result<LeaderboardStatus, LeaderboardRefusal> {
+        let api = self.api()?;
+        let rejoined = {
+            let _work = lock(&self.work);
+            if self
+                .host
+                .membership()
+                .map_err(saved_state_failed)?
+                .is_some()
+            {
+                return Err(String::from("You have already joined the leaderboard.").into());
+            }
+            let pending = lock(&self.notes)
+                .pending
+                .clone()
+                .ok_or_else(|| String::from(NO_CODE_SENT))?;
+            let joined = match api.verify(&pending.id, code, nickname) {
+                Ok(joined) => joined,
+                Err(refusal) => {
+                    let mut notes = lock(&self.notes);
+                    let code_is = |name: &str| matches!(&refusal, Refusal::Code(c) if c == name);
+                    if code_is("code_expired") {
+                        // The leaderboard deleted this pending join: start over.
+                        notes.pending = None;
+                    } else if code_is("nickname_taken") {
+                        // The code was right and stays valid: the same code
+                        // is confirmed again with another nickname.
+                        if let Some(pending) = notes.pending.as_mut() {
+                            pending.nickname_taken = true;
+                            if let Some(nickname) = nickname {
+                                pending.nickname = nickname.to_owned();
+                            }
+                        }
+                        return Err(LeaderboardRefusal {
+                            message: NICKNAME_TAKEN_AT_CODE.into(),
+                            field: Some(LeaderboardField::Nickname),
+                        });
+                    }
+                    return Err(LeaderboardRefusal::from(&refusal));
+                }
+            };
+            // The pending join is gone on the leaderboard either way.
+            lock(&self.notes).pending = None;
             let membership = LeaderboardMembership {
                 key: joined.key,
                 nickname: joined.nickname,
                 last_sent: None,
             };
             if let Err(error) = self.host.join(&membership) {
+                if joined.rejoined {
+                    // An existing entry is never deleted here: it keeps its
+                    // number, and the same email signs back in to it.
+                    return Err(String::from(JOIN_NOT_SAVED_ENTRY_KEPT).into());
+                }
                 // Without the saved key the member could never leave, so the
-                // new row is removed again.
-                let _ = api.delete(&membership.key);
-                return Err(saved_state_failed(error).into());
+                // new entry is removed again.
+                return Err(match api.delete(&membership.key) {
+                    Ok(()) => saved_state_failed(error),
+                    Err(_) => JOIN_NOT_SAVED_ENTRY_KEPT.into(),
+                }
+                .into());
             }
-            *lock(&self.notes) = Notes::default();
+            let mut notes = lock(&self.notes);
+            *notes = Notes::default();
+            notes.welcome = joined.rejoined.then(|| {
+                format!(
+                    "Welcome back. You are signed in to your existing entry as {}.",
+                    membership.nickname
+                )
+            });
+            joined.rejoined
+        };
+        if !rejoined {
+            (self.on_joined)();
         }
-        (self.on_joined)();
         self.send_number();
         Ok(self.status())
+    }
+
+    /// "Use a different email": forgets the code waiting to be entered.
+    pub fn cancel_code(&self) -> LeaderboardStatus {
+        lock(&self.notes).pending = None;
+        self.status()
     }
 
     /// Changes the nickname; the leaderboard checks it.
@@ -824,6 +1034,7 @@ impl LeaderboardService {
                 return true;
             }
             Err(Refusal::Unreachable) => Some(UPLOAD_UNREACHABLE.into()),
+            Err(Refusal::RateLimited(_)) => Some(UPLOAD_RATE_LIMITED.into()),
             Err(refusal) => Some(refusal_message(&refusal)),
         };
         lock(&self.notes).upload_error = failed;

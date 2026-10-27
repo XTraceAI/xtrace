@@ -1263,8 +1263,9 @@ async fn leaderboard_status(
     on_leaderboard(app, |service| Ok(service.status())).await
 }
 
-/// Joins with the nickname and email as typed; the leaderboard checks them
-/// and a refusal is returned in plain words, with the field it is about.
+/// The first step of joining: asks the leaderboard to email a code for the
+/// nickname and email as typed. The leaderboard checks them, and a refusal
+/// is returned in plain words, with the field it is about.
 #[tauri::command]
 async fn leaderboard_join(
     app: tauri::AppHandle,
@@ -1272,6 +1273,28 @@ async fn leaderboard_join(
     email: String,
 ) -> Result<leaderboard::LeaderboardStatus, leaderboard::LeaderboardRefusal> {
     on_leaderboard(app, move |service| service.join(&nickname, &email)).await
+}
+
+/// The second step of joining: the emailed code, with a new nickname when
+/// the leaderboard said the first one is taken.
+#[tauri::command]
+async fn leaderboard_confirm(
+    app: tauri::AppHandle,
+    code: String,
+    nickname: Option<String>,
+) -> Result<leaderboard::LeaderboardStatus, leaderboard::LeaderboardRefusal> {
+    on_leaderboard(app, move |service| {
+        service.confirm(&code, nickname.as_deref())
+    })
+    .await
+}
+
+/// "Use a different email": forgets the code waiting to be entered.
+#[tauri::command]
+async fn leaderboard_cancel_code(
+    app: tauri::AppHandle,
+) -> Result<leaderboard::LeaderboardStatus, String> {
+    on_leaderboard(app, |service| Ok(service.cancel_code())).await
 }
 
 #[tauri::command]
@@ -1753,8 +1776,10 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         telemetry::installed_own_data(live && default_data_folder, &app.config().identifier),
     );
     app.manage(leaderboard);
-    uploads.wake();
+    // Managed before the first wake, so a first-Ready wake from the index
+    // always finds it.
     app.manage(LeaderboardUploads(uploads));
+    app.state::<LeaderboardUploads>().0.wake();
     tray::setup(app)?;
     app.state::<telemetry::Telemetry>().opened();
     Ok(())
@@ -1977,6 +2002,8 @@ pub fn run() {
             open_telemetry_doc,
             leaderboard_status,
             leaderboard_join,
+            leaderboard_confirm,
+            leaderboard_cancel_code,
             leaderboard_rename,
             leaderboard_leave,
             leaderboard_open_page

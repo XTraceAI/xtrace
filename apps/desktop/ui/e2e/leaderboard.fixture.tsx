@@ -11,8 +11,9 @@ import '../src/index.css';
 
 /**
  * The F1 app on /leaderboard with synthetic leaderboard controls: `?joined=1`
- * starts as a member, anything else as not joined. The nickname `taken` is
- * refused as the leaderboard refuses a taken one. Nothing is saved or sent.
+ * starts as a member, anything else as not joined. An email without `@` is
+ * refused, the emailed code is 123456, and the nickname `taken` is refused
+ * after a right code, as the leaderboard does. Nothing is saved or sent.
  */
 const params = new URLSearchParams(location.search);
 const notJoined: LeaderboardStatus = {
@@ -25,6 +26,8 @@ const notJoined: LeaderboardStatus = {
   page_url: 'https://leaderboard.xtrace.ai/',
   error: null,
   notice: null,
+  code_sent: null,
+  welcome: null,
 };
 const member = (nickname: string): LeaderboardStatus => ({
   ...notJoined,
@@ -38,11 +41,36 @@ const refuseTaken = async (nickname: string) => {
   if (nickname === 'taken')
     throw { message: 'That nickname is taken. Try another one.', field: 'nickname' };
 };
+const refuseBadEmail = async (email: string) => {
+  if (!email.includes('@'))
+    throw { message: 'That email address does not look right.', field: 'email' };
+};
 const leaderboard: LeaderboardControls = {
   read: async () => status,
-  join: async (nickname) => {
-    await refuseTaken(nickname);
-    status = member(nickname);
+  // As the leaderboard does, a taken nickname is only said after a right code.
+  join: async (nickname, email) => {
+    await refuseBadEmail(email);
+    status = { ...notJoined, code_sent: { nickname, email, choose_nickname: false } };
+    return status;
+  },
+  // The synthetic code is 123456; it stays valid after a taken nickname.
+  confirm: async (code, nickname) => {
+    if (code !== '123456')
+      throw { message: 'That code is not right. Check the email and try again.', field: 'code' };
+    const sent = status.code_sent!;
+    const wanted = nickname ?? sent.nickname;
+    if (wanted === 'taken') {
+      status = { ...status, code_sent: { ...sent, nickname: wanted, choose_nickname: true } };
+      throw {
+        message: 'That nickname is taken. Choose another one and confirm again.',
+        field: 'nickname',
+      };
+    }
+    status = member(wanted);
+    return status;
+  },
+  cancelCode: async () => {
+    status = notJoined;
     return status;
   },
   rename: async (nickname) => {

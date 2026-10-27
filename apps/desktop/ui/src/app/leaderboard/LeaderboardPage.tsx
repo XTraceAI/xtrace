@@ -11,6 +11,8 @@ import { SectionCard } from '../../kit/SectionCard';
 import {
   JOIN_TEXT,
   LEAVE_BACKUPS,
+  SEND_TIMES,
+  codeSentText,
   LEAVE_QUESTION,
   LEAVE_TEXT,
   leaderboardNumber,
@@ -55,25 +57,33 @@ function useLeaderboard(
 ) {
   const client = useQueryClient();
   const status = useQuery({ queryKey: queryKeys.leaderboard, queryFn: () => controls.read() });
-  const saved = (next: LeaderboardStatus) => {
+  const saved = (next: LeaderboardStatus, focusHeading: boolean) => {
     client.setQueryData(queryKeys.leaderboard, next);
-    // After the new state renders.
-    requestAnimationFrame(() => heading.current?.focus());
+    // After the new state renders. The code step and the form focus their
+    // own first field instead.
+    if (focusHeading) requestAnimationFrame(() => heading.current?.focus());
   };
   const reread = () => void client.invalidateQueries({ queryKey: queryKeys.leaderboard });
-  const change = <T,>(run: (input: T) => Promise<LeaderboardStatus>) => ({
+  const change = <T,>(run: (input: T) => Promise<LeaderboardStatus>, focusHeading = true) => ({
     mutationFn: run,
-    onSuccess: saved,
+    onSuccess: (next: LeaderboardStatus) => saved(next, focusHeading),
     onError: reread,
   });
   const join = useMutation(
-    change(({ nickname, email }: { nickname: string; email: string }) =>
-      controls.join(nickname, email),
+    change(
+      ({ nickname, email }: { nickname: string; email: string }) => controls.join(nickname, email),
+      false,
     ),
   );
+  const confirm = useMutation(
+    change(({ code, nickname }: { code: string; nickname?: string }) =>
+      controls.confirm(code, nickname),
+    ),
+  );
+  const cancelCode = useMutation(change(() => controls.cancelCode(), false));
   const rename = useMutation(change((nickname: string) => controls.rename(nickname)));
   const leave = useMutation(change(() => controls.leave()));
-  return { status, join, rename, leave };
+  return { status, join, confirm, cancelCode, rename, leave };
 }
 
 function Leaderboard({
@@ -83,7 +93,7 @@ function Leaderboard({
   controls: LeaderboardControls;
   heading: RefObject<HTMLHeadingElement | null>;
 }) {
-  const { status, join, rename, leave } = useLeaderboard(controls, heading);
+  const { status, join, confirm, cancelCode, rename, leave } = useLeaderboard(controls, heading);
   const current = status.data;
   if (!current)
     return (
@@ -113,23 +123,83 @@ function Leaderboard({
       heading={heading}
     />
   ) : (
-    <JoinForm status={current} join={join} />
+    <NotJoined status={current} join={join} confirm={confirm} cancelCode={cancelCode} />
   );
 }
 
 type Changes = ReturnType<typeof useLeaderboard>;
 
-function JoinForm({ status, join }: { status: LeaderboardStatus; join: Changes['join'] }) {
-  const [nickname, setNickname] = useState('');
-  const [email, setEmail] = useState('');
+/**
+ * Joining in two steps: the form, then the emailed code. What was typed stays
+ * here across both, so "Use a different email" comes back with the nickname;
+ * after a restart of the page it comes from the code the app still holds.
+ */
+function NotJoined({
+  status,
+  join,
+  confirm,
+  cancelCode,
+}: {
+  status: LeaderboardStatus;
+  join: Changes['join'];
+  confirm: Changes['confirm'];
+  cancelCode: Changes['cancelCode'];
+}) {
+  const [nickname, setNickname] = useState(status.code_sent?.nickname ?? '');
+  const [email, setEmail] = useState(status.code_sent?.email ?? '');
+  const sent = status.code_sent;
+  if (sent) return <CodeStep sent={sent} join={join} confirm={confirm} cancelCode={cancelCode} />;
+  // A refusal of the code step that ended it (the nickname was taken
+  // meanwhile) is shown on the form it returns to.
+  const refused = join.isError ? join.error : confirm.isError ? confirm.error : null;
+  return (
+    <JoinForm
+      status={status}
+      join={join}
+      onJoin={() => {
+        confirm.reset();
+        join.mutate({ nickname, email });
+      }}
+      refused={refused}
+      nickname={nickname}
+      email={email}
+      setNickname={setNickname}
+      setEmail={setEmail}
+      // Back from the code step: the email is the field to change.
+      focusEmail={cancelCode.isSuccess}
+    />
+  );
+}
+
+function JoinForm({
+  status,
+  join,
+  onJoin,
+  refused,
+  nickname,
+  email,
+  setNickname,
+  setEmail,
+  focusEmail,
+}: {
+  status: LeaderboardStatus;
+  join: Changes['join'];
+  onJoin: () => void;
+  refused: unknown;
+  nickname: string;
+  email: string;
+  setNickname: (value: string) => void;
+  setEmail: (value: string) => void;
+  focusEmail: boolean;
+}) {
   const nicknameId = useId();
   const emailId = useId();
   const errorId = useId();
-  const failed = join.isError ? refusalText(join.error) : null;
-  const field = join.isError ? refusalField(join.error) : null;
+  const failed = refused ? refusalText(refused) : null;
+  const field = refused ? refusalField(refused) : null;
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!join.isPending) join.mutate({ nickname, email });
+    if (!join.isPending) onJoin();
   };
   return (
     <SectionCard title="Join the public leaderboard">
@@ -159,16 +229,129 @@ function JoinForm({ status, join }: { status: LeaderboardStatus; join: Changes['
           autoComplete="email"
           spellCheck={false}
           value={email}
+          autoFocus={focusEmail}
           aria-invalid={field === 'email' || undefined}
           aria-describedby={failed ? errorId : undefined}
           onChange={(event) => setEmail(event.target.value)}
         />
         <div className="xt-leaderboard-actions">
           <Button type="submit" variant="primary" height={28} disabled={join.isPending}>
-            {join.isPending ? 'Joining…' : 'Join'}
+            {join.isPending ? 'Sending a code…' : 'Join'}
           </Button>
         </div>
       </form>
+      {failed && (
+        <p id={errorId} role="alert">
+          {failed}
+        </p>
+      )}
+    </SectionCard>
+  );
+}
+
+function CodeStep({
+  sent,
+  join,
+  confirm,
+  cancelCode,
+}: {
+  sent: NonNullable<LeaderboardStatus['code_sent']>;
+  join: Changes['join'];
+  confirm: Changes['confirm'];
+  cancelCode: Changes['cancelCode'];
+}) {
+  const [code, setCode] = useState('');
+  const [nickname, setNickname] = useState(sent.nickname);
+  const [resent, setResent] = useState(false);
+  const codeId = useId();
+  const nicknameId = useId();
+  const errorId = useId();
+  const refused = confirm.isError ? confirm.error : join.isError ? join.error : null;
+  const failed = refused ? refusalText(refused) : null;
+  const field = refused ? refusalField(refused) : null;
+  // The code was right but the nickname is taken: the same code is
+  // confirmed again with another nickname.
+  const chooseNickname = sent.choose_nickname || field === 'nickname';
+  const busy = confirm.isPending || join.isPending || cancelCode.isPending;
+  return (
+    <SectionCard title="Check your email">
+      <p data-testid="leaderboard-code-sent">{codeSentText(sent.email)}</p>
+      <form
+        className="xt-leaderboard-form"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (busy) return;
+          setResent(false);
+          join.reset();
+          confirm.mutate({ code, nickname: chooseNickname ? nickname : undefined });
+        }}
+      >
+        <label htmlFor={codeId}>Code</label>
+        <input
+          id={codeId}
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          spellCheck={false}
+          value={code}
+          // The step replaced the form, so its one field takes the focus.
+          autoFocus
+          aria-invalid={field === 'code' || undefined}
+          aria-describedby={failed ? errorId : undefined}
+          onChange={(event) => setCode(event.target.value)}
+        />
+        {chooseNickname && (
+          <>
+            <label htmlFor={nicknameId}>Nickname</label>
+            <input
+              id={nicknameId}
+              type="text"
+              autoComplete="nickname"
+              spellCheck={false}
+              value={nickname}
+              // Shown because the nickname must change: it takes the focus.
+              autoFocus
+              aria-invalid={field === 'nickname' || (sent.choose_nickname && !refused) || undefined}
+              aria-describedby={failed ? errorId : undefined}
+              onChange={(event) => setNickname(event.target.value)}
+            />
+          </>
+        )}
+        <div className="xt-leaderboard-actions">
+          <Button type="submit" variant="primary" height={28} disabled={busy}>
+            {confirm.isPending ? 'Checking…' : 'Confirm'}
+          </Button>
+          <Button
+            variant="outline"
+            height={28}
+            disabled={busy}
+            onClick={() => {
+              setResent(false);
+              confirm.reset();
+              join.mutate(
+                { nickname: sent.nickname, email: sent.email },
+                { onSuccess: () => setResent(true) },
+              );
+            }}
+          >
+            {join.isPending ? 'Sending…' : 'Send a new code'}
+          </Button>
+          <Button
+            variant="outline"
+            height={28}
+            disabled={busy}
+            onClick={() => {
+              confirm.reset();
+              join.reset();
+              cancelCode.mutate();
+            }}
+          >
+            Use a different email
+          </Button>
+        </div>
+      </form>
+      {resent && !failed && <p role="status">A new code was sent. Only the newest code works.</p>}
       {failed && (
         <p id={errorId} role="alert">
           {failed}
@@ -222,9 +405,12 @@ function Membership({
           {status.last_sent ? clock(status.last_sent.at_ms, { date: 'day' }) : 'Not sent yet'}
         </dd>
       </dl>
-      <p className="xt-settings-note">
-        The app sends your number when it starts and every hour while it runs.
-      </p>
+      {status.welcome && (
+        <p role="status" data-testid="leaderboard-welcome">
+          {status.welcome}
+        </p>
+      )}
+      <p className="xt-settings-note">{SEND_TIMES}</p>
       {status.error && <p role="alert">{status.error}</p>}
       {openFailed && <p role="alert">The leaderboard page could not be opened in your browser.</p>}
       {renaming ? (

@@ -31,7 +31,10 @@ const notJoined: LeaderboardStatus = {
   page_url: 'https://leaderboard.xtrace.ai/',
   error: null,
   notice: null,
+  code_sent: null,
+  welcome: null,
 };
+const CODE = '123456';
 const joined: LeaderboardStatus = {
   ...notJoined,
   joined: true,
@@ -46,8 +49,21 @@ function controls(initial: LeaderboardStatus) {
   const answer = async () => status;
   return {
     read: vi.fn<LeaderboardControls['read']>(answer),
-    join: vi.fn<LeaderboardControls['join']>(async (nickname) => {
-      status = { ...joined, nickname };
+    join: vi.fn<LeaderboardControls['join']>(async (nickname, email) => {
+      status = { ...notJoined, code_sent: { nickname, email, choose_nickname: false } };
+      return status;
+    }),
+    confirm: vi.fn<LeaderboardControls['confirm']>(async (code, nickname) => {
+      if (code !== CODE)
+        throw {
+          message: 'That code is not right. Check the email and try again.',
+          field: 'code',
+        };
+      status = { ...joined, nickname: nickname ?? status.code_sent?.nickname ?? 'ada' };
+      return status;
+    }),
+    cancelCode: vi.fn<LeaderboardControls['cancelCode']>(async () => {
+      status = notJoined;
       return status;
     }),
     rename: vi.fn<LeaderboardControls['rename']>(async (nickname) => {
@@ -98,6 +114,17 @@ it('explains what joining sends and joins with exactly what was typed', async ()
   fireEvent.click(screen.getByRole('button', { name: 'Join' }));
   // The leaderboard checks the values; the app sends them as typed.
   await waitFor(() => expect(leaderboard.join).toHaveBeenCalledWith(' ada ', 'ada@example.com'));
+  // The code step names the email and takes the focus in its field.
+  expect((await screen.findByTestId('leaderboard-code-sent')).textContent).toBe(
+    'We sent a 6-digit code to ada@example.com. Enter it below. It expires in 15 minutes.',
+  );
+  const code = screen.getByLabelText('Code');
+  expect(document.activeElement).toBe(code);
+  expect(code.getAttribute('inputmode')).toBe('numeric');
+  expect(code.getAttribute('autocomplete')).toBe('one-time-code');
+  fireEvent.change(code, { target: { value: CODE } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  await waitFor(() => expect(leaderboard.confirm).toHaveBeenCalledWith(CODE, undefined));
   expect(await screen.findByText('You are on the leaderboard')).toBeTruthy();
   expect(summary()['Nickname']).toBe(' ada ');
   // The form is gone, so focus moves to the page heading.
@@ -271,4 +298,96 @@ it('reads the status again after a background upload', async () => {
   act(() => source.emit(events.leaderboardChanged));
   await waitFor(() => expect(summary()['Leverage, 7 days']).toBe('15×'));
   expect(leaderboard.read.mock.calls.length).toBeGreaterThan(before);
+});
+
+it('marks a wrong code, sends a new one, and goes back keeping the nickname', async () => {
+  const leaderboard = controls(notJoined);
+  await mount(leaderboard);
+  fireEvent.change(await screen.findByLabelText('Nickname'), { target: { value: 'ada' } });
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ada@exmaple.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+  const code = await screen.findByLabelText('Code');
+  fireEvent.change(code, { target: { value: '000000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toBe('That code is not right. Check the email and try again.');
+  expect(code.getAttribute('aria-invalid')).toBe('true');
+  expect(code.getAttribute('aria-describedby')).toBe(alert.id);
+  // A new code goes to the same nickname and email.
+  fireEvent.click(screen.getByRole('button', { name: 'Send a new code' }));
+  await waitFor(() => expect(leaderboard.join).toHaveBeenCalledTimes(2));
+  expect(leaderboard.join).toHaveBeenLastCalledWith('ada', 'ada@exmaple.com');
+  expect(await screen.findByText('A new code was sent. Only the newest code works.')).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+  // A typo in the email: back to the form, nickname kept, email to change.
+  fireEvent.click(screen.getByRole('button', { name: 'Use a different email' }));
+  const email = (await screen.findByLabelText('Email')) as HTMLInputElement;
+  expect(leaderboard.cancelCode).toHaveBeenCalledTimes(1);
+  expect((screen.getByLabelText('Nickname') as HTMLInputElement).value).toBe('ada');
+  expect(document.activeElement).toBe(email);
+  expect(screen.queryByLabelText('Code')).toBeNull();
+});
+
+it('shows the code step the app still holds, and asks for another nickname with the same code', async () => {
+  const leaderboard = controls({
+    ...notJoined,
+    code_sent: { nickname: 'ada', email: 'ada@example.com', choose_nickname: false },
+  });
+  leaderboard.confirm.mockRejectedValueOnce({
+    message: 'That nickname is taken. Choose another one and confirm again.',
+    field: 'nickname',
+  });
+  await mount(leaderboard);
+  const code = await screen.findByLabelText('Code');
+  // Only the code is asked for until the leaderboard says otherwise.
+  expect(screen.queryByLabelText('Nickname')).toBeNull();
+  fireEvent.change(code, { target: { value: CODE } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  await waitFor(() => expect(leaderboard.confirm).toHaveBeenCalledWith(CODE, undefined));
+  const nickname = (await screen.findByLabelText('Nickname')) as HTMLInputElement;
+  expect(nickname.value).toBe('ada');
+  expect(nickname.getAttribute('aria-invalid')).toBe('true');
+  expect(document.activeElement).toBe(nickname);
+  expect(screen.getByRole('alert').textContent).toBe(
+    'That nickname is taken. Choose another one and confirm again.',
+  );
+  // The code stays; the same code goes again with the new nickname.
+  expect((screen.getByLabelText('Code') as HTMLInputElement).value).toBe(CODE);
+  fireEvent.change(nickname, { target: { value: 'ada_2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  await waitFor(() => expect(leaderboard.confirm).toHaveBeenLastCalledWith(CODE, 'ada_2'));
+  expect(await screen.findByText('You are on the leaderboard')).toBeTruthy();
+  expect(summary()['Nickname']).toBe('ada_2');
+});
+
+it('asks for the nickname again when the app already knows it was taken', async () => {
+  await mount(
+    controls({
+      ...notJoined,
+      code_sent: { nickname: 'ada', email: 'ada@example.com', choose_nickname: true },
+    }),
+  );
+  const nickname = await screen.findByLabelText('Nickname');
+  expect(nickname.getAttribute('aria-invalid')).toBe('true');
+});
+
+it('welcomes someone signing back in to an existing entry once', async () => {
+  const leaderboard = controls({
+    ...notJoined,
+    code_sent: { nickname: 'new_name', email: 'ada@example.com', choose_nickname: false },
+  });
+  leaderboard.confirm.mockResolvedValueOnce({
+    ...joined,
+    nickname: 'ada',
+    welcome: 'Welcome back. You are signed in to your existing entry as ada.',
+  });
+  await mount(leaderboard);
+  fireEvent.change(await screen.findByLabelText('Code'), { target: { value: CODE } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  expect((await screen.findByTestId('leaderboard-welcome')).textContent).toBe(
+    'Welcome back. You are signed in to your existing entry as ada.',
+  );
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 })),
+  );
 });

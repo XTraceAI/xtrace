@@ -375,6 +375,9 @@ pub fn export_types(directory: impl AsRef<std::path::Path>) -> Result<(), ts_rs:
     crate::leaderboard::LeaderboardStatus::export_all(
         &ts_rs::Config::new().with_out_dir(directory.as_ref()),
     )?;
+    crate::leaderboard::LeaderboardCodeSent::export_all(
+        &ts_rs::Config::new().with_out_dir(directory.as_ref()),
+    )?;
     crate::leaderboard::LeaderboardRefusal::export_all(
         &ts_rs::Config::new().with_out_dir(directory.as_ref()),
     )?;

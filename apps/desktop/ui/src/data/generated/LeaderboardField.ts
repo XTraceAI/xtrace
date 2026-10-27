@@ -3,4 +3,4 @@
 /**
  * The form field a refusal is about, so the page can mark it.
  */
-export type LeaderboardField = "nickname" | "email";
+export type LeaderboardField = "nickname" | "email" | "code";
