@@ -21,12 +21,12 @@ export const SESSION_WARNINGS_TEXT = {
   "diagnose": {
     "button": "Diagnose",
     "button_name": "Diagnose this warning: {label}",
-    "confirm": "Send and diagnose",
+    "confirm": "Send & diagnose",
     "not_now": "Not now",
     "running": "Diagnosing… This can take a minute.",
     "stop": "Stop",
     "close": "Hide diagnosis",
-    "heading": "Diagnosis",
+    "heading": "Diagnosis result",
     "what_happened": "What happened",
     "why": "Supporting evidence",
     "details": "Details",
@@ -47,6 +47,30 @@ export const SESSION_WARNINGS_TEXT = {
     "copied": "Copied",
     "copy_failed": "Could not copy. Select the line and copy it yourself.",
     "reason": "Reason",
-    "failed": "The diagnosis could not be run. Try again."
+    "failed": "The diagnosis could not be run. Try again.",
+    "dot_running": "Diagnosing… {elapsed}",
+    "dot_running_name": "Diagnosing",
+    "dot_ready": "Diagnosis ready",
+    "busy": "Another warning is being diagnosed. One diagnosis runs at a time."
+  },
+  "modal_heading": "Session warning",
+  "conversation_heading": "Conversation",
+  "you": "You",
+  "agent": "Agent",
+  "flagged_label": "Why this was flagged",
+  "flagged_headings": {
+    "correction": "You corrected the agent.",
+    "interruption": "You stopped the agent.",
+    "repeated_calls": "Another attempt. The same inputs.",
+    "repeated_prompt": "The same request, sent again.",
+    "repeated_failure": "Another attempt. The same failure."
+  },
+  "flagged_next": "See the conversation around it, then take a closer look.",
+  "message_tags": {
+    "correction": "Correction",
+    "interruption": "Interruption",
+    "repeated_calls": "Repeated call",
+    "repeated_prompt": "Repeated prompt",
+    "repeated_failure": "Repeated failure"
   }
 } as const;

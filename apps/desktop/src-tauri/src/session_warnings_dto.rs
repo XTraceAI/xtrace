@@ -77,6 +77,34 @@ pub struct WarningsText {
     pub diagnose_before_sending: &'static str,
     /// Every other word the Diagnose controls show.
     pub diagnose: crate::session_diagnosis_dto::DiagnoseText,
+    /// The heading of the Dashboard's window for one warning.
+    pub modal_heading: &'static str,
+    /// Over the messages around a warning in that window.
+    pub conversation_heading: &'static str,
+    /// Who sent a message saved under the user role, in that conversation.
+    pub you: &'static str,
+    /// Who sent a message saved under the assistant role.
+    pub agent: &'static str,
+    /// Over the reason in that window.
+    pub flagged_label: &'static str,
+    /// A short heading over the reason, by the warning's kind.
+    pub flagged_headings: KindWords,
+    /// Under the reason: what the reader can do next.
+    pub flagged_next: &'static str,
+    /// What the flagged message itself is called on its card, by kind: one
+    /// message, so one call or one prompt.
+    pub message_tags: KindWords,
+}
+
+/// One phrase for each warning kind, keyed as `SessionWarningKind` is
+/// serialized, so a screen looks one up by the warning's `kind`.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct KindWords {
+    pub correction: &'static str,
+    pub interruption: &'static str,
+    pub repeated_calls: &'static str,
+    pub repeated_prompt: &'static str,
+    pub repeated_failure: &'static str,
 }
 
 pub const TEXT: WarningsText = WarningsText {
@@ -97,6 +125,26 @@ pub const TEXT: WarningsText = WarningsText {
     open_hint: "Open to see it on the session page",
     diagnose_before_sending: crate::session_diagnosis_dto::BEFORE_SENDING,
     diagnose: crate::session_diagnosis_dto::DIAGNOSE_TEXT,
+    modal_heading: "Session warning",
+    conversation_heading: "Conversation",
+    you: "You",
+    agent: "Agent",
+    flagged_label: "Why this was flagged",
+    flagged_headings: KindWords {
+        correction: "You corrected the agent.",
+        interruption: "You stopped the agent.",
+        repeated_calls: "Another attempt. The same inputs.",
+        repeated_prompt: "The same request, sent again.",
+        repeated_failure: "Another attempt. The same failure.",
+    },
+    flagged_next: "See the conversation around it, then take a closer look.",
+    message_tags: KindWords {
+        correction: "Correction",
+        interruption: "Interruption",
+        repeated_calls: "Repeated call",
+        repeated_prompt: "Repeated prompt",
+        repeated_failure: "Repeated failure",
+    },
 };
 
 /// Writes [`TEXT`] as `SessionWarningsText.ts` into the generated directory.
