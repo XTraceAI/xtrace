@@ -109,7 +109,7 @@ fn migration_8_adds_nullable_status_columns_and_preserves_rows() {
     // typed writer: every value must survive the upgrade unchanged.
     let raw = Connection::open(&path).unwrap();
     raw.execute_batch(
-        "DROP INDEX tool_results_session; DROP TABLE tool_results; DROP INDEX tool_uses_call_id; ALTER TABLE tool_uses DROP COLUMN call_id_conflict; ALTER TABLE tool_uses DROP COLUMN call_id; DROP TABLE grading_added_skills; DROP TABLE grades; DROP TABLE telemetry_events; ALTER TABLE pull_requests DROP COLUMN manual_failed_at; DELETE FROM schema_version WHERE version>=8;
+        concat!(include_str!("fixtures/undo_saved_session_warnings.sql"), "DROP TABLE dismissed_warnings; DROP INDEX tool_results_session; DROP TABLE tool_results; DROP INDEX tool_uses_call_id; ALTER TABLE tool_uses DROP COLUMN call_id_conflict; ALTER TABLE tool_uses DROP COLUMN call_id; DROP TABLE grading_added_skills; DROP TABLE grades; DROP TABLE telemetry_events; ALTER TABLE pull_requests DROP COLUMN manual_failed_at; DELETE FROM schema_version WHERE version>=8;
          ALTER TABLE pull_requests DROP COLUMN refresh_error;
          ALTER TABLE pull_requests DROP COLUMN last_attempted_at;
          ALTER TABLE tool_uses DROP COLUMN group_key;
@@ -123,7 +123,7 @@ fn migration_8_adds_nullable_status_columns_and_preserves_rows() {
          DROP INDEX sessions_host_native; DROP INDEX source_cursors_tail;
          INSERT INTO pull_requests(repo,number,url,title,state,merged_at,additions,deletions,head_ref_name,refreshed_at)
              VALUES ('octo-org/legacy',7,'https://github.com/octo-org/legacy/pull/7','Legacy','MERGED',
-                     '2026-01-02T03:04:05Z',1,2,'legacy-branch',500);",
+                     '2026-01-02T03:04:05Z',1,2,'legacy-branch',500);"),
     )
     .unwrap();
     let before = snapshot(&path);

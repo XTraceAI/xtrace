@@ -165,6 +165,16 @@ const MIGRATIONS: &[Migration] = &[
         "0027_tool_result_outcomes",
         "cce54663d395af6156d8fcd76e0056f57d6c6faa7b8c1c7389e602a632b36511"
     ),
+    migration!(
+        28,
+        "0028_dismissed_warnings",
+        "7eb32610cd5e2cd32dee3ac3337383c1064565fe67e8c5a6bb789ecfa05dee68"
+    ),
+    migration!(
+        29,
+        "0029_saved_session_warnings",
+        "a0d3fea37a3e4656f1919b668811ce02d9dac014f7b6a65b15710f8471ed058f"
+    ),
 ];
 
 /// Newest schema supported by the embedded migration chain.
@@ -690,6 +700,11 @@ mod tests {
         DROP INDEX tool_uses_call_id; ALTER TABLE tool_uses DROP COLUMN call_id_conflict;
         ALTER TABLE tool_uses DROP COLUMN call_id;";
 
+    const UNDO_WARNINGS: &str = concat!(
+        include_str!("../tests/fixtures/undo_saved_session_warnings.sql"),
+        "DROP TABLE dismissed_warnings;"
+    );
+
     /// Forgets that migrations from `version` on were applied, leaving what
     /// they wrote in place.
     fn forget_from(version: u32) -> String {
@@ -763,7 +778,7 @@ mod tests {
         // Migration 27 pending again: its columns, table and history are gone.
         Connection::open(&path)
             .unwrap()
-            .execute_batch(&format!("{UNDO_27} {}", forget_from(27)))
+            .execute_batch(&format!("{UNDO_WARNINGS} {UNDO_27} {}", forget_from(27)))
             .unwrap();
         drop(Store::open(&path).unwrap());
         assert_eq!(views(&path), expected);
@@ -801,7 +816,7 @@ mod tests {
         // 26 and 27 pending; 26 can apply, 27 cannot while its columns remain.
         Connection::open(&path)
             .unwrap()
-            .execute_batch(&format!("{UNDO_26} {}", forget_from(26)))
+            .execute_batch(&format!("{UNDO_WARNINGS} {UNDO_26} {}", forget_from(26)))
             .unwrap();
         assert!(Store::open(&path).is_err());
         let (versions, fingerprints) = history(&path);

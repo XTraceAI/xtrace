@@ -1,5 +1,5 @@
 use crate::support::*;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, types::Value as SqlValue};
 use serde_json::json;
 use tempfile::TempDir;
 use xt_store::Store;
@@ -8,6 +8,12 @@ fn legacy_database(path: &std::path::Path) -> Connection {
     let connection = connection(path);
     connection
         .execute_batch(include_str!("../../migrations/0001_canonical.sql"))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO meta(key,value) VALUES('unrelated_legacy_meta','preserved fixture value')",
+            [],
+        )
         .unwrap();
     connection
         .execute_batch(
@@ -66,7 +72,18 @@ fn upgrade_real_base_schema() {
     ]
     .map(|table| {
         let columns = columns(&old, table);
-        (table, rows(&old, table, &columns), columns)
+        let mut expected = rows(&old, table, &columns);
+        if table == "meta" {
+            expected.push(vec![
+                SqlValue::Text("session_warnings_revision_allocator".into()),
+                SqlValue::Text("1".into()),
+            ]);
+            expected.sort_by_key(|row| match &row[0] {
+                SqlValue::Text(key) => key.clone(),
+                _ => panic!("meta key must be text"),
+            });
+        }
+        (table, expected, columns)
     });
     drop(old);
     for _ in 0..2 {

@@ -687,3 +687,30 @@ fn malformed_self_linked_or_unbounded_input_rejects_the_whole_call() {
         .concat()
     );
 }
+
+#[test]
+fn standalone_guardian_confirmation_invalidates_saved_warnings_but_replay_does_not() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("guardian.sqlite");
+    let mut store = open(&directory);
+    seed(&mut store, &path);
+    let sql = Connection::open(path).unwrap();
+    let revision = || {
+        sql.query_row(
+            "SELECT revision FROM session_warning_inputs WHERE session_id=?1",
+            [SESSION],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let before = revision();
+    store
+        .apply_guardian_turn_confirmations(&[proof(INPUT, 1)], 1000)
+        .unwrap();
+    let changed = revision();
+    assert!(changed > before);
+    store
+        .apply_guardian_turn_confirmations(&[proof(INPUT, 1)], 2000)
+        .unwrap();
+    assert_eq!(Some(revision()), Some(changed));
+}

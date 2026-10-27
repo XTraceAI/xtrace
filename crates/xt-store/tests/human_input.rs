@@ -133,3 +133,43 @@ fn adjustment_preserves_raw_length_and_conflict_withholds_it() {
         Some(12)
     );
 }
+
+#[test]
+fn human_origins_and_input_adjustments_invalidate_saved_warnings_on_change() {
+    let (dir, mut store) = setup();
+    let sql = rusqlite::Connection::open(dir.path().join("index.db")).unwrap();
+    let revision = || {
+        sql.query_row(
+            "SELECT revision FROM session_warning_inputs WHERE session_id=?1",
+            ["codex-child"],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let before = revision();
+    let manifest = OriginManifest {
+        version: 1,
+        sessions: vec![origin()],
+    };
+    store.import_human_session_origins(&manifest).unwrap();
+    let changed = revision();
+    assert!(changed > before);
+    store.import_human_session_origins(&manifest).unwrap();
+    assert_eq!(Some(revision()), Some(changed));
+    let adjustment = InputAdjustment {
+        record_uuid: "input".into(),
+        session_id: "codex-child".into(),
+        original_ts: "2026-09-01T00:00:00Z".into(),
+        original_length: 12,
+        retained_length: Some(5),
+        reason: "question_reply".into(),
+        native_item_id: None,
+    };
+    store
+        .apply_human_input_adjustments(std::slice::from_ref(&adjustment))
+        .unwrap();
+    let changed_again = revision();
+    assert!(changed_again > changed);
+    store.apply_human_input_adjustments(&[adjustment]).unwrap();
+    assert_eq!(Some(revision()), Some(changed_again));
+}
