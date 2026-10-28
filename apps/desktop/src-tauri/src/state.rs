@@ -1991,10 +1991,6 @@ mod tests {
         session_source::{GenerationBasis, LoadedSession, SessionSourceOutcome},
     };
 
-    /// Manual acceptance only: the caller owns a controlled Claude process
-    /// with no tools or session persistence. This test never starts/signals it.
-    /// Compile first; start this test, then send work after the ready marker.
-    #[cfg(target_os = "macos")]
     #[test]
     fn only_an_admitted_mistake_read_around_its_own_reply_has_a_lead() {
         let warning = |kind, anchor: &str, records: &[&str]| xt_metrics::SessionWarning {
@@ -2022,6 +2018,10 @@ mod tests {
         assert_eq!(warning_lead(&correction, "reply"), None);
     }
 
+    /// Manual acceptance only: the caller owns a controlled Claude process
+    /// with no tools or session persistence. This test never starts/signals it.
+    /// Compile first; start this test, then send work after the ready marker.
+    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "requires explicit probe home/SID and a controlled live Claude publisher"]
     fn live_status_claude_manual_registry_running_then_idle() {
