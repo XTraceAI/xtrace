@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = &args.path;
     let metrics = MetricsDb::open(path)?;
     let side = Connection::open_with_flags(
-        &path,
+        path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     side.pragma_update(None, "query_only", true)?;
