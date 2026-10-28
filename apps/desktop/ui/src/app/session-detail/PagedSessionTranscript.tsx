@@ -183,7 +183,7 @@ export function PagedSessionTranscript({
       return {
         kind: 'warning' as const,
         jump: matches
-          ? resolveWarningJump(point, { phase: 'read', status: view.status })
+          ? resolveWarningJump(intent.point, { phase: 'read', status: view.status })
           : { kind: 'unavailable' as const, reason: 'not_in_transcript' as const },
       };
     if (!matches) return null;

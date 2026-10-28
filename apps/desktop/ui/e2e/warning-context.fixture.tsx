@@ -75,7 +75,7 @@ function Sample() {
       {shown && (
         <WarningContext
           sessionId="synthetic-session"
-          warning={{ ...warning, points_at: { record_uuid: 'target', block } }}
+          warning={{ ...warning, points_at: { record_uuid: 'target', block, sent_by: 'person' } }}
           timezone="UTC"
         />
       )}

@@ -1631,11 +1631,11 @@ function supplyWarnings(h: ReturnType<typeof source>, items: SessionWarningItem[
 }
 const messageWarning = {
   ...suppliedWarning,
-  points_at: { record_uuid: 'warning-message', block: null },
+  points_at: { record_uuid: 'warning-message', block: null, sent_by: 'person' as const },
 };
 const resultWarning = {
   ...suppliedSecond,
-  points_at: { record_uuid: 'warning-result', block: 128 },
+  points_at: { record_uuid: 'warning-result', block: 128, sent_by: 'person' as const },
 };
 
 it.each(['claude', 'codex'] as const)(

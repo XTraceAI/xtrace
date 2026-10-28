@@ -47,7 +47,7 @@ function warning(id: string): SessionWarningItem {
     compact_reason: id,
     name: id,
     record_uuids: [id],
-    points_at: { record_uuid: id, block: null },
+    points_at: { record_uuid: id, block: null, sent_by: 'person' },
     returned: null,
   };
 }
@@ -767,7 +767,9 @@ it('offers no mutation handler without the optional dismissal capability and use
   expect(button.getAttribute('aria-busy')).toBe('false');
   expect(data.read).toHaveBeenCalledTimes(1);
   expect(pointsAt(first)).toBe(first.id);
-  expect(pointsAt({ ...first, points_at: { record_uuid: 'record', block: 0 } })).toBe('record#0');
+  expect(
+    pointsAt({ ...first, points_at: { record_uuid: 'record', block: 0, sent_by: 'person' } }),
+  ).toBe('record#0');
   expect(warningsOf(undefined)).toEqual([]);
   expect(warningsOf(answer('one', [first]))).toEqual([first]);
 });

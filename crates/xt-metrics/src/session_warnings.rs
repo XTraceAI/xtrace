@@ -163,6 +163,31 @@ impl WarningKind {
             Self::AdmittedMistake => "admitted_mistake",
         }
     }
+
+    /// The one answer to "who sent the record a warning of this kind points
+    /// at", when [`SessionWarning::points_at`] names a whole record rather
+    /// than one tool block in it: the agent's reply for an admitted mistake;
+    /// otherwise the person's record (a correction or a repeated prompt is
+    /// the person's message, an interruption without a stopped call's result
+    /// is the marker saved as the person's record). A point with a block
+    /// names a tool call or result instead, which is matched by its kind and
+    /// not by this answer.
+    pub fn points_at_sender(self) -> WarningSender {
+        match self {
+            Self::AdmittedMistake => WarningSender::Agent,
+            Self::Correction
+            | Self::Interruption
+            | Self::RepeatedPrompt
+            | Self::RepeatedFailure => WarningSender::Person,
+        }
+    }
+}
+
+/// Who sent a saved record a warning points at: the person, or the agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarningSender {
+    Person,
+    Agent,
 }
 
 /// One warning: which rule matched, where, and why in plain words.
@@ -2533,6 +2558,24 @@ mod tests {
         assert_eq!(
             of_kind(&found, WarningKind::RepeatedFailure)[0].reason,
             "WebFetch failed twice (14:15, 14:16)"
+        );
+    }
+
+    #[test]
+    fn only_an_admitted_mistake_points_at_the_agents_record() {
+        let senders: Vec<_> = WarningKind::ALL
+            .iter()
+            .map(|kind| (*kind, kind.points_at_sender()))
+            .collect();
+        assert_eq!(
+            senders,
+            vec![
+                (WarningKind::Correction, WarningSender::Person),
+                (WarningKind::Interruption, WarningSender::Person),
+                (WarningKind::RepeatedPrompt, WarningSender::Person),
+                (WarningKind::RepeatedFailure, WarningSender::Person),
+                (WarningKind::AdmittedMistake, WarningSender::Agent),
+            ]
         );
     }
 

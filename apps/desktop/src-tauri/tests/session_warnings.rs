@@ -5,7 +5,8 @@ use serde_json::{Value, json};
 use std::path::Path;
 use xt_store::{CanonicalRecord, SessionMeta, SessionSource, Store, retention::RetentionMode};
 use xtrace_desktop::dto::{
-    DashboardWarnings, SessionWarningKind, SessionWarningsAnswer, SessionWarningsList,
+    DashboardWarnings, SessionWarningKind, SessionWarningSender, SessionWarningsAnswer,
+    SessionWarningsList,
 };
 use xtrace_desktop::session_warnings_dto::{session_warnings, validate_ids, window_warnings};
 
@@ -1000,6 +1001,12 @@ fn warning_targets_preserve_the_exact_record_and_result_block() {
         .unwrap();
     assert_eq!(failed.points_at.record_uuid, "two-results");
     assert_eq!(failed.points_at.block, Some(1));
+    let correction = warnings
+        .iter()
+        .find(|warning| warning.kind == SessionWarningKind::Correction)
+        .unwrap();
+    assert_eq!(correction.points_at.block, None);
+    assert_eq!(correction.points_at.sent_by, SessionWarningSender::Person);
 }
 
 fn live(root: &Path) -> xtrace_desktop::state::AppState {
@@ -1403,6 +1410,8 @@ fn an_admitted_mistake_is_worded_once_and_dismissed_like_one_event() {
     assert_eq!(warning.record_uuids, vec!["m-h1", "m-a1"]);
     assert_eq!(warning.points_at.record_uuid, "m-a1");
     assert_eq!(warning.points_at.block, None);
+    // The reply's record, so the session page looks for the agent's record.
+    assert_eq!(warning.points_at.sent_by, SessionWarningSender::Agent);
     assert_eq!(warning.returned, None);
     assert_eq!(
         checks.last().map(|c| (c.complete, c.text.as_str())),

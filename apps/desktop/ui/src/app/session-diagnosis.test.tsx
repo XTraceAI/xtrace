@@ -517,7 +517,10 @@ it('destroys evidence selection on changed saved point and does not restore it o
   fireEvent.click(screen.getByRole('button', { name: '[13]' }));
   await waitFor(() => expect(document.activeElement?.getAttribute('data-number')).toBe('13'));
   act(() =>
-    change({ ...initial, points_at: { record_uuid: 'replacement-saved-point', block: null } }),
+    change({
+      ...initial,
+      points_at: { record_uuid: 'replacement-saved-point', block: null, sent_by: 'person' },
+    }),
   );
   expect(screen.getByTestId('diagnosis-evidence').hasAttribute('open')).toBe(false);
   expect(

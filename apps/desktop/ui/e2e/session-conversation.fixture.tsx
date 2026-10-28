@@ -1,4 +1,10 @@
-import { answer as warningAnswer, warning, second } from './session-warnings.data';
+import {
+  admitted,
+  admittedOnPerson,
+  answer as warningAnswer,
+  warning,
+  second,
+} from './session-warnings.data';
 import type { SessionPageSelection } from '../src/data/generated/SessionPageSelection';
 import type { DataSource } from '../src/data/DataSource';
 import type { SessionPageStatus } from '../src/data/generated/SessionPageStatus';
@@ -94,8 +100,10 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
       },
     ];
     const items = [
-      { ...warning, points_at: { record_uuid: 'prompt', block: null } },
-      { ...second, points_at: { record_uuid: 'result', block: 128 } },
+      { ...warning, points_at: { record_uuid: 'prompt', block: null, sent_by: 'person' as const } },
+      { ...second, points_at: { record_uuid: 'result', block: 128, sent_by: 'person' as const } },
+      admitted,
+      admittedOnPerson,
     ];
     let current = { ...warningAnswer, warnings: items, dismissed: [] as typeof items };
     source.sessionWarnings = async (ids, timezone) => ({

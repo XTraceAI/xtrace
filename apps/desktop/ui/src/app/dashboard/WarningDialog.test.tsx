@@ -425,7 +425,7 @@ for (const replace of [false, true])
         warning: {
           ...selected.warning,
           id: 'replacement',
-          points_at: { record_uuid: 'replacement', block: null },
+          points_at: { record_uuid: 'replacement', block: null, sent_by: 'person' as const },
         },
       });
     else fireEvent.click(close());
@@ -444,7 +444,10 @@ it('refuses partial source sets instead of guessing the triggering message', asy
 });
 it('shows the exact target tool output expanded, with no unrelated block', async () => {
   const test = setup();
-  const warning = { ...selected.warning, points_at: { record_uuid: 'tool-result', block: 99 } };
+  const warning = {
+    ...selected.warning,
+    points_at: { record_uuid: 'tool-result', block: 99, sent_by: 'person' as const },
+  };
   test.warnings.mockResolvedValue({
     timezone: selected.timezone,
     sessions: [{ session_id: selected.sessionId, answer: { ...read, warnings: [warning] } }],
@@ -482,7 +485,7 @@ it('guards another warning in the same session and requests only its excerpt', a
   const another = {
     ...selected.warning,
     id: 'another',
-    points_at: { record_uuid: 'another', block: null },
+    points_at: { record_uuid: 'another', block: null, sent_by: 'person' as const },
   };
   test.warnings.mockResolvedValue({
     timezone: selected.timezone,
@@ -717,7 +720,7 @@ it('names an admitted mistake with its own heading and tag and shows its native 
     reason: 'Supplied admission reason (10:05)',
     compact_reason: 'Supplied admission summary',
     record_uuids: [selected.warning.points_at.record_uuid, 'synthetic-reply'],
-    points_at: { record_uuid: 'synthetic-reply', block: null },
+    points_at: { record_uuid: 'synthetic-reply', block: null, sent_by: 'agent' as const },
   };
   const withAdmission = structuredClone(list);
   const answer = withAdmission.sessions.find((one) => one.session_id === 's-warned')!.answer;

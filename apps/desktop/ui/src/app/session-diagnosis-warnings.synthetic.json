@@ -58,7 +58,8 @@
               "record_uuids": ["o-h2"],
               "points_at": {
                 "record_uuid": "o-h2",
-                "block": null
+                "block": null,
+                "sent_by": "person"
               },
               "returned": null
             }
@@ -153,7 +154,8 @@
               "record_uuids": ["w-h1"],
               "points_at": {
                 "record_uuid": "w-h1",
-                "block": null
+                "block": null,
+                "sent_by": "person"
               },
               "returned": null
             },
@@ -169,7 +171,8 @@
               "record_uuids": ["w-r1", "w-r2"],
               "points_at": {
                 "record_uuid": "w-r2",
-                "block": 0
+                "block": 0,
+                "sent_by": "person"
               },
               "returned": null
             },
@@ -185,7 +188,8 @@
               "record_uuids": ["w-r3", "w-i1"],
               "points_at": {
                 "record_uuid": "w-r3",
-                "block": 0
+                "block": 0,
+                "sent_by": "person"
               },
               "returned": null
             },
@@ -201,7 +205,8 @@
               "record_uuids": ["w-h3"],
               "points_at": {
                 "record_uuid": "w-h3",
-                "block": null
+                "block": null,
+                "sent_by": "person"
               },
               "returned": null
             },
@@ -217,7 +222,8 @@
               "record_uuids": ["w-h2", "w-h4"],
               "points_at": {
                 "record_uuid": "w-h4",
-                "block": null
+                "block": null,
+                "sent_by": "person"
               },
               "returned": null
             }

@@ -28,7 +28,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use ts_rs::TS;
 use xt_metrics::{
-    CheckState, Dismissal, Missing, SessionWarning, WarningKind, WholeSessionWarnings,
+    CheckState, Dismissal, Missing, SessionWarning, WarningKind, WarningSender,
+    WholeSessionWarnings,
 };
 
 /// Sessions one request names at most: a Sessions page (51), or the session
@@ -261,6 +262,29 @@ pub struct SessionWarningItem {
 pub struct SessionWarningPoint {
     pub record_uuid: String,
     pub block: Option<u32>,
+    /// Who sent the record when `block` is `null` and the point is the whole
+    /// record: the person's message, or the agent's reply (an admitted
+    /// mistake). A screen shows the point only on a record from that sender.
+    /// Not read when `block` is set: a tool block is matched by its kind.
+    /// Decided by `xt_metrics::WarningKind::points_at_sender`.
+    pub sent_by: SessionWarningSender,
+}
+
+/// Who sent a saved record a warning points at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionWarningSender {
+    Person,
+    Agent,
+}
+
+impl From<WarningSender> for SessionWarningSender {
+    fn from(sender: WarningSender) -> Self {
+        match sender {
+            WarningSender::Person => Self::Person,
+            WarningSender::Agent => Self::Agent,
+        }
+    }
 }
 
 impl SessionWarningItem {
@@ -289,6 +313,7 @@ impl SessionWarningItem {
             points_at: SessionWarningPoint {
                 record_uuid: point.record_uuid,
                 block: point.block,
+                sent_by: warning.kind.points_at_sender().into(),
             },
             returned,
         }

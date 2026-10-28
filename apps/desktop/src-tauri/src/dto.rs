@@ -28,7 +28,7 @@ pub use crate::session_titles::{SessionTitle, SessionTitles};
 pub use crate::session_warnings_dto::{
     DashboardDayWarning, DashboardWarningDay, DashboardWarnings, FixtureDashboardWarnings,
     SessionWarningCheck, SessionWarningDismissal, SessionWarningItem, SessionWarningKind,
-    SessionWarningsAnswer, SessionWarningsEntry, SessionWarningsList,
+    SessionWarningSender, SessionWarningsAnswer, SessionWarningsEntry, SessionWarningsList,
 };
 use serde::Serialize;
 use ts_rs::TS;

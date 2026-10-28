@@ -330,6 +330,7 @@ export function SessionDetailPage() {
       : undefined;
   const warningRecord = warningPoint?.record_uuid ?? null;
   const warningBlock = warningPoint?.block ?? null;
+  const warningSender = warningPoint?.sent_by ?? null;
   const warningIdentity =
     warningId === null
       ? null
@@ -338,6 +339,7 @@ export function SessionDetailPage() {
           warningId,
           warningRecord,
           warningBlock,
+          warningSender,
           warningNavigation.current.generation,
         ]);
 
@@ -440,16 +442,16 @@ export function SessionDetailPage() {
     setPageIntent(null);
     setPageFeedback(null);
     setResult(null);
-    if (warningIdentity !== null && warningRecord !== null) {
+    if (warningIdentity !== null && warningRecord !== null && warningSender !== null) {
       tokens.current += 1;
       setPress({
         kind: 'warning',
         token: tokens.current,
-        point: { record_uuid: warningRecord, block: warningBlock },
+        point: { record_uuid: warningRecord, block: warningBlock, sent_by: warningSender },
         owner: { identity: warningIdentity, source },
       });
     } else setPress((current) => (current?.kind === 'warning' ? null : current));
-  }, [source, warningIdentity, warningRecord, warningBlock]);
+  }, [source, warningIdentity, warningRecord, warningBlock, warningSender]);
   const pressed =
     press?.kind === 'warning'
       ? press.owner.identity === warningIdentity && press.owner.source === source

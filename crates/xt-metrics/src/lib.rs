@@ -68,7 +68,7 @@ pub use session_summary::SessionListSummary;
 pub use session_warnings::{
     CORRECTION_PHRASE, CORRECTION_WORDS, CheckState, Dismissal, Missing, NO_MAX_WORDS,
     PROMPT_MIN_WORDS, REPEAT_AT_LEAST, STILL_NEGATIVES, STILL_REACH, SessionWarning,
-    SessionWarnings, WarningChecks, WarningKind, WarningPoint, WholeSessionWarnings,
+    SessionWarnings, WarningChecks, WarningKind, WarningPoint, WarningSender, WholeSessionWarnings,
     WindowSessionWarnings, comparable_prompt, correction, correction_spans, tool_written,
 };
 pub use sessions::{DaySessions, SessionsPerDay};
