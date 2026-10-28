@@ -1,0 +1,20 @@
+{
+  "name": "@xtrace/leaderboard-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --import ./scripts/ts-resolve.mjs --test \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev:local": "node --import ./scripts/ts-resolve.mjs scripts/dev-local.ts",
+    "db:migrate": "node --import ./scripts/ts-resolve.mjs scripts/migrate.ts"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "1.2.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@types/node": "22.18.6",
+    "typescript": "5.9.3"
+  }
+}
