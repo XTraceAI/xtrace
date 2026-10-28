@@ -1,5 +1,10 @@
 //! Transient, bounded context for one saved message. Every relevant source is
-//! checked before a unique target is returned; only three records are retained.
+//! checked before a unique target is returned. At most three records are
+//! retained around it (the one before, the target, the one after), plus, when
+//! the caller names one, a single earlier *lead* record from the target's own
+//! source (see [`LeadKept`]), so at most four. A lead that is missing, named
+//! twice, in another source, after the target or already beside it is left
+//! out and the excerpt is read as without one: the lead never fails a read.
 use super::streaming::{Scan, discover, identities, verify};
 use super::*;
 use std::time::{Duration, Instant};
@@ -47,6 +52,38 @@ pub struct LoadedExcerpt {
     pub generation: GenerationBasis,
     pub records: Vec<ParsedRecord>,
     pub target: usize,
+    /// Set when `records[0]` is the lead record the read was asked for, kept
+    /// ahead of the target's usual neighbours.
+    pub lead: Option<LeadKept>,
+}
+
+/// The lead record an excerpt kept: an earlier record of the target's own
+/// source, such as the person's message an admitted mistake answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeadKept {
+    /// Records lie between the lead and the next record kept, and are not
+    /// shown. `false` when the lead is directly before it.
+    pub gap: bool,
+}
+
+impl LoadedExcerpt {
+    /// The same excerpt without its lead record, as it is read without one.
+    pub fn without_lead(mut self) -> Self {
+        if self.lead.take().is_some() && !self.records.is_empty() {
+            self.records.remove(0);
+            self.target = self.target.saturating_sub(1);
+        }
+        self
+    }
+}
+
+/// The lead to keep, by its position among one source's records, when the
+/// first record kept around the target is at `first_kept`: only an earlier
+/// record that is not already kept.
+fn lead_before(lead_at: usize, first_kept: usize) -> Option<LeadKept> {
+    (lead_at < first_kept).then_some(LeadKept {
+        gap: lead_at + 1 < first_kept,
+    })
 }
 
 /// Limits may be lowered for deterministic refusal tests. Defaults apply to
@@ -87,6 +124,22 @@ pub fn load_session_excerpt_with(
     reader: Option<&DetailReader<'_>>,
     limits: ExcerptLimits,
 ) -> Result<LoadedExcerpt, ExcerptUnavailable> {
+    load_session_excerpt_with_lead(request, record_uuid, None, block, reader, limits)
+}
+
+/// [`load_session_excerpt_with`], also keeping the record `lead` names when
+/// it is an earlier record of the target's own source ([`LeadKept`]). Which
+/// record is the lead is the caller's decision; a lead that cannot be kept
+/// changes nothing else about the read.
+pub fn load_session_excerpt_with_lead(
+    request: &SessionSourceRequest<'_>,
+    record_uuid: &str,
+    lead: Option<&str>,
+    block: Option<u32>,
+    reader: Option<&DetailReader<'_>>,
+    limits: ExcerptLimits,
+) -> Result<LoadedExcerpt, ExcerptUnavailable> {
+    let lead = lead.filter(|lead| !lead.trim().is_empty() && *lead != record_uuid);
     if cancelled(request.cancel) {
         return Err(ExcerptUnavailable::Source(SourceUnavailable::Cancelled));
     }
@@ -102,7 +155,7 @@ pub fn load_session_excerpt_with(
         return match load_session_source_with(request, reader) {
             SessionSourceOutcome::Unavailable(reason) => Err(ExcerptUnavailable::Source(reason)),
             SessionSourceOutcome::Loaded(loaded) => {
-                excerpt_from_loaded(*loaded, record_uuid, block)
+                excerpt_from_loaded(*loaded, record_uuid, lead, block)
             }
         };
     }
@@ -125,17 +178,21 @@ pub fn load_session_excerpt_with(
     let mut selected = Vec::new();
     let mut target = 0;
     let mut matches = 0;
+    let mut leads = 0;
+    let mut kept_lead = None;
     let mut generation = GenerationBasis::Indexed { appended: false };
     for file in &files {
-        let (basis, window, offset, count) = scan_file(request, file, record_uuid, &mut scan)?;
-        generation = generation.and(basis);
-        matches += count;
+        let found = scan_file(request, file, record_uuid, lead, &mut scan)?;
+        generation = generation.and(found.generation);
+        matches += found.matches;
+        leads += found.leads;
         if matches > 1 {
             return Err(ExcerptUnavailable::TargetAmbiguous);
         }
-        if count == 1 {
-            selected = window;
-            target = offset;
+        if found.matches == 1 {
+            selected = found.window;
+            target = found.offset;
+            kept_lead = found.lead;
         }
     }
     // A subagent added during the scan could contain a second target. Check
@@ -163,11 +220,21 @@ pub fn load_session_excerpt_with(
         return Err(ExcerptUnavailable::TargetMissing);
     }
     validate_block(&selected[target], block)?;
-    Ok(LoadedExcerpt {
+    let mut excerpt = LoadedExcerpt {
         generation,
         records: selected,
         target,
-    })
+        lead: None,
+    };
+    // A lead named by more than one record, in any file, is not kept.
+    if leads == 1
+        && let Some((record, kept)) = kept_lead
+    {
+        excerpt.records.insert(0, record);
+        excerpt.target += 1;
+        excerpt.lead = Some(kept);
+    }
+    Ok(excerpt)
 }
 
 #[cfg(test)]
@@ -183,37 +250,81 @@ pub(super) fn settled_for_test(path: &Path) {
 #[cfg(not(test))]
 pub(super) fn settled_for_test(_path: &Path) {}
 
+/// What one Claude file holds of an excerpt.
+struct FileExcerpt {
+    generation: GenerationBasis,
+    /// The target and its neighbours, when the target is in this file.
+    window: Vec<ParsedRecord>,
+    offset: usize,
+    matches: usize,
+    /// How many records in this file the lead names.
+    leads: usize,
+    /// The lead, when it is in this file before the target and not already
+    /// in `window` (one saved copy, only the file's first).
+    lead: Option<(ParsedRecord, LeadKept)>,
+}
+
 fn scan_file(
     request: &SessionSourceRequest<'_>,
     file: &ClaudeFile,
     uuid: &str,
+    lead: Option<&str>,
     scan: &mut Scan<'_>,
-) -> Result<(GenerationBasis, Vec<ParsedRecord>, usize, usize), ExcerptUnavailable> {
+) -> Result<FileExcerpt, ExcerptUnavailable> {
     let mut previous = None;
     let mut window = Vec::new();
     let mut offset = 0;
     let mut matches = 0;
     let mut want_next = false;
+    let mut position = 0;
+    let mut leads = 0;
+    let mut saved_lead: Option<(usize, ParsedRecord)> = None;
+    let mut kept_lead = None;
     let generation = super::streaming::scan_file(request, file, scan, |record, _| {
-        if record.canonical.uuid.as_deref() == Some(uuid) {
+        let id = record.canonical.uuid.as_deref();
+        if id == Some(uuid) {
             matches += 1;
             if matches > 1 {
                 return Err(ExcerptUnavailable::TargetAmbiguous);
             }
+            let first_kept = if previous.is_some() {
+                position - 1
+            } else {
+                position
+            };
             if let Some(before) = previous.take() {
                 window.push(before);
             }
             offset = window.len();
             window.push(record.clone());
             want_next = true;
-        } else if want_next {
-            window.push(record.clone());
-            want_next = false;
+            kept_lead = saved_lead
+                .take()
+                .and_then(|(at, record)| lead_before(at, first_kept).map(|kept| (record, kept)));
+        } else {
+            if lead.is_some() && id == lead {
+                leads += 1;
+                if leads == 1 && matches == 0 {
+                    saved_lead = Some((position, record.clone()));
+                }
+            }
+            if want_next {
+                window.push(record.clone());
+                want_next = false;
+            }
         }
         previous = Some(record);
+        position += 1;
         Ok(())
     })?;
-    Ok((generation, window, offset, matches))
+    Ok(FileExcerpt {
+        generation,
+        window,
+        offset,
+        matches,
+        leads,
+        lead: kept_lead,
+    })
 }
 
 fn validate_block(record: &ParsedRecord, block: Option<u32>) -> Result<(), ExcerptUnavailable> {
@@ -232,9 +343,13 @@ fn validate_block(record: &ParsedRecord, block: Option<u32>) -> Result<(), Excer
     }
     Ok(())
 }
+/// The excerpt around `uuid` in a session read whole, with the record `lead`
+/// names kept ahead of it when that is an earlier record of the target's own
+/// source ([`LeadKept`]).
 pub fn excerpt_from_loaded(
     loaded: LoadedSession,
     uuid: &str,
+    lead: Option<&str>,
     block: Option<u32>,
 ) -> Result<LoadedExcerpt, ExcerptUnavailable> {
     if !loaded.gaps.is_empty() {
@@ -258,15 +373,88 @@ pub fn excerpt_from_loaded(
         if offset <= target && target < end {
             let start = offset.max(target.saturating_sub(1));
             let end = end.min(target + 2);
+            let lead =
+                lead.filter(|lead| *lead != uuid)
+                    .and_then(|lead| {
+                        let mut named =
+                            loaded.records.iter().enumerate().filter(|(_, record)| {
+                                record.canonical.uuid.as_deref() == Some(lead)
+                            });
+                        let (at, _) = named.next()?;
+                        named.next().is_none().then_some(at)
+                    })
+                    .filter(|&at| offset <= at)
+                    .and_then(|at| Some((at, lead_before(at, start)?)));
+            let mut records = Vec::with_capacity(end - start + 1);
+            if let Some((at, _)) = lead {
+                records.push(loaded.records[at].clone());
+            }
+            records.extend_from_slice(&loaded.records[start..end]);
             return Ok(LoadedExcerpt {
                 generation: loaded.generation,
-                records: loaded.records[start..end].to_vec(),
-                target: target - start,
+                records,
+                target: target - start + usize::from(lead.is_some()),
+                lead: lead.map(|(_, kept)| kept),
             });
         }
         offset = end;
     }
     Err(ExcerptUnavailable::Incomplete)
+}
+
+/// The excerpt around a bounded page's target: the target and the records
+/// beside it from its own source, and `lead` when the page holds it earlier
+/// in that source ([`LeadKept`]). A lead outside the page, named twice in it
+/// or of another source is left out; a page without its target is
+/// [`ExcerptUnavailable::TargetMissing`].
+pub fn excerpt_from_page(
+    page: LoadedPage,
+    record_uuid: &str,
+    lead: Option<&str>,
+) -> Result<LoadedExcerpt, ExcerptUnavailable> {
+    let target = page
+        .target
+        .and_then(|ordinal| page.records.iter().position(|r| r.ordinal == ordinal))
+        .ok_or(ExcerptUnavailable::TargetMissing)?;
+    let source = page.records[target].source;
+    let start = target.saturating_sub(1);
+    let end = page.records.len().min(target + 2);
+    let first_kept = if page.records[start].source == source {
+        start
+    } else {
+        target
+    };
+    let lead = lead
+        .filter(|lead| *lead != record_uuid)
+        .and_then(|lead| {
+            let mut named = page
+                .records
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.record.canonical.uuid.as_deref() == Some(lead));
+            let (at, _) = named.next()?;
+            named.next().is_none().then_some(at)
+        })
+        .filter(|&at| page.records[at].source == source)
+        .and_then(|at| Some((at, lead_before(at, first_kept)?)));
+    let mut records = Vec::new();
+    let mut target_index = 0;
+    for (index, record) in page.records.into_iter().enumerate() {
+        if lead.is_some_and(|(at, _)| at == index) {
+            records.push(record.record);
+        } else if (start..end).contains(&index) && record.source == source {
+            if index == target {
+                target_index = records.len();
+            }
+            records.push(record.record);
+        }
+    }
+    Ok(LoadedExcerpt {
+        generation: page.generation,
+        records,
+        target: target_index,
+        lead: lead.map(|(_, kept)| kept),
+    })
 }
 
 #[cfg(test)]
@@ -366,6 +554,182 @@ mod tests {
                 Some(format!("record-{n}").as_str())
             );
         }
+    }
+    /// The excerpt around `target` with `lead`, read both ways: the Claude
+    /// streaming scan, and from the session read whole (the Codex and Cursor
+    /// path). Both must agree.
+    fn with_lead(f: &Fixture, target: &str, lead: &str) -> LoadedExcerpt {
+        let streamed = load_session_excerpt_with_lead(
+            &f.request(),
+            target,
+            Some(lead),
+            None,
+            None,
+            ExcerptLimits::default(),
+        )
+        .unwrap();
+        let SessionSourceOutcome::Loaded(loaded) = load_session_source(&f.request()) else {
+            panic!("loaded");
+        };
+        let whole = excerpt_from_loaded(*loaded, target, Some(lead), None).unwrap();
+        assert_eq!(streamed, whole);
+        streamed
+    }
+    fn write(f: &Fixture, records: &[&str]) {
+        fs::write(
+            &f.path,
+            records
+                .iter()
+                .map(|id| line(id, "synthetic"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    }
+    #[test]
+    fn an_earlier_lead_is_kept_ahead_of_the_neighbours_with_a_gap_when_records_lie_between() {
+        let f = Fixture::new();
+        write(
+            &f,
+            &[
+                "first", "lead", "step-1", "step-2", "target", "after", "last",
+            ],
+        );
+        let read = with_lead(&f, "target", "lead");
+        assert_eq!(ids(&read), ["lead", "step-2", "target", "after"]);
+        assert_eq!(read.target, 2);
+        assert_eq!(read.lead, Some(LeadKept { gap: true }));
+        // Directly before the record before the target: kept, no gap.
+        write(&f, &["lead", "step", "target", "after"]);
+        let read = with_lead(&f, "target", "lead");
+        assert_eq!(ids(&read), ["lead", "step", "target", "after"]);
+        assert_eq!(read.lead, Some(LeadKept { gap: false }));
+        // Without the lead the read is as before.
+        assert_eq!(ids(&f.read("target").unwrap()), ["step", "target", "after"]);
+        assert_eq!(f.read("target").unwrap().lead, None);
+    }
+    #[test]
+    fn a_lead_already_beside_the_target_is_not_shown_twice() {
+        let f = Fixture::new();
+        write(&f, &["lead", "target", "after"]);
+        let read = with_lead(&f, "target", "lead");
+        assert_eq!(ids(&read), ["lead", "target", "after"]);
+        assert_eq!((read.target, read.lead), (1, None));
+        // The lead is the target itself.
+        let read = with_lead(&f, "target", "target");
+        assert_eq!(ids(&read), ["lead", "target", "after"]);
+        assert_eq!(read.lead, None);
+    }
+    #[test]
+    fn a_lead_that_is_missing_named_twice_later_or_elsewhere_leaves_the_excerpt_as_before() {
+        let as_before = |f: &Fixture, lead: &str| {
+            let read = with_lead(f, "target", lead);
+            assert_eq!(ids(&read), ["step", "target", "after"], "{lead}");
+            assert_eq!((read.target, read.lead), (1, None), "{lead}");
+        };
+        let f = Fixture::new();
+        write(&f, &["lead", "x", "step", "target", "after"]);
+        assert_eq!(ids(&with_lead(&f, "target", "lead")).len(), 4);
+        // Missing.
+        as_before(&f, "nowhere");
+        // Named twice in the same file, before and after the target.
+        write(&f, &["lead", "x", "step", "target", "after", "lead"]);
+        as_before(&f, "lead");
+        // After the target.
+        write(&f, &["x", "step", "target", "after", "y", "lead"]);
+        as_before(&f, "lead");
+        // In another source file only.
+        write(&f, &["x", "step", "target", "after"]);
+        f.sidechain(&line("lead", "synthetic"));
+        as_before(&f, "lead");
+        // Before the target, and once more in another source file.
+        write(&f, &["lead", "x", "step", "target", "after"]);
+        as_before(&f, "lead");
+    }
+    #[test]
+    fn the_target_is_still_refused_when_named_twice_whatever_the_lead() {
+        let f = Fixture::new();
+        write(&f, &["lead", "x", "target", "target"]);
+        assert_eq!(
+            load_session_excerpt_with_lead(
+                &f.request(),
+                "target",
+                Some("lead"),
+                None,
+                None,
+                ExcerptLimits::default()
+            ),
+            Err(ExcerptUnavailable::TargetAmbiguous)
+        );
+    }
+    #[test]
+    fn without_lead_gives_the_excerpt_read_without_one() {
+        let f = Fixture::new();
+        write(&f, &["lead", "x", "step", "target", "after"]);
+        assert_eq!(
+            with_lead(&f, "target", "lead").without_lead(),
+            f.read("target").unwrap()
+        );
+    }
+    #[test]
+    fn a_bounded_page_keeps_the_lead_only_when_it_holds_it_earlier_in_the_same_source() {
+        let f = Fixture::new();
+        let page = |target: &str| {
+            load_session_context_with_reader(
+                &f.request(),
+                &page_anchor(target),
+                None,
+                ExcerptLimits::default(),
+            )
+            .unwrap()
+        };
+        write(
+            &f,
+            &["first", "lead", "step-1", "step-2", "target", "after"],
+        );
+        let read = excerpt_from_page(page("target"), "target", Some("lead")).unwrap();
+        assert_eq!(ids(&read), ["lead", "step-2", "target", "after"]);
+        assert_eq!((read.target, read.lead), (2, Some(LeadKept { gap: true })));
+        // Without a lead, or one the page does not hold: as before.
+        let plain = excerpt_from_page(page("target"), "target", None).unwrap();
+        assert_eq!(ids(&plain), ["step-2", "target", "after"]);
+        assert_eq!((plain.target, plain.lead), (1, None));
+        assert_eq!(
+            excerpt_from_page(page("target"), "target", Some("nowhere")).unwrap(),
+            plain
+        );
+        // Beside the target already, or after it: not shown twice.
+        let read = excerpt_from_page(page("target"), "target", Some("step-2")).unwrap();
+        assert_eq!((ids(&read).len(), read.lead), (3, None));
+        let read = excerpt_from_page(page("target"), "target", Some("after")).unwrap();
+        assert_eq!((ids(&read).len(), read.lead), (3, None));
+        // Directly before the record before the target: no gap.
+        let read = excerpt_from_page(page("target"), "target", Some("step-1")).unwrap();
+        assert_eq!(read.lead, Some(LeadKept { gap: false }));
+        // Earlier than the page holds (a plain page keeps one record before).
+        let short = load_session_page_with(
+            &f.request(),
+            &page_anchor("target"),
+            ExcerptLimits::default(),
+        )
+        .unwrap();
+        let read = excerpt_from_page(short, "target", Some("lead")).unwrap();
+        assert_eq!(
+            (ids(&read), read.lead),
+            (vec!["step-2", "target", "after"], None)
+        );
+        // Named twice in the page.
+        write(&f, &["lead", "x", "lead", "step", "target", "after"]);
+        let read = excerpt_from_page(page("target"), "target", Some("lead")).unwrap();
+        assert_eq!(
+            (ids(&read), read.lead),
+            (vec!["step", "target", "after"], None)
+        );
+        // In another source than the target.
+        write(&f, &["x", "y", "z"]);
+        f.sidechain(&[line("lead", "s"), line("a", "s"), line("b", "s")].concat());
+        fs::write(&f.path, [line("x", "s"), line("target", "s")].concat()).unwrap();
+        let read = excerpt_from_page(page("target"), "target", Some("lead")).unwrap();
+        assert_eq!((ids(&read), read.lead), (vec!["x", "target"], None));
     }
     #[test]
     fn neighbors_never_cross_source_files() {

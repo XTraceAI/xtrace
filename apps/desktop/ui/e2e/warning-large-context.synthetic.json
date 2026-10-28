@@ -22,7 +22,9 @@
       "omitted_blocks": false,
       "only_tool_results": false,
       "person": null,
-      "correction_marks": []
+      "correction_marks": [],
+      "lead": false,
+      "gap_after": false
     },
     {
       "record": {
@@ -42,9 +44,19 @@
       "only_tool_results": false,
       "person": true,
       "correction_marks": [
-        { "block": 0, "start": 0, "end": 5 },
-        { "block": 0, "start": 6, "end": 9 }
-      ]
+        {
+          "block": 0,
+          "start": 0,
+          "end": 5
+        },
+        {
+          "block": 0,
+          "start": 6,
+          "end": 9
+        }
+      ],
+      "lead": false,
+      "gap_after": false
     },
     {
       "record": {
@@ -63,7 +75,9 @@
       "omitted_blocks": false,
       "only_tool_results": false,
       "person": null,
-      "correction_marks": []
+      "correction_marks": [],
+      "lead": false,
+      "gap_after": false
     }
   ]
 }

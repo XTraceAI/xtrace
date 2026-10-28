@@ -264,6 +264,18 @@ impl SessionWarning {
             },
         }
     }
+
+    /// The person's message an admitted mistake answers: the first record it
+    /// names, which the reply's record may follow only after other records.
+    /// `None` for every other kind.
+    pub fn answered_message(&self) -> Option<&str> {
+        match self.kind {
+            WarningKind::AdmittedMistake if self.record_uuids.len() == 2 => {
+                self.record_uuids.first().map(String::as_str)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Inputs a rule needed and could not read.
@@ -3013,6 +3025,13 @@ mod tests {
                 (WarningKind::AdmittedMistake, uuids(&["p2", "a2"])),
             ]
         );
+        // Only the admission names a message it answers: the person's.
+        let answered: Vec<_> = found
+            .warnings
+            .iter()
+            .map(SessionWarning::answered_message)
+            .collect();
+        assert_eq!(answered, [None, Some("p2")]);
     }
 
     #[test]

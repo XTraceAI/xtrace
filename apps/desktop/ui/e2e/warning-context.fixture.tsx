@@ -3,7 +3,11 @@ import { createRoot } from 'react-dom/client';
 import fixture from '../fixtures/F1.json';
 import { warning } from './session-warnings.data';
 import { WarningContext } from '../src/app/dashboard/WarningContext';
-import { contextExcerpt, contextFixture } from '../src/app/dashboard/warning-context.synthetic';
+import {
+  contextExcerpt,
+  contextFixture,
+  contextMessage,
+} from '../src/app/dashboard/warning-context.synthetic';
 import { DataProvider } from '../src/data/DataProvider';
 import type { DataSource } from '../src/data/DataSource';
 import { FixtureDataSource } from '../src/data/FixtureDataSource';
@@ -27,6 +31,18 @@ if (params.has('omitted'))
     failed: true,
     parts: [{ kind: 'text', text: 'Synthetic tool failure. No linked call name is available.' }],
   });
+// The person's message an admitted mistake answers, kept by the native side
+// ahead of the reply's neighbours: right before them (`lead-adjacent`), or
+// with an agent step between that the excerpt leaves out (`lead`).
+const lead = params.has('lead') || params.has('lead-adjacent') ? 'asked' : null;
+if (lead) status.records[0] = contextMessage('asked', 'Please make the sample build pass.');
+if (params.has('lead')) {
+  status.records.splice(1, 0, {
+    ...contextMessage('skipped-step', 'Synthetic skipped agent step.'),
+    role: 'assistant',
+  });
+  status.record_ranges = [{ start: 0, end: status.records.length }];
+}
 const block = params.has('omitted') ? 99 : null;
 const calls = { reads: [] as unknown[][], cancels: [] as string[] };
 Object.defineProperty(source, 'sessionWarningContext', {
@@ -34,7 +50,7 @@ Object.defineProperty(source, 'sessionWarningContext', {
     calls.reads.push(args);
     return params.has('refusal')
       ? { state: 'unavailable', reason: { reason: 'target_ambiguous' } }
-      : contextExcerpt(status, 'target', block);
+      : contextExcerpt(status, 'target', block, [], lead);
   },
 });
 source.cancelSessionTranscript = async (readId: string) => {

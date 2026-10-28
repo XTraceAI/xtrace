@@ -296,6 +296,23 @@
   font-size: 10.5px;
   line-height: 1.5;
 }
+/* Between the person's message an admitted mistake answers and the reply's
+   neighbours, when records between them are left out. */
+.xt-warning-context-gap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--meta);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.xt-warning-context-gap::before,
+.xt-warning-context-gap::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--border);
+}
 .xt-warning-context-foot {
   display: flex;
   justify-content: flex-start;

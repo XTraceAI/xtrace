@@ -4,7 +4,7 @@ import { warning } from './session-warnings.data';
 
 type Calls = { reads: unknown[][]; cancels: string[] };
 for (const scheme of ['light', 'dark'] as const) {
-  for (const variant of ['', 'long', 'omitted', 'refusal'] as const) {
+  for (const variant of ['', 'long', 'omitted', 'refusal', 'lead', 'lead-adjacent'] as const) {
     test(`standalone warning context ${variant || 'bounded'} in ${scheme}`, async ({
       page,
     }, testInfo) => {
@@ -32,9 +32,31 @@ for (const scheme of ['light', 'dark'] as const) {
           await expect(context).toContainText('Synthetic tool failure.');
           await expect(context).not.toContainText('Person');
           await expect(context.locator('[data-highlighted]')).toHaveCount(1);
+        } else if (variant === 'lead' || variant === 'lead-adjacent') {
+          // The person's message the reply answered comes first, as "You".
+          const records = context.locator('[data-record-id]');
+          await expect(records).toHaveCount(4);
+          await expect(records.first()).toHaveAttribute('data-record-id', 'asked');
+          await expect(records.first()).toHaveAttribute('data-own', 'true');
+          await expect(records.first()).toContainText(SESSION_WARNINGS_TEXT.you);
+          await expect(context.getByTestId('warning-context-gap')).toHaveCount(
+            variant === 'lead' ? 1 : 0,
+          );
+          if (variant === 'lead')
+            await expect(context.getByRole('separator')).toHaveText(
+              SESSION_WARNINGS_TEXT.context_gap,
+            );
+          await expect(context).not.toContainText('Synthetic skipped agent step.');
+          await expect(context.locator('.xt-warning-context-caption')).toHaveText(
+            SESSION_WARNINGS_TEXT.context_caption_with_lead,
+          );
         } else {
           await expect(context.locator('[data-record-id]')).toHaveCount(3);
           await expect(context).toContainText(SESSION_WARNINGS_TEXT.you);
+          await expect(context.getByTestId('warning-context-gap')).toHaveCount(0);
+          await expect(context.locator('.xt-warning-context-caption')).toHaveText(
+            SESSION_WARNINGS_TEXT.context_caption,
+          );
         }
       }
       expect(await context.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);

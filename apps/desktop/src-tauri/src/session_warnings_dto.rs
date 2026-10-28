@@ -86,6 +86,15 @@ pub struct WarningsText {
     pub conversation_heading: &'static str,
     /// Who sent a message M-02 counts as a person's, in that conversation.
     pub you: &'static str,
+    /// Under that conversation: which messages it shows.
+    pub context_caption: &'static str,
+    /// The same when it also shows an earlier message ahead of them (the
+    /// excerpt's lead, `SessionExcerptRecord.lead`): for an admitted mistake,
+    /// the person's message the agent answered.
+    pub context_caption_with_lead: &'static str,
+    /// Between that earlier message and the next one shown, when messages
+    /// between them are left out (`SessionExcerptRecord.gap_after`).
+    pub context_gap: &'static str,
     /// Over the reason in that window.
     pub flagged_label: &'static str,
     /// A short heading over the reason, by the warning's kind.
@@ -130,6 +139,9 @@ pub const TEXT: WarningsText = WarningsText {
     modal_heading: "Session warning",
     conversation_heading: "Conversation",
     you: "You",
+    context_caption: "Showing the triggering message and up to one message on either side from the same source.",
+    context_caption_with_lead: "Showing the message the agent answered, then the triggering message and up to one message on either side from the same source.",
+    context_gap: "Earlier steps not shown",
     flagged_label: "Why this was flagged",
     flagged_headings: KindWords {
         correction: "You corrected the agent.",

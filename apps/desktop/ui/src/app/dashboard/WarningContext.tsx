@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import type { SessionWarningItem } from '../../data/generated/SessionWarningItem';
 import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
 import { clock } from '../../kit/clock';
@@ -113,30 +114,39 @@ export function WarningContextView({
             </p>
           )}
           <div className="xt-chat">
-            {excerpt.records.map(({ record, target, omitted, person }, index) => (
-              <div
-                className="xt-warning-context-message"
-                data-trigger={target || undefined}
-                key={`${index}:${record.id}`}
-              >
-                <ChatRecord
-                  record={record}
-                  person={person}
-                  host={host}
-                  flagged={target ? { tag, block: flaggedBlock(record, warning) } : null}
-                />
-                {omitted && (
-                  <p className="xt-warning-context-note">
-                    Other blocks in this message are not shown in this excerpt.
+            {excerpt.records.map(({ record, target, omitted, person, gapAfter }, index) => (
+              <Fragment key={`${index}:${record.id}`}>
+                <div className="xt-warning-context-message" data-trigger={target || undefined}>
+                  <ChatRecord
+                    record={record}
+                    person={person}
+                    host={host}
+                    flagged={target ? { tag, block: flaggedBlock(record, warning) } : null}
+                  />
+                  {omitted && (
+                    <p className="xt-warning-context-note">
+                      Other blocks in this message are not shown in this excerpt.
+                    </p>
+                  )}
+                </div>
+                {gapAfter && (
+                  <p
+                    role="separator"
+                    className="xt-warning-context-gap"
+                    data-testid="warning-context-gap"
+                  >
+                    {SESSION_WARNINGS_TEXT.context_gap}
                   </p>
                 )}
-              </div>
+              </Fragment>
             ))}
           </div>
           <p className="xt-warning-context-caption">
-            {excerpt.neighborsAvailable
-              ? 'Showing the triggering message and up to one message on either side from the same source.'
-              : 'Nearby messages are unavailable because this message’s conversation source could not be identified.'}
+            {!excerpt.neighborsAvailable
+              ? 'Nearby messages are unavailable because this message’s conversation source could not be identified.'
+              : excerpt.hasLead
+                ? SESSION_WARNINGS_TEXT.context_caption_with_lead
+                : SESSION_WARNINGS_TEXT.context_caption}
           </p>
         </>
       )}

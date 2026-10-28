@@ -10,9 +10,13 @@ export type WarningContext =
         omitted: boolean;
         /** M-02: a person's message (`true`), or not known to be one. */
         person: boolean;
+        /** The native excerpt left out records between this and the next. */
+        gapAfter: boolean;
       }[];
       state: TranscriptState;
       neighborsAvailable: boolean;
+      /** The native excerpt kept an earlier message ahead of the target's neighbours. */
+      hasLead: boolean;
     };
 
 /** One read of a warning's original messages. */
@@ -79,11 +83,13 @@ export function warningExcerpt(read: WarningContextRead): WarningContext {
     kind: 'excerpt',
     state: { kind: 'ready' },
     neighborsAvailable: true,
+    hasLead: read.status.records.some((entry) => entry.lead),
     records: read.status.records.map((entry) => ({
       record: excerptRecord(entry.record, entry.only_tool_results),
       target: entry.target,
       person: entry.person === true,
       omitted: entry.omitted_blocks,
+      gapAfter: entry.gap_after,
     })),
   };
 }
