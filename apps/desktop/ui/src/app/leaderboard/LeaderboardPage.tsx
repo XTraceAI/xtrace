@@ -117,6 +117,9 @@ function Leaderboard({
   return current.joined ? (
     <Membership
       status={current}
+      // Only the code's own answer carries the welcome; later status reads
+      // leave it on the page.
+      welcome={confirm.data?.welcome ?? null}
       controls={controls}
       rename={rename}
       leave={leave}
@@ -265,6 +268,7 @@ function CodeStep({
   const [resent, setResent] = useState(false);
   const codeId = useId();
   const nicknameId = useId();
+  const sentId = useId();
   const errorId = useId();
   const refused = confirm.isError ? confirm.error : join.isError ? join.error : null;
   const failed = refused ? refusalText(refused) : null;
@@ -275,7 +279,9 @@ function CodeStep({
   const busy = confirm.isPending || join.isPending || cancelCode.isPending;
   return (
     <SectionCard title="Check your email">
-      <p data-testid="leaderboard-code-sent">{codeSentText(sent.email)}</p>
+      <p id={sentId} data-testid="leaderboard-code-sent">
+        {codeSentText(sent.email)}
+      </p>
       <form
         className="xt-leaderboard-form"
         noValidate
@@ -298,7 +304,8 @@ function CodeStep({
           // The step replaced the form, so its one field takes the focus.
           autoFocus
           aria-invalid={field === 'code' || undefined}
-          aria-describedby={failed ? errorId : undefined}
+          // Where the code went, and the refusal when there is one.
+          aria-describedby={failed ? `${sentId} ${errorId}` : sentId}
           onChange={(event) => setCode(event.target.value)}
         />
         {chooseNickname && (
@@ -330,7 +337,8 @@ function CodeStep({
               setResent(false);
               confirm.reset();
               join.mutate(
-                { nickname: sent.nickname, email: sent.email },
+                // While choosing a nickname, the one typed now.
+                { nickname: chooseNickname ? nickname : sent.nickname, email: sent.email },
                 { onSuccess: () => setResent(true) },
               );
             }}
@@ -363,12 +371,14 @@ function CodeStep({
 
 function Membership({
   status,
+  welcome,
   controls,
   rename,
   leave,
   heading,
 }: {
   status: LeaderboardStatus;
+  welcome: string | null;
   controls: LeaderboardControls;
   rename: Changes['rename'];
   leave: Changes['leave'];
@@ -405,9 +415,9 @@ function Membership({
           {status.last_sent ? clock(status.last_sent.at_ms, { date: 'day' }) : 'Not sent yet'}
         </dd>
       </dl>
-      {status.welcome && (
+      {welcome && (
         <p role="status" data-testid="leaderboard-welcome">
-          {status.welcome}
+          {welcome}
         </p>
       )}
       <p className="xt-settings-note">{SEND_TIMES}</p>

@@ -261,11 +261,16 @@ pub fn refusal_message(refusal: &Refusal) -> String {
             "invalid_nickname" => {
                 "Nicknames are 3 to 20 characters: letters, digits, _ and - only.".into()
             }
-            "invalid_email" => "That email address does not look right.".into(),
+            "invalid_email" => {
+                "That email address does not look right. Enter only the address, like name@example.com."
+                    .into()
+            }
             "invalid_leverage" => "The leaderboard did not accept your number.".into(),
             "invalid_code" => "That code is not right. Check the email and try again.".into(),
+            // The code step is over: the page is back at the form.
             "code_expired" => {
-                "That code has expired or was tried too many times. Send a new code.".into()
+                "That code has expired or was tried too many times. Press Join to get a new code."
+                    .into()
             }
             "email_unavailable" => {
                 "The leaderboard can't send emails right now. Try again later.".into()
@@ -273,13 +278,7 @@ pub fn refusal_message(refusal: &Refusal) -> String {
             "unknown_key" => GONE.into(),
             _ => "The leaderboard did not accept the request.".into(),
         },
-        Refusal::RateLimited(Some(seconds)) => {
-            // Whole minutes, rounded up, at least one.
-            let minutes = seconds.div_ceil(60).max(1);
-            let unit = if minutes == 1 { "minute" } else { "minutes" };
-            format!("Too many tries. Try again in about {minutes} {unit}.")
-        }
-        Refusal::RateLimited(None) => "Too many tries. Try again later.".into(),
+        Refusal::RateLimited(seconds) => format!("Too many tries. Try again {}.", wait_text(*seconds)),
         Refusal::Status(413) => "That nickname or email is too long.".into(),
         Refusal::Unreadable => "The leaderboard answered in a way XTrace could not read.".into(),
         Refusal::Status(status) => {
@@ -332,9 +331,39 @@ impl From<&Refusal> for LeaderboardRefusal {
     }
 }
 
-/// Shown once the leaderboard no longer knows the saved membership.
-pub const GONE: &str =
-    "The leaderboard no longer has your membership, so this app is not joined any more.";
+/// When to try again after the leaderboard asked to wait `seconds`: the one
+/// way a wait is written. Whole minutes rounded up (at least one) under an
+/// hour, whole hours rounded up from then on; "later" when it gave none.
+pub fn wait_text(seconds: Option<u64>) -> String {
+    let Some(seconds) = seconds else {
+        return "later".into();
+    };
+    let minutes = seconds.div_ceil(60).max(1);
+    let (count, unit) = if minutes < 60 {
+        (minutes, "minute")
+    } else {
+        (minutes.div_ceil(60), "hour")
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("in about {count} {unit}{plural}")
+}
+
+/// A refusal of a read the person did not ask for (the page's status read):
+/// a rate limit there means the leaderboard is busy, not that they tried
+/// too often.
+fn read_refusal_message(refusal: &Refusal) -> String {
+    match refusal {
+        Refusal::RateLimited(seconds) => format!(
+            "The leaderboard is busy right now. Try again {}.",
+            wait_text(*seconds)
+        ),
+        other => refusal_message(other),
+    }
+}
+
+/// Shown once the leaderboard no longer knows this Mac's key: the entry was
+/// removed, or the same email signed in on another Mac, which replaces it.
+pub const GONE: &str = "This Mac is no longer joined. Your entry was removed, or the same email signed in on another Mac.";
 /// Shown when the number could not be read from the app's own data.
 const NUMBER_UNREADABLE: &str =
     "Your 7-day leverage could not be read. It will be tried again within the hour.";
@@ -657,7 +686,6 @@ struct Notes {
     upload_error: Option<String>,
     gone: bool,
     pending: Option<PendingJoin>,
-    welcome: Option<String>,
 }
 
 /// Wall time in Unix milliseconds.
@@ -768,7 +796,7 @@ impl LeaderboardService {
             Err(refusal) => self.answer(
                 Some(membership),
                 Some(LeaderboardStanding::Unknown),
-                Some(refusal_message(&refusal)),
+                Some(read_refusal_message(&refusal)),
             ),
         }
     }
@@ -779,9 +807,8 @@ impl LeaderboardService {
         standing: Option<LeaderboardStanding>,
         error: Option<String>,
     ) -> LeaderboardStatus {
-        let mut notes = lock(&self.notes);
+        let notes = lock(&self.notes);
         let joined = membership.is_some();
-        let welcome = notes.welcome.take();
         LeaderboardStatus {
             available: self.transport.is_ok(),
             unavailable_reason: self.transport.as_ref().err().cloned(),
@@ -805,13 +832,14 @@ impl LeaderboardService {
                     choose_nickname: pending.nickname_taken,
                 }
             }),
-            welcome: welcome.filter(|_| joined),
+            // Only the answer to the code that signed back in carries it.
+            welcome: None,
         }
     }
 
     /// The first step of joining: asks the leaderboard to email a code for
     /// the nickname and email as typed (it checks them). Asking again sends
-    /// a new code; only the newest works.
+    /// a new code; this app confirms only the newest.
     pub fn join(
         &self,
         nickname: &str,
@@ -855,7 +883,7 @@ impl LeaderboardService {
         nickname: Option<&str>,
     ) -> Result<LeaderboardStatus, LeaderboardRefusal> {
         let api = self.api()?;
-        let rejoined = {
+        let welcome = {
             let _work = lock(&self.work);
             if self
                 .host
@@ -869,7 +897,9 @@ impl LeaderboardService {
                 .pending
                 .clone()
                 .ok_or_else(|| String::from(NO_CODE_SENT))?;
-            let joined = match api.verify(&pending.id, code, nickname) {
+            // A pasted code may carry spaces ("123 456 ").
+            let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+            let joined = match api.verify(&pending.id, &code, nickname) {
                 Ok(joined) => joined,
                 Err(refusal) => {
                     let mut notes = lock(&self.notes);
@@ -915,26 +945,33 @@ impl LeaderboardService {
                 }
                 .into());
             }
-            let mut notes = lock(&self.notes);
-            *notes = Notes::default();
-            notes.welcome = joined.rejoined.then(|| {
+            *lock(&self.notes) = Notes::default();
+            joined.rejoined.then(|| {
                 format!(
                     "Welcome back. You are signed in to your existing entry as {}.",
                     membership.nickname
                 )
-            });
-            joined.rejoined
+            })
         };
-        if !rejoined {
+        if welcome.is_none() {
             (self.on_joined)();
         }
         self.send_number();
-        Ok(self.status())
+        // Said in this answer only: no other read can take or repeat it.
+        Ok(LeaderboardStatus {
+            welcome,
+            ..self.status()
+        })
     }
 
-    /// "Use a different email": forgets the code waiting to be entered.
+    /// "Use a different email": forgets the code waiting to be entered. It
+    /// waits for a join in progress, so a code that join asks for is
+    /// forgotten too, never set again after this.
     pub fn cancel_code(&self) -> LeaderboardStatus {
-        lock(&self.notes).pending = None;
+        {
+            let _work = lock(&self.work);
+            lock(&self.notes).pending = None;
+        }
         self.status()
     }
 

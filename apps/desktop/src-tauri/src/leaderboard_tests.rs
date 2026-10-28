@@ -432,7 +432,10 @@ fn a_join_the_leaderboard_refuses_saves_nothing_and_says_why() {
             "invalid_nickname",
             "Nicknames are 3 to 20 characters: letters, digits, _ and - only.",
         ),
-        ("invalid_email", "That email address does not look right."),
+        (
+            "invalid_email",
+            "That email address does not look right. Enter only the address, like name@example.com.",
+        ),
         (
             "invalid_request",
             "The leaderboard did not accept the request.",
@@ -996,7 +999,7 @@ fn every_code_step_answer_has_plain_words() {
         (
             410,
             "code_expired",
-            "That code has expired or was tried too many times. Send a new code.",
+            "That code has expired or was tried too many times. Press Join to get a new code.",
             None,
         ),
         (
@@ -1023,7 +1026,11 @@ fn every_code_step_answer_has_plain_words() {
         (Some(1), "Too many tries. Try again in about 1 minute."),
         (Some(60), "Too many tries. Try again in about 1 minute."),
         (Some(61), "Too many tries. Try again in about 2 minutes."),
-        (Some(3600), "Too many tries. Try again in about 60 minutes."),
+        (Some(3540), "Too many tries. Try again in about 59 minutes."),
+        (Some(3541), "Too many tries. Try again in about 1 hour."),
+        (Some(3600), "Too many tries. Try again in about 1 hour."),
+        (Some(3601), "Too many tries. Try again in about 2 hours."),
+        (Some(86_400), "Too many tries. Try again in about 24 hours."),
         (Some(0), "Too many tries. Try again in about 1 minute."),
         (None, "Too many tries. Try again later."),
     ] {
@@ -1198,4 +1205,77 @@ fn a_taken_nickname_at_the_code_step_keeps_the_code_for_another_nickname() {
         ]
     );
     assert_eq!(rig.joins.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_pasted_code_with_spaces_is_sent_without_them() {
+    let rig = setup(FakeHost::new(Some(1)), FakeTransport::new(accepting));
+    rig.service.join("ada", "a@example.com").unwrap();
+    assert!(rig.service.confirm(" 123 456 \n", None).unwrap().joined);
+    let verify = rig
+        .transport
+        .seen()
+        .into_iter()
+        .find(|request| request.path == "/api/join/verify")
+        .unwrap();
+    assert_eq!(
+        verify.body,
+        Some(json!({ "pending_id": PENDING, "code": CODE }))
+    );
+}
+
+/// A status read the person did not ask for says the leaderboard is busy,
+/// in the same wait wording.
+#[test]
+fn a_rate_limited_status_read_says_the_leaderboard_is_busy() {
+    let rig = setup(
+        FakeHost::joined("ada", Some(1)),
+        FakeTransport::new(|_| {
+            answer(
+                429,
+                json!({ "error": "rate_limited", "retry_after_seconds": 7200 }),
+            )
+        }),
+    );
+    let status = rig.service.status();
+    assert!(status.joined);
+    assert_eq!(
+        status.error.as_deref(),
+        Some("The leaderboard is busy right now. Try again in about 2 hours.")
+    );
+    assert_eq!(wait_text(None), "later");
+}
+
+/// "Use a different email" waits for a join in progress: the code that join
+/// asked for is forgotten too, never set again afterwards.
+#[test]
+fn use_a_different_email_cannot_be_undone_by_a_join_in_progress() {
+    use std::sync::mpsc;
+    let (arrived, wait_arrived) = mpsc::channel::<()>();
+    let (release, wait_release) = mpsc::channel::<()>();
+    let gates = Mutex::new((arrived, wait_release));
+    let transport = FakeTransport::new(move |request| {
+        if request.path == "/api/join" {
+            let gates = lock(&gates);
+            gates.0.send(()).unwrap();
+            gates.1.recv().unwrap();
+        }
+        accepting(request)
+    });
+    let rig = Arc::new(setup(FakeHost::new(Some(1)), transport));
+    let joining = {
+        let rig = rig.clone();
+        std::thread::spawn(move || rig.service.join("ada", "a@example.com").unwrap())
+    };
+    wait_arrived.recv().unwrap();
+    let cancelling = {
+        let rig = rig.clone();
+        std::thread::spawn(move || rig.service.cancel_code())
+    };
+    // The cancel is waiting for the join; let the join finish.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    release.send(()).unwrap();
+    joining.join().unwrap();
+    assert_eq!(cancelling.join().unwrap().code_sent, None);
+    assert_eq!(rig.service.status().code_sent, None);
 }

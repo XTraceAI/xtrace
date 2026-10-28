@@ -312,7 +312,9 @@ it('marks a wrong code, sends a new one, and goes back keeping the nickname', as
   const alert = await screen.findByRole('alert');
   expect(alert.textContent).toBe('That code is not right. Check the email and try again.');
   expect(code.getAttribute('aria-invalid')).toBe('true');
-  expect(code.getAttribute('aria-describedby')).toBe(alert.id);
+  // The field names where the code went, then the refusal.
+  const sentLine = screen.getByTestId('leaderboard-code-sent');
+  expect(code.getAttribute('aria-describedby')).toBe(`${sentLine.id} ${alert.id}`);
   // A new code goes to the same nickname and email.
   fireEvent.click(screen.getByRole('button', { name: 'Send a new code' }));
   await waitFor(() => expect(leaderboard.join).toHaveBeenCalledTimes(2));
@@ -381,7 +383,8 @@ it('welcomes someone signing back in to an existing entry once', async () => {
     nickname: 'ada',
     welcome: 'Welcome back. You are signed in to your existing entry as ada.',
   });
-  await mount(leaderboard);
+  const source = new FixtureDataSource(exported);
+  await mount(leaderboard, source);
   fireEvent.change(await screen.findByLabelText('Code'), { target: { value: CODE } });
   fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
   expect((await screen.findByTestId('leaderboard-welcome')).textContent).toBe(
@@ -390,4 +393,22 @@ it('welcomes someone signing back in to an existing entry once', async () => {
   await waitFor(() =>
     expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 })),
   );
+  // A later status read, which never carries it, leaves it on the page.
+  leaderboard.read.mockResolvedValue({ ...joined, nickname: 'ada', last_sent: null });
+  const before = leaderboard.read.mock.calls.length;
+  act(() => source.emit(events.leaderboardChanged));
+  await waitFor(() => expect(leaderboard.read.mock.calls.length).toBeGreaterThan(before));
+  await waitFor(() => expect(summary()['Last sent']).toBe('Not sent yet'));
+  expect(screen.getByTestId('leaderboard-welcome')).toBeTruthy();
+});
+
+it('sends a new code with the nickname being chosen', async () => {
+  const leaderboard = controls({
+    ...notJoined,
+    code_sent: { nickname: 'ada', email: 'ada@example.com', choose_nickname: true },
+  });
+  await mount(leaderboard);
+  fireEvent.change(await screen.findByLabelText('Nickname'), { target: { value: 'ada_3' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send a new code' }));
+  await waitFor(() => expect(leaderboard.join).toHaveBeenCalledWith('ada_3', 'ada@example.com'));
 });

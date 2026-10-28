@@ -110,7 +110,9 @@ the app's **Leaderboard** page.
   you enter in the app within 15 minutes. The leaderboard shows your nickname
   and never shows your email; it keeps the email only so XTrace can reach you.
   The app does not save the email. Joining again with the same email (for
-  example on a new Mac) signs you back in to your existing entry.
+  example on a new Mac) signs you back in to your existing entry. Only the Mac
+  you joined from most recently sends your number; any other Mac is told it
+  is no longer joined.
 - **While you are joined**, the app sends one number: your leverage for the
   last 7 days, as the Dashboard shows it for the 7-day range, to one decimal
   (or no number when it has none). It is sent right after you join, when the
