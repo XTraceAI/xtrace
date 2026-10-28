@@ -104,8 +104,8 @@ pub fn reason(kind: WarningKind, times: usize) -> String {
             format!("the same tool call failed {} times", times.max(2))
         }
         WarningKind::AdmittedMistake => {
-            "the agent's reply to the person's message began by admitting a mistake, with words \
-             like \"you're right\", \"my mistake\" or \"sorry\""
+            "the agent admitted a mistake near the start of its reply to the person's message, \
+             with words like \"you're right\", \"my mistake\" or \"sorry\""
                 .to_owned()
         }
     }

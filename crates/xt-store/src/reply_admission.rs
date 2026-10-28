@@ -37,6 +37,10 @@ pub const FACT_VERSION: i64 = 1;
 pub const REPLY_CHARS: usize = 600;
 /// The longest saved phrase list (the table's CHECK).
 pub const MAX_PHRASES_CHARS: usize = 600;
+/// The longest record identifier a row is kept for (the table's CHECK).
+/// `records.uuid` has no such limit; a longer one gets no row, and the
+/// warning rule reads that reply as not checked.
+pub const MAX_RECORD_ID_CHARS: usize = 256;
 
 /// One admission phrase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -330,8 +334,9 @@ pub fn has_reply_text(blocks: &[serde_json::Value]) -> bool {
 /// Keep one reply's phrases under `version`: a new row, a replacement of a
 /// row written under a lower version, nothing for the same phrases, and a
 /// conflict mark for other phrases under the same version. Only a record
-/// this session owns, unconflicted, is written to. Returns whether a row was
-/// written or replaced.
+/// this session owns, unconflicted, is written to, and none for an
+/// identifier over [`MAX_RECORD_ID_CHARS`] characters. Returns whether a row
+/// was written or replaced.
 pub(crate) fn keep(
     connection: &Connection,
     session_id: &str,
@@ -339,6 +344,9 @@ pub(crate) fn keep(
     found: &[Phrase],
     version: i64,
 ) -> Result<bool> {
+    if uuid.chars().count() > MAX_RECORD_ID_CHARS {
+        return Ok(false);
+    }
     let saved = to_saved(found);
     let written = connection.execute(
         "INSERT INTO reply_admissions(record_uuid,session_id,phrases,fact_version)
@@ -359,8 +367,9 @@ pub(crate) fn keep(
 }
 
 /// Keep the admission phrases of every accepted agent record of one write
-/// that is outside sidechains and has reply text ([`has_reply_text`]). An
-/// input whose content was not observed states nothing. Returns how many
+/// that is outside sidechains and has reply text ([`has_reply_text`]), and
+/// whose identifier fits the table ([`MAX_RECORD_ID_CHARS`]). An input whose
+/// content was not observed states nothing. Returns how many
 /// rows were written or replaced.
 pub(crate) fn apply(
     connection: &Connection,

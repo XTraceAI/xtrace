@@ -1647,7 +1647,7 @@ fn admitted() -> Vec<CanonicalRecord> {
             &at(0, 3),
             "You\u{2019}re right \u{2014} I misread the loop.",
         ),
-        // A later reply to the same message is not checked.
+        // Nothing after the reply's first warning phrase is read.
         answers("a3", &at(0, 4), "Sorry, one more fix."),
         says("h2", &at(1, 0), "Thanks, now add a test"),
         answers("a4", &at(1, 5), "I wrongly assumed it ended in a newline."),
@@ -1697,16 +1697,22 @@ fn replies_without_readable_saved_names_leave_the_check_incomplete() {
     )
     .unwrap();
     let found = warnings(&db, SESSION);
-    assert!(
-        found
-            .warnings
-            .iter()
-            .all(|w| w.kind != WarningKind::AdmittedMistake)
+    // a2 is unread, but a3 starts inside the first reply's window and warns,
+    // so that reply is checked; the second reply's only record is unread.
+    let admitted: Vec<_> = found
+        .warnings
+        .iter()
+        .filter(|w| w.kind == WarningKind::AdmittedMistake)
+        .map(|w| (w.record_uuids.clone(), w.compact_reason.as_str()))
+        .collect();
+    assert_eq!(
+        admitted,
+        vec![(uuids(&["h1", "a3"]), "Agent said \"sorry\"")]
     );
     assert_eq!(
         found.checks.admitted_mistake,
         CheckState::Incomplete {
-            missing: vec![Missing::ReplyNotChecked { replies: 2 }]
+            missing: vec![Missing::ReplyNotChecked { replies: 1 }]
         }
     );
     // As an index written before migration 30 holds them.
@@ -1715,6 +1721,49 @@ fn replies_without_readable_saved_names_leave_the_check_incomplete() {
         warnings(&db, SESSION).checks.admitted_mistake,
         CheckState::Incomplete {
             missing: vec![Missing::ReplyNotChecked { replies: 2 }]
+        }
+    );
+}
+
+#[test]
+fn a_phrase_after_a_preamble_record_warns_and_an_overlong_id_is_not_checked() {
+    let long = "r".repeat(300);
+    let mut db = TempDb::empty().unwrap();
+    seed(
+        &mut db,
+        SESSION,
+        "claude",
+        &[
+            says("h1", &at(0, 0), "The parser drops the last line"),
+            answers("a1", &at(0, 1), "Let me look at the loop first."),
+            calls("a2", &at(0, 2), &[("t1", "Bash", json!({"command":"ls"}))]),
+            result("r1", &at(0, 3), "t1", Some(false), "ok"),
+            answers(
+                "a3",
+                &at(0, 4),
+                "Good catch \u{2014} I missed the final line.",
+            ),
+            says("h2", &at(1, 0), "Now add a test"),
+            // Its identifier is too long for the saved phrases: unread.
+            answers(&long, &at(1, 5), "Sorry, my mistake."),
+        ],
+        false,
+    );
+    let found = warnings(&db, SESSION);
+    let admitted: Vec<_> = found
+        .warnings
+        .iter()
+        .filter(|w| w.kind == WarningKind::AdmittedMistake)
+        .map(|w| (w.record_uuids.clone(), w.compact_reason.as_str()))
+        .collect();
+    assert_eq!(
+        admitted,
+        vec![(uuids(&["h1", "a3"]), "Agent said \"good catch\"")]
+    );
+    assert_eq!(
+        found.checks.admitted_mistake,
+        CheckState::Incomplete {
+            missing: vec![Missing::ReplyNotChecked { replies: 1 }]
         }
     );
 }

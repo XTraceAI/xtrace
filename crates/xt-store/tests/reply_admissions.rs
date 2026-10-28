@@ -348,3 +348,46 @@ fn migration_30_keeps_dismissals_and_clears_claude_checkpoints() {
         Some(reader)
     );
 }
+
+#[test]
+fn a_reply_whose_id_is_too_long_for_the_table_gets_no_row_and_the_write_succeeds() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, path) = store(&directory, false);
+    let long = "r".repeat(300);
+    store
+        .upsert_records(
+            "s",
+            &[
+                person("p1", 0, "build it"),
+                text(&long, 1, "Sorry, my mistake."),
+                text("a2", 2, "Good catch."),
+            ],
+            false,
+        )
+        .unwrap();
+    // The record itself is kept; only its phrase row is not.
+    let kept: i64 = Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT count(*) FROM records WHERE uuid=?1", [&long], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(kept, 1);
+    assert_eq!(rows(&path), vec![row("a2", "good_catch")]);
+    // A 256-character identifier still fits.
+    let longest = "q".repeat(xt_store::reply_admission::MAX_RECORD_ID_CHARS);
+    store
+        .upsert_records("s", &[text(&longest, 3, "Fair point.")], false)
+        .unwrap();
+    assert_eq!(rows(&path).len(), 2);
+}
+
+#[test]
+fn a_whitespace_only_reply_gets_a_row_with_no_phrase() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, path) = store(&directory, false);
+    store
+        .upsert_records("s", &[text("a1", 1, "\n\n")], false)
+        .unwrap();
+    assert_eq!(rows(&path), vec![row("a1", "")]);
+}

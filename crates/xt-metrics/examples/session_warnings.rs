@@ -13,7 +13,8 @@
 //! in the window, and up to eight example sessions per kind.
 //!
 //! `--admission-ids` also prints one line per admitted-mistake warning: the
-//! session, the person's message ID, the reply ID and the phrase name.
+//! session, the person's message ID, the ID of the reply's record that holds
+//! the phrase, and the phrase name.
 //! `--counts-only` leaves out the examples, which print saved session titles
 //! and the words a correction matched. Nothing else prints message text.
 
@@ -292,7 +293,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     println!(
-        "replies to a person's message not checked (no readable saved phrases): {not_checked}, \
+        "replies to a person's message not checked (a record in the reply's first 600 \
+         characters has no readable saved phrases): {not_checked}, \
          in {not_checked_sessions} sessions"
     );
 
@@ -326,7 +328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     drop(rows);
     println!(
-        "agent replies with text in the window: {replies}; with saved phrases row: {saved}; \
+        "agent records with text in the window: {replies}; with saved phrases row: {saved}; \
          rows marked conflicted: {conflicted}; replies on a conflicted record: {record_conflict}; \
          rows from a later build: {newer}; rows naming a phrase: {with_phrase}"
     );
@@ -335,7 +337,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     if args.admission_ids {
         println!();
-        println!("admitted-mistake warnings: session person_message_id reply_id phrase");
+        println!("admitted-mistake warnings: session person_message_id phrase_record_id phrase");
         for session in &all {
             for warning in session
                 .warnings

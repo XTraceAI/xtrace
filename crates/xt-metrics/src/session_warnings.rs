@@ -22,14 +22,15 @@
 //!   messages are not compared ([`comparable_prompt`]).
 //! * **Repeated failure**: two or more calls with the same stored M-20
 //!   comparison key whose saved result says they failed.
-//! * **Admitted mistake**: the agent's reply to a person's message opens with
-//!   one of the admission phrases in [`ADMISSION_WARNS`] ("you're right",
-//!   "my mistake", "sorry", …). The reply is the first agent record after the
-//!   message with text (a stored `text_len > 0`; thinking and tool calls
-//!   alone are passed over); later replies are not checked, and a new person
-//!   message before any reply text restarts the wait. Which phrases its first
-//!   [`reply_admission::REPLY_CHARS`] characters hold is the store's saved
-//!   fact (`reply_admissions`, migration 30), never re-read from text here.
+//! * **Admitted mistake**: near its start, the agent's reply to a person's
+//!   message holds one of the admission phrases in [`ADMISSION_WARNS`]
+//!   ("you're right", "my mistake", "sorry", …). The reply is every agent
+//!   record with text (a stored `text_len > 0`; thinking and tool calls alone
+//!   are passed over) after the message, until the person's next message;
+//!   only records that start within its first
+//!   [`reply_admission::REPLY_CHARS`] characters are read ([`ReplyWindow`]).
+//!   Which phrases a record holds is the store's saved fact
+//!   (`reply_admissions`, migration 30), never re-read from text here.
 //!
 //! A person's message that opens with a tag (`<ci-monitor-event …>`,
 //! `<task-notification>`) is text a tool wrote ([`tool_written`]): neither
@@ -175,15 +176,18 @@ pub struct SessionWarning {
     /// `record#block` (an interruption), the first of the repeated messages
     /// (a repeated prompt), the
     /// first failed result's `record#block` (a repeated failure), or the
-    /// agent's reply (an admitted mistake). Saved IDs
+    /// reply's first record in its window that holds a warning phrase (an
+    /// admitted mistake). Saved IDs
     /// and positions only; it stays the same while the session grows. See
     /// [`SessionWarning::id`].
     pub anchor: String,
     /// The moment it points at, on the stored millisecond projection: the
-    /// message, the interruption, the first repeat, the agent's reply.
+    /// message, the interruption, the first repeat, the reply's record that
+    /// admits the mistake.
     pub at_ms: i64,
     /// The saved records it points at, earliest first. An admitted mistake
-    /// names the person's message and then the agent's reply.
+    /// names the person's message and then the reply's record that admits
+    /// the mistake.
     pub record_uuids: Vec<String>,
     /// One short sentence. A correction quotes its matched span, including
     /// words between "still" and its nearby negative word.
@@ -447,15 +451,16 @@ pub(crate) struct EvidenceRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReplyFacts {
     /// Not an agent record, or one whose stored text length is 0: thinking
-    /// or tool calls only. It is never a reply.
+    /// or tool calls only. It is no part of a reply's text.
     NoText,
     /// Text whose saved phrases cannot be read: no row, a conflicted row or
-    /// record, a later build's facts, a name this build does not know, or a
-    /// record whose text length is not known.
-    NotChecked,
-    /// The saved admission phrases, in order of first appearance (perhaps
-    /// none).
-    Checked(Vec<Phrase>),
+    /// record, a later build's facts or a name this build does not know.
+    /// `chars` is its stored text length; `None` when that is not known,
+    /// which also makes its phrases unreadable, whatever its row says.
+    NotChecked { chars: Option<u64> },
+    /// Text of `chars` characters with its saved admission phrases, in order
+    /// of first appearance (perhaps none).
+    Checked { chars: u64, phrases: Vec<Phrase> },
 }
 
 impl ReplyFacts {
@@ -469,17 +474,86 @@ impl ReplyFacts {
         conflicted: Option<bool>,
         record_conflict: bool,
     ) -> Self {
-        if text_len == Some(0) {
-            return Self::NoText;
-        }
+        let chars = match text_len.map(u64::try_from) {
+            Some(Ok(0)) => return Self::NoText,
+            Some(Ok(chars)) => chars,
+            // An unknown (or impossible) length: not even where the reply's
+            // next record starts is known.
+            None | Some(Err(_)) => return Self::NotChecked { chars: None },
+        };
+        let not_checked = Self::NotChecked { chars: Some(chars) };
         match (phrases, version, conflicted) {
             (Some(phrases), Some(version), Some(false))
                 if !record_conflict && version <= reply_admission::FACT_VERSION =>
             {
-                reply_admission::from_saved(&phrases).map_or(Self::NotChecked, Self::Checked)
+                reply_admission::from_saved(&phrases)
+                    .map_or(not_checked, |phrases| Self::Checked { chars, phrases })
             }
-            _ => Self::NotChecked,
+            _ => not_checked,
         }
+    }
+}
+
+/// The agent's reply to one person's message, as the admitted-mistake rule
+/// reads it: the agent records with text (outside sidechains) after the
+/// message, until the person's next message. A record is in the reply's
+/// window when its text starts within the reply's first
+/// [`reply_admission::REPLY_CHARS`] characters: the stored text lengths of
+/// the reply's earlier records add up to less than that. The store saved
+/// each record's phrases from that record's own first characters, so a
+/// phrase past the reply's first 600 characters still counts when its record
+/// starts before them; the rule accepts that small reach.
+struct ReplyWindow<'a> {
+    /// The person's message the reply answers.
+    message: &'a EvidenceRecord,
+    /// Characters of reply text before the next record; `None` once a
+    /// record's length is unknown, which ends the window.
+    offset: Option<u64>,
+    /// A record in the window whose phrases could not be read.
+    unchecked: bool,
+    /// The reply already warned: nothing after it is read.
+    warned: bool,
+}
+
+impl<'a> ReplyWindow<'a> {
+    fn new(message: &'a EvidenceRecord) -> Self {
+        Self {
+            message,
+            offset: Some(0),
+            unchecked: false,
+            warned: false,
+        }
+    }
+
+    /// Read the reply's next agent record. The phrase it warns with when it
+    /// is the first record in the window that holds one.
+    fn read(&mut self, record: &EvidenceRecord) -> Option<Phrase> {
+        let offset = self
+            .offset
+            .filter(|offset| !self.warned && *offset < reply_admission::REPLY_CHARS as u64)?;
+        let (chars, found) = match &record.reply {
+            ReplyFacts::NoText => return None,
+            ReplyFacts::NotChecked { chars } => {
+                self.unchecked = true;
+                (*chars, None)
+            }
+            ReplyFacts::Checked { chars, phrases } => (
+                Some(*chars),
+                phrases
+                    .iter()
+                    .find(|p| ADMISSION_WARNS.contains(p))
+                    .copied(),
+            ),
+        };
+        self.offset = chars.and_then(|chars| offset.checked_add(chars));
+        self.warned = found.is_some();
+        found
+    }
+
+    /// Once the reply is over: no record in its window warned, and one of
+    /// them could not be read.
+    fn not_checked(&self) -> bool {
+        self.unchecked && !self.warned
     }
 }
 
@@ -973,33 +1047,24 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
     let mut interruption_unknown = 0;
     let mut prompts = BTreeMap::<String, Vec<&EvidenceRecord>>::new();
     let (mut person_messages, mut person_messages_read) = (0, 0);
-    // The person's message whose reply is still to come: the first agent
-    // record after it with text is that reply.
-    let mut awaiting: Option<&EvidenceRecord> = None;
+    // The reply to the person's latest message, while it lasts.
+    let mut reply: Option<ReplyWindow> = None;
     let mut reply_not_checked = 0;
     for record in evidence.records.iter().filter(|r| !r.sidechain) {
         if record.agent {
-            if record.reply != ReplyFacts::NoText
-                && let Some(message) = awaiting.take()
+            if let Some(window) = &mut reply
+                && let Some(phrase) = window.read(record)
             {
-                match &record.reply {
-                    ReplyFacts::Checked(found) => {
-                        if let Some(phrase) = found.iter().find(|p| ADMISSION_WARNS.contains(p)) {
-                            warnings.push(warn(
-                                WarningKind::AdmittedMistake,
-                                record.uuid.clone(),
-                                record.at_ms,
-                                vec![message.uuid.clone(), record.uuid.clone()],
-                                WarningReason::AdmittedMistake {
-                                    phrase: *phrase,
-                                    moment: record.at_ms,
-                                },
-                            ));
-                        }
-                    }
-                    ReplyFacts::NotChecked => reply_not_checked += 1,
-                    ReplyFacts::NoText => {}
-                }
+                warnings.push(warn(
+                    WarningKind::AdmittedMistake,
+                    record.uuid.clone(),
+                    record.at_ms,
+                    vec![window.message.uuid.clone(), record.uuid.clone()],
+                    WarningReason::AdmittedMistake {
+                        phrase,
+                        moment: record.at_ms,
+                    },
+                ));
             }
             replied = true;
             open = None;
@@ -1080,7 +1145,10 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
             continue;
         }
         open = None;
-        awaiting = Some(record);
+        // This message ends the reply to the one before it.
+        if let Some(ended) = reply.replace(ReplyWindow::new(record)) {
+            reply_not_checked += u64::from(ended.not_checked());
+        }
         let after_reply = std::mem::replace(&mut replied, false);
         let mut corrected = |phrase: String| {
             warnings.push(warn(
@@ -1122,6 +1190,9 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
                 prompt_not_kept += 1;
             }
         }
+    }
+    if let Some(ended) = reply {
+        reply_not_checked += u64::from(ended.not_checked());
     }
     for sent in prompts
         .values()
@@ -1846,15 +1917,39 @@ mod tests {
             person: Some(false),
             words: None,
             interrupted: Some(false),
-            reply: ReplyFacts::Checked(vec![]),
+            reply: ReplyFacts::Checked {
+                chars: 100,
+                phrases: vec![],
+            },
         }
     }
-    /// An agent reply whose saved phrases are `found`.
+    /// An agent record of 100 characters whose saved phrases are `found`.
     fn said(uuid: &str, minute: i64, found: &[Phrase]) -> EvidenceRecord {
+        said_len(uuid, minute, 100, found)
+    }
+    /// An agent record of `chars` characters whose saved phrases are `found`.
+    fn said_len(uuid: &str, minute: i64, chars: u64, found: &[Phrase]) -> EvidenceRecord {
         EvidenceRecord {
-            reply: ReplyFacts::Checked(found.to_vec()),
+            reply: ReplyFacts::Checked {
+                chars,
+                phrases: found.to_vec(),
+            },
             ..agent(uuid, minute)
         }
+    }
+    /// An agent record whose phrases could not be read; `chars` `None` when
+    /// its length is not known either.
+    fn unread(uuid: &str, minute: i64, chars: Option<u64>) -> EvidenceRecord {
+        EvidenceRecord {
+            reply: ReplyFacts::NotChecked { chars },
+            ..agent(uuid, minute)
+        }
+    }
+    fn admitted_records(found: &SessionWarnings) -> Vec<Vec<String>> {
+        of_kind(found, WarningKind::AdmittedMistake)
+            .into_iter()
+            .map(|w| w.record_uuids.clone())
+            .collect()
     }
     /// An agent record with thinking or tool calls only.
     fn no_text(uuid: &str, minute: i64) -> EvidenceRecord {
@@ -2628,34 +2723,144 @@ mod tests {
     }
 
     #[test]
-    fn only_the_first_reply_counts_and_a_new_message_restarts_the_wait() {
+    fn a_phrase_after_a_short_preamble_record_is_in_the_reply() {
         let found = decide(
             &evidence(vec![
-                // A reply with text but no phrase answers p1; the later
-                // apology is not its reply.
+                person("p1", 0, "build the parser"),
+                said_len("a1", 1, 40, &[]),
+                no_text("call", 2),
+                said_len("a2", 3, 100, &[Phrase::YouAreRight]),
+                // After the first warning phrase nothing more is read.
+                said_len("a3", 4, 10, &[Phrase::Sorry]),
+            ]),
+            &utc(),
+        );
+        assert_eq!(admitted_records(&found), vec![uuids(&["p1", "a2"])]);
+        let warning = of_kind(&found, WarningKind::AdmittedMistake)[0];
+        assert_eq!(warning.anchor, "a2");
+        assert_eq!(warning.at_ms, T0 + 3 * MINUTE);
+        assert!(warning.reason.contains("\"you're right\""));
+        // No message before it: there is no reply to read.
+        let opening = decide(&evidence(vec![said("a0", 0, &[Phrase::Sorry])]), &utc());
+        assert!(admissions(&opening).is_empty());
+        assert!(opening.checks.admitted_mistake.is_complete());
+    }
+
+    #[test]
+    fn a_record_starting_at_or_past_600_characters_is_not_read() {
+        let reply = |first: u64| {
+            decide(
+                &evidence(vec![
+                    person("p1", 0, "build the parser"),
+                    said_len("a1", 1, first - 100, &[]),
+                    said_len("a2", 2, 100, &[]),
+                    said_len("a3", 3, 50, &[Phrase::Sorry]),
+                    unread("a4", 4, Some(10)),
+                ]),
+                &utc(),
+            )
+        };
+        // a3 starts at 600: outside the window, as is the unread a4.
+        let outside = reply(reply_admission::REPLY_CHARS as u64);
+        assert!(admissions(&outside).is_empty());
+        assert!(outside.checks.admitted_mistake.is_complete());
+        // At 599 it starts inside, and its phrase counts.
+        let inside = reply(reply_admission::REPLY_CHARS as u64 - 1);
+        assert_eq!(admitted_records(&inside), vec![uuids(&["p1", "a3"])]);
+    }
+
+    #[test]
+    fn a_whitespace_only_first_record_is_part_of_the_reply() {
+        // "\n\n" has a stored text length of 2 and a saved row with no phrase.
+        let found = decide(
+            &evidence(vec![
+                person("p1", 0, "build the parser"),
+                said_len("a1", 1, 2, &[]),
+                said_len("a2", 2, 80, &[Phrase::MyMistake]),
+            ]),
+            &utc(),
+        );
+        assert_eq!(admitted_records(&found), vec![uuids(&["p1", "a2"])]);
+        assert!(found.checks.admitted_mistake.is_complete());
+    }
+
+    #[test]
+    fn an_unread_record_matters_only_inside_the_window_and_before_a_warning() {
+        let check = |records: Vec<EvidenceRecord>| decide(&evidence(records), &utc());
+        let not_checked = CheckState::Incomplete {
+            missing: vec![Missing::ReplyNotChecked { replies: 1 }],
+        };
+        // Unread, then read with no phrase: not checked, counted once.
+        let found = check(vec![
+            person("p1", 0, "build it"),
+            unread("a1", 1, Some(30)),
+            said("a2", 2, &[]),
+            unread("a3", 3, Some(30)),
+        ]);
+        assert!(admissions(&found).is_empty());
+        assert_eq!(found.checks.admitted_mistake, not_checked);
+        // Unread, then a warning: the warning stands and the check is whole.
+        let found = check(vec![
+            person("p1", 0, "build it"),
+            unread("a1", 1, Some(30)),
+            said("a2", 2, &[Phrase::GoodCatch]),
+        ]);
+        assert_eq!(admitted_records(&found), vec![uuids(&["p1", "a2"])]);
+        assert!(found.checks.admitted_mistake.is_complete());
+        // A warning, then unread: nothing after the warning is read.
+        let found = check(vec![
+            person("p1", 0, "build it"),
+            said("a1", 1, &[Phrase::GoodCatch]),
+            unread("a2", 2, Some(30)),
+        ]);
+        assert_eq!(admitted_records(&found), vec![uuids(&["p1", "a1"])]);
+        assert!(found.checks.admitted_mistake.is_complete());
+        // An unknown length ends the window: where the next record starts is
+        // not known, so a later phrase is not read and the reply is unread.
+        let found = check(vec![
+            person("p1", 0, "build it"),
+            unread("a1", 1, None),
+            said("a2", 2, &[Phrase::Sorry]),
+        ]);
+        assert!(admissions(&found).is_empty());
+        assert_eq!(found.checks.admitted_mistake, not_checked);
+        // Unread past the window: the reply is checked.
+        let found = check(vec![
+            person("p1", 0, "build it"),
+            said_len("a1", 1, 700, &[]),
+            unread("a2", 2, Some(30)),
+        ]);
+        assert!(found.checks.admitted_mistake.is_complete());
+    }
+
+    #[test]
+    fn the_person_s_next_message_ends_the_reply() {
+        let found = decide(
+            &evidence(vec![
                 person("p1", 0, "build the parser"),
                 said("a1", 1, &[]),
-                said("a2", 2, &[Phrase::Sorry]),
-                // p2 gets no reply text before p3: p3's reply is checked, as
-                // p3's.
+                unread("a2", 2, Some(20)),
+                // p2's reply is its own: p1's reply ended unread.
                 person("p2", 3, "and the tests"),
-                no_text("call", 4),
-                person("p3", 5, "actually only the tests"),
-                said("a3", 6, &[Phrase::MyMistake]),
+                said("a3", 4, &[Phrase::Sorry]),
+                // p3 with no reply text before p4: p4's reply is read as p4's.
+                person("p3", 5, "only the tests"),
+                no_text("call", 6),
+                person("p4", 7, "actually all of them"),
+                said("a4", 8, &[Phrase::MyMistake]),
             ]),
             &utc(),
         );
         assert_eq!(
-            admissions(&found)
-                .into_iter()
-                .map(|(records, _)| records)
-                .collect::<Vec<_>>(),
-            vec![uuids(&["p3", "a3"])]
+            admitted_records(&found),
+            vec![uuids(&["p2", "a3"]), uuids(&["p4", "a4"])]
         );
-        // No message before it: nothing is awaited.
-        let opening = decide(&evidence(vec![said("a0", 0, &[Phrase::Sorry])]), &utc());
-        assert!(admissions(&opening).is_empty());
-        assert!(opening.checks.admitted_mistake.is_complete());
+        assert_eq!(
+            found.checks.admitted_mistake,
+            CheckState::Incomplete {
+                missing: vec![Missing::ReplyNotChecked { replies: 1 }]
+            }
+        );
     }
 
     #[test]
@@ -2703,22 +2908,15 @@ mod tests {
 
     #[test]
     fn unread_replies_and_unknown_senders_leave_the_check_incomplete() {
-        let unread = EvidenceRecord {
-            reply: ReplyFacts::NotChecked,
-            ..agent("a1", 1)
-        };
         let mut unknown = person("u", 2, "");
         unknown.person = None;
         unknown.words = None;
         let found = decide(
             &evidence(vec![
+                // Two unread records of one reply: one reply not checked.
                 person("p1", 0, "build it"),
-                unread,
-                // An unread reply that answers nothing awaited is not counted.
-                EvidenceRecord {
-                    reply: ReplyFacts::NotChecked,
-                    ..agent("a2", 2)
-                },
+                unread("a1", 1, Some(30)),
+                unread("a2", 2, Some(30)),
                 unknown,
                 person("p2", 3, "and test it"),
                 said("a3", 4, &[Phrase::IShouldHave]),
@@ -2759,23 +2957,36 @@ mod tests {
                 Some(false),
                 false
             ),
-            ReplyFacts::Checked(vec![Phrase::Sorry, Phrase::GoodCatch])
+            ReplyFacts::Checked {
+                chars: 5,
+                phrases: vec![Phrase::Sorry, Phrase::GoodCatch]
+            }
         );
         assert_eq!(
             read(Some(5), Some(""), Some(v), Some(false), false),
-            ReplyFacts::Checked(vec![])
+            ReplyFacts::Checked {
+                chars: 5,
+                phrases: vec![]
+            }
         );
         for unread in [
             // No row: indexed before the facts were kept.
             read(Some(5), None, None, None, false),
-            // Unknown text length and no row.
-            read(None, None, None, None, false),
             read(Some(5), Some("sorry"), Some(v), Some(true), false),
             read(Some(5), Some("sorry"), Some(v), Some(false), true),
             read(Some(5), Some("sorry"), Some(v + 1), Some(false), false),
             read(Some(5), Some("sorry wrongly"), Some(v), Some(false), false),
         ] {
-            assert_eq!(unread, ReplyFacts::NotChecked);
+            assert_eq!(unread, ReplyFacts::NotChecked { chars: Some(5) });
+        }
+        // An unknown text length, with or without a row: unread, length
+        // unknown.
+        for unknown in [
+            read(None, None, None, None, false),
+            read(None, Some("sorry"), Some(v), Some(false), false),
+            read(Some(-1), Some("sorry"), Some(v), Some(false), false),
+        ] {
+            assert_eq!(unknown, ReplyFacts::NotChecked { chars: None });
         }
     }
 
