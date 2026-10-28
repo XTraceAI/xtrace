@@ -162,7 +162,7 @@ export async function verifyTag(tag, readAnnotation) {
     // URL or recursively peel an unexpected annotation chain.
     if (typeof readAnnotation !== 'function') throw new Error('Tag annotation lookup is required');
     const annotation = await readAnnotation(
-      `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/tags/${target.sha}`,
+      `https://api.github.com/repos/XTraceAI/xtrace/git/tags/${target.sha}`,
     );
     if (annotation?.sha !== target.sha || annotation.tag !== release.tag)
       throw new Error('Tag annotation identity or name does not match its ref');

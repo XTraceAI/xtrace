@@ -414,7 +414,7 @@ async function main() {
           String(bytes),
           '--output',
           destination,
-          `https://github.com/XTraceAI/xtrace-desktop/releases/download/${release.tag}/${fixture.archive}${name === 'signature' ? '.sig' : ''}`,
+          `https://github.com/XTraceAI/xtrace/releases/download/${release.tag}/${fixture.archive}${name === 'signature' ? '.sig' : ''}`,
         ],
         95000,
       );

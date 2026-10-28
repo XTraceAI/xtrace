@@ -2,7 +2,7 @@
 use crate::state::StateError;
 
 #[cfg(target_os = "macos")]
-const PUBLIC_RELEASES_URL: &str = "https://github.com/XTraceAI/xtrace-desktop/releases";
+const PUBLIC_RELEASES_URL: &str = "https://github.com/XTraceAI/xtrace/releases";
 
 pub fn require_main_window(label: &str) -> Result<(), String> {
     if label != crate::tray::MAIN_LABEL {
@@ -149,9 +149,6 @@ mod tests {
         let command = public_releases_command().unwrap();
         assert_eq!(command.get_program(), "/usr/bin/open");
         let args: Vec<_> = command.get_args().collect();
-        assert_eq!(
-            args,
-            ["https://github.com/XTraceAI/xtrace-desktop/releases"]
-        );
+        assert_eq!(args, ["https://github.com/XTraceAI/xtrace/releases"]);
     }
 }

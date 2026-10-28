@@ -11,14 +11,14 @@ estimated human time and API-equivalent spend from the Claude Code, Codex and
 Cursor history already on your Mac. Track Claude and Codex account usage and pace
 in the sidebar.
 
-[![Latest release](https://img.shields.io/github/v/release/XTraceAI/xtrace-desktop?label=release&color=8b7cf6)](https://github.com/XTraceAI/xtrace-desktop/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/XTraceAI/xtrace?label=release&color=8b7cf6)](https://github.com/XTraceAI/xtrace/releases/latest)
 [![macOS 14+ · Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20Silicon-black?logo=apple)](docs/SETUP.md)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/XTraceAI/xtrace-desktop?style=flat&color=yellow)](https://github.com/XTraceAI/xtrace-desktop/stargazers)
+[![Stars](https://img.shields.io/github/stars/XTraceAI/xtrace?style=flat&color=yellow)](https://github.com/XTraceAI/xtrace/stargazers)
 
-[**Download for Mac**](https://github.com/XTraceAI/xtrace-desktop/releases/latest) ·
+[**Download for Mac**](https://github.com/XTraceAI/xtrace/releases/latest) ·
 [Setup guide](docs/SETUP.md) ·
-[Report a bug](https://github.com/XTraceAI/xtrace-desktop/issues)
+[Report a bug](https://github.com/XTraceAI/xtrace/issues)
 
 <img src="docs/images/readme/dashboard-dark.png" alt="XTrace Dashboard with API-equivalent spend, estimated human time, populated Claude and Codex usage, a Codex forecast, and session compaction counts and markers" width="100%">
 
@@ -150,7 +150,7 @@ not attribute individual edits or lines to you or an agent.
 
 ## Install
 
-1. Download the `.dmg` from the [latest release](https://github.com/XTraceAI/xtrace-desktop/releases/latest).
+1. Download the `.dmg` from the [latest release](https://github.com/XTraceAI/xtrace/releases/latest).
 2. Drag **XTrace** into **Applications**.
 3. Open it. The first scan reads your existing history and shows its progress.
 

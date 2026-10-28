@@ -226,7 +226,7 @@ impl AppState {
 /// crosses IPC. A local build whose version has no tag with this file yet
 /// opens a page that does not exist until the next version.
 pub const TELEMETRY_DOC_URL: &str = concat!(
-    "https://github.com/XTraceAI/xtrace-desktop/blob/v",
+    "https://github.com/XTraceAI/xtrace/blob/v",
     env!("CARGO_PKG_VERSION"),
     "/TELEMETRY.md"
 );
@@ -834,7 +834,7 @@ mod tests {
         assert_eq!(
             TELEMETRY_DOC_URL,
             format!(
-                "https://github.com/XTraceAI/xtrace-desktop/blob/v{}/TELEMETRY.md",
+                "https://github.com/XTraceAI/xtrace/blob/v{}/TELEMETRY.md",
                 env!("CARGO_PKG_VERSION")
             )
         );

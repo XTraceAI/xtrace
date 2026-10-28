@@ -19,7 +19,7 @@ export const previousRelease = Object.freeze({
 });
 export const updateBudget = Object.freeze({ workMs: 14 * 60_000, cleanupMs: 2 * 60_000 });
 export const productionFeed =
-  'https://github.com/XTraceAI/xtrace-desktop/releases/latest/download/latest.json';
+  'https://github.com/XTraceAI/xtrace/releases/latest/download/latest.json';
 export const sentinel = `Owned hosted update check: retain this synthetic file across ${previousRelease.version} to ${release.version}.\n`;
 
 export function requireUpdateHost(input) {
@@ -55,7 +55,8 @@ export function verifyProductionFeed(bytes, pins = release) {
       `Production feed prerequisite unmet: canonical ${pins.version} is not available`,
     );
   // Defense in depth: the pinned bytes must also name this version and only
-  // the public archive of its own tag.
+  // the public archive of its own tag. The published 0.1.9 feed was made
+  // before the repository rename, so its archive URL keeps the old name.
   const feed = JSON.parse(bytes);
   if (
     feed.version !== pins.version ||
