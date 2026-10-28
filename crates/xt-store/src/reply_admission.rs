@@ -18,6 +18,10 @@
 //! A saved row is replaced only by an observation with a higher
 //! [`FACT_VERSION`]; one with the same version that states other phrases
 //! marks the row conflicted, which readers treat as unknown.
+//!
+//! Version 2 (migration 31) ignores a phrase any of whose words sits inside a
+//! closed quotation ([`quoted_ranges`]), so a reply that quotes "you're
+//! right" is not read as admitting a mistake.
 
 use crate::{
     Result,
@@ -31,8 +35,8 @@ use rusqlite::{Connection, params};
 /// The write-time derivation of the saved phrases this build implements.
 /// Bump it only together with a change to [`phrases`] or the phrase table;
 /// rows written under a lower version are then replaced when their source is
-/// read again.
-pub const FACT_VERSION: i64 = 1;
+/// read again. Version 2 ignores phrases inside closed quotations.
+pub const FACT_VERSION: i64 = 2;
 /// How many characters (not bytes) of a reply's joined text blocks are read.
 pub const REPLY_CHARS: usize = 600;
 /// The longest saved phrase list (the table's CHECK).
@@ -247,17 +251,19 @@ impl Phrase {
         Self::ALL.into_iter().find(|phrase| phrase.name() == name)
     }
 
-    /// Whether one of the phrase's word runs starts at `words[at]`.
-    fn matches_at(self, words: &[Word], at: usize) -> bool {
+    /// Whether one of the phrase's word runs starts at `words[at]` with none
+    /// of its words `quoted`.
+    fn matches_at(self, words: &[Word], at: usize, quoted: impl Fn(&Word) -> bool) -> bool {
         self.spec().forms.iter().any(|form| {
             form.len() <= words.len().saturating_sub(at)
                 && form.iter().zip(&words[at..]).all(|(slot, word)| {
-                    let word = word.text.as_str();
-                    match slot {
-                        Is(expected) => word == *expected,
-                        OneOf(options) => options.contains(&word),
-                        StartsWith(prefix) => word.starts_with(prefix),
-                    }
+                    let text = word.text.as_str();
+                    let matched = match slot {
+                        Is(expected) => text == *expected,
+                        OneOf(options) => options.contains(&text),
+                        StartsWith(prefix) => text.starts_with(prefix),
+                    };
+                    matched && !quoted(word)
                 })
         })
     }
@@ -285,7 +291,11 @@ impl<'de> serde::Deserialize<'de> for Phrase {
 /// reply's text, each once, in order of first appearance (two found at the
 /// same word in [`Phrase::ALL`] order). Phrases match whole words only, as
 /// [`spanned_words`] splits them; only "apolog" matches the start of a word.
-/// A word the limit cuts in two is left out.
+/// A word the limit cuts in two is left out. A match any of whose words lies
+/// inside a closed quotation is ignored ([`quoted_ranges`], found over the
+/// whole `text`, so a quotation that closes after the limit still counts);
+/// the quoted words are never removed, so words around a quotation do not
+/// join into a phrase.
 pub fn phrases(text: &str) -> Vec<Phrase> {
     let (head, next) = match text.char_indices().nth(REPLY_CHARS) {
         Some((at, next)) => (&text[..at], Some(next)),
@@ -297,15 +307,100 @@ pub fn phrases(text: &str) -> Vec<Phrase> {
     if cut_in_word {
         words.pop();
     }
+    // `head` is a prefix of `text`, so its word spans are offsets into `text`.
+    let quotes = quoted_ranges(text, head.len());
+    let quoted = |word: &Word| {
+        quotes
+            .iter()
+            .any(|range| range.start <= word.span.start && word.span.start < range.end)
+    };
     let mut found = Vec::new();
     for at in 0..words.len() {
         for phrase in Phrase::ALL {
-            if !found.contains(&phrase) && phrase.matches_at(&words, at) {
+            if !found.contains(&phrase) && phrase.matches_at(&words, at, quoted) {
                 found.push(phrase);
             }
         }
     }
     found
+}
+
+/// The closed quotations of `text` that open before byte `before`, as byte
+/// ranges of what lies between their marks. Read left to right:
+///
+/// - a straight double quote `"` closes at the next straight one;
+/// - a curly `“` closes at the next `”` (a `”` with no `“` before it is
+///   ordinary text);
+/// - a run of N backticks closes at the next run of exactly N backticks,
+///   which covers inline code and fenced code blocks alike.
+///
+/// Inside a quotation the other kinds are ordinary text, so kinds never
+/// cross. A mark that never closes quotes nothing, and reading goes on just
+/// after it. Single quotes are not quotation marks here: they are apostrophes
+/// too (`you're`).
+pub fn quoted_ranges(text: &str, before: usize) -> Vec<std::ops::Range<usize>> {
+    let bytes = text.as_bytes();
+    let mut ranges = Vec::new();
+    // Kinds known to have no closing mark after some point: every later
+    // opening of that kind is unclosed too. Backtick runs by their length.
+    let (mut straight_closes, mut curly_closes) = (true, true);
+    let mut ticks_unclosed = std::collections::BTreeSet::<usize>::new();
+    let mut at = 0;
+    while at < text.len() && at < before {
+        let rest = &text[at..];
+        let (inside, close) = if rest.starts_with('"') {
+            let inside = at + 1;
+            let close = straight_closes
+                .then(|| text[inside..].find('"'))
+                .flatten()
+                .map(|found| (inside + found, 1));
+            straight_closes &= close.is_some();
+            (inside, close)
+        } else if rest.starts_with('\u{201C}') {
+            let inside = at + '\u{201C}'.len_utf8();
+            let close = curly_closes
+                .then(|| text[inside..].find('\u{201D}'))
+                .flatten()
+                .map(|found| (inside + found, '\u{201D}'.len_utf8()));
+            curly_closes &= close.is_some();
+            (inside, close)
+        } else if bytes[at] == b'`' {
+            let run = backtick_run(bytes, at);
+            let inside = at + run;
+            let mut close = None;
+            if !ticks_unclosed.contains(&run) {
+                let mut look = inside;
+                while let Some(next) = text[look..].find('`').map(|found| look + found) {
+                    let length = backtick_run(bytes, next);
+                    if length == run {
+                        close = Some((next, run));
+                        break;
+                    }
+                    look = next + length;
+                }
+                if close.is_none() {
+                    ticks_unclosed.insert(run);
+                }
+            }
+            (inside, close)
+        } else {
+            at += rest.chars().next().map_or(1, char::len_utf8);
+            continue;
+        };
+        match close {
+            Some((end, mark)) => {
+                ranges.push(inside..end);
+                at = end + mark;
+            }
+            None => at = inside,
+        }
+    }
+    ranges
+}
+
+/// How many backticks run from byte `at` on.
+fn backtick_run(bytes: &[u8], at: usize) -> usize {
+    bytes[at..].iter().take_while(|&&byte| byte == b'`').count()
 }
 
 /// How a phrase list is saved: names separated by single spaces, empty for
@@ -576,6 +671,92 @@ mod tests {
         assert_eq!(names(&text), "sorry");
         let text = format!("{} sorry", "é".repeat(REPLY_CHARS - 2));
         assert_eq!(names(&text), "");
+    }
+
+    #[test]
+    fn phrases_inside_closed_quotations_are_ignored() {
+        for text in [
+            "Of the 52 hits, \"you're right\" alone is 39 of them.",
+            "The rule matches \u{201C}my mistake\u{201D} and nothing else.",
+            "Search for `sorry` in the log.",
+            "Run ``grep 'good catch' log`` first.",
+            "```\nI was wrong\n```\nThat block is the fixture.",
+            // A quotation that holds words of other kinds of marks.
+            "\u{201C}Use `x` here; \"you are right\" there\u{201D} was the reply.",
+        ] {
+            assert_eq!(names(text), "", "{text}");
+        }
+        // The same words unquoted still match.
+        assert_eq!(names("You're right, I'll fix it."), "you_are_right");
+        // A match that straddles a quotation's edge is ignored as a whole...
+        assert_eq!(names("you \"are right\" was quoted"), "");
+        assert_eq!(names("\"I was\" wrong"), "");
+        // ...and words on either side of a quotation never join into one.
+        assert_eq!(names("my \"new\" mistake"), "");
+    }
+
+    #[test]
+    fn an_unclosed_quotation_hides_nothing() {
+        assert_eq!(names("He said \"you're right and left."), "you_are_right");
+        assert_eq!(names("\u{201C}Sorry, I missed it."), "sorry i_missed");
+        assert_eq!(names("Run `sorry and stop"), "sorry");
+        // A closing curly mark with no opening one is ordinary text.
+        assert_eq!(names("sorry\u{201D} for that"), "sorry");
+        // A later straight pair still quotes after an unclosed curly one.
+        assert_eq!(names("\u{201C}a \"sorry\" b. My bad."), "my_bad");
+    }
+
+    #[test]
+    fn a_real_admission_before_a_quotation_still_matches() {
+        assert_eq!(
+            names("You're right, I missed it; the log says \"sorry\"."),
+            "you_are_right i_missed"
+        );
+        assert_eq!(
+            names("The test checks `my bad`. My mistake: it never ran."),
+            "my_mistake"
+        );
+    }
+
+    #[test]
+    fn apostrophes_are_not_quotation_marks() {
+        assert_eq!(names("'you're right' he said"), "you_are_right");
+        assert_eq!(
+            names("That's on me, I didn't answer"),
+            "thats_on_me i_didnt_answer"
+        );
+        assert_eq!(
+            names("It\u{2019}s my error; you\u{2019}re right"),
+            "my_error you_are_right"
+        );
+    }
+
+    #[test]
+    fn backtick_runs_close_only_at_the_same_length() {
+        // One backtick inside a double run is text, not a close.
+        assert_eq!(names("``a ` sorry ` b`` ok"), "");
+        // A single run with no single run after it quotes nothing, and a
+        // double run after it is its own quotation.
+        assert_eq!(names("`a ``sorry b"), "sorry");
+        assert_eq!(names("`a ``sorry`` b"), "");
+        // Fenced code with a shorter run inside.
+        assert_eq!(names("```\nlet x = `y`; // my bad\n```"), "");
+        // An unclosed fence hides nothing, and a later inline pair still quotes.
+        assert_eq!(names("```\nmy bad `sorry` here"), "my_bad");
+    }
+
+    #[test]
+    fn a_quotation_that_closes_past_600_characters_still_quotes() {
+        let pad = "x".repeat(REPLY_CHARS - 20) + " ";
+        // Opens before the limit, closes after it.
+        let text = format!("{pad}\"sorry {} done\" then", "y".repeat(40));
+        assert_eq!(names(&text), "");
+        // The same opening never closed: the phrase counts.
+        let text = format!("{pad}\"sorry {} done then", "y".repeat(40));
+        assert_eq!(names(&text), "sorry");
+        // Only quotations that open before the given byte are looked for.
+        assert_eq!(quoted_ranges("a \"b\" c", 2), vec![]);
+        assert_eq!(quoted_ranges("a \"b\" c", 3), vec![3..4]);
     }
 
     #[test]

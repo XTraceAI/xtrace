@@ -180,6 +180,11 @@ const MIGRATIONS: &[Migration] = &[
         "0030_reply_admissions",
         "edcb0b1dfc2dbd6310ae16c83d9b7a8cf0bb0d4732f99165c60e31ca91fd3000"
     ),
+    migration!(
+        31,
+        "0031_reply_admissions_quotes",
+        "6132e981fdcb8a0343a0867842409e2b91578e00759651560b8a70fc6d64791a"
+    ),
 ];
 
 /// Newest schema supported by the embedded migration chain.

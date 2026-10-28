@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use xt_store::{
     CanonicalRecord, SessionMeta, SessionSource, Store, batch::NativeCheckpoint,
-    retention::RetentionMode,
+    reply_admission::FACT_VERSION, retention::RetentionMode,
 };
 
 fn record(value: Value) -> CanonicalRecord {
@@ -64,7 +64,7 @@ fn rows(path: &Path) -> Vec<Row> {
         .unwrap()
 }
 fn row(uuid: &str, phrases: &str) -> Row {
-    (uuid.into(), phrases.into(), 1, false)
+    (uuid.into(), phrases.into(), FACT_VERSION, false)
 }
 fn revision(path: &Path) -> i64 {
     Connection::open(path)
@@ -176,7 +176,7 @@ fn other_phrases_under_the_same_version_mark_the_row_conflicted() {
         .unwrap();
     assert_eq!(
         rows(&path),
-        vec![("a1".into(), "good_catch".into(), 1, true)]
+        vec![("a1".into(), "good_catch".into(), FACT_VERSION, true)]
     );
     assert!(revision(&path) > before);
 }
@@ -244,7 +244,7 @@ fn every_change_to_a_row_moves_the_session_s_revision() {
     let connection = Connection::open(&path).unwrap();
     for change in [
         "UPDATE reply_admissions SET phrases='sorry'",
-        "UPDATE reply_admissions SET fact_version=2",
+        "UPDATE reply_admissions SET fact_version=fact_version+1",
         "UPDATE reply_admissions SET conflicted=1",
         "DELETE FROM reply_admissions",
         "INSERT INTO reply_admissions(record_uuid,session_id,phrases,fact_version)
@@ -390,4 +390,70 @@ fn a_whitespace_only_reply_gets_a_row_with_no_phrase() {
         .upsert_records("s", &[text("a1", 1, "\n\n")], false)
         .unwrap();
     assert_eq!(rows(&path), vec![row("a1", "")]);
+}
+
+/// Migration 31 on a store left at 30: a version-1 row that counted a quoted
+/// phrase stays until its reply is read again, which replaces it under
+/// version 2 without the quoted phrase; only the Claude transcript
+/// checkpoints are cleared.
+#[test]
+fn migration_31_clears_claude_checkpoints_and_a_reread_drops_quoted_phrases() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, path) = store(&directory, false);
+    let quoted = text("a1", 1, "Of those, \"you're right\" alone is 39.");
+    store
+        .upsert_records("s", std::slice::from_ref(&quoted), false)
+        .unwrap();
+    let transcript = NativeCheckpoint {
+        source: SessionSource::Transcript,
+        cursor_key: "claude:/synthetic/session.jsonl".into(),
+        generation: "{}".into(),
+        position: 4096,
+        updated_at: 1,
+    };
+    let reader = NativeCheckpoint {
+        source: SessionSource::ReadersCli,
+        cursor_key: "codex:/synthetic/rollout.jsonl".into(),
+        ..transcript.clone()
+    };
+    store.record_native_checkpoint(&transcript).unwrap();
+    store.record_native_checkpoint(&reader).unwrap();
+    drop(store);
+    // Back to 30, with the row an older build wrote for the quoted phrase.
+    let sql = Connection::open(&path).unwrap();
+    sql.execute_batch(
+        "DELETE FROM schema_version WHERE version>=31;
+         DELETE FROM migration_fingerprints WHERE version>=31;
+         UPDATE reply_admissions SET phrases='you_are_right', fact_version=1;",
+    )
+    .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.schema_version().unwrap(),
+        xt_store::LATEST_SCHEMA_VERSION
+    );
+    assert_eq!(xt_store::LATEST_SCHEMA_VERSION, 31);
+    assert_eq!(
+        store
+            .native_checkpoint(SessionSource::Transcript, &transcript.cursor_key)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .native_checkpoint(SessionSource::ReadersCli, &reader.cursor_key)
+            .unwrap(),
+        Some(reader)
+    );
+    assert_eq!(
+        rows(&path),
+        vec![("a1".into(), "you_are_right".into(), 1, false)]
+    );
+    // Reading the reply again replaces the row under this build's version.
+    store.upsert_records("s", &[quoted], false).unwrap();
+    assert_eq!(
+        rows(&path),
+        vec![("a1".into(), String::new(), FACT_VERSION, false)]
+    );
+    assert_eq!(FACT_VERSION, 2);
 }
