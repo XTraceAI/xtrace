@@ -185,3 +185,32 @@ it('says "You" only for a message M-02 counts as a person\'s, and the neutral ro
   expect(target.querySelector('.xt-chat-who')!.textContent).toContain('User');
   expect(target.querySelector('.xt-chat-bubble')).toBeNull();
 });
+
+// An excerpt holds a few messages, so whether a call was answered elsewhere
+// is never settled there: its cards say nothing about it. A transcript's
+// cards keep the note (ToolStrip.test).
+it('shows a call without its result with no "not checked" note in the excerpt', async () => {
+  const h = mount();
+  await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
+  const status = excerpt();
+  if (status.state !== 'loaded') throw Error('Missing fixture');
+  status.records[0] = {
+    ...status.records[0]!,
+    record: {
+      ...status.records[0]!.record,
+      blocks: [
+        {
+          kind: 'tool_call',
+          index: 0,
+          call_id: 'synthetic-call',
+          name: 'Bash',
+          input: { kind: 'json', value: { command: 'pnpm test' } },
+        },
+      ],
+    },
+  };
+  await act(async () => h.calls[0]!.resolve(status));
+  const card = await screen.findByText('pnpm test');
+  expect(card.closest('.xt-tool-card')!.getAttribute('data-tool-state')).toBe('not_checked');
+  expect(screen.getByTestId('warning-context').textContent).not.toMatch(/not checked/);
+});

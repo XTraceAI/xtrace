@@ -20,6 +20,7 @@ import { ThemeProvider } from '../../theme/ThemeProvider';
 import diagnosisSynthetic from '../session-diagnosis.synthetic.json';
 import synthetic from '../session-warnings.synthetic.json';
 import { WarningDialog, type SelectedWarning } from './WarningDialog';
+import { Modal } from '../../kit/Modal';
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
 afterEach(cleanup);
@@ -703,4 +704,51 @@ it('asks for every warning by its own ID and shows its reason when nothing is ma
   });
   expect(screen.getByTestId('warning-reason').textContent).toBe(other.reason);
   expect(screen.getByTestId('warning-reason').querySelector('mark')).toBeNull();
+});
+
+/** A full press on the window's backdrop, as a pointer makes it. */
+function pressBackdrop() {
+  const backdrop = document.querySelector<HTMLElement>('.xt-modal-backdrop')!;
+  fireEvent.pointerDown(backdrop, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseDown(backdrop, { button: 0 });
+  fireEvent.pointerUp(backdrop, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseUp(backdrop, { button: 0 });
+  fireEvent.click(backdrop, { button: 0 });
+}
+
+// A press outside the window closes it the way × and Escape do: a running
+// diagnosis keeps running, and focus goes back to what opened it.
+it('closes on a press outside the window, keeps a running diagnosis, and returns focus', async () => {
+  const test = setup();
+  await run(test);
+  // A press inside, on the conversation, does not close it.
+  const context = screen.getByTestId('warning-context');
+  fireEvent.pointerDown(context, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseDown(context, { button: 0 });
+  fireEvent.pointerUp(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseUp(document.body, { button: 0 });
+  fireEvent.click(document.body, { button: 0 });
+  expect(test.onClose).not.toHaveBeenCalled();
+  pressBackdrop();
+  await waitFor(() => expect(test.onClose).toHaveBeenCalledOnce());
+  expect(test.controls.cancel).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Origin' })),
+  );
+});
+
+it('leaves every other window open on a press outside it', async () => {
+  const onOpenChange = vi.fn();
+  render(
+    <ThemeProvider>
+      <Modal open onOpenChange={onOpenChange} aria-label="Synthetic other window">
+        <button type="button">Inside</button>
+      </Modal>
+    </ThemeProvider>,
+  );
+  await screen.findByRole('dialog', { name: 'Synthetic other window' });
+  pressBackdrop();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(onOpenChange).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog', { name: 'Synthetic other window' })).toBeTruthy();
 });

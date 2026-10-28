@@ -893,3 +893,11 @@
     padding-top: 12px;
   }
 }
+
+/* A read under way: the spinner beside its sentence. */
+.xt-warning-context-note[data-loading],
+.xt-warning-modal-side [data-testid='warnings-state'][data-loading] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

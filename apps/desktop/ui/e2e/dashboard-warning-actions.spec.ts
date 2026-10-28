@@ -448,3 +448,39 @@ for (const theme of ['light', 'dark'] as const)
         path: `${process.env.WARNING_SHOTS}/context-scrolled-${theme}.png`,
       });
   });
+
+// A press outside the warning window closes it, as × and Escape do; a
+// selection that starts inside and ends outside does not; and another
+// Dashboard window still ignores presses outside it.
+for (const theme of ['light', 'dark'] as const)
+  test(`a press outside closes only the warning window, ${theme}`, async ({ page }) => {
+    await open(page, theme);
+    const target = await dot(page, 'lane');
+    await target.focus();
+    await page.keyboard.press('Enter');
+    await expect(modal(page).getByTestId('warning-context')).toContainText('Still not fixed.');
+    // Select text from inside the conversation out past the window's edge.
+    const text = modal(page).getByTestId('warning-context').getByText('The sample build is ready.');
+    const box = (await text.boundingBox())!;
+    await page.mouse.move(box.x + 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(4, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect(modal(page)).toBeVisible();
+    // A press on the backdrop closes it and gives focus back to the dot.
+    await page.mouse.click(4, 4);
+    await expect(modal(page)).toHaveCount(0);
+    await expect(target).toBeFocused();
+    expect((await calls(page)).stops).toEqual([]);
+    // Another window on the Dashboard keeps its own rule.
+    const trigger = page.locator('.xt-dashboard').getByRole('button', { name: /^Coverage/ });
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    const coverage = page.getByRole('dialog', { name: 'Coverage' });
+    await expect(coverage).toBeVisible();
+    await page.mouse.click(4, 4);
+    await page.waitForTimeout(200);
+    await expect(coverage).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(coverage).toHaveCount(0);
+  });

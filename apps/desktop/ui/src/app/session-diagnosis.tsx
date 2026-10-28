@@ -87,6 +87,11 @@ function refocusRow(from: Element | null, now: boolean) {
     there.focus();
     return;
   }
+  // Hold focus on the row while the panel's control (Not now, Hide
+  // diagnosis) goes, so focus is never left on a removed element (a window
+  // that closes on a press outside would take it back to itself), then hand
+  // it to the button once it is drawn again.
+  if (row instanceof HTMLElement && row.tabIndex >= -1) row.focus({ preventScroll: true });
   let frames = 0;
   const attempt = () => {
     const button = rowButton(row);
@@ -260,6 +265,11 @@ function Confirm({ diagnose, warningId }: { diagnose: Diagnose; warningId: strin
   );
 }
 
+/** The small turning ring shown beside a "…" while something is read. */
+export function Spinner() {
+  return <span className="xt-diagnosis-spinner" aria-hidden="true" />;
+}
+
 function Running({ diagnose, readId }: { diagnose: Diagnose; readId: string }) {
   const stop = useRef<HTMLButtonElement>(null);
   // Stop takes focus right after this view's own send; a view opened while
@@ -271,7 +281,7 @@ function Running({ diagnose, readId }: { diagnose: Diagnose; readId: string }) {
   return (
     <div className="xt-diagnosis" data-testid="diagnosis-running" aria-busy="true">
       <p className="xt-diagnosis-running" role="status">
-        <span className="xt-diagnosis-spinner" aria-hidden="true" />
+        <Spinner />
         {WORDS.running}
       </p>
       <span className="xt-diagnosis-buttons">

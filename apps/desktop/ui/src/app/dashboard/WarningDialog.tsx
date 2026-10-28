@@ -16,6 +16,7 @@ import type { SessionWarningItem } from '../../data/generated/SessionWarningItem
 import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
 import { Modal } from '../../kit/Modal';
 import {
+  Spinner,
   BusyDiagnosis,
   DetachedDiagnosis,
   DiagnoseButton,
@@ -63,6 +64,8 @@ export function WarningDialog({
         if (!open) requestClose.current?.();
       }}
       returnFocusRef={returnFocusRef}
+      // A press outside closes it, the same way × and Escape do.
+      dismissOnOutsidePress
       aria-labelledby={`${title} ${session}`}
       className="xt-dash-modal xt-warning-modal"
       data-testid="dashboard-warning-modal"
@@ -136,6 +139,7 @@ function SelectedIssue({
   };
   useImperativeHandle(requestClose, () => close);
   const press = warning ? rowProps(warning, Boolean(dismissed)) : null;
+  const reading = !query.isError && (query.isFetching || query.isPending);
   return (
     <>
       <div className="xt-warning-modal-bar">
@@ -242,10 +246,16 @@ function SelectedIssue({
         ) : (
           <section className="xt-warning-modal-side" data-alone="">
             <WarningLine warning={selected.warning} />
-            <p className="xt-session-detail-notice" role="status" data-testid="warnings-state">
+            <p
+              className="xt-session-detail-notice"
+              role="status"
+              data-testid="warnings-state"
+              data-loading={reading || undefined}
+            >
+              {reading && <Spinner />}
               {query.isError
                 ? SESSION_WARNINGS_TEXT.session_unread
-                : query.isFetching || query.isPending
+                : reading
                   ? SESSION_WARNINGS_TEXT.session_reading
                   : query.data?.state === 'missing'
                     ? SESSION_WARNINGS_TEXT.session_missing

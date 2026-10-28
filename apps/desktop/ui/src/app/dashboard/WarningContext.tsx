@@ -15,6 +15,7 @@ import {
 } from '../session-detail/transcript-view';
 import { useWarningContext } from './useWarningContext';
 import { warningExcerpt, type WarningContextRead } from './warning-context';
+import { Spinner } from '../session-diagnosis';
 import '../../styles/session-warnings.css';
 
 /**
@@ -85,7 +86,12 @@ export function WarningContextView({
         <span data-testid="warning-context-when">{when.join(' · ')}</span>
       </div>
       {notice ? (
-        <p role="status" className="xt-warning-context-note">
+        <p
+          role="status"
+          className="xt-warning-context-note"
+          data-loading={read.phase === 'loading' || undefined}
+        >
+          {read.phase === 'loading' && <Spinner />}
           {notice}
         </p>
       ) : null}
@@ -219,6 +225,7 @@ function ChatRecord({
                   <ToolCallCard
                     block={block}
                     highlighted={flaggedTool}
+                    excerpt
                     tag={flaggedTool ? <FlagTag tag={flagged.tag} /> : undefined}
                   />
                 </div>
