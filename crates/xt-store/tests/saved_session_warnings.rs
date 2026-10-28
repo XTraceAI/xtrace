@@ -649,7 +649,7 @@ fn migration_backfills_old_bounds_and_growth_widens_them_before_any_saved_answer
     let sql = Connection::open(&path).unwrap();
     sql.execute_batch(include_str!("fixtures/undo_saved_session_warnings.sql"))
         .unwrap();
-    sql.execute_batch("DELETE FROM schema_version WHERE version=29; DELETE FROM migration_fingerprints WHERE version=29;").unwrap();
+    sql.execute_batch("DELETE FROM schema_version WHERE version>=29; DELETE FROM migration_fingerprints WHERE version>=29;").unwrap();
     let mut store = Store::open(path).unwrap();
     let bounds = || {
         sql.query_row(

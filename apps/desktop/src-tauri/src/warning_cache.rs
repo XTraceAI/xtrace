@@ -314,7 +314,7 @@ mod tests {
             "../../../../crates/xt-store/tests/fixtures/undo_saved_session_warnings.sql"
         ))
         .unwrap();
-        sql.execute_batch("DELETE FROM schema_version WHERE version=29; DELETE FROM migration_fingerprints WHERE version=29;").unwrap();
+        sql.execute_batch("DELETE FROM schema_version WHERE version>=29; DELETE FROM migration_fingerprints WHERE version>=29;").unwrap();
         let store = Store::open(&path).unwrap();
         assert_eq!(
             store

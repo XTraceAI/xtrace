@@ -165,6 +165,7 @@ fn the_table_refuses_rows_no_warning_could_name() {
         ("repeated_calls", Some(1)),
         ("repeated_prompt", Some(2)),
         ("repeated_failure", Some(2)),
+        ("admitted_mistake", None),
     ] {
         assert!(
             store
@@ -195,6 +196,8 @@ fn the_table_refuses_rows_no_warning_could_name() {
         ("s", "repeated_failure:r", Some(0), 0),
         ("s", "repeated_calls:r", None, 0),
         ("s", "repeated_calls:r", Some(u64::MAX), 0),
+        ("s", "admitted_mistake:r", Some(1), 0),
+        ("s", "admitted_mistake:", None, 0),
     ] {
         assert!(
             store.dismiss_warning(session, warning, size, at).is_err(),
@@ -220,7 +223,7 @@ fn the_table_refuses_rows_no_warning_could_name() {
             "{row}"
         );
     }
-    assert_eq!(stored(&path, "s").len(), 5);
+    assert_eq!(stored(&path, "s").len(), 6);
 }
 
 #[test]

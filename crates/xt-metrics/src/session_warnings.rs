@@ -55,6 +55,7 @@ use xt_store::{
     timestamp::{self, InstantKey},
     tool_result::{self, Outcome, Wording},
     tool_sent::ToolSentKind,
+    words::{Word, spanned_words, words},
 };
 
 /// One session's records inside the window, with the stored facts every rule
@@ -447,65 +448,6 @@ pub(crate) struct Evidence {
     /// Result-carrying records with no saved outcome.
     pub(crate) outcome_not_saved: u64,
     pub(crate) outcome_unknown: u64,
-}
-
-/// One word of a message as the text rules compare it, and where it came
-/// from in the original text, as a byte range.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Word {
-    text: String,
-    span: std::ops::Range<usize>,
-}
-
-/// The words of a message as the text rules compare them: lowercase, curly
-/// apostrophes made straight, split on anything that is not a letter, digit,
-/// apostrophe or hyphen. Each keeps the byte range of the original text it
-/// came from (every lowercase character maps to the original character it
-/// was made from), so a match can be shown in the message as written.
-fn spanned_words(text: &str) -> Vec<Word> {
-    let lower = text.to_lowercase();
-    let mut lowered = lower.chars();
-    let mut words = Vec::new();
-    let mut current: Vec<(char, usize, usize)> = Vec::new();
-    let mut flush = |current: &mut Vec<(char, usize, usize)>| {
-        let trim = |c: &(char, usize, usize)| c.0 == '\'' || c.0 == '-';
-        let first = current.iter().position(|c| !trim(c));
-        let last = current.iter().rposition(|c| !trim(c));
-        if let (Some(first), Some(last)) = (first, last) {
-            let kept = &current[first..=last];
-            words.push(Word {
-                text: kept.iter().map(|c| c.0).collect(),
-                span: kept[0].1..kept[kept.len() - 1].2,
-            });
-        }
-        current.clear();
-    };
-    for (at, original) in text.char_indices() {
-        let end = at + original.len_utf8();
-        // `str::to_lowercase` writes as many characters for each character as
-        // `char::to_lowercase` does (a final sigma differs only in which one).
-        for _ in 0..original.to_lowercase().count() {
-            let Some(mut c) = lowered.next() else { break };
-            if c == '\u{2019}' {
-                c = '\'';
-            }
-            if c.is_alphanumeric() || c == '\'' || c == '-' {
-                current.push((c, at, end));
-            } else {
-                flush(&mut current);
-            }
-        }
-    }
-    flush(&mut current);
-    words
-}
-
-/// The words of a message as the text rules compare them ([`spanned_words`]).
-fn words(text: &str) -> Vec<String> {
-    spanned_words(text)
-        .into_iter()
-        .map(|word| word.text)
-        .collect()
 }
 
 /// The first correction in a message, as the matched words, or `None`.
@@ -1915,32 +1857,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["I", "said"]
         );
-    }
-
-    /// The offset-keeping split gives exactly the words the split before
-    /// it gave, on text where lowercasing changes lengths or depends on
-    /// position.
-    #[test]
-    fn spanned_words_are_the_words_the_old_split_gave() {
-        fn legacy(text: &str) -> Vec<String> {
-            text.to_lowercase()
-                .replace('\u{2019}', "'")
-                .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '-'))
-                .map(|word| word.trim_matches(|c| c == '\'' || c == '-'))
-                .filter(|word| !word.is_empty())
-                .map(str::to_owned)
-                .collect()
-        }
-        for text in [
-            "ΟΔΟΣ ΣΑΣ σ",
-            "İstanbul İİ",
-            "it\u{2019}s 'quoted' -dash- a--b ''",
-            "ﬁle ß ẞ Ǆ",
-            "tab\tnew\nline 🙂emoji🙂",
-            "",
-        ] {
-            assert_eq!(words(text), legacy(text), "{text}");
-        }
     }
 
     #[test]

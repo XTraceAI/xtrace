@@ -175,6 +175,11 @@ const MIGRATIONS: &[Migration] = &[
         "0029_saved_session_warnings",
         "a0d3fea37a3e4656f1919b668811ce02d9dac014f7b6a65b15710f8471ed058f"
     ),
+    migration!(
+        30,
+        "0030_reply_admissions",
+        "edcb0b1dfc2dbd6310ae16c83d9b7a8cf0bb0d4732f99165c60e31ca91fd3000"
+    ),
 ];
 
 /// Newest schema supported by the embedded migration chain.

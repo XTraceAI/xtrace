@@ -116,6 +116,7 @@ mod read;
 pub mod record_preview;
 pub mod record_text;
 pub mod repeat_key;
+pub mod reply_admission;
 pub mod retention;
 pub mod saved_session_warnings;
 mod server_settings;
@@ -129,6 +130,7 @@ pub mod tool_sent;
 pub mod tool_use;
 pub mod typing_speed;
 pub mod views;
+pub mod words;
 mod write;
 
 pub use model::{
