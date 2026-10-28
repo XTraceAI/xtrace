@@ -746,6 +746,53 @@ function Row({
     ? `${row.name}; agents: ${line ? `${line.spoken}${line.busiest ? `, busiest 15 minutes at ${line.busiest}` : ''}` : 'unknown'}; agent time per hour of yours: ${line?.leverageWords ?? 'unknown'}${warnedName}; Enter opens the day’s sessions${warned ? '; Right arrow moves to its warnings' : ''}`
     : row.name;
   const sessionsName = `Sessions on ${row.label}`;
+  const dayHead = (
+    <span className="xt-effort-tip-head">
+      <span>{row.label}</span>
+      <b>{row.total ?? 'unknown'}</b>
+    </span>
+  );
+  /** The whole day's lines: the same wherever the pointer is on it. */
+  const daySummary = (
+    <>
+      {dayHead}
+      {row.bars.length === 0 && (
+        <span className="xt-effort-tip-note">
+          {row.total === null ? 'Could not tell which messages a person sent' : 'No messages'}
+        </span>
+      )}
+      {row.bars.map((bar, index) => (
+        <span key={index} className="xt-effort-tip-row">
+          <span>{bar.text}</span>
+          <em>{bar.tick ? 'one message' : ''}</em>
+        </span>
+      ))}
+      {paired && (
+        <>
+          <span className="xt-effort-tip-divider" />
+          <span className="xt-effort-tip-row" data-agent="">
+            <span>Agent time</span>
+            <b data-testid="agent-day-total">{line ? line.total : 'unknown'}</b>
+          </span>
+          {line?.busiest && (
+            <span className="xt-effort-tip-row">
+              <span>Busiest 15 min</span>
+              <em>{line.busiest}</em>
+            </span>
+          )}
+          <span
+            className="xt-effort-tip-row"
+            data-low={line?.atOrBelowEven ? '' : undefined}
+            data-testid="leverage-day"
+          >
+            <span>Agent time per hour of yours</span>
+            <b>{line?.leverage ?? line?.leverageWords ?? 'unknown'}</b>
+            {line?.atOrBelowEven && <em>{AT_OR_BELOW_EVEN}</em>}
+          </span>
+        </>
+      )}
+    </>
+  );
   const dayCard = (
     <Tooltip.Root
       disableHoverablePopup
@@ -851,51 +898,19 @@ function Row({
           sideOffset={4}
           collisionPadding={8}
         >
-          <Tooltip.Popup className="xt-rule-popover xt-effort-tip" aria-hidden="true">
-            <span className="xt-effort-tip-head">
-              <span>{row.label}</span>
-              <b>{row.total ?? 'unknown'}</b>
-            </span>
-            {row.bars.length === 0 && (
-              <span className="xt-effort-tip-note">
-                {row.total === null ? 'Could not tell which messages a person sent' : 'No messages'}
+          <Tooltip.Popup
+            className="xt-rule-popover xt-effort-tip"
+            aria-hidden="true"
+            data-testid="day-card"
+          >
+            {/* With agents the day's own lines are in its date's box; this
+                card names the day and the 15 minutes under the pointer. */}
+            {paired ? dayHead : daySummary}
+            {paired && line && pointer && (
+              <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
+                <span>{line.quarter(pointer.quarter).span}</span>
+                <em>{line.quarter(pointer.quarter).agents}</em>
               </span>
-            )}
-            {row.bars.map((bar, index) => (
-              <span key={index} className="xt-effort-tip-row">
-                <span>{bar.text}</span>
-                <em>{bar.tick ? 'one message' : ''}</em>
-              </span>
-            ))}
-            {paired && (
-              <>
-                <span className="xt-effort-tip-divider" />
-                <span className="xt-effort-tip-row" data-agent="">
-                  <span>Agent time</span>
-                  <b data-testid="agent-day-total">{line ? line.total : 'unknown'}</b>
-                </span>
-                {line?.busiest && (
-                  <span className="xt-effort-tip-row">
-                    <span>Busiest 15 min</span>
-                    <em>{line.busiest}</em>
-                  </span>
-                )}
-                <span
-                  className="xt-effort-tip-row"
-                  data-low={line?.atOrBelowEven ? '' : undefined}
-                  data-testid="leverage-day"
-                >
-                  <span>Agent time per hour of yours</span>
-                  <b>{line?.leverage ?? line?.leverageWords ?? 'unknown'}</b>
-                  {line?.atOrBelowEven && <em>{AT_OR_BELOW_EVEN}</em>}
-                </span>
-                {line && pointer && (
-                  <span className="xt-effort-tip-row" data-pointer="" data-testid="agent-quarter">
-                    <span>{line.quarter(pointer.quarter).span}</span>
-                    <em>{line.quarter(pointer.quarter).agents}</em>
-                  </span>
-                )}
-              </>
             )}
           </Tooltip.Popup>
         </Tooltip.Positioner>
@@ -987,6 +1002,9 @@ function Row({
             initialFocus={false}
             finalFocus={false}
           >
+            <div className="xt-day-summary" data-testid="day-summary">
+              {daySummary}
+            </div>
             <DaySessions
               window={window}
               date={row.date}
