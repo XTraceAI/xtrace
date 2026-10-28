@@ -315,13 +315,17 @@ mod tests {
         ))
         .unwrap();
         sql.execute_batch("DELETE FROM schema_version WHERE version>=29; DELETE FROM migration_fingerprints WHERE version>=29;").unwrap();
-        let store = Store::open(&path).unwrap();
+        let mut store = Store::open(&path).unwrap();
+        // Migration 30 resets the Claude transcript checkpoints once, so the
+        // next scan reads them again for its reply facts. Record one again:
+        // warming the saved answers below must not need a source replay.
         assert_eq!(
             store
                 .native_checkpoint(SessionSource::Transcript, &checkpoint.cursor_key)
                 .unwrap(),
-            Some(checkpoint.clone())
+            None
         );
+        store.record_native_checkpoint(&checkpoint).unwrap();
         for _ in 0..2 {
             let worker = WarningCacheWorker::start(path.clone());
             let until = Instant::now() + Duration::from_secs(3);

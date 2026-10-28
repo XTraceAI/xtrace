@@ -9904,7 +9904,7 @@
           "warnings": [],
           "count_label": null,
           "summary": "No warnings. Every check read everything it needed.",
-          "checks_summary": "Checks · all 4 complete",
+          "checks_summary": "Checks · all 5 complete",
           "dismissed": [],
           "checks": [
             {
@@ -9926,6 +9926,11 @@
               "kind": "repeated_failure",
               "complete": true,
               "text": "Checked: repeated failures"
+            },
+            {
+              "kind": "admitted_mistake",
+              "complete": true,
+              "text": "Checked: admitted mistakes"
             }
           ],
           "incomplete_checks": 0
@@ -9955,7 +9960,7 @@
           ],
           "count_label": "1 warning",
           "summary": "1 warning to review.",
-          "checks_summary": "Checks · all 4 complete",
+          "checks_summary": "Checks · all 5 complete",
           "dismissed": [],
           "checks": [
             {
@@ -9977,6 +9982,11 @@
               "kind": "repeated_failure",
               "complete": true,
               "text": "Checked: repeated failures"
+            },
+            {
+              "kind": "admitted_mistake",
+              "complete": true,
+              "text": "Checked: admitted mistakes"
             }
           ],
           "incomplete_checks": 0
@@ -9988,8 +9998,8 @@
           "state": "read",
           "warnings": [],
           "count_label": null,
-          "summary": "No warnings found, but 3 of 4 checks could not read everything, so something may still have gone wrong.",
-          "checks_summary": "Checks · 3 of 4 incomplete",
+          "summary": "No warnings found, but 3 of 5 checks could not read everything, so something may still have gone wrong.",
+          "checks_summary": "Checks · 3 of 5 incomplete",
           "dismissed": [],
           "checks": [
             {
@@ -10011,6 +10021,11 @@
               "kind": "repeated_failure",
               "complete": false,
               "text": "Not fully checked: repeated failures — 2 tool results do not say how they ended"
+            },
+            {
+              "kind": "admitted_mistake",
+              "complete": true,
+              "text": "Checked: admitted mistakes"
             }
           ],
           "incomplete_checks": 3
@@ -10104,7 +10119,7 @@
           ],
           "count_label": "5 warnings",
           "summary": "5 warnings to review.",
-          "checks_summary": "Checks · all 4 complete",
+          "checks_summary": "Checks · all 5 complete",
           "dismissed": [],
           "checks": [
             {
@@ -10126,6 +10141,11 @@
               "kind": "repeated_failure",
               "complete": true,
               "text": "Checked: repeated failures"
+            },
+            {
+              "kind": "admitted_mistake",
+              "complete": true,
+              "text": "Checked: admitted mistakes"
             }
           ],
           "incomplete_checks": 0
@@ -10706,7 +10726,7 @@
             "warnings": [],
             "count_label": null,
             "summary": "No warnings. Every check read everything it needed.",
-            "checks_summary": "Checks · all 4 complete",
+            "checks_summary": "Checks · all 5 complete",
             "dismissed": [],
             "checks": [
               {
@@ -10728,6 +10748,11 @@
                 "kind": "repeated_failure",
                 "complete": true,
                 "text": "Checked: repeated failures"
+              },
+              {
+                "kind": "admitted_mistake",
+                "complete": true,
+                "text": "Checked: admitted mistakes"
               }
             ],
             "incomplete_checks": 0
@@ -10757,7 +10782,7 @@
             ],
             "count_label": "1 warning",
             "summary": "1 warning to review.",
-            "checks_summary": "Checks · all 4 complete",
+            "checks_summary": "Checks · all 5 complete",
             "dismissed": [],
             "checks": [
               {
@@ -10779,6 +10804,11 @@
                 "kind": "repeated_failure",
                 "complete": true,
                 "text": "Checked: repeated failures"
+              },
+              {
+                "kind": "admitted_mistake",
+                "complete": true,
+                "text": "Checked: admitted mistakes"
               }
             ],
             "incomplete_checks": 0
@@ -10790,8 +10820,8 @@
             "state": "read",
             "warnings": [],
             "count_label": null,
-            "summary": "No warnings found, but 3 of 4 checks could not read everything, so something may still have gone wrong.",
-            "checks_summary": "Checks · 3 of 4 incomplete",
+            "summary": "No warnings found, but 3 of 5 checks could not read everything, so something may still have gone wrong.",
+            "checks_summary": "Checks · 3 of 5 incomplete",
             "dismissed": [],
             "checks": [
               {
@@ -10813,6 +10843,11 @@
                 "kind": "repeated_failure",
                 "complete": false,
                 "text": "Not fully checked: repeated failures — 2 tool results do not say how they ended"
+              },
+              {
+                "kind": "admitted_mistake",
+                "complete": true,
+                "text": "Checked: admitted mistakes"
               }
             ],
             "incomplete_checks": 3
@@ -10890,7 +10925,7 @@
             ],
             "count_label": "4 warnings",
             "summary": "4 warnings to review.",
-            "checks_summary": "Checks · all 4 complete",
+            "checks_summary": "Checks · all 5 complete",
             "dismissed": [
               {
                 "id": "correction:w-h3",
@@ -10929,6 +10964,11 @@
                 "kind": "repeated_failure",
                 "complete": true,
                 "text": "Checked: repeated failures"
+              },
+              {
+                "kind": "admitted_mistake",
+                "complete": true,
+                "text": "Checked: admitted mistakes"
               }
             ],
             "incomplete_checks": 0

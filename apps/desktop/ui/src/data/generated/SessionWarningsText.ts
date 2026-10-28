@@ -61,13 +61,15 @@ export const SESSION_WARNINGS_TEXT = {
     "correction": "You corrected the agent.",
     "interruption": "You stopped the agent.",
     "repeated_prompt": "The same request, sent again.",
-    "repeated_failure": "Another attempt. The same failure."
+    "repeated_failure": "Another attempt. The same failure.",
+    "admitted_mistake": "The agent admitted a mistake."
   },
   "you_wrote": "you wrote",
   "message_tags": {
     "correction": "Correction",
     "interruption": "Interruption",
     "repeated_prompt": "Repeated prompt",
-    "repeated_failure": "Repeated failure"
+    "repeated_failure": "Repeated failure",
+    "admitted_mistake": "Admitted mistake"
   }
 } as const;

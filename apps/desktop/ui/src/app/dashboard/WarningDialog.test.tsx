@@ -706,6 +706,48 @@ it('asks for every warning by its own ID and shows its reason when nothing is ma
   expect(screen.getByTestId('warning-reason').querySelector('mark')).toBeNull();
 });
 
+it('names an admitted mistake with its own heading and tag and shows its native reason', async () => {
+  const test = setup();
+  // Supplied synthetic DTO: the native side words the reason and tag.
+  const admitted = {
+    ...selected.warning,
+    id: 'admitted_mistake:synthetic-reply',
+    kind: 'admitted_mistake' as const,
+    label: 'Admitted mistake',
+    reason: 'Supplied admission reason (10:05)',
+    compact_reason: 'Supplied admission summary',
+    record_uuids: [selected.warning.points_at.record_uuid, 'synthetic-reply'],
+    points_at: { record_uuid: 'synthetic-reply', block: null },
+  };
+  const withAdmission = structuredClone(list);
+  const answer = withAdmission.sessions.find((one) => one.session_id === 's-warned')!.answer;
+  if (answer.state === 'read') answer.warnings.push(admitted);
+  test.warnings.mockImplementation(async () => structuredClone(withAdmission));
+  test.transcript.mockResolvedValue(
+    contextExcerpt(contextFixture('synthetic-reply'), 'synthetic-reply'),
+  );
+  test.mount();
+  await screen.findByTestId('warning-reason');
+  test.select({ ...selected, warning: admitted });
+  await waitFor(() =>
+    expect(screen.getByTestId('warning-item').dataset.warningId).toBe(admitted.id),
+  );
+  expect(
+    within(dialog()).getByRole('heading', {
+      name: SESSION_WARNINGS_TEXT.flagged_headings.admitted_mistake,
+    }),
+  ).toBeTruthy();
+  expect(SESSION_WARNINGS_TEXT.flagged_headings.admitted_mistake).toBe(
+    'The agent admitted a mistake.',
+  );
+  expect(SESSION_WARNINGS_TEXT.message_tags.admitted_mistake).toBe('Admitted mistake');
+  await waitFor(() =>
+    expect(screen.getByTestId('warning-context-flag').textContent).toBe('Admitted mistake'),
+  );
+  expect(screen.getByTestId('warning-reason').textContent).toBe(admitted.reason);
+  expect(screen.getByTestId('warning-reason').querySelector('mark')).toBeNull();
+});
+
 /** A full press on the window's backdrop, as a pointer makes it. */
 function pressBackdrop() {
   const backdrop = document.querySelector<HTMLElement>('.xt-modal-backdrop')!;

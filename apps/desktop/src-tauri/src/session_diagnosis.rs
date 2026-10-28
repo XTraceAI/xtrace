@@ -439,6 +439,7 @@ fn kind(kind: WarningKind) -> input::WarningKind {
         WarningKind::Interruption => input::WarningKind::Interruption,
         WarningKind::RepeatedPrompt => input::WarningKind::RepeatedPrompt,
         WarningKind::RepeatedFailure => input::WarningKind::RepeatedFailure,
+        WarningKind::AdmittedMistake => input::WarningKind::AdmittedMistake,
     }
 }
 

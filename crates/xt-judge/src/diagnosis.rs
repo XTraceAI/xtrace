@@ -43,6 +43,7 @@ mod tests {
             input::WarningKind::Interruption,
             input::WarningKind::RepeatedPrompt,
             input::WarningKind::RepeatedFailure,
+            input::WarningKind::AdmittedMistake,
         ] {
             assert!(body.contains(&format!("`{}`", kind.as_str())), "{kind:?}");
         }

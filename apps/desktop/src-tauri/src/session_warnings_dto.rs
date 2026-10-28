@@ -17,8 +17,8 @@
 //! (`kind:anchor`), which a growing session keeps, and stores the warning's
 //! size then ([`SessionWarning::size`]): a dismissed repeated prompt sent
 //! once more, or a repeated failure that fails again, has grown past it, so it
-//! shows again everywhere and its page says so (`returned`). A correction or
-//! an interruption is one event and stays dismissed.
+//! shows again everywhere and its page says so (`returned`). A correction,
+//! an interruption or an admitted mistake is one event and stays dismissed.
 //!
 //! A dismissal stored for a kind that no longer exists (`repeated_calls:…`,
 //! from before that rule was removed) names no warning any answer has, so it
@@ -106,6 +106,7 @@ pub struct KindWords {
     pub interruption: &'static str,
     pub repeated_prompt: &'static str,
     pub repeated_failure: &'static str,
+    pub admitted_mistake: &'static str,
 }
 
 pub const TEXT: WarningsText = WarningsText {
@@ -135,6 +136,7 @@ pub const TEXT: WarningsText = WarningsText {
         interruption: "You stopped the agent.",
         repeated_prompt: "The same request, sent again.",
         repeated_failure: "Another attempt. The same failure.",
+        admitted_mistake: "The agent admitted a mistake.",
     },
     you_wrote: "you wrote",
     message_tags: KindWords {
@@ -142,6 +144,7 @@ pub const TEXT: WarningsText = WarningsText {
         interruption: "Interruption",
         repeated_prompt: "Repeated prompt",
         repeated_failure: "Repeated failure",
+        admitted_mistake: "Admitted mistake",
     },
 };
 
@@ -160,7 +163,7 @@ pub fn export_text(directory: &std::path::Path) -> std::io::Result<()> {
     )
 }
 
-/// The four checks.
+/// The five checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionWarningKind {
@@ -168,6 +171,7 @@ pub enum SessionWarningKind {
     Interruption,
     RepeatedPrompt,
     RepeatedFailure,
+    AdmittedMistake,
 }
 
 impl From<WarningKind> for SessionWarningKind {
@@ -177,6 +181,7 @@ impl From<WarningKind> for SessionWarningKind {
             WarningKind::Interruption => Self::Interruption,
             WarningKind::RepeatedPrompt => Self::RepeatedPrompt,
             WarningKind::RepeatedFailure => Self::RepeatedFailure,
+            WarningKind::AdmittedMistake => Self::AdmittedMistake,
         }
     }
 }
@@ -188,6 +193,7 @@ fn kind_label(kind: WarningKind) -> &'static str {
         WarningKind::Interruption => "Interruption",
         WarningKind::RepeatedPrompt => "Repeated prompt",
         WarningKind::RepeatedFailure => "Repeated failure",
+        WarningKind::AdmittedMistake => "Admitted mistake",
     }
 }
 
@@ -198,6 +204,7 @@ fn check_label(kind: WarningKind) -> &'static str {
         WarningKind::Interruption => "interruptions",
         WarningKind::RepeatedPrompt => "repeated prompts",
         WarningKind::RepeatedFailure => "repeated failures",
+        WarningKind::AdmittedMistake => "admitted mistakes",
     }
 }
 
@@ -295,7 +302,9 @@ fn returned_text(warning: &SessionWarning, dismissal: &Dismissal) -> Option<Stri
         WarningKind::RepeatedFailure => format!(
             "Shown again: you dismissed it at {then} failures; the call has now failed {now} times."
         ),
-        WarningKind::Correction | WarningKind::Interruption => return None,
+        WarningKind::Correction | WarningKind::Interruption | WarningKind::AdmittedMistake => {
+            return None;
+        }
     })
 }
 
@@ -334,7 +343,7 @@ pub enum SessionWarningsAnswer {
         /// The warnings found now that the user dismissed, earliest first:
         /// listed apart on the session's page, each with an undo.
         dismissed: Vec<SessionWarningItem>,
-        /// The four checks, in a fixed order.
+        /// The five checks, in a fixed order.
         checks: Vec<SessionWarningCheck>,
         /// How many checks could not read everything.
         #[ts(type = "number")]
@@ -487,6 +496,10 @@ fn missing_text(missing: &Missing) -> String {
         Missing::FailedCallKey { calls, .. } => format!(
             "{} could not be compared with the others",
             plural(*calls, "failed call", "failed calls")
+        ),
+        Missing::ReplyNotChecked { replies } => format!(
+            "{} to your messages could not be checked",
+            plural(*replies, "agent reply", "agent replies")
         ),
     }
 }
@@ -662,7 +675,7 @@ pub struct SessionWarningDismissal {
 }
 
 /// A dismissal or undo names one session as a warnings request does and one
-/// warning identity, `kind:anchor` with one of the four kinds and an anchor.
+/// warning identity, `kind:anchor` with one of the five kinds and an anchor.
 /// Refused before storage is touched otherwise.
 pub fn validate_dismissal(session_id: &str, warning_id: &str) -> Result<(), StateError> {
     validate_ids(&[session_id.to_owned()]).map_err(|_| StateError::InvalidWarningDismissal)?;

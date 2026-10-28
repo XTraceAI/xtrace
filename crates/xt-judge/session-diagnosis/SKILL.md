@@ -54,7 +54,9 @@ Reply with the JSON object now.
 "wrong" or "still not working" after a reply), `interruption` (the person
 stopped the agent, or declined a tool the agent wanted to use),
 `repeated_prompt` (the person sent the same message two or more times),
-`repeated_failure` (the same tool call failed two or more times).
+`repeated_failure` (the same tool call failed two or more times),
+`admitted_mistake` (the agent's reply to the person's message admitted a
+mistake, with words like "you're right", "my mistake" or "sorry").
 
 `host` is the coding tool the session ran in; `other` means XTrace does
 not know which.
