@@ -20,22 +20,28 @@ export const LIMITS = {
   verifyPerIp: { name: 'verify:ip', max: 20, windowSeconds: HOUR },
   scorePerMember: { name: 'score:member', max: 12, windowSeconds: HOUR },
   renamePerMember: { name: 'rename:member', max: 10, windowSeconds: DAY },
+  /**
+   * One bucket for every join: at most this many code emails a day in total, so
+   * a flood cannot spend the Resend account's sending quota. Counted last.
+   */
+  joinGlobal: { name: 'join:all', max: 500, windowSeconds: DAY },
 } satisfies Record<string, Limit>;
 
-/** Counter rows (and expired pending joins) older than this are removed. */
+/** Counter rows older than this are removed. */
 export const CLEANUP_AFTER_SECONDS = DAY;
 
 export type Hit = { count: number; retryAfterSeconds: number | null };
 
 /**
- * Counts one request against `limit` for `subject`. `retryAfterSeconds` is null
- * when it is allowed, or the whole seconds until the window ends when it is not.
+ * Counts one request against `limit` for `subject` (no subject: one bucket for
+ * everyone). `retryAfterSeconds` is null when it is allowed, or the whole
+ * seconds until the window ends when it is not.
  */
 export async function hitLimit(
   query: Query,
   now: Date,
   limit: Limit,
-  subject: string,
+  subject?: string,
 ): Promise<Hit> {
   const windowMs = limit.windowSeconds * 1000;
   const start = Math.floor(now.getTime() / windowMs) * windowMs;
@@ -43,7 +49,10 @@ export async function hitLimit(
     `insert into rate_counters (bucket, window_start, count) values ($1, $2::timestamptz, 1)
      on conflict (bucket, window_start) do update set count = rate_counters.count + 1
      returning count`,
-    [`${limit.name}:${subject}`, new Date(start).toISOString()],
+    [
+      subject === undefined ? limit.name : `${limit.name}:${subject}`,
+      new Date(start).toISOString(),
+    ],
   );
   const count = Number(rows[0]?.count);
   if (count <= limit.max) return { count, retryAfterSeconds: null };
@@ -53,11 +62,11 @@ export async function hitLimit(
   };
 }
 
-/** Removes counter rows and expired pending joins older than a day. */
+/** Removes counter rows older than a day and every expired pending join. */
 export async function cleanUp(query: Query, now: Date): Promise<void> {
   const cutoff = new Date(now.getTime() - CLEANUP_AFTER_SECONDS * 1000).toISOString();
   await query('delete from rate_counters where window_start < $1::timestamptz', [cutoff]);
-  await query('delete from pending_joins where expires_at < $1::timestamptz', [cutoff]);
+  await query('delete from pending_joins where expires_at < $1::timestamptz', [now.toISOString()]);
 }
 
 /** Headers that carry the client IP, in the order they are trusted. */

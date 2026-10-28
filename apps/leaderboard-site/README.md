@@ -99,7 +99,8 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
    (for example 10 per minute per IP). The site has its own limits too;
    these rules stop a flood before it reaches the functions and the database.
 9. In the Vercel team's **Settings → Billing**, set a spend limit, so a flood cannot run up a bill.
-   In Resend, check the plan's sending limit too.
+   In Resend, check the plan's daily sending limit too: the site sends at most 500 code emails a day
+   (see "Known limits"), so keep that number at or below the plan's limit.
 
 ## Known limits
 
@@ -108,6 +109,11 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
   A code that was already sent and has not expired still works, and existing members keep their entry.
 - The email limits count the inbox, not the exact address: `name+tag@…` counts as `name@…`,
   and for Gmail the dots do not count either.
+- At most 500 code emails go out per day in total (`joinGlobal` in `src/limits.ts`).
+  Anyone can use them up, from many IPs and emails. That blocks new joins until the next UTC midnight.
+  Existing members and their score updates are not affected.
+  The cap exists so a flood cannot spend the shared Resend account's sending quota.
+  Keep it at or below the Resend plan's daily sending limit.
 
 ## Later changes
 

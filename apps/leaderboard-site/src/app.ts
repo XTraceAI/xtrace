@@ -1,6 +1,7 @@
 // Every endpoint's behaviour. The files in api/ only forward to these handlers.
-// Order inside a handler: the per-IP API limit, the body, the key, then the
-// endpoint's own limit. GET /api/leaderboard and the page are not limited.
+// Order inside a handler: the per-IP API limit, the body (its content type
+// first), the key, then the endpoint's own limit. GET /api/leaderboard and the
+// page are not limited.
 import { isUniqueViolation, type Clock, type Query } from './db.js';
 import { fail, json, noContent, readJsonObject } from './http.js';
 import { CODE_FORMAT, startJoin, verifyJoin } from './joining.js';
@@ -8,7 +9,7 @@ import { bearerKeyHash } from './keys.js';
 import { cleanUp, emailSubject, hitLimit, ipSubject, LIMITS, type Limit } from './limits.js';
 import { listedMembers, memberStanding } from './listing.js';
 import { unavailableMailer, type Mailer } from './mail.js';
-import { pageResponse } from './page.js';
+import { PAGE_CACHE_CONTROL, pageResponse } from './page.js';
 import { parseEmail, parseLeverageTenths, parseNickname } from './validate.js';
 
 export type Handler = (request: Request) => Promise<Response>;
@@ -67,7 +68,7 @@ export function createApp({
 }: AppOptions): App {
   const joinContext = { query, clock, mailer, log };
   /** Seconds to wait when over `rule`, else null. */
-  const limit = async (rule: Limit, subject: string) =>
+  const limit = async (rule: Limit, subject?: string) =>
     (await hitLimit(query, clock(), rule, subject)).retryAfterSeconds;
 
   /**
@@ -112,6 +113,9 @@ export function createApp({
     if (pairWait !== null) return rateLimited(pairWait);
     const emailWait = await limit(LIMITS.joinPerEmail, emailKey);
     if (emailWait !== null) return rateLimited(emailWait);
+    // Last, so requests refused by the limits above do not use up the shared cap.
+    const globalWait = await limit(LIMITS.joinGlobal);
+    if (globalWait !== null) return rateLimited(globalWait);
     return startJoin(joinContext, nickname, email);
   });
 
@@ -196,7 +200,12 @@ export function createApp({
     return rows.length === 0 ? fail(401, 'unknown_key') : noContent();
   });
 
-  const leaderboard: Handler = async () => json(200, { rows: await listedMembers(query, clock()) });
+  // Cached like the page, which shows the same rows.
+  const leaderboard: Handler = async () => {
+    const response = json(200, { rows: await listedMembers(query, clock()) });
+    response.headers.set('cache-control', PAGE_CACHE_CONTROL);
+    return response;
+  };
 
   const page: Handler = async () => pageResponse(await listedMembers(query, clock()));
 

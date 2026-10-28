@@ -91,6 +91,7 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
   assert.ok(match, 'the local server prints the code');
   const verified = await fetch(`${origin}/api/join/verify`, {
     method: 'POST',
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ pending_id, code: match[1] }),
   });
   assert.equal(verified.status, 201);
@@ -119,10 +120,18 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
 
   const big = await fetch(`${origin}/api/score`, {
     method: 'PUT',
-    headers: auth,
+    headers: { ...auth, 'content-type': 'application/json' },
     body: JSON.stringify({ leverage_tenths: 1, pad: 'x'.repeat(5000) }),
   });
   assert.equal(big.status, 413);
+
+  // fetch sends a string body as text/plain, as a form on another site could.
+  const plain = await fetch(`${origin}/api/join`, {
+    method: 'POST',
+    body: JSON.stringify({ nickname: 'Plain_User', email: 'plain@example.com' }),
+  });
+  assert.equal(plain.status, 415);
+  assert.ok(!printed.some((item) => item.startsWith('code for plain@')));
 
   assert.equal((await fetch(`${origin}/api/me`, { method: 'DELETE', headers: auth })).status, 204);
   assert.equal((await fetch(`${origin}/api/me`, { headers: auth })).status, 401);

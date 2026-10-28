@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { clientIp, inboxAddress, ipLimitKey } from '../src/limits.js';
+import { clientIp, inboxAddress, ipLimitKey, LIMITS } from '../src/limits.js';
 import {
   HOUR,
   harness,
@@ -10,6 +10,7 @@ import {
   readJson,
   request,
   score,
+  START,
   startJoin,
   type Harness,
 } from './support.js';
@@ -91,6 +92,44 @@ describe('POST /api/join', () => {
     for (let i = 0; i < 10; i += 1)
       assert.equal((await postJoin('x', 'bad', '192.0.2.20')).status, 400);
     assert.equal((await postJoin('valid', 'valid@example.com', '192.0.2.20')).status, 202);
+  });
+});
+
+describe('all joins together', () => {
+  const globalCount = async () =>
+    Number(
+      (await h.query(`select count from rate_counters where bucket = 'join:all'`))[0]?.count ?? 0,
+    );
+
+  test('500 code emails a day in total; then a fresh IP and email waits for UTC midnight', async () => {
+    assert.equal(LIMITS.joinGlobal.max, 500);
+    // As if 499 codes were sent earlier today (the UTC day started at 00:00).
+    await h.query(
+      `insert into rate_counters (bucket, window_start, count)
+       values ('join:all', '2026-10-27T00:00:00.000Z'::timestamptz, 499)`,
+    );
+    assert.equal((await postJoin('last', 'last@example.com', '192.0.2.170')).status, 202);
+    // START is 12:00 UTC, so the day window ends in 12 hours.
+    await expectLimited(await postJoin('fresh', 'fresh@example.com', '192.0.2.171'), 12 * 3600);
+    assert.deepEqual(
+      h.mailer.sent.map((item) => item.to),
+      ['last@example.com'],
+    );
+    assert.equal((await h.query('select count(*)::int as n from pending_joins'))[0]!.n, 1);
+    h.advance(12 * HOUR);
+    assert.equal((await postJoin('fresh', 'fresh@example.com', '192.0.2.171')).status, 202);
+  });
+
+  test('requests refused by the other join limits do not use it up', async () => {
+    for (let i = 1; i <= 5; i += 1)
+      assert.equal((await postJoin(`all${i}`, `all${i}@example.com`, '192.0.2.180')).status, 202);
+    await expectLimited(await postJoin('all6', 'all6@example.com', '192.0.2.180'), 3600);
+    assert.equal(await globalCount(), 5);
+    for (let i = 1; i <= 3; i += 1)
+      assert.equal((await postJoin('pairs', 'pairs@example.com', '192.0.2.181')).status, 202);
+    await expectLimited(await postJoin('pairs', 'pairs@example.com', '192.0.2.181'), 3600);
+    assert.equal((await postJoin('x', 'bad', '192.0.2.182')).status, 400);
+    assert.equal(await globalCount(), 8);
   });
 });
 
@@ -285,8 +324,10 @@ describe('client IP', () => {
     const buckets = (await h.query('select bucket from rate_counters')).map((row) =>
       String(row.bucket),
     );
-    assert.ok(buckets.length >= 3);
-    for (const bucket of buckets) {
+    assert.ok(buckets.length >= 4);
+    // The one bucket for all joins holds no IP or email at all.
+    assert.ok(buckets.includes('join:all'));
+    for (const bucket of buckets.filter((name) => name !== 'join:all')) {
       assert.match(bucket, /^[a-z]+:[a-z-]+:[0-9a-f]{64}(?::[0-9a-f]{64})?$/);
       assert.ok(!bucket.includes('hashed.person'));
       // Keyed: the plain SHA-256 of the email is not used either.
@@ -298,12 +339,24 @@ describe('client IP', () => {
 });
 
 describe('cleanup', () => {
-  test('counters and expired pending joins older than a day are removed by later joins', async () => {
+  test('expired pending joins are removed by later joins; counters only after a day', async () => {
     await startJoin(h, 'stale', 'stale@example.com');
-    h.advance(24 * HOUR + 16 * MINUTE);
+    // The stale code expired at 12:15; this is 2 hours after that.
+    h.advance(2 * HOUR + 15 * MINUTE);
     await startJoin(h, 'fresh', 'fresh@example.com');
     const pending = await h.query('select email from pending_joins');
     assert.deepEqual(pending, [{ email: 'fresh@example.com' }]);
+    // The stale join's counters, from 2 hours ago, are kept.
+    const kept = await h.query(
+      `select count(*)::int as n from rate_counters where window_start = $1::timestamptz`,
+      [START.toISOString()],
+    );
+    assert.ok(Number(kept[0]!.n) > 0);
+    h.advance(24 * HOUR);
+    await startJoin(h, 'later', 'later@example.com');
+    assert.deepEqual(await h.query('select email from pending_joins'), [
+      { email: 'later@example.com' },
+    ]);
     const old = await h.query(
       `select count(*)::int as n from rate_counters where window_start < $1::timestamptz`,
       [new Date(h.now().getTime() - 24 * HOUR).toISOString()],

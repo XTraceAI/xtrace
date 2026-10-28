@@ -96,10 +96,10 @@ export function request(
     headers.set('x-vercel-forwarded-for', options.ip ?? DEFAULT_IP);
   if (options.key !== undefined) headers.set('authorization', `Bearer ${options.key}`);
   let body: string | Uint8Array | undefined = options.raw;
-  if (options.body !== undefined) {
-    body = JSON.stringify(options.body);
+  if (options.body !== undefined) body = JSON.stringify(options.body);
+  // Bodies are sent as JSON unless the test names another content type.
+  if (body !== undefined && !headers.has('content-type'))
     headers.set('content-type', 'application/json');
-  }
   return new Request(`${ORIGIN}${path}`, {
     method,
     headers,

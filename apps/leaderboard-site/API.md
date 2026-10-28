@@ -65,6 +65,7 @@ Deletes the member's row (nickname, email, score) completely.
 ### GET /api/leaderboard
 
 - 200 `{"rows": [{"rank": integer, "nickname": string, "leverage_tenths": integer}]}` — listed members only, in order.
+  Cache header `public, s-maxage=60, stale-while-revalidate=60`, the same as the page.
 
 ### GET /
 
@@ -150,6 +151,8 @@ Fixed windows; the one rule lives in one module.
 
 - ~~POST /api/join: 5 per hour per IP, and 3 per hour per email.~~
   _Replaced by v2.2: 5 per hour per IP; 3 per hour per (email, IP); 10 per day per email._
+  _Added after review: 500 per day for all joins together (one shared count), so a flood cannot spend the Resend
+  account's sending quota._
 - POST /api/join/verify: 20 per hour per IP (on top of the 5-attempts-per-code rule).
 - PUT /api/score: 12 per hour per member.
 - PATCH /api/me: 10 per day per member.
@@ -158,7 +161,8 @@ Fixed windows; the one rule lives in one module.
   address (local server).~~ _As built (after review): `x-vercel-forwarded-for`, else `x-real-ip`, else the first
   `x-forwarded-for` entry; see the notes at the end._ The IP is never stored in clear: only HMAC-SHA256(IP, `$IP_HASH_SECRET`). Production with no
   IP_HASH_SECRET → 503 `server_misconfigured` on rate-limited endpoints (fail closed). Local server uses a fixed dev secret.
-  Counter rows and expired pending joins older than a day are deleted opportunistically.
+  Counter rows older than a day, ~~and expired pending joins older than a day,~~ are deleted opportunistically.
+  _After review: expired pending joins are deleted as soon as they have expired._
 
 ## Schema additions
 
@@ -216,17 +220,25 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
 ## Details the contract above leaves open (as built)
 
 - A body over 4 KB means more than 4096 bytes. The 413 body is `{"error": "body_too_large"}`.
-- Order of checks in a rate-limited endpoint: the per-IP API limit (600 per hour), then the body
-  (413 / 400), then the key (401), then the endpoint's own limits, then the work.
-  `POST /api/join` checks its limits in this order: per IP, per (email, IP), per email per day. A request
-  stopped by one limit is not counted by the later ones.
+- `POST /api/join`, `POST /api/join/verify`, `PUT /api/score` and `PATCH /api/me` need
+  `Content-Type: application/json`. Parameters such as `; charset=utf-8` are allowed and case does not matter.
+  Any other media type, or none, gets 415 `{"error": "unsupported_media_type"}` before the body is read. This stops a
+  web page on another site from sending a join without the browser asking the server first (a plain form or text
+  body needs no permission; a JSON one does). The server sends no CORS headers, so browsers refuse JSON requests from
+  other sites. `GET` requests and `DELETE /api/me` send no body and need no content type.
+- Order of checks in a rate-limited endpoint: the per-IP API limit (600 per hour), then the content type (415),
+  then the body (413 / 400), then the key (401), then the endpoint's own limits, then the work.
+  `POST /api/join` checks its limits in this order: per IP, per (email, IP), per email per day, then the 500 per
+  day for all joins together. A request stopped by one limit is not counted by the later ones, so requests refused
+  by the other join limits do not use up the shared 500.
   - `POST /api/join`: the join limits count only requests whose body passed the checks. Invalid bodies
     use up only the 600-per-hour API limit.
   - `POST /api/join/verify`: the 20-per-hour limit counts only requests whose code is 6 digits and whose
     optional `nickname` is valid.
   - `PUT /api/score` and `PATCH /api/me` count against the member only when the key is known.
-- A refused (429) request still counts. The window resets on its fixed boundary: the hour, or the UTC
-  day for `PATCH /api/me`. `retry_after_seconds` is the whole seconds until then (at least 1).
+- A refused (429) request still counts. The window resets on its fixed boundary: the hour, or UTC midnight
+  for the daily limits (`PATCH /api/me`'s 10 per day, the join's 10 per day per email and the join's 500 per
+  day for all joins). `retry_after_seconds` is the whole seconds until then (at least 1).
 - The 600-per-hour API limit covers `POST /api/join`, `POST /api/join/verify`, `PUT /api/score` and
   `GET`/`PATCH`/`DELETE /api/me`. `GET /api/leaderboard` and the public page (`GET`/`HEAD /`, served by
   `/api/page`) are not limited.
@@ -235,7 +247,8 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
   request is counted under the IP `unknown` (a bad header does not fall through to the next one). IPv6 addresses are
   grouped by their first 64 bits (written `a:b:c:d::/64`); IPv4-mapped IPv6 addresses (`::ffff:1.2.3.4`)
   count as the IPv4 address. Bucket names: `<limit>:<hmac>` for IPs and emails, `<limit>:<member id>` for
-  members, and `join:email-ip:<email hmac>:<ip hmac>` for the email-and-IP pair. The local server
+  members, `join:email-ip:<email hmac>:<ip hmac>` for the email-and-IP pair, and just `join:all` for all
+  joins together. The local server
   sets `x-vercel-forwarded-for` from the socket address and drops any client-sent `x-real-ip` /
   `x-forwarded-for`, as Vercel's proxy does.
 - The two email limits (per (email, IP) and per day) count the _inbox_ address, not the exact one: everything
@@ -246,6 +259,9 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
 - Known limit, accepted: anyone who knows an email can use up its 10 joins for the day (from several IPs at once, or from one IP over about 4 hours),
   so that inbox cannot start a new join until the next UTC midnight. A code that was already sent and is
   still live keeps working, and an existing member's entry is not affected.
+- Known limit, accepted: anyone can use up the 500 code emails for the day, from many IPs and emails. Then no one can
+  start a new join until the next UTC midnight. Existing members, their score updates and codes already sent are
+  not affected. Set it at or below the Resend plan's daily sending limit.
 - Emails are also refused (400 `invalid_email`) when the part before `@` starts or ends with a dot or has
   two dots in a row, or when the domain has fewer than two labels, an empty label (`..`), or a label that
   starts or ends with `-`. Plus addressing, subdomains and punycode (`xn--…`) domains are accepted.
@@ -263,8 +279,7 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
   identical request can get 410; that 410 deletes a pending join only if it is expired or used up, so it
   never removes one that was just put back.
 - Opportunistic cleanup runs on any rate-limited endpoint when it is an IP's first request of the hour:
-  counter rows whose window started more than a day ago, and pending joins that expired more than a day
-  ago, are deleted.
+  counter rows whose window started more than a day ago, and every pending join that has expired, are deleted.
 - `PUT /api/score`: a body that is not a JSON object gets 400 `invalid_request`. A JSON object whose
   `leverage_tenths` is missing, not an integer or out of range gets 400 `invalid_leverage`.
 - "Within the last 48 hours" includes exactly 48 hours: a score written 48 h ago is still listed; 48 h and
@@ -272,7 +287,8 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
 - The Resend response body is cancelled without being read.
 - An unexpected server or database failure gives 500 `{"error": "server_error"}`. Logs never contain
   request bodies, emails, keys or codes. A failed email send logs only `email not sent (<error kind>)`.
-- `/api/*` responses send `Cache-Control: no-store`.
+- `/api/*` responses send `Cache-Control: no-store`, except `GET /api/leaderboard`, which sends the page's
+  `public, s-maxage=60, stale-while-revalidate=60`.
 - `HEAD /` returns the same status and headers as `GET /`, with no body.
 - The page sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'`.
 - The local development server answers an unknown path with 404 `not_found` and an unsupported method

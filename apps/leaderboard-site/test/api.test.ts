@@ -169,6 +169,7 @@ describe('request body size', () => {
     const response = await h.app.join.POST(
       new Request('https://leaderboard.test/api/join', {
         method: 'POST',
+        headers: { 'content-type': 'application/json' },
         body: stream,
         duplex: 'half',
       } as RequestInit),
@@ -196,6 +197,97 @@ describe('request body size', () => {
       413,
       'body_too_large',
     );
+  });
+});
+
+describe('request content type', () => {
+  const joinJson = JSON.stringify({ nickname: 'typed', email: 'typed@example.com' });
+  const postAs = (contentType: string) =>
+    h.app.join.POST(
+      request('POST', '/api/join', {
+        raw: joinJson,
+        ip: nextIp(),
+        headers: { 'content-type': contentType },
+      }),
+    );
+
+  test('a join that is not sent as application/json gets 415 and sends no code', async () => {
+    for (const contentType of [
+      'text/plain',
+      'text/plain;charset=UTF-8',
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=x',
+      'text/json',
+      'application/json-seq',
+      'application/jsonx',
+    ])
+      await expectError(await postAs(contentType), 415, 'unsupported_media_type');
+    // No content type at all (a byte body gets none from Request).
+    await expectError(
+      await h.app.join.POST(
+        new Request('https://leaderboard.test/api/join', {
+          method: 'POST',
+          headers: { 'x-vercel-forwarded-for': nextIp() },
+          body: new TextEncoder().encode(joinJson),
+        }),
+      ),
+      415,
+      'unsupported_media_type',
+    );
+    assert.equal(h.mailer.sent.length, 0);
+    assert.equal((await h.query('select count(*)::int as n from pending_joins'))[0]!.n, 0);
+    // Only the per-IP API limit counted them; the join limits did not.
+    const buckets = await h.query('select bucket from rate_counters');
+    assert.ok(buckets.every((row) => String(row.bucket).startsWith('api:ip:')));
+  });
+
+  test('application/json with a charset, or in another case, is accepted', async () => {
+    assert.equal((await postAs('application/json; charset=utf-8')).status, 202);
+    assert.equal((await postAs('Application/JSON')).status, 202);
+    assert.equal((await postAs('application/json ;charset=UTF-8')).status, 202);
+    assert.equal(h.mailer.sent.length, 3);
+  });
+
+  test('verify, score and rename refuse it too; GET and DELETE need no content type', async () => {
+    const key = await join(h, 'typer');
+    const text = { 'content-type': 'text/plain' };
+    await expectError(
+      await h.app.verify.POST(
+        request('POST', '/api/join/verify', {
+          raw: JSON.stringify({ pending_id: 'AAAAAAAAAAAAAAAAAAAAAA', code: '123456' }),
+          headers: text,
+        }),
+      ),
+      415,
+      'unsupported_media_type',
+    );
+    await expectError(
+      await h.app.score.PUT(
+        request('PUT', '/api/score', {
+          key,
+          raw: JSON.stringify({ leverage_tenths: 5 }),
+          headers: text,
+        }),
+      ),
+      415,
+      'unsupported_media_type',
+    );
+    await expectError(
+      await h.app.me.PATCH(
+        request('PATCH', '/api/me', {
+          key,
+          raw: JSON.stringify({ nickname: 'renamed' }),
+          headers: text,
+        }),
+      ),
+      415,
+      'unsupported_media_type',
+    );
+    const standing = (await readJson(await me(h.app, key))) as Record<string, unknown>;
+    assert.equal(standing.nickname, 'typer');
+    assert.equal(standing.leverage_tenths, null);
+    // No body, so request() sends no content type.
+    assert.equal((await h.app.me.DELETE(request('DELETE', '/api/me', { key }))).status, 204);
   });
 });
 

@@ -140,6 +140,15 @@ describe('GET /api/leaderboard', () => {
     assert.match(response.headers.get('content-type') ?? '', /^application\/json/);
     assert.deepEqual(await readJson(response), { rows: [] });
   });
+
+  test('cached like the page, which shows the same rows', async () => {
+    const response = await h.app.leaderboard.GET(request('GET', '/api/leaderboard'));
+    assert.equal(
+      response.headers.get('cache-control'),
+      'public, s-maxage=60, stale-while-revalidate=60',
+    );
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  });
 });
 
 describe('GET /', () => {
