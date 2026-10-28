@@ -133,6 +133,20 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
       },
     });
   }
+  // `?encrypted`: a Codex agent's message to another agent, which Codex saves
+  // as an encrypted token, as the native side sends it: the token named in
+  // words (`transcript_dto::encrypted_placeholder`), the rest of the input kept.
+  if (parameters.has('encrypted'))
+    records[2]!.blocks[1] = {
+      kind: 'tool_call',
+      index: 1,
+      name: 'send_message',
+      call_id: 'call-1',
+      input: {
+        kind: 'json',
+        value: { message: 'encrypted (812 characters, not readable)', target: '/root' },
+      },
+    };
   const repeated = (
     record_uuid: string,
     block_index: number,

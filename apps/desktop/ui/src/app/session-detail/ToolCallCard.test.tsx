@@ -30,3 +30,25 @@ it('keeps the note in a session transcript, which never passes the excerpt flag'
   if (!screen.queryByText(NOTE)) fireEvent.click(screen.getAllByRole('button')[0]!);
   expect(screen.getByText(NOTE)).toBeTruthy();
 });
+
+// The native side names an encrypted token in words
+// (`transcript_dto::encrypted_placeholder`); the card prints that line with
+// the rest of the input, in the transcript and in a warning's excerpt alike.
+it('prints an encrypted message as its short native line beside the rest of the input', () => {
+  const encrypted: ToolCallBlock = {
+    ...call,
+    name: 'send_message',
+    input: {
+      kind: 'json',
+      value: { message: 'encrypted (812 characters, not readable)', target: '/root' },
+    },
+  };
+  for (const excerpt of [false, true]) {
+    const { container, unmount } = render(<ToolCallCard block={encrypted} excerpt={excerpt} />);
+    expect(container.textContent).toContain(
+      '"message": "encrypted (812 characters, not readable)"',
+    );
+    expect(container.textContent).toContain('"target": "/root"');
+    unmount();
+  }
+});

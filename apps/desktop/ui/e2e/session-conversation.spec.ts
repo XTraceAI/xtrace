@@ -107,6 +107,35 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
+for (const theme of ['light', 'dark'] as const) {
+  test(`shows an encrypted agent message as a short line, not its token, ${theme}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1120, height: 900 });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    await page.goto('/e2e/session-conversation.html?encrypted');
+    const conversation = page.getByRole('region', { name: 'Conversation', exact: true });
+    const navigation = conversation.getByRole('navigation', { name: 'Repeated activity' });
+    // The first notice opens the call's strip, the card beside it included.
+    await navigation.getByRole('button', { name: 'Next ↓' }).click();
+    const card = conversation.locator('.xt-tool-card[data-block-id="tools:1"]');
+    if (!(await card.isVisible()))
+      await conversation
+        .getByRole('button', { name: /^Send message/ })
+        .first()
+        .click();
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('send_message');
+    await expect(card).toContainText('"message": "encrypted (812 characters, not readable)"');
+    await expect(card).toContainText('"target": "/root"');
+    await card.scrollIntoViewIfNeeded();
+    if (process.env.CONVERSATION_SHOTS)
+      await card.screenshot({
+        path: `${process.env.CONVERSATION_SHOTS}/encrypted-tool-card-${theme}.png`,
+      });
+  });
+}
+
 test('keeps keyboard focus when a single repeated-activity notice reaches both boundaries', async ({
   page,
 }) => {

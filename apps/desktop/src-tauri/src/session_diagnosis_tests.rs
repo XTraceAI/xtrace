@@ -669,6 +669,29 @@ fn the_flagged_record_is_the_one_the_warning_points_at() {
 }
 
 #[test]
+fn an_encrypted_message_reaches_diagnose_as_its_placeholder() {
+    // Codex's agents send each other Fernet tokens: the conversation sent to
+    // Diagnose names one, as the screens do, instead of its ciphertext.
+    let secret = format!("gAAAAA{}", "Zq9-Rw7_Kp".repeat(80));
+    let records = vec![agent(
+        1,
+        "m1",
+        json!([{"type": "tool_use", "id": "a", "name": "send_message",
+            "input": {"target": "/root", "message": secret}}]),
+    )];
+    let flag = WarningPoint {
+        record_uuid: uuid(1),
+        block: None,
+    };
+    let (messages, _) =
+        conversation(&records, &HashMap::new(), &flag, WarningSender::Agent).unwrap();
+    assert_eq!(
+        messages[0].text,
+        "(ran send_message: {\"message\":\"encrypted (806 characters, not readable)\",\"target\":\"/root\"})"
+    );
+}
+
+#[test]
 fn a_call_input_is_one_short_line() {
     let json = |value: Value| SourcePayload::Json { value };
     assert_eq!(

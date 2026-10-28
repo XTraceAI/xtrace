@@ -28,7 +28,12 @@
 //!
 //! The one payload that is genuinely open is a tool call's input, which is
 //! whatever the tool was given. The view's contract takes it as an opaque
-//! value it prints and never interprets, so it crosses as one.
+//! value it prints and never interprets, so it crosses as one — with one
+//! exception: a string in it that is an encrypted token no one can read
+//! ([`is_encrypted_token`]) crosses as a short sentence saying so
+//! ([`encrypted_placeholder`]), so a Codex agent's `send_message` shows as
+//! `"message": "encrypted (812 characters, not readable)"` rather than a
+//! screen of ciphertext.
 use serde::Serialize;
 use serde_json::Value;
 use ts_rs::TS;
@@ -232,13 +237,58 @@ fn text_of(block: &Value, key: &str) -> Option<String> {
     block.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
-/// A tool call's arguments as the record carried them.
-fn payload(value: &Value) -> SourcePayload {
+/// The prefix every Fernet token starts with: its version byte (0x80) and
+/// the high bytes of its timestamp, base64url-encoded.
+const ENCRYPTED_PREFIX: &str = "gAAAAA";
+
+/// The shortest string taken for an encrypted token. A Fernet token is at
+/// least 73 bytes before encoding (about 100 characters); a shorter string
+/// that happens to start with the prefix is left alone.
+const MIN_ENCRYPTED_CHARS: usize = 100;
+
+/// Whether a string is an encrypted token no one can read: Codex writes the
+/// messages its agents send each other (`send_message`) as Fernet tokens,
+/// which are base64url text (`A-Z a-z 0-9 - _`, `=` padding) starting
+/// [`ENCRYPTED_PREFIX`], hundreds of characters long, with no spaces. Only
+/// that whole shape matches: ordinary text, a short string, a string with a
+/// space or any other character, or JSON text that holds a token, does not.
+pub fn is_encrypted_token(text: &str) -> bool {
+    text.len() >= MIN_ENCRYPTED_CHARS
+        && text.starts_with(ENCRYPTED_PREFIX)
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'='))
+}
+
+/// What a screen shows in place of an encrypted token of `chars` characters.
+pub fn encrypted_placeholder(chars: usize) -> String {
+    format!("encrypted ({chars} characters, not readable)")
+}
+
+/// A tool call's argument value with every encrypted token in it, at any
+/// depth, replaced by [`encrypted_placeholder`]; everything else unchanged.
+fn readable(value: &Value) -> Value {
     match value {
-        Value::String(text) => SourcePayload::Text { text: text.clone() },
-        other => SourcePayload::Json {
-            value: other.clone(),
-        },
+        Value::String(text) if is_encrypted_token(text) => {
+            Value::String(encrypted_placeholder(text.len()))
+        }
+        Value::Array(items) => Value::Array(items.iter().map(readable).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, field)| (key.clone(), readable(field)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// A tool call's arguments as the record carried them, with encrypted
+/// tokens named rather than shown ([`readable`]).
+fn payload(value: &Value) -> SourcePayload {
+    match readable(value) {
+        Value::String(text) => SourcePayload::Text { text },
+        other => SourcePayload::Json { value: other },
     }
 }
 
@@ -685,6 +735,86 @@ mod tests {
             input,
             &Some(SourcePayload::Text {
                 text: "ls".to_owned()
+            })
+        );
+    }
+
+    /// A synthetic token of the Fernet shape, `len` characters long.
+    fn token(len: usize) -> String {
+        token_of(len, "Abc_-09xYz")
+    }
+
+    fn token_of(len: usize, fill: &str) -> String {
+        let body = fill.repeat(len / fill.len() + 1);
+        format!("{ENCRYPTED_PREFIX}{body}")[..len].to_owned()
+    }
+
+    #[test]
+    fn only_the_whole_fernet_shape_is_an_encrypted_token() {
+        assert!(is_encrypted_token(&token(100)));
+        assert!(is_encrypted_token(&token(812)));
+        assert!(is_encrypted_token(&format!("{}==", token(200))));
+        // Too short to be one.
+        assert!(!is_encrypted_token(&token(99)));
+        assert!(!is_encrypted_token("gAAAAA"));
+        // A space, or any character outside base64url.
+        let spaced = format!("{} {}", token(60), token(60));
+        assert!(!is_encrypted_token(&spaced));
+        assert!(!is_encrypted_token(&format!("{}\n", token(200))));
+        assert!(!is_encrypted_token(&format!("{}+/", token(200))));
+        assert!(!is_encrypted_token(&format!("{}é", token(200))));
+        // Another prefix: an ordinary long word or another kind of base64.
+        assert!(!is_encrypted_token(&format!("gAAAAB{}", &token(200)[6..])));
+        assert!(!is_encrypted_token(&"a".repeat(300)));
+        assert!(!is_encrypted_token(&format!("x{}", token(200))));
+        // JSON text that holds a token is not itself one.
+        let nested = json!({"message": token(200)}).to_string();
+        assert!(!is_encrypted_token(&nested));
+        assert!(!is_encrypted_token(""));
+    }
+
+    #[test]
+    fn an_encrypted_message_in_a_tool_call_is_named_not_shown() {
+        let secret = token_of(812, "Zq9-Rw7_Kp");
+        let record = assistant(json!([
+            {"type": "tool_use", "id": "t", "name": "send_message", "input": {
+                "target": "/root",
+                "message": secret,
+                "note": "gAAAAA is how they start",
+                "short": token(40),
+                "nested": {"parts": [token(150), "plain words"]},
+                "quoted": json!({"message": token(150)}).to_string(),
+            }},
+            {"type": "tool_use", "id": "u", "name": "Echo", "input": token(120)},
+        ]));
+        let SourceBlock::ToolCall { input, .. } = &record.blocks[0] else {
+            panic!("{:?}", record.blocks[0]);
+        };
+        let Some(SourcePayload::Json { value }) = input else {
+            panic!("{input:?}");
+        };
+        assert_eq!(
+            value,
+            &json!({
+                "target": "/root",
+                "message": "encrypted (812 characters, not readable)",
+                "note": "gAAAAA is how they start",
+                "short": token(40),
+                "nested": {"parts": ["encrypted (150 characters, not readable)", "plain words"]},
+                "quoted": json!({"message": token(150)}).to_string(),
+            })
+        );
+        // No character of the token crosses.
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(!json.contains(&secret[20..120]), "{json}");
+        // A call given only a token, as text.
+        let SourceBlock::ToolCall { input, .. } = &record.blocks[1] else {
+            panic!("{:?}", record.blocks[1]);
+        };
+        assert_eq!(
+            input,
+            &Some(SourcePayload::Text {
+                text: encrypted_placeholder(120)
             })
         );
     }
