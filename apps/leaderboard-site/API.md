@@ -243,7 +243,7 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
   `googlemail.com` the dots before `@` are dropped too and both count as `gmail.com`. So
   `victim+1@gmail.com` and `v.ictim@googlemail.com` share `victim@gmail.com`'s limits. The stored email,
   the code email and the member lookup still use the exact (lowercased) address.
-- Known limit, accepted: anyone who knows an email can use up its 10 joins for the day (from several IPs),
+- Known limit, accepted: anyone who knows an email can use up its 10 joins for the day (from several IPs at once, or from one IP over about 4 hours),
   so that inbox cannot start a new join until the next UTC midnight. A code that was already sent and is
   still live keeps working, and an existing member's entry is not affected.
 - Emails are also refused (400 `invalid_email`) when the part before `@` starts or ends with a dot or has

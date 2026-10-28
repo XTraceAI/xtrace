@@ -103,7 +103,7 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
 
 ## Known limits
 
-- Anyone who knows an email address can use up its 10 joins for the day (spread over several IPs).
+- Anyone who knows an email address can use up its 10 joins for the day: from several IPs at once, or from one IP over about 4 hours (3 per hour).
   That inbox then cannot start a new join until the next UTC midnight.
   A code that was already sent and has not expired still works, and existing members keep their entry.
 - The email limits count the inbox, not the exact address: `name+tag@…` counts as `name@…`,
