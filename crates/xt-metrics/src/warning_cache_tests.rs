@@ -178,7 +178,8 @@ fn current_saved_reads_and_unchanged_refresh_never_load_history() {
         .connection
         .authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
             AuthAction::Read {
-                table_name: "records" | "record_previews" | "tool_uses" | "tool_results",
+                table_name: "records" | "record_previews" | "tool_uses" | "tool_results"
+                    | "reply_admissions",
                 ..
             } => Authorization::Deny,
             _ => Authorization::Allow,
@@ -209,7 +210,7 @@ fn current_saved_reads_and_unchanged_refresh_never_load_history() {
         .connection
         .authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
             AuthAction::Read {
-                table_name: "record_previews" | "tool_uses" | "tool_results",
+                table_name: "record_previews" | "tool_uses" | "tool_results" | "reply_admissions",
                 ..
             } => Authorization::Deny,
             _ => Authorization::Allow,

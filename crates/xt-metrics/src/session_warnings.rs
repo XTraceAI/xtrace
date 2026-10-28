@@ -7,7 +7,7 @@
 //! evidence from the store and calls it once per session, and anything that
 //! later shows a warning reads its result rather than working one out again.
 //!
-//! The four rules, and the existing answers each one reads:
+//! The five rules, and the existing answers each one reads:
 //!
 //! * **Correction**: a message the stored M-02 classification calls a
 //!   person's, sent after an agent reply, holds a correction ([`correction`]).
@@ -22,10 +22,19 @@
 //!   messages are not compared ([`comparable_prompt`]).
 //! * **Repeated failure**: two or more calls with the same stored M-20
 //!   comparison key whose saved result says they failed.
+//! * **Admitted mistake**: the agent's reply to a person's message opens with
+//!   one of the admission phrases in [`ADMISSION_WARNS`] ("you're right",
+//!   "my mistake", "sorry", …). The reply is the first agent record after the
+//!   message with text (a stored `text_len > 0`; thinking and tool calls
+//!   alone are passed over); later replies are not checked, and a new person
+//!   message before any reply text restarts the wait. Which phrases its first
+//!   [`reply_admission::REPLY_CHARS`] characters hold is the store's saved
+//!   fact (`reply_admissions`, migration 30), never re-read from text here.
 //!
 //! A person's message that opens with a tag (`<ci-monitor-event …>`,
 //! `<task-notification>`) is text a tool wrote ([`tool_written`]): neither
-//! text rule reads it, and it does not end the agent's reply.
+//! text rule reads it, it does not end the agent's reply, and it is not a
+//! message the agent replies to.
 //!
 //! Sidechain records (an agent's own sub-conversation inside the session) are
 //! left out of every rule: they are not the person's conversation.
@@ -52,6 +61,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use xt_store::{
     Host,
+    reply_admission::{self, Phrase},
     timestamp::{self, InstantKey},
     tool_result::{self, Outcome, Wording},
     tool_sent::ToolSentKind,
@@ -62,13 +72,17 @@ use xt_store::{
 /// reads: who sent each one (M-02), whether only part of a person's record is
 /// theirs, the stored interruption flag, the stated tool-result presence, the
 /// record it follows in its source, whether a stored proof says Codex wrote
-/// it as its interrupted-turn note (`?4`), and the record's conflict flag.
+/// it as its interrupted-turn note (`?4`), the record's conflict flag, its
+/// text length, and its saved admission phrases with their version and
+/// conflict flag (migration 30; names only, never text).
 pub(crate) const RECORD_QUERY: &str = "SELECT v.uuid,v.ts,v.ts_ms,v.type,v.is_sidechain,
        v.human_is_eligible,v.human_text_len IS NOT v.text_len,v.is_interrupted,
        v.is_tool_result_carrier,v.parent_uuid,
        EXISTS(SELECT 1 FROM tool_sent_inputs t WHERE t.record_uuid=v.uuid
-           AND t.session_id=v.session_id AND t.evidence_kind=?4),v.has_conflict
+           AND t.session_id=v.session_id AND t.evidence_kind=?4),v.has_conflict,
+       v.text_len,a.phrases,a.fact_version,a.conflicted
      FROM v_session_events v
+     LEFT JOIN reply_admissions a ON a.record_uuid=v.uuid AND a.session_id=v.session_id
      WHERE v.session_id=?1 AND v.ts_ms>=?2 AND v.ts_ms<?3";
 
 /// The saved facts of every tool result in the session (migration 27): the
@@ -112,8 +126,12 @@ pub const STILL_REACH: usize = 5;
 pub const REPEAT_AT_LEAST: usize = 2;
 /// A prompt of fewer words ("yes", "go on") is not compared with the others.
 pub const PROMPT_MIN_WORDS: usize = 4;
+/// The admission phrases that make an admitted-mistake warning: all of them,
+/// for now. The store saves every phrase it finds, so narrowing this list
+/// needs no rescan.
+pub const ADMISSION_WARNS: &[Phrase] = &Phrase::ALL;
 
-/// The four rules. A saved answer naming any other kind (such as the
+/// The five rules. A saved answer naming any other kind (such as the
 /// removed `repeated_calls`) does not parse, and is recounted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,14 +140,16 @@ pub enum WarningKind {
     Interruption,
     RepeatedPrompt,
     RepeatedFailure,
+    AdmittedMistake,
 }
 
 impl WarningKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Correction,
         Self::Interruption,
         Self::RepeatedPrompt,
         Self::RepeatedFailure,
+        Self::AdmittedMistake,
     ];
 
     /// The kind's stable name, as serialized and in a warning's [`SessionWarning::id`].
@@ -139,6 +159,7 @@ impl WarningKind {
             Self::Interruption => "interruption",
             Self::RepeatedPrompt => "repeated_prompt",
             Self::RepeatedFailure => "repeated_failure",
+            Self::AdmittedMistake => "admitted_mistake",
         }
     }
 }
@@ -152,15 +173,17 @@ pub struct SessionWarning {
     /// the session starts at: the message (a correction), the marker record,
     /// or the stopped call's result record and that result's block in it as
     /// `record#block` (an interruption), the first of the repeated messages
-    /// (a repeated prompt), or the
-    /// first failed result's `record#block` (a repeated failure). Saved IDs
+    /// (a repeated prompt), the
+    /// first failed result's `record#block` (a repeated failure), or the
+    /// agent's reply (an admitted mistake). Saved IDs
     /// and positions only; it stays the same while the session grows. See
     /// [`SessionWarning::id`].
     pub anchor: String,
     /// The moment it points at, on the stored millisecond projection: the
-    /// message, the interruption, the first repeat.
+    /// message, the interruption, the first repeat, the agent's reply.
     pub at_ms: i64,
-    /// The saved records it points at, earliest first.
+    /// The saved records it points at, earliest first. An admitted mistake
+    /// names the person's message and then the agent's reply.
     pub record_uuids: Vec<String>,
     /// One short sentence. A correction quotes its matched span, including
     /// words between "still" and its nearby negative word.
@@ -181,8 +204,8 @@ pub struct SessionWarning {
     pub repeat: Option<WarningPoint>,
     /// How big a warning that can grow is now: how many times the prompt
     /// was sent (a repeated prompt) or how many times the call failed (a
-    /// repeated failure). `None` for a correction or an interruption, which
-    /// are one event each. A dismissal keeps the size it was dismissed at,
+    /// repeated failure). `None` for a correction, an interruption or an
+    /// admitted mistake, which are one event each. A dismissal keeps the size it was dismissed at,
     /// and the warning is dismissed only while it has not grown past it.
     /// Not serialised.
     #[serde(skip)]
@@ -271,6 +294,11 @@ pub enum Missing {
     UnmatchedResults { results: u64 },
     /// Failed calls whose stored comparison key cannot be compared.
     FailedCallKey { reason: UnknownRepeats, calls: u64 },
+    /// Agent replies to a person's message whose admission phrases the index
+    /// has not saved, or saved in a way this build cannot read: indexed
+    /// before they were kept, content never seen, two observations that
+    /// disagreed, or a later build's facts.
+    ReplyNotChecked { replies: u64 },
 }
 
 /// Whether a rule read every input it needed.
@@ -304,6 +332,7 @@ pub struct WarningChecks {
     pub interruption: CheckState,
     pub repeated_prompt: CheckState,
     pub repeated_failure: CheckState,
+    pub admitted_mistake: CheckState,
 }
 
 impl WarningChecks {
@@ -313,6 +342,7 @@ impl WarningChecks {
             WarningKind::Interruption => &self.interruption,
             WarningKind::RepeatedPrompt => &self.repeated_prompt,
             WarningKind::RepeatedFailure => &self.repeated_failure,
+            WarningKind::AdmittedMistake => &self.admitted_mistake,
         }
     }
 }
@@ -409,6 +439,48 @@ pub(crate) struct EvidenceRecord {
     /// marker, or a stored proof of Codex's interrupted-turn note. `None`
     /// unknown.
     pub(crate) interrupted: Option<bool>,
+    /// What the admission rule reads about an agent record's text.
+    pub(crate) reply: ReplyFacts,
+}
+
+/// An agent record's text, as the admitted-mistake rule reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReplyFacts {
+    /// Not an agent record, or one whose stored text length is 0: thinking
+    /// or tool calls only. It is never a reply.
+    NoText,
+    /// Text whose saved phrases cannot be read: no row, a conflicted row or
+    /// record, a later build's facts, a name this build does not know, or a
+    /// record whose text length is not known.
+    NotChecked,
+    /// The saved admission phrases, in order of first appearance (perhaps
+    /// none).
+    Checked(Vec<Phrase>),
+}
+
+impl ReplyFacts {
+    /// What a stored agent record says: its text length, and its saved row's
+    /// phrases, version and conflict state (each `None` without a row), with
+    /// the record's own conflict flag.
+    pub(crate) fn read(
+        text_len: Option<i64>,
+        phrases: Option<String>,
+        version: Option<i64>,
+        conflicted: Option<bool>,
+        record_conflict: bool,
+    ) -> Self {
+        if text_len == Some(0) {
+            return Self::NoText;
+        }
+        match (phrases, version, conflicted) {
+            (Some(phrases), Some(version), Some(false))
+                if !record_conflict && version <= reply_admission::FACT_VERSION =>
+            {
+                reply_admission::from_saved(&phrases).map_or(Self::NotChecked, Self::Checked)
+            }
+            _ => Self::NotChecked,
+        }
+    }
 }
 
 /// The call a result answers, from its stored metadata.
@@ -619,6 +691,12 @@ pub(crate) enum WarningReason {
         moments: Vec<i64>,
         count: u64,
     },
+    AdmittedMistake {
+        /// The first phrase found that warns.
+        phrase: Phrase,
+        /// The reply's time.
+        moment: i64,
+    },
 }
 
 impl WarningReason {
@@ -646,6 +724,9 @@ impl WarningReason {
                     call_words(tool, *tool_only),
                     times_word(*count as usize)
                 )
+            }
+            Self::AdmittedMistake { phrase, .. } => {
+                format!("Agent said \"{}\"", phrase.label())
             }
         }
     }
@@ -684,6 +765,11 @@ impl WarningReason {
                 call_words(tool, *tool_only),
                 times_word(*count as usize),
                 clock_times(moments, zone)
+            ),
+            Self::AdmittedMistake { phrase, moment } => format!(
+                "the agent replied \"{}\" after your message ({})",
+                phrase.label(),
+                clock_times(&[*moment], zone)
             ),
         }
     }
@@ -786,6 +872,16 @@ impl NeutralSessionWarnings {
                         WarningKind::RepeatedFailure,
                         WarningReason::RepeatedFailure { count, moments, .. },
                     ) => repeated(*count, moments, false),
+                    // The person's message, then the reply it points at.
+                    (
+                        WarningKind::AdmittedMistake,
+                        WarningReason::AdmittedMistake { moment, .. },
+                    ) => {
+                        single()
+                            && *moment == warning.at_ms
+                            && warning.record_uuids.len() == 2
+                            && warning.record_uuids[1] == warning.anchor
+                    }
                     _ => false,
                 }
             })
@@ -877,8 +973,34 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
     let mut interruption_unknown = 0;
     let mut prompts = BTreeMap::<String, Vec<&EvidenceRecord>>::new();
     let (mut person_messages, mut person_messages_read) = (0, 0);
+    // The person's message whose reply is still to come: the first agent
+    // record after it with text is that reply.
+    let mut awaiting: Option<&EvidenceRecord> = None;
+    let mut reply_not_checked = 0;
     for record in evidence.records.iter().filter(|r| !r.sidechain) {
         if record.agent {
+            if record.reply != ReplyFacts::NoText
+                && let Some(message) = awaiting.take()
+            {
+                match &record.reply {
+                    ReplyFacts::Checked(found) => {
+                        if let Some(phrase) = found.iter().find(|p| ADMISSION_WARNS.contains(p)) {
+                            warnings.push(warn(
+                                WarningKind::AdmittedMistake,
+                                record.uuid.clone(),
+                                record.at_ms,
+                                vec![message.uuid.clone(), record.uuid.clone()],
+                                WarningReason::AdmittedMistake {
+                                    phrase: *phrase,
+                                    moment: record.at_ms,
+                                },
+                            ));
+                        }
+                    }
+                    ReplyFacts::NotChecked => reply_not_checked += 1,
+                    ReplyFacts::NoText => {}
+                }
+            }
             replied = true;
             open = None;
             continue;
@@ -958,6 +1080,7 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
             continue;
         }
         open = None;
+        awaiting = Some(record);
         let after_reply = std::mem::replace(&mut replied, false);
         let mut corrected = |phrase: String| {
             warnings.push(warn(
@@ -1112,6 +1235,17 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
         });
     }
     interruption_missing.extend(outcome_missing);
+    let mut admission_missing = Vec::new();
+    if reply_not_checked > 0 {
+        admission_missing.push(Missing::ReplyNotChecked {
+            replies: reply_not_checked,
+        });
+    }
+    if unclassified > 0 {
+        admission_missing.push(Missing::Unclassified {
+            inputs: unclassified,
+        });
+    }
 
     warnings.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then(a.kind.cmp(&b.kind)));
     NeutralSessionWarnings {
@@ -1130,6 +1264,7 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
                 prompt_wrapped,
             )),
             repeated_failure: CheckState::of(failure_missing),
+            admitted_mistake: CheckState::of(admission_missing),
         },
         person_messages,
         person_messages_read,
@@ -1459,6 +1594,7 @@ impl MetricsDb {
             }
             let agent = row.get::<_, String>(3)? == "assistant";
             let turn_aborted: bool = row.get(10)?;
+            let record_conflict: bool = row.get(11)?;
             rows.push(Row {
                 instant,
                 record: EvidenceRecord {
@@ -1475,11 +1611,22 @@ impl MetricsDb {
                     } else {
                         row.get(7)?
                     },
+                    reply: if agent {
+                        ReplyFacts::read(
+                            row.get(12)?,
+                            row.get(13)?,
+                            row.get(14)?,
+                            row.get(15)?,
+                            record_conflict,
+                        )
+                    } else {
+                        ReplyFacts::NoText
+                    },
                 },
                 parent: row.get(9)?,
                 partial: row.get(6)?,
                 carrier: !agent
-                    && (row.get::<_, bool>(11)? || row.get::<_, Option<bool>>(8)? != Some(false)),
+                    && (record_conflict || row.get::<_, Option<bool>>(8)? != Some(false)),
             });
         }
         drop(result);
@@ -1677,6 +1824,13 @@ mod tests {
                 },
                 "Bash failed 3 times",
             ),
+            (
+                WarningReason::AdmittedMistake {
+                    phrase: Phrase::YouAreRight,
+                    moment: 0,
+                },
+                "Agent said \"you're right\"",
+            ),
         ];
         for (reason, expected) in cases {
             assert_eq!(reason.compact(), expected);
@@ -1692,6 +1846,21 @@ mod tests {
             person: Some(false),
             words: None,
             interrupted: Some(false),
+            reply: ReplyFacts::Checked(vec![]),
+        }
+    }
+    /// An agent reply whose saved phrases are `found`.
+    fn said(uuid: &str, minute: i64, found: &[Phrase]) -> EvidenceRecord {
+        EvidenceRecord {
+            reply: ReplyFacts::Checked(found.to_vec()),
+            ..agent(uuid, minute)
+        }
+    }
+    /// An agent record with thinking or tool calls only.
+    fn no_text(uuid: &str, minute: i64) -> EvidenceRecord {
+        EvidenceRecord {
+            reply: ReplyFacts::NoText,
+            ..agent(uuid, minute)
         }
     }
     fn person(uuid: &str, minute: i64, text: &str) -> EvidenceRecord {
@@ -1703,6 +1872,7 @@ mod tests {
             person: Some(true),
             words: Some(PersonText::Whole(text.into())),
             interrupted: Some(false),
+            reply: ReplyFacts::NoText,
         }
     }
     /// A person's message of which only the first part was kept.
@@ -2413,6 +2583,250 @@ mod tests {
         assert_eq!(found.checks.repeated_failure, missing);
         assert_eq!(found.checks.interruption, missing);
         assert!(found.checks.correction.is_complete());
+    }
+
+    fn admissions(found: &SessionWarnings) -> Vec<(Vec<String>, &str)> {
+        of_kind(found, WarningKind::AdmittedMistake)
+            .into_iter()
+            .map(|w| (w.record_uuids.clone(), w.reason.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn the_first_reply_with_text_is_checked_past_thinking_and_tool_records() {
+        let found = decide(
+            &evidence(vec![
+                person("p1", 0, "the parser drops the last line"),
+                no_text("think", 1),
+                automatic("result", 1),
+                no_text("call", 2),
+                said("a1", 5, &[Phrase::YouAreRight, Phrase::IMisread]),
+            ]),
+            &utc(),
+        );
+        assert_eq!(
+            admissions(&found),
+            vec![(
+                uuids(&["p1", "a1"]),
+                "the agent replied \"you're right\" after your message (14:18)"
+            )]
+        );
+        let warning = of_kind(&found, WarningKind::AdmittedMistake)[0];
+        assert_eq!(warning.id(), "admitted_mistake:a1");
+        assert_eq!(warning.anchor, "a1");
+        assert_eq!(warning.at_ms, T0 + 5 * MINUTE);
+        assert_eq!(warning.size, None);
+        assert_eq!(warning.compact_reason, "Agent said \"you're right\"");
+        assert_eq!(
+            warning.points_at(),
+            WarningPoint {
+                record_uuid: "a1".into(),
+                block: None
+            }
+        );
+        assert!(found.checks.admitted_mistake.is_complete());
+    }
+
+    #[test]
+    fn only_the_first_reply_counts_and_a_new_message_restarts_the_wait() {
+        let found = decide(
+            &evidence(vec![
+                // A reply with text but no phrase answers p1; the later
+                // apology is not its reply.
+                person("p1", 0, "build the parser"),
+                said("a1", 1, &[]),
+                said("a2", 2, &[Phrase::Sorry]),
+                // p2 gets no reply text before p3: p3's reply is checked, as
+                // p3's.
+                person("p2", 3, "and the tests"),
+                no_text("call", 4),
+                person("p3", 5, "actually only the tests"),
+                said("a3", 6, &[Phrase::MyMistake]),
+            ]),
+            &utc(),
+        );
+        assert_eq!(
+            admissions(&found)
+                .into_iter()
+                .map(|(records, _)| records)
+                .collect::<Vec<_>>(),
+            vec![uuids(&["p3", "a3"])]
+        );
+        // No message before it: nothing is awaited.
+        let opening = decide(&evidence(vec![said("a0", 0, &[Phrase::Sorry])]), &utc());
+        assert!(admissions(&opening).is_empty());
+        assert!(opening.checks.admitted_mistake.is_complete());
+    }
+
+    #[test]
+    fn a_tool_written_or_automatic_message_is_not_replied_to() {
+        let found = decide(
+            &evidence(vec![
+                person(
+                    "t1",
+                    0,
+                    "<task-notification><summary>done</summary></task-notification>",
+                ),
+                said("a1", 1, &[Phrase::GoodCatch]),
+                automatic("hook", 2),
+                said("a2", 3, &[Phrase::Sorry]),
+                // A tool-written message does not restart a person's wait.
+                person("p1", 4, "run the tests"),
+                person(
+                    "t2",
+                    5,
+                    "<ci-monitor-event kind=\"check\">failed</ci-monitor-event>",
+                ),
+                said("a3", 6, &[Phrase::FairPoint]),
+            ]),
+            &utc(),
+        );
+        assert_eq!(
+            admissions(&found)
+                .into_iter()
+                .map(|(records, _)| records)
+                .collect::<Vec<_>>(),
+            vec![uuids(&["p1", "a3"])]
+        );
+    }
+
+    #[test]
+    fn sidechain_replies_are_not_the_person_s_reply() {
+        let mut side = said("side", 1, &[Phrase::Sorry]);
+        side.sidechain = true;
+        let found = decide(
+            &evidence(vec![person("p1", 0, "build it"), side, said("a1", 2, &[])]),
+            &utc(),
+        );
+        assert!(admissions(&found).is_empty());
+    }
+
+    #[test]
+    fn unread_replies_and_unknown_senders_leave_the_check_incomplete() {
+        let unread = EvidenceRecord {
+            reply: ReplyFacts::NotChecked,
+            ..agent("a1", 1)
+        };
+        let mut unknown = person("u", 2, "");
+        unknown.person = None;
+        unknown.words = None;
+        let found = decide(
+            &evidence(vec![
+                person("p1", 0, "build it"),
+                unread,
+                // An unread reply that answers nothing awaited is not counted.
+                EvidenceRecord {
+                    reply: ReplyFacts::NotChecked,
+                    ..agent("a2", 2)
+                },
+                unknown,
+                person("p2", 3, "and test it"),
+                said("a3", 4, &[Phrase::IShouldHave]),
+            ]),
+            &utc(),
+        );
+        // A warning found among what could be read is still a warning.
+        assert_eq!(admissions(&found).len(), 1);
+        assert_eq!(
+            found.checks.admitted_mistake,
+            CheckState::Incomplete {
+                missing: vec![
+                    Missing::ReplyNotChecked { replies: 1 },
+                    Missing::Unclassified { inputs: 1 },
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn saved_facts_are_read_only_when_this_build_can_trust_them() {
+        let read = |len, phrases: Option<&str>, version, conflicted, record_conflict| {
+            ReplyFacts::read(
+                len,
+                phrases.map(str::to_owned),
+                version,
+                conflicted,
+                record_conflict,
+            )
+        };
+        let v = reply_admission::FACT_VERSION;
+        assert_eq!(read(Some(0), None, None, None, false), ReplyFacts::NoText);
+        assert_eq!(
+            read(
+                Some(5),
+                Some("sorry good_catch"),
+                Some(v),
+                Some(false),
+                false
+            ),
+            ReplyFacts::Checked(vec![Phrase::Sorry, Phrase::GoodCatch])
+        );
+        assert_eq!(
+            read(Some(5), Some(""), Some(v), Some(false), false),
+            ReplyFacts::Checked(vec![])
+        );
+        for unread in [
+            // No row: indexed before the facts were kept.
+            read(Some(5), None, None, None, false),
+            // Unknown text length and no row.
+            read(None, None, None, None, false),
+            read(Some(5), Some("sorry"), Some(v), Some(true), false),
+            read(Some(5), Some("sorry"), Some(v), Some(false), true),
+            read(Some(5), Some("sorry"), Some(v + 1), Some(false), false),
+            read(Some(5), Some("sorry wrongly"), Some(v), Some(false), false),
+        ] {
+            assert_eq!(unread, ReplyFacts::NotChecked);
+        }
+    }
+
+    #[test]
+    fn a_correction_and_an_admission_on_one_exchange_both_warn() {
+        let found = decide(
+            &evidence(vec![
+                person("p1", 0, "build the parser"),
+                said("a1", 1, &[]),
+                person("p2", 2, "that is wrong"),
+                said("a2", 3, &[Phrase::YouAreRight]),
+            ]),
+            &utc(),
+        );
+        let kinds: Vec<_> = found
+            .warnings
+            .iter()
+            .map(|w| (w.kind, w.record_uuids.clone()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (WarningKind::Correction, uuids(&["p2"])),
+                (WarningKind::AdmittedMistake, uuids(&["p2", "a2"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_admission_survives_the_saved_answer_round_trip() {
+        let neutral = decide_neutral(&evidence(vec![
+            person("p1", 0, "build it"),
+            said("a1", 1, &[Phrase::Apology]),
+        ]));
+        assert!(neutral.is_valid_for("s"));
+        let json = serde_json::to_string(&neutral).unwrap();
+        assert!(json.contains("\"apology\""), "{json}");
+        let back: NeutralSessionWarnings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, neutral);
+        // A saved answer naming a phrase this build does not know is not read.
+        assert!(
+            serde_json::from_str::<NeutralSessionWarnings>(
+                &json.replace("\"apology\"", "\"oops\"")
+            )
+            .is_err()
+        );
+        // One that does not name the reply as its anchor and second record is
+        // refused.
+        let mut wrong = neutral.clone();
+        wrong.warnings[0].record_uuids.reverse();
+        assert!(!wrong.is_valid_for("s"));
     }
 
     #[test]
