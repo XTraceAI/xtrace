@@ -61,12 +61,14 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
 ## Deploy (first time)
 
 1. In Vercel, create a new project from this GitHub repository.
-2. Set **Root Directory** to `apps/leaderboard-site`. Leave the framework as **Other**.
-   Leave the build command empty. Leave the install command as it is:
-   `vercel.json` sets it.
-   That install command uses the repository's pnpm version (10.33.0) and skips the desktop app's packages.
-   It turns off the strict Node version check. Without that, Vercel's install fails
-   whenever its Node 22 version differs from the exact one the repository asks for.
+2. Set **Root Directory** to `apps/leaderboard-site`. Leave the framework as **Other**
+   and the build command empty. Set **Node.js Version** to 22.x.
+   In **Settings → Environment Variables**, add `npm_config_engine_strict` with the value `false`
+   for Production and Preview.
+   Vercel runs a plain `pnpm install` at the repository root for this project. It does not use the
+   `installCommand` in `vercel.json` or the project's install command setting (seen on the first deploy,
+   October 2026). The repository asks for one exact Node version, so without that variable the install
+   fails whenever Vercel's Node 22 is a different patch release.
 3. Open the project's **Storage** tab, add **Neon** from the Marketplace, and connect it to the project.
    This sets `DATABASE_URL` for the project.
 4. Set up email with Resend. MemHub already sends from the domain `emails.xtrace.ai` through Resend,
@@ -93,6 +95,8 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
    It prints `Schema applied: 5 statement(s).` Running it again is safe.
 
 6. Deploy. Open the deployment's address and check that the page says "No one is listed yet."
+   The build log also shows TypeScript errors about `Request` from Vercel's own type check.
+   They do not stop the build.
 7. In the project's **Domains** settings, add `leaderboard.xtrace.ai`, then add the DNS record Vercel shows you.
 8. Add an outer layer against floods. In the project's **Firewall**, add a rate-limit rule for paths
    starting with `/api/` (for example 60 requests per minute per IP), and a stricter one for `/api/join`
@@ -117,6 +121,15 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
 
 ## Later changes
 
-- Code changes deploy when they reach the branch Vercel watches.
+- The `xtrace-leaderboard` project has Git deployments turned off, so pushes and merges do not deploy it
+  and other branches of this repository get no Vercel status. After a site change reaches `main`,
+  deploy `main` to production by hand: in the Vercel dashboard (**Deployments → Create Deployment**,
+  branch `main`), or with the Vercel CLI:
+
+  ```sh
+  echo '{"name":"xtrace-leaderboard","project":"xtrace-leaderboard","target":"production","gitSource":{"type":"github","org":"XTraceAI","repo":"xtrace","ref":"main"}}' \
+    | vercel api /v13/deployments --scope xt-race -X POST --input -
+  ```
+
 - If `schema.sql` changes, run step 5 again before deploying the code that needs it.
 - To remove someone by hand, delete their row from `members` in the Neon console.
