@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/XTraceAI/agent-plugins.git",
-  "commit": "7dc225204b2a0287d93e3fb634b84cc21dc92bdd",
+  "commit": "6cddf908d50015e657d4d4df682c1b6e05579457",
   "plugin_root": "plugins/memhub",
   "plugin_version": "0.58.3",
   "reader_sources": {
