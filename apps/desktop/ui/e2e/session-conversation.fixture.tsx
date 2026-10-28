@@ -147,6 +147,27 @@ function conversationFixture(source: FixtureDataSource, row: SessionRow) {
         value: { message: 'encrypted (812 characters, not readable)', target: '/root' },
       },
     };
+  // `?tasks`: a Claude Desktop plan update, as the native side sends it: the
+  // input as recorded, and its tasks read out (`transcript_dto::task_list`).
+  if (parameters.has('tasks')) {
+    const tasks = [
+      { content: 'Check the configuration', status: 'completed' },
+      { content: 'Rename the sample app', status: 'in_progress' },
+      { content: 'Keep the saved settings', status: 'pending' },
+    ];
+    records[2]!.blocks[1] = {
+      kind: 'tool_call',
+      index: 1,
+      name: 'mcp__ccd_turn__update_plan',
+      call_id: 'call-1',
+      input: { kind: 'json', value: { items: tasks, scope: 'first_task' } },
+      task_list: [
+        { text: 'Check the configuration', status: 'done' },
+        { text: 'Rename the sample app', status: 'in_progress' },
+        { text: 'Keep the saved settings', status: 'not_started' },
+      ],
+    };
+  }
   const repeated = (
     record_uuid: string,
     block_index: number,

@@ -102,7 +102,21 @@ export interface ToolCallBlock {
   /** The call's own id, kept so a result and a jump target can both find this call. */
   readonly callId?: string | null;
   readonly input?: TranscriptPayload;
+  /**
+   * The input read as a task list, when the native side found it is exactly one
+   * (`transcript_dto::task_list`); the card then draws a checklist in place of the input.
+   */
+  readonly taskList?: readonly TaskListItem[] | null;
   readonly outcome: ToolOutcome;
+}
+
+/** Where one task stands, as the native side decided it. */
+export type TaskStatus = 'done' | 'in_progress' | 'not_started';
+
+/** One task of a task-list call: its words, verbatim, and where it stands. */
+export interface TaskListItem {
+  readonly text: string;
+  readonly status: TaskStatus;
 }
 
 /** A result whose call is not in this view — carried rather than dropped. */
@@ -295,14 +309,16 @@ function plural(n: number, one: string, many = `${one}s`): string {
  * The tool set is open: an MCP name or one that ships next week has to come out readable
  * without an entry in the table above, which is why the default branch counts rather than
  * guessing a verb for it.
+ *
+ * An MCP name is `mcp__<server>__<tool>`, and a server's own name may hold single
+ * underscores (`mcp__ccd_turn__update_plan`, `mcp__plugin_memhub_memhub__link_pr`), so the
+ * tool is what follows the last `__`.
  */
 export function humanizeToolName(name: string): string {
-  const stripped = name
-    .replace(/^mcp__[^_]+__/, '')
-    .replace(/^[a-z0-9-]+__/, '')
-    .replace(/[_-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const tool = name.startsWith('mcp__')
+    ? name.slice(name.lastIndexOf('__') + 2)
+    : name.replace(/^[a-z0-9-]+__/, '');
+  const stripped = tool.replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!stripped) return 'Tool';
   return stripped.charAt(0).toUpperCase() + stripped.slice(1);
 }

@@ -703,6 +703,10 @@ fn a_call_input_is_one_short_line() {
     assert_eq!(long.chars().count(), MAX_CALL_INPUT_CHARS);
     assert!(long.ends_with('…'));
     assert_eq!(call_line("Bash", None), "(ran Bash)");
+    // A task list reaches Diagnose as its compact JSON, like any other input:
+    // the checklist is the screen's drawing of it, and the model reads JSON.
+    let plan = json!({"items": [{"content": "a", "status": "in_progress"}]});
+    assert_eq!(short_input(&json(plan.clone())), plan.to_string());
 }
 
 #[test]

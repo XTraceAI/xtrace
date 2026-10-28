@@ -52,3 +52,63 @@ it('prints an encrypted message as its short native line beside the rest of the 
     unmount();
   }
 });
+
+// The header reads as the strip's row does; the recorded name stays on hover and on the node.
+it('names a call by its readable tool name and keeps the recorded name on hover', () => {
+  const plan: ToolCallBlock = { ...call, name: 'mcp__ccd_turn__update_plan' };
+  const { container } = render(<ToolCallCard block={plan} excerpt />);
+  const name = container.querySelector('.xt-tool-name')!;
+  expect(name.textContent).toBe('Update plan');
+  expect(name.getAttribute('title')).toBe('mcp__ccd_turn__update_plan');
+  expect(container.querySelector('.xt-tool-card')!.getAttribute('data-tool')).toBe(
+    'mcp__ccd_turn__update_plan',
+  );
+  cleanup();
+  const { container: bash } = render(<ToolCallCard block={call} excerpt />);
+  expect(bash.querySelector('.xt-tool-name')!.textContent).toBe('Bash');
+  expect(bash.querySelector('.xt-tool-name')!.hasAttribute('title')).toBe(false);
+});
+
+// Which inputs are task lists is decided natively (`transcript_dto::task_list`); the card
+// draws the tasks it is handed and leaves the JSON out.
+it('draws a task list as a checklist in place of its JSON, in a transcript and an excerpt', () => {
+  const plan: ToolCallBlock = {
+    ...call,
+    name: 'mcp__ccd_turn__update_plan',
+    input: {
+      kind: 'json',
+      value: { items: [{ content: 'Fix the hover', status: 'completed' }] },
+    },
+    taskList: [
+      { text: 'Fix the hover', status: 'done' },
+      { text: 'Build the runner', status: 'in_progress' },
+      { text: 'Add the screens', status: 'not_started' },
+    ],
+  };
+  for (const excerpt of [false, true]) {
+    const { container, unmount } = render(<ToolCallCard block={plan} excerpt={excerpt} />);
+    const items = screen.getByRole('list', { name: 'Tasks' }).querySelectorAll('li');
+    expect([...items].map((item) => item.textContent)).toEqual([
+      '✓Fix the hover (done)',
+      '◐Build the runner (in progress)',
+      '○Add the screens (not started)',
+    ]);
+    expect([...items].map((item) => item.dataset.status)).toEqual([
+      'done',
+      'in_progress',
+      'not_started',
+    ]);
+    expect(container.textContent).not.toContain('"items"');
+    expect(container.querySelector('[data-payload="input"] pre')).toBeNull();
+    unmount();
+  }
+});
+
+it('shows the input as it is when there is no task list', () => {
+  for (const taskList of [undefined, null, []]) {
+    const { container, unmount } = render(<ToolCallCard block={{ ...call, taskList }} />);
+    expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
+    expect(container.textContent).toContain('pnpm test');
+    unmount();
+  }
+});

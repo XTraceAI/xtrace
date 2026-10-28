@@ -596,6 +596,7 @@ pub fn conversation(
                                 name,
                                 call_id,
                                 input,
+                                ..
                             } => {
                                 if let Some(id) = call_id {
                                     calls.insert(id.clone(), name.clone());

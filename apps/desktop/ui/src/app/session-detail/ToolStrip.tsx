@@ -4,8 +4,11 @@ import { StatePill } from '../../kit';
 import { CodeSurface } from './TranscriptText';
 import { RevealContext } from './transcript-reveal';
 import {
+  type TaskListItem,
+  type TaskStatus,
   type ToolBlock,
   type TranscriptPayload,
+  humanizeToolName,
   toolDetail,
   toolFailureCount,
   toolGroups,
@@ -55,6 +58,40 @@ export function ToolPayload({ label, payload }: { label: string; payload?: Trans
   );
 }
 
+/** How each task status is drawn: a mark for the eye and the word a screen reader says. */
+const TASK_STATUS: Record<TaskStatus, { mark: string; word: string }> = {
+  done: { mark: '✓', word: 'done' },
+  in_progress: { mark: '◐', word: 'in progress' },
+  not_started: { mark: '○', word: 'not started' },
+};
+
+/**
+ * A task-list call's input as a checklist: one line per task, with a mark for where it
+ * stands. Which inputs are task lists, and each task's status, are decided natively
+ * (`transcript_dto::task_list`); this only draws them.
+ */
+export function TaskChecklist({ items }: { items: readonly TaskListItem[] }) {
+  return (
+    <div className="xt-task-list" data-payload="input">
+      <span className="xt-tx-code-label">Tasks</span>
+      <ul aria-label="Tasks">
+        {items.map((item, index) => {
+          const status = TASK_STATUS[item.status];
+          return (
+            <li key={index} data-status={item.status}>
+              <span className="xt-task-mark" aria-hidden="true" title={status.word}>
+                {status.mark}
+              </span>
+              <span className="xt-task-text">{item.text}</span>
+              <span className="xt-task-status">{` (${status.word})`}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * One tool call, rendered generically — the same card for `Bash`, for `Read`, and for an MCP
  * name that ships next week.
@@ -100,6 +137,7 @@ export function ToolCallCard({
   highlighted?: boolean;
 }) {
   const name = toolLabel(block);
+  const readable = humanizeToolName(name);
   const argument = toolPrimaryArgument(block);
   const outcome = block.outcome;
   const failed = outcome.state === 'failed';
@@ -119,7 +157,10 @@ export function ToolCallCard({
       data-call-id={block.callId ?? undefined}
     >
       <div className="xt-tool-card-head">
-        <span className="xt-tool-name">{name}</span>
+        {/* The readable name, as the strip's row says it; the recorded name stays on hover. */}
+        <span className="xt-tool-name" title={readable === name ? undefined : name}>
+          {readable}
+        </span>
         {argument ? (
           <span className="xt-tool-arg">{argument}</span>
         ) : (
@@ -155,7 +196,11 @@ export function ToolCallCard({
         </p>
       ) : null}
 
-      {block.kind === 'tool_call' ? <ToolPayload label="Input" payload={block.input} /> : null}
+      {block.kind !== 'tool_call' ? null : block.taskList?.length ? (
+        <TaskChecklist items={block.taskList} />
+      ) : (
+        <ToolPayload label="Input" payload={block.input} />
+      )}
       {outcome.state === 'unrecorded' ||
       outcome.state === 'ambiguous' ||
       outcome.state === 'not_checked' ? null : (

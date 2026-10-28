@@ -220,6 +220,7 @@ fn an_indexed_session_opens_its_own_records_exactly() {
                 input: Some(SourcePayload::Json {
                     value: json!({"file_path": "/repo/fixture/a.txt"}),
                 }),
+                task_list: None,
             },
         ]
     );
@@ -462,6 +463,7 @@ fn a_tool_name_and_a_payload_cross_exactly_as_the_record_wrote_them() {
             input: Some(SourcePayload::Json {
                 value: Value::Object(input.clone()),
             }),
+            task_list: None,
         }]
     );
 }

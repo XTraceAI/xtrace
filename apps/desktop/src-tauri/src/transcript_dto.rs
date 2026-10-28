@@ -33,7 +33,10 @@
 //! ([`is_encrypted_token`]) crosses as a short sentence saying so
 //! ([`encrypted_placeholder`]), so a Codex agent's `send_message` shows as
 //! `"message": "encrypted (812 characters, not readable)"` rather than a
-//! screen of ciphertext.
+//! screen of ciphertext. And an input that is exactly a task list
+//! ([`task_list`]: Claude Desktop's and Codex's `update_plan`, Claude Code's
+//! `TodoWrite`) also crosses as its tasks and their statuses, so the view can
+//! draw a checklist instead of the list's JSON.
 use serde::Serialize;
 use serde_json::Value;
 use ts_rs::TS;
@@ -84,6 +87,23 @@ pub enum SourceResultPart {
     Unshown { label: Option<String> },
 }
 
+/// Where one task of a task list stands. Task-list tools write three values
+/// (`completed`, `in_progress`, `pending`); each is one of these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Done,
+    InProgress,
+    NotStarted,
+}
+
+/// One task of a task list: its words, verbatim, and where it stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct TaskListItem {
+    pub text: String,
+    pub status: TaskStatus,
+}
+
 /// One content block of a record, in the record's own order.
 ///
 /// **`index` is the block's real place in its record's content**, which is the
@@ -118,6 +138,13 @@ pub enum SourceBlock {
         name: String,
         call_id: Option<String>,
         input: Option<SourcePayload>,
+        /// The call's input read as a task list ([`task_list`]), when it is
+        /// exactly one; `null` for every other input, which the view shows
+        /// as it is. Left off the wire when absent, so every other call
+        /// crosses exactly as before.
+        #[ts(optional = nullable)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_list: Option<Vec<TaskListItem>>,
     },
     /// A result, where the record put it. `failed` is the record's own
     /// `is_error`; absent means it did not say so, which is not a failure.
@@ -284,12 +311,95 @@ fn readable(value: &Value) -> Value {
 }
 
 /// A tool call's arguments as the record carried them, with encrypted
-/// tokens named rather than shown ([`readable`]).
-fn payload(value: &Value) -> SourcePayload {
-    match readable(value) {
+/// tokens already named rather than shown ([`readable`]).
+fn payload(value: Value) -> SourcePayload {
+    match value {
         Value::String(text) => SourcePayload::Text { text },
         other => SourcePayload::Json { value: other },
     }
+}
+
+/// The field each task-list tool keeps its tasks in, the field each task
+/// keeps its words in, and the other top-level fields the tool may write
+/// beside them without changing what the list says:
+///
+/// - Claude Desktop's `update_plan`: `{"items": [{"content", "status"}],
+///   "scope": "<word>"}`;
+/// - Claude Code's `TodoWrite`: `{"todos": [{"content", "status",
+///   "activeForm"}]}` (older versions add `id` and `priority`);
+/// - Codex's `update_plan`: `{"plan": [{"step", "status"}],
+///   "explanation": "<text>"}`, read only when the explanation is absent or
+///   empty, because a list shown without it would drop the agent's words.
+const TASK_LISTS: [(&str, &str, &[&str]); 3] = [
+    ("items", "content", &["scope"]),
+    ("todos", "content", &[]),
+    ("plan", "step", &["explanation"]),
+];
+
+/// Fields a task may carry beside its words and status that a checklist
+/// leaves out: Claude Code's present-tense `activeForm`, and the `id` and
+/// `priority` its older versions wrote.
+const TASK_EXTRA_FIELDS: [&str; 3] = ["activeForm", "id", "priority"];
+
+/// Whether a tool call's input is a task list, and its tasks if so.
+///
+/// It is one when the input is an object holding exactly one of the list
+/// fields in [`TASK_LISTS`], plus at most that tool's own companion fields
+/// (a `scope` word; an `explanation` only when it is empty), and the list is
+/// not empty and every entry is an object with non-blank string words, a
+/// status of `completed`, `in_progress` or `pending`, and no fields beyond
+/// [`TASK_EXTRA_FIELDS`]. Anything else — an unknown status such as
+/// `cancelled`, a missing status, words that are not text, an empty list, a
+/// list nested under another field — is not a task list, and the call shows
+/// its input as it is.
+pub fn task_list(input: &Value) -> Option<Vec<TaskListItem>> {
+    let fields = input.as_object()?;
+    let (list, words, companions) = TASK_LISTS
+        .iter()
+        .find(|(list, ..)| fields.contains_key(*list))?;
+    let companions_fit = fields.iter().all(|(key, value)| {
+        key == list
+            || (companions.contains(&key.as_str())
+                && match key.as_str() {
+                    "scope" => value.is_string(),
+                    "explanation" => {
+                        value.is_null() || value.as_str().is_some_and(|text| text.trim().is_empty())
+                    }
+                    _ => false,
+                })
+    });
+    if !companions_fit {
+        return None;
+    }
+    let tasks = fields.get(*list)?.as_array()?;
+    if tasks.is_empty() {
+        return None;
+    }
+    tasks
+        .iter()
+        .map(|task| {
+            let task = task.as_object()?;
+            if !task.keys().all(|key| {
+                key == words || key == "status" || TASK_EXTRA_FIELDS.contains(&key.as_str())
+            }) {
+                return None;
+            }
+            let text = task.get(*words)?.as_str()?;
+            if text.trim().is_empty() {
+                return None;
+            }
+            let status = match task.get("status")?.as_str()? {
+                "completed" => TaskStatus::Done,
+                "in_progress" => TaskStatus::InProgress,
+                "pending" => TaskStatus::NotStarted,
+                _ => return None,
+            };
+            Some(TaskListItem {
+                text: text.to_owned(),
+                status,
+            })
+        })
+        .collect()
 }
 
 /// One part of a tool result: its text, or the name of what is not shown.
@@ -343,12 +453,16 @@ fn block(index: u32, value: &Value) -> SourceBlock {
             },
         },
         // A tool call's name is non-blank by the canonical parser's contract.
-        Some("tool_use") => SourceBlock::ToolCall {
-            index,
-            name: text_of(value, "name").unwrap_or_default(),
-            call_id: text_of(value, "id"),
-            input: value.get("input").map(payload),
-        },
+        Some("tool_use") => {
+            let input = value.get("input").map(readable);
+            SourceBlock::ToolCall {
+                index,
+                name: text_of(value, "name").unwrap_or_default(),
+                call_id: text_of(value, "id"),
+                task_list: input.as_ref().and_then(task_list),
+                input: input.map(payload),
+            }
+        }
         Some("tool_result") => SourceBlock::ToolResult {
             index,
             call_id: text_of(value, "tool_use_id"),
@@ -466,6 +580,7 @@ mod tests {
                 input: Some(SourcePayload::Json {
                     value: json!({"command": "ls -al", "flags": [1, 2]}),
                 }),
+                task_list: None,
             }]
         );
     }
@@ -817,5 +932,143 @@ mod tests {
                 text: encrypted_placeholder(120)
             })
         );
+    }
+
+    fn tasks(input: Value) -> Option<Vec<(String, TaskStatus)>> {
+        task_list(&input).map(|items| {
+            items
+                .into_iter()
+                .map(|item| (item.text, item.status))
+                .collect()
+        })
+    }
+
+    #[test]
+    fn a_desktop_plan_is_a_task_list() {
+        let plan = json!({"items": [
+            {"content": "Fix the hover", "status": "completed"},
+            {"content": "Build the runner", "status": "in_progress"},
+            {"content": "Add the screens", "status": "pending"},
+        ], "scope": "first_task"});
+        assert_eq!(
+            tasks(plan),
+            Some(vec![
+                ("Fix the hover".into(), TaskStatus::Done),
+                ("Build the runner".into(), TaskStatus::InProgress),
+                ("Add the screens".into(), TaskStatus::NotStarted),
+            ])
+        );
+        // Without a scope too.
+        assert!(tasks(json!({"items": [{"content": "a", "status": "pending"}]})).is_some());
+        // A scope that is not a word is not this tool's scope.
+        assert_eq!(
+            tasks(json!({"items": [{"content": "a", "status": "pending"}], "scope": 1})),
+            None
+        );
+    }
+
+    #[test]
+    fn a_claude_code_todo_list_is_a_task_list_without_its_present_tense() {
+        let todos = json!({"todos": [
+            {"content": "Run the tests", "status": "in_progress", "activeForm": "Running the tests"},
+            {"content": "Fix lint", "status": "pending", "activeForm": "Fixing lint", "id": "2", "priority": "high"},
+        ]});
+        assert_eq!(
+            tasks(todos),
+            Some(vec![
+                ("Run the tests".into(), TaskStatus::InProgress),
+                ("Fix lint".into(), TaskStatus::NotStarted),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_codex_plan_is_a_task_list_only_without_an_explanation() {
+        let steps = json!([{"step": "Read the code", "status": "completed"}]);
+        let read = Some(vec![("Read the code".into(), TaskStatus::Done)]);
+        assert_eq!(tasks(json!({"plan": steps})), read);
+        assert_eq!(tasks(json!({"plan": steps, "explanation": null})), read);
+        assert_eq!(tasks(json!({"plan": steps, "explanation": "  "})), read);
+        assert_eq!(
+            tasks(json!({"plan": steps, "explanation": "Changed course"})),
+            None
+        );
+        // Codex's words are a step, not content.
+        assert_eq!(
+            tasks(json!({"plan": [{"content": "x", "status": "pending"}]})),
+            None
+        );
+    }
+
+    #[test]
+    fn anything_short_of_an_exact_task_list_is_not_one() {
+        let not = |input: Value| assert_eq!(tasks(input.clone()), None, "{input}");
+        // A missing, unknown or non-text status.
+        not(json!({"items": [{"content": "a"}]}));
+        not(json!({"items": [{"content": "a", "status": "cancelled"}]}));
+        not(json!({"items": [{"content": "a", "status": "done"}]}));
+        not(json!({"items": [{"content": "a", "status": "Completed"}]}));
+        not(json!({"items": [{"content": "a", "status": 1}]}));
+        // One bad task spoils the list rather than vanishing from it.
+        not(json!({"items": [
+            {"content": "a", "status": "pending"},
+            {"content": "b", "status": "blocked"},
+        ]}));
+        // Words that are not text, or are blank.
+        not(json!({"items": [{"content": 1, "status": "pending"}]}));
+        not(json!({"items": [{"content": ["a"], "status": "pending"}]}));
+        not(json!({"items": [{"content": " ", "status": "pending"}]}));
+        // A field the checklist would drop.
+        not(json!({"items": [{"content": "a", "status": "pending", "note": "b"}]}));
+        not(json!({"items": [{"content": "a", "status": "pending"}], "other": 1}));
+        // Two lists, an empty list, a list that is not a list, a task that is not an object.
+        not(json!({"items": [{"content": "a", "status": "pending"}], "todos": []}));
+        not(json!({"items": []}));
+        not(json!({"todos": "a"}));
+        not(json!({"items": ["a"]}));
+        // A list nested under another field, or input that is not an object.
+        not(json!({"args": {"items": [{"content": "a", "status": "pending"}]}}));
+        not(json!([{"content": "a", "status": "pending"}]));
+        not(json!("items"));
+        // The plan tool's other inputs.
+        not(json!({"advance": true}));
+        not(json!({"done": [2], "start": 4}));
+    }
+
+    #[test]
+    fn a_task_list_call_carries_its_tasks_beside_its_input() {
+        let input = json!({"items": [{"content": "a", "status": "pending"}]});
+        let record = assistant(json!([
+            {"type": "tool_use", "id": "t", "name": "mcp__ccd_turn__update_plan", "input": input},
+            {"type": "tool_use", "id": "u", "name": "mcp__ccd_turn__update_plan",
+             "input": {"advance": true}},
+        ]));
+        let SourceBlock::ToolCall {
+            input: carried,
+            task_list,
+            ..
+        } = &record.blocks[0]
+        else {
+            panic!("{:?}", record.blocks[0]);
+        };
+        assert_eq!(carried, &Some(SourcePayload::Json { value: input }));
+        assert_eq!(
+            task_list,
+            &Some(vec![TaskListItem {
+                text: "a".into(),
+                status: TaskStatus::NotStarted
+            }])
+        );
+        let SourceBlock::ToolCall { task_list, .. } = &record.blocks[1] else {
+            panic!("{:?}", record.blocks[1]);
+        };
+        assert_eq!(task_list, &None);
+        let wire = serde_json::to_value(&record.blocks[0]).unwrap();
+        assert_eq!(
+            wire["task_list"],
+            json!([{"text": "a", "status": "not_started"}])
+        );
+        let other = serde_json::to_value(&record.blocks[1]).unwrap();
+        assert!(other.get("task_list").is_none(), "{other}");
     }
 }

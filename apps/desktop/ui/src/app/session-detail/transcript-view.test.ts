@@ -96,6 +96,25 @@ it('counts and verbs a run, and falls back to a readable name for anything else'
   expect(humanizeToolName('mcp__synthetic__')).toBe('Tool');
 });
 
+it('reads an MCP tool name after its server, whatever the server is called', () => {
+  // A server name may hold single underscores; the tool is what follows the last `__`.
+  expect(humanizeToolName('mcp__ccd_turn__update_plan')).toBe('Update plan');
+  expect(humanizeToolName('mcp__plugin_memhub_memhub__link_pr')).toBe('Link pr');
+  expect(humanizeToolName('mcp__claude-in-chrome__navigate')).toBe('Navigate');
+  expect(humanizeToolName('mcp__memhub__search_memory')).toBe('Search memory');
+  // Names that are not MCP names keep their old reading.
+  expect(humanizeToolName('Bash')).toBe('Bash');
+  expect(humanizeToolName('TodoWrite')).toBe('TodoWrite');
+  expect(humanizeToolName('send_message')).toBe('Send message');
+  expect(humanizeToolName('functions__exec_command')).toBe('Exec command');
+  // Empty and odd names still come out as something to read.
+  expect(humanizeToolName('')).toBe('Tool');
+  expect(humanizeToolName('   ')).toBe('Tool');
+  expect(humanizeToolName('mcp__')).toBe('Tool');
+  expect(humanizeToolName('mcp__server')).toBe('Server');
+  expect(humanizeToolName('__proto__')).toBe('Proto');
+});
+
 it('names a result with no call in view rather than leaving the row blank', () => {
   expect(toolSummary([{ kind: 'tool_result', id: 'b0', outcome: { state: 'ok' } }])).toBe('Tool');
 });

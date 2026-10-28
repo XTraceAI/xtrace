@@ -108,6 +108,41 @@ for (const theme of ['light', 'dark'] as const) {
 }
 
 for (const theme of ['light', 'dark'] as const) {
+  test(`shows a plan update as a readable name and a checklist, ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1120, height: 900 });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    await page.goto('/e2e/session-conversation.html?tasks');
+    const conversation = page.getByRole('region', { name: 'Conversation', exact: true });
+    const navigation = conversation.getByRole('navigation', { name: 'Repeated activity' });
+    // The first notice opens the call's strip, the card beside it included.
+    await navigation.getByRole('button', { name: 'Next ↓' }).click();
+    const card = conversation.locator('.xt-tool-card[data-block-id="tools:1"]');
+    if (!(await card.isVisible()))
+      await conversation
+        .getByRole('button', { name: /^Update plan/ })
+        .first()
+        .click();
+    await expect(card).toBeVisible();
+    const name = card.locator('.xt-tool-name');
+    await expect(name).toHaveText('Update plan');
+    await expect(name).toHaveAttribute('title', 'mcp__ccd_turn__update_plan');
+    const tasks = card.getByRole('list', { name: 'Tasks' }).getByRole('listitem');
+    await expect(tasks).toHaveText([
+      '✓Check the configuration (done)',
+      '◐Rename the sample app (in progress)',
+      '○Keep the saved settings (not started)',
+    ]);
+    await expect(card).not.toContainText('"items"');
+    await expect(card).not.toContainText('in_progress');
+    await card.scrollIntoViewIfNeeded();
+    if (process.env.CONVERSATION_SHOTS)
+      await card.screenshot({
+        path: `${process.env.CONVERSATION_SHOTS}/task-list-tool-card-${theme}.png`,
+      });
+  });
+}
+
+for (const theme of ['light', 'dark'] as const) {
   test(`shows an encrypted agent message as a short line, not its token, ${theme}`, async ({
     page,
   }) => {
@@ -125,7 +160,7 @@ for (const theme of ['light', 'dark'] as const) {
         .first()
         .click();
     await expect(card).toBeVisible();
-    await expect(card).toContainText('send_message');
+    await expect(card).toContainText('Send message');
     await expect(card).toContainText('"message": "encrypted (812 characters, not readable)"');
     await expect(card).toContainText('"target": "/root"');
     await card.scrollIntoViewIfNeeded();
