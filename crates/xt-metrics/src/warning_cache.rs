@@ -1,8 +1,6 @@
 //! Saved default-threshold M-21 decisions. The compute APIs remain the oracle.
 use crate::session_warnings::{ACTIVE_QUERY, NeutralWholeSessionWarnings};
-use crate::{
-    MetricsDb, RepeatThresholds, Result, WholeSessionWarnings, Window, WindowSessionWarnings,
-};
+use crate::{MetricsDb, Result, WholeSessionWarnings, Window, WindowSessionWarnings};
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,7 +13,10 @@ use std::{
 use xt_store::saved_session_warnings::SavedSessionWarning;
 
 /// Bump for changes to payload, rules, default thresholds or stored-fact meaning.
-pub const SESSION_WARNINGS_CACHE_VERSION: i64 = 3;
+/// 4: the repeated-calls rule was removed. Every answer saved at 3 or earlier
+/// is out of date, so none that still holds a repeated-calls warning is shown;
+/// each is recounted under the four remaining rules.
+pub const SESSION_WARNINGS_CACHE_VERSION: i64 = 4;
 
 pub(crate) const SAVED_QUERY: &str = "SELECT session_id,i.revision,c.revision,c.rule_version,c.payload_json FROM sessions s LEFT JOIN session_warning_inputs i USING(session_id) LEFT JOIN saved_session_warnings c USING(session_id) WHERE s.kind='user'";
 pub(crate) const DIRTY_QUERY: &str = "SELECT session_id,i.revision FROM session_warning_inputs i JOIN sessions s USING(session_id) LEFT JOIN saved_session_warnings c USING(session_id) WHERE s.kind='user' AND (c.revision IS NOT i.revision OR c.rule_version IS NOT ?1)";
@@ -86,7 +87,7 @@ impl MetricsDb {
             let cleanup:bool=db.connection.query_row("SELECT EXISTS(SELECT 1 FROM saved_session_warnings WHERE session_id NOT IN (SELECT session_id FROM sessions WHERE kind='user'))",[],|r|r.get(0))?;
             if revisions.is_empty()&&!cleanup { return Ok(None); }
             let ids:Vec<_>=revisions.keys().map(String::as_str).collect();
-            let (answers,spans)=db.whole_neutral_in_snapshot(&ids,RepeatThresholds::default(),cancelled)?;
+            let (answers,spans)=db.whole_neutral_in_snapshot(&ids,cancelled)?;
             let mut rows=Vec::with_capacity(answers.len());
             for (id,answer) in answers {
                 if cancelled() { return Err(crate::Error::Cancelled); }
@@ -201,8 +202,7 @@ impl MetricsDb {
         }
         if recount && !stale.is_empty() {
             let named: Vec<_> = stale.iter().map(String::as_str).collect();
-            let (fresh, fresh_spans) =
-                self.whole_neutral_in_snapshot(&named, RepeatThresholds::default(), &|| false)?;
+            let (fresh, fresh_spans) = self.whole_neutral_in_snapshot(&named, &|| false)?;
             answers.extend(
                 fresh
                     .into_iter()

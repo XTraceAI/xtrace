@@ -7,7 +7,7 @@
 //! evidence from the store and calls it once per session, and anything that
 //! later shows a warning reads its result rather than working one out again.
 //!
-//! The five rules, and the existing answers each one reads:
+//! The four rules, and the existing answers each one reads:
 //!
 //! * **Correction**: a message the stored M-02 classification calls a
 //!   person's, sent after an agent reply, holds a correction ([`correction`]).
@@ -17,11 +17,6 @@
 //!   (`tool_sent_inputs`), or a tool call whose saved result says the person
 //!   declined or interrupted it. A stopped call and Claude Code's marker for
 //!   it are one interruption, not two.
-//! * **Repeated calls**: an M-09 stretch judged circling by M-20's own
-//!   measurement and thresholds, over every call except the expected repeats
-//!   [`expected_repeat`] names (see [`crate::repeats`]'s call scope). It is
-//!   named "repeated calls" wherever it is shown, never "circling", so it is
-//!   never read as the Dashboard's own M-20 number, which compares every call.
 //! * **Repeated prompt**: the same person's message, compared lowercased with
 //!   whitespace collapsed, sent two or more times in the session; short
 //!   messages are not compared ([`comparable_prompt`]).
@@ -33,12 +28,14 @@
 //! text rule reads it, and it does not end the agent's reply.
 //!
 //! Sidechain records (an agent's own sub-conversation inside the session) are
-//! left out of the rules that read messages and results: they are not the
-//! person's conversation. Repeated calls is the exception on purpose. It is M-20's
-//! answer over M-09's stretches, which count sidechain records and calls as
-//! the Dashboard does, so a stretch and its repeats are the same here as there.
-//! Leaving sidechains out only here would give "is this stretch circling" a
-//! second answer.
+//! left out of every rule: they are not the person's conversation.
+//!
+//! There is no repeated-calls rule. It flagged M-20's circling stretches, and
+//! a review of real warnings found every one a false alarm (deliberate
+//! polling, different calls through one tool, different edits to one file),
+//! so it was removed. M-20 itself is unchanged and still reported where it is
+//! its own number. Saved answers and dismissals that still name the old kind
+//! (`repeated_calls`) are never shown: see [`crate::warning_cache`].
 //!
 //! An unknown is never a zero. Each rule says whether it read everything it
 //! needed ([`CheckState::Complete`]) or which inputs it could not read. A
@@ -47,9 +44,7 @@
 
 use crate::{
     MetricsDb, Result, Window, hands_off,
-    repeats::{
-        CallScope, RepeatDensity, RepeatThresholds, SessionRepeats, StoredCalls, UnknownRepeats,
-    },
+    repeats::{StoredCalls, UnknownRepeats},
     span_detail::{self, PersonText},
 };
 use jiff::{Timestamp, tz::TimeZone};
@@ -117,90 +112,21 @@ pub const REPEAT_AT_LEAST: usize = 2;
 /// A prompt of fewer words ("yes", "go on") is not compared with the others.
 pub const PROMPT_MIN_WORDS: usize = 4;
 
-/// Tools that track a task list: each call is the list's next state, so
-/// calling them often is their job, not going in circles.
-pub const TASK_LIST_TOOLS: [&str; 7] = [
-    "TodoWrite",
-    "TaskCreate",
-    "TaskUpdate",
-    "TaskList",
-    "TaskGet",
-    "update_plan",
-    "mcp__ccd_turn__update_plan",
-];
-/// Tools that wait or poll for something to finish.
-pub const WAITING_TOOLS: [&str; 8] = [
-    "ScheduleWakeup",
-    "Monitor",
-    "sleep",
-    "wait",
-    "wait_agent",
-    "AwaitShell",
-    "BashOutput",
-    "TaskOutput",
-];
-
-/// Tools a subagent calls to hand its report back to the agent that started
-/// it: one call per subagent, so a session that runs many of them calls it
-/// often.
-pub const HANDBACK_TOOLS: [&str; 1] = ["SubagentHandback"];
-
-/// Tools that start, message, list or stop other agents: a session that runs
-/// many agents calls them often by design. Claude Code's `Agent` (formerly
-/// `Task`), `SendMessage`, `ListAgents` and `TaskStop`; Codex's
-/// `spawn_agent`, `send_message`, `followup_task`, `list_agents` and
-/// `interrupt_agent`; Cursor's `Subagent` (and `Task`); and the Claude desktop
-/// app's session tools that start a session or a task or send a session a
-/// message. Waiting for an agent (`wait_agent`) is a waiting tool.
-pub const AGENT_TOOLS: [&str; 14] = [
-    "Agent",
-    "Task",
-    "SendMessage",
-    "ListAgents",
-    "TaskStop",
-    "spawn_agent",
-    "send_message",
-    "followup_task",
-    "list_agents",
-    "interrupt_agent",
-    "Subagent",
-    "mcp__ccd_session__spawn_task",
-    "mcp__ccd_session__start_session",
-    "mcp__ccd_session_mgmt__send_message",
-];
-
-/// M-21's repeated-calls exclusion: whether a call is an expected repeat,
-/// which the repeated-calls warning does not compare. Read from the stored
-/// tool name only; no argument is read. A task-list tool
-/// ([`TASK_LIST_TOOLS`]), a waiting tool ([`WAITING_TOOLS`]), a handback tool
-/// ([`HANDBACK_TOOLS`]), an agent tool ([`AGENT_TOOLS`]), or a screenshot
-/// tool: its stored name contains `screenshot`.
-pub fn expected_repeat(name: &str) -> bool {
-    TASK_LIST_TOOLS.contains(&name)
-        || WAITING_TOOLS.contains(&name)
-        || HANDBACK_TOOLS.contains(&name)
-        || AGENT_TOOLS.contains(&name)
-        || name.to_ascii_lowercase().contains("screenshot")
-}
-
-/// The five rules.
+/// The four rules. A saved answer naming any other kind (such as the
+/// removed `repeated_calls`) does not parse, and is recounted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
     Correction,
     Interruption,
-    /// M-20's circling verdict over the calls that are not expected repeats.
-    /// Named "repeated calls" so it is never read as M-20's own number.
-    RepeatedCalls,
     RepeatedPrompt,
     RepeatedFailure,
 }
 
 impl WarningKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::Correction,
         Self::Interruption,
-        Self::RepeatedCalls,
         Self::RepeatedPrompt,
         Self::RepeatedFailure,
     ];
@@ -210,7 +136,6 @@ impl WarningKind {
         match self {
             Self::Correction => "correction",
             Self::Interruption => "interruption",
-            Self::RepeatedCalls => "repeated_calls",
             Self::RepeatedPrompt => "repeated_prompt",
             Self::RepeatedFailure => "repeated_failure",
         }
@@ -225,14 +150,14 @@ pub struct SessionWarning {
     /// What this warning starts at, which no other warning of its kind in
     /// the session starts at: the message (a correction), the marker record,
     /// or the stopped call's result record and that result's block in it as
-    /// `record#block` (an interruption), the stretch's first record (repeated
-    /// calls), the first of the repeated messages (a repeated prompt), or the
+    /// `record#block` (an interruption), the first of the repeated messages
+    /// (a repeated prompt), or the
     /// first failed result's `record#block` (a repeated failure). Saved IDs
     /// and positions only; it stays the same while the session grows. See
     /// [`SessionWarning::id`].
     pub anchor: String,
     /// The moment it points at, on the stored millisecond projection: the
-    /// message, the interruption, the stretch's start, the first repeat.
+    /// message, the interruption, the first repeat.
     pub at_ms: i64,
     /// The saved records it points at, earliest first.
     pub record_uuids: Vec<String>,
@@ -248,15 +173,14 @@ pub struct SessionWarning {
     /// serialised.
     #[serde(skip)]
     pub correction_phrase: Option<String>,
-    /// The representative tool call for repeated calls, or the first repeat
-    /// (the second message/result) for a repeated prompt or failure.
+    /// The first repeat (the second message/result) for a repeated prompt or
+    /// failure.
     /// Read through [`SessionWarning::points_at`]. Not serialised.
     #[serde(skip)]
     pub repeat: Option<WarningPoint>,
     /// How big a warning that can grow is now: how many times the prompt
-    /// was sent (a repeated prompt), how many times the call failed (a
-    /// repeated failure), or how many repeated calls the stretch has
-    /// (repeated calls). `None` for a correction or an interruption, which
+    /// was sent (a repeated prompt) or how many times the call failed (a
+    /// repeated failure). `None` for a correction or an interruption, which
     /// are one event each. A dismissal keeps the size it was dismissed at,
     /// and the warning is dismissed only while it has not grown past it.
     /// Not serialised.
@@ -290,8 +214,7 @@ impl SessionWarning {
     }
 
     /// The one answer to "which message does this warning point at": the
-    /// representative tool call for repeated calls, or the first repeat for
-    /// a repeated prompt or failure (its own block too, even
+    /// first repeat for a repeated prompt or failure (its own block too, even
     /// when both failures are in one record), otherwise the anchor's record
     /// and, for `record#block`, its block.
     pub fn points_at(&self) -> WarningPoint {
@@ -347,14 +270,6 @@ pub enum Missing {
     UnmatchedResults { results: u64 },
     /// Failed calls whose stored comparison key cannot be compared.
     FailedCallKey { reason: UnknownRepeats, calls: u64 },
-    /// M-20 states no stretches for this session: its surface's clock is
-    /// excluded, or a classification it needs is unknown.
-    StretchesUnmeasured,
-    /// M-20 could not count the calls of some stretches.
-    RepeatsUnknown {
-        reason: UnknownRepeats,
-        stretches: u64,
-    },
 }
 
 /// Whether a rule read every input it needed.
@@ -386,7 +301,6 @@ impl CheckState {
 pub struct WarningChecks {
     pub correction: CheckState,
     pub interruption: CheckState,
-    pub repeated_calls: CheckState,
     pub repeated_prompt: CheckState,
     pub repeated_failure: CheckState,
 }
@@ -396,7 +310,6 @@ impl WarningChecks {
         match kind {
             WarningKind::Correction => &self.correction,
             WarningKind::Interruption => &self.interruption,
-            WarningKind::RepeatedCalls => &self.repeated_calls,
             WarningKind::RepeatedPrompt => &self.repeated_prompt,
             WarningKind::RepeatedFailure => &self.repeated_failure,
         }
@@ -534,11 +447,6 @@ pub(crate) struct Evidence {
     /// Result-carrying records with no saved outcome.
     pub(crate) outcome_not_saved: u64,
     pub(crate) outcome_unknown: u64,
-    /// M-20 over the session's calls, expected repeats left out.
-    pub(crate) repeats: SessionRepeats,
-    /// The calls, by `(record, block)`, whose M-20 key names the tool only,
-    /// among the most repeated call of each circling stretch.
-    pub(crate) tool_only_calls: BTreeSet<(String, u64)>,
 }
 
 /// One word of a message as the text rules compare it, and where it came
@@ -769,19 +677,6 @@ pub(crate) enum WarningReason {
         moments: Vec<i64>,
         count: u64,
     },
-    RepeatedCalls {
-        repeats: u64,
-        active_duration_ms: u64,
-        worst: Option<WorstCall>,
-        start_ms: i64,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct WorstCall {
-    tool: String,
-    tool_only: bool,
-    count: u64,
 }
 
 impl WarningReason {
@@ -808,16 +703,6 @@ impl WarningReason {
                     "{} failed {}",
                     call_words(tool, *tool_only),
                     times_word(*count as usize)
-                )
-            }
-            Self::RepeatedCalls {
-                repeats,
-                active_duration_ms,
-                ..
-            } => {
-                format!(
-                    "{repeats} repeats · {} active min",
-                    active_duration_ms / 60_000
                 )
             }
         }
@@ -858,28 +743,6 @@ impl WarningReason {
                 times_word(*count as usize),
                 clock_times(moments, zone)
             ),
-            Self::RepeatedCalls {
-                repeats,
-                active_duration_ms,
-                worst,
-                start_ms,
-            } => {
-                let worst = worst
-                    .as_ref()
-                    .map(|worst| {
-                        format!(
-                            ", most often {} ({})",
-                            call_words(&worst.tool, worst.tool_only),
-                            times_word(worst.count as usize)
-                        )
-                    })
-                    .unwrap_or_default();
-                format!(
-                    "{repeats} repeated calls in {} active minutes{worst} (from {})",
-                    active_duration_ms / 60_000,
-                    clock_times(&[*start_ms], zone)
-                )
-            }
         }
     }
 }
@@ -981,27 +844,6 @@ impl NeutralSessionWarnings {
                         WarningKind::RepeatedFailure,
                         WarningReason::RepeatedFailure { count, moments, .. },
                     ) => repeated(*count, moments, false),
-                    (
-                        WarningKind::RepeatedCalls,
-                        WarningReason::RepeatedCalls {
-                            repeats,
-                            start_ms,
-                            worst,
-                            ..
-                        },
-                    ) => {
-                        *repeats > 0
-                            && warning.size == Some(*repeats)
-                            && (match (&warning.repeat, worst) {
-                                (Some(point), Some(_)) => {
-                                    point.block.is_some()
-                                        && warning.record_uuids.contains(&point.record_uuid)
-                                }
-                                (None, None) => true,
-                                _ => false,
-                            })
-                            && *start_ms == warning.at_ms
-                    }
                     _ => false,
                 }
             })
@@ -1329,85 +1171,6 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
     }
     interruption_missing.extend(outcome_missing);
 
-    // Repeated calls is M-20's own circling verdict, stretch by stretch.
-    let at = |uuid: &str| {
-        evidence
-            .records
-            .iter()
-            .find(|r| r.uuid == uuid)
-            .map(|r| r.at_ms)
-    };
-    let mut repeats_missing = Vec::new();
-    match &evidence.repeats {
-        SessionRepeats::Missing | SessionRepeats::Unmeasured { .. } => {
-            repeats_missing.push(Missing::StretchesUnmeasured)
-        }
-        SessionRepeats::Measured { stretches, .. } => {
-            let mut unknown = BTreeMap::<UnknownRepeats, u64>::new();
-            for stretch in stretches {
-                match (&stretch.repeats, stretch.circling) {
-                    (RepeatDensity::Unknown { reason }, _) => {
-                        *unknown.entry(*reason).or_default() += 1
-                    }
-                    (RepeatDensity::Measured { repeats, worst }, Some(true)) => {
-                        let mut uuids = BTreeSet::new();
-                        uuids.insert(stretch.start_uuid.clone());
-                        let repeat = worst.as_ref().and_then(|group| {
-                            Some(WarningPoint {
-                                record_uuid: group.representative.record_uuid.clone(),
-                                block: Some(u32::try_from(group.representative.block_index).ok()?),
-                            })
-                        });
-                        let worst = worst.as_ref().map(|group| {
-                            let block = &group.representative;
-                            uuids.insert(block.record_uuid.clone());
-                            let tool_only = evidence
-                                .tool_only_calls
-                                .contains(&(block.record_uuid.clone(), block.block_index));
-                            WorstCall {
-                                tool: group.tool_name.clone(),
-                                tool_only,
-                                count: group.count,
-                            }
-                        });
-                        uuids.insert(stretch.end_uuid.clone());
-                        // The stretch's own start, which M-20 states whether
-                        // or not its record is among these.
-                        let start_ms = timestamp::parse(&stretch.start)
-                            .map(|(_, ms)| ms)
-                            .ok()
-                            .or_else(|| at(&stretch.start_uuid))
-                            .unwrap_or_default();
-                        let mut record_uuids: Vec<_> = uuids.into_iter().collect();
-                        record_uuids.sort_by_key(|uuid| at(uuid));
-                        warnings.push(NeutralWarning {
-                            repeat,
-                            size: Some(*repeats),
-                            ..warn(
-                                WarningKind::RepeatedCalls,
-                                stretch.start_uuid.clone(),
-                                start_ms,
-                                record_uuids,
-                                WarningReason::RepeatedCalls {
-                                    repeats: *repeats,
-                                    active_duration_ms: stretch.active_duration_ms,
-                                    worst,
-                                    start_ms,
-                                },
-                            )
-                        });
-                    }
-                    (RepeatDensity::Measured { .. }, _) => {}
-                }
-            }
-            repeats_missing.extend(
-                unknown
-                    .into_iter()
-                    .map(|(reason, stretches)| Missing::RepeatsUnknown { reason, stretches }),
-            );
-        }
-    }
-
     warnings.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then(a.kind.cmp(&b.kind)));
     NeutralSessionWarnings {
         session_id: session_id.clone(),
@@ -1419,7 +1182,6 @@ pub(crate) fn decide_neutral(evidence: &Evidence) -> NeutralSessionWarnings {
                 correction_wrapped,
             )),
             interruption: CheckState::of(interruption_missing),
-            repeated_calls: CheckState::of(repeats_missing),
             repeated_prompt: CheckState::of(text_missing(
                 prompt_not_kept,
                 prompt_cut,
@@ -1487,36 +1249,21 @@ fn source_order<T>(
 impl MetricsDb {
     /// M-21 for every user session with an event inside the window, ordered
     /// by session id. Every rule reads only the session's records inside the
-    /// window; circling is M-20 over that same window, expected repeats left
-    /// out. `zone` only writes the clock times in each reason.
+    /// window. `zone` only writes the clock times in each reason.
     ///
     /// Read inside one snapshot, so every session's rules describe the same
     /// committed state.
     pub fn session_warnings(
         &self,
         window: Window,
-        thresholds: RepeatThresholds,
         zone: &TimeZone,
     ) -> Result<Vec<SessionWarnings>> {
         self.read_snapshot(|db| {
             let surfaces = hands_off::load(&db.connection, window)?;
             let mut all = Vec::new();
-            for ((host, surface), sessions) in &surfaces {
-                // M-09's health verdict is about the surface, so it is judged
-                // once for all of its sessions, as M-20 judges it for each.
-                let excluded = hands_off::health(host, surface, sessions);
-                for (session_id, events) in sessions {
-                    // The session's stored calls, read once for both readers.
-                    let mut stored = None;
-                    let repeats = db.loaded_repeats(
-                        excluded.clone(),
-                        Some(events.as_slice()),
-                        session_id,
-                        thresholds,
-                        CallScope::WithoutExpectedRepeats,
-                        &mut stored,
-                    )?;
-                    let evidence = db.warning_evidence(window, session_id, repeats, &mut stored)?;
+            for sessions in surfaces.values() {
+                for session_id in sessions.keys() {
+                    let evidence = db.warning_evidence(window, session_id, &mut None)?;
                     all.push(decide(&evidence, zone));
                 }
             }
@@ -1526,20 +1273,16 @@ impl MetricsDb {
     }
 
     /// M-21 for exactly the requested sessions, each over its own whole
-    /// history: every rule reads every timed record the session has, and
-    /// repeated calls is M-20 over the session's own window (its first to its
-    /// last timed record), with that surface's timestamp health judged over
-    /// the same window, exactly as [`MetricsDb::session_warnings`] would judge
-    /// it for that window. So a session's answer depends only on the session
-    /// and the store, never on which screen or range asks. `zone` only writes
-    /// the clock times in each reason.
+    /// history: every rule reads every timed record the session has (its
+    /// first to its last timed record). So a session's answer depends only on
+    /// the session and the store, never on which screen or range asks. `zone`
+    /// only writes the clock times in each reason.
     ///
-    /// One snapshot and one event load for the whole request; duplicate
-    /// identifiers collapse, and at most [`crate::MAX_SESSIONS`] are read.
+    /// One snapshot for the whole request; duplicate identifiers collapse,
+    /// and at most [`crate::MAX_SESSIONS`] are read.
     pub fn whole_session_warnings(
         &self,
         sessions: &[&str],
-        thresholds: RepeatThresholds,
         zone: &TimeZone,
     ) -> Result<BTreeMap<String, WholeSessionWarnings>> {
         let mut ids: Vec<&str> = sessions.to_vec();
@@ -1551,28 +1294,25 @@ impl MetricsDb {
         if ids.is_empty() {
             return Ok(BTreeMap::new());
         }
-        self.read_snapshot(|db| Ok(db.whole_in_snapshot(&ids, thresholds, zone)?.0))
+        self.read_snapshot(|db| Ok(db.whole_in_snapshot(&ids, zone)?.0))
     }
 
     /// [`MetricsDb::whole_session_warnings`]'s body inside the caller's
     /// snapshot, for any number of sorted, distinct identifiers: the
-    /// identifier lookups go in groups of [`crate::MAX_SESSIONS`], and the
-    /// events of every named session are loaded once, over the union of their
-    /// whole windows, then narrowed to each session's own window. A narrowed
-    /// load holds exactly what a load of that window would ([`hands_off::within`]),
-    /// so the answer for a session never depends on which others were named.
-    /// Beside the answers, each timed session's first and last timed record.
+    /// identifier lookups go in groups of [`crate::MAX_SESSIONS`], and each
+    /// session is read over its own whole window, so the answer for a session
+    /// never depends on which others were named. Beside the answers, each
+    /// timed session's first and last timed record.
     #[allow(clippy::type_complexity)]
     fn whole_in_snapshot(
         &self,
         ids: &[&str],
-        thresholds: RepeatThresholds,
         zone: &TimeZone,
     ) -> Result<(
         BTreeMap<String, WholeSessionWarnings>,
         BTreeMap<String, (i64, i64)>,
     )> {
-        let (answers, spans) = self.whole_neutral_in_snapshot(ids, thresholds, &|| false)?;
+        let (answers, spans) = self.whole_neutral_in_snapshot(ids, &|| false)?;
         Ok((
             answers
                 .into_iter()
@@ -1585,11 +1325,10 @@ impl MetricsDb {
     pub(crate) fn whole_neutral_in_snapshot(
         &self,
         ids: &[&str],
-        thresholds: RepeatThresholds,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<NeutralWholeWarningBatch> {
         let mut answers = BTreeMap::new();
-        let mut owned = BTreeMap::<String, (String, Option<String>)>::new();
+        let mut owned = BTreeSet::<String>::new();
         let mut spans = BTreeMap::<String, (i64, i64)>::new();
         let mut untimed = BTreeMap::<String, (i64, i64)>::new();
         for chunk in ids.chunks(crate::MAX_SESSIONS) {
@@ -1602,7 +1341,7 @@ impl MetricsDb {
                 .prepare(&by_id(crate::session::EXISTS_QUERY))?;
             let mut rows = statement.query(rusqlite::params_from_iter(chunk))?;
             while let Some(row) = rows.next()? {
-                owned.insert(row.get(0)?, (row.get(1)?, row.get(2)?));
+                owned.insert(row.get(0)?);
             }
             drop(rows);
             drop(statement);
@@ -1622,33 +1361,12 @@ impl MetricsDb {
         }
         let mut windows = BTreeMap::<&str, Window>::new();
         for id in ids {
-            if owned.contains_key(*id)
+            if owned.contains(*id)
                 && let Some((first, last)) = spans.get(*id)
             {
                 windows.insert(id, whole_window(*first, *last)?);
             }
         }
-        let union = match (
-            windows.values().map(|w| w.start_ms()).min(),
-            windows.values().map(|w| w.end_ms()).max(),
-        ) {
-            (Some(start), Some(end)) => Some(Window::new(start, end)?),
-            _ => None,
-        };
-        let surfaces = match union {
-            Some(union) => hands_off::load(&self.connection, union)?,
-            None => Default::default(),
-        };
-        // Each surface's health records, indexed once for every window below.
-        let health: BTreeMap<_, _> = surfaces
-            .iter()
-            .map(|(key, sessions)| {
-                (
-                    key,
-                    hands_off::HealthIndex::new(sessions.values().map(Vec::as_slice)),
-                )
-            })
-            .collect();
         for id in ids.iter().copied() {
             if cancelled() {
                 return Err(crate::Error::Cancelled);
@@ -1656,10 +1374,10 @@ impl MetricsDb {
             let untimed_records = untimed
                 .get(id)
                 .map_or(0, |(count, _)| u64::try_from(*count).unwrap_or(0));
-            let Some(key) = owned.get(id) else {
+            if !owned.contains(id) {
                 answers.insert(id.to_owned(), NeutralWholeSessionWarnings::Missing);
                 continue;
-            };
+            }
             let Some(window) = windows.get(id).copied() else {
                 answers.insert(
                     id.to_owned(),
@@ -1667,26 +1385,7 @@ impl MetricsDb {
                 );
                 continue;
             };
-            let sessions = surfaces.get(key);
-            // The surface's health over this session's own window, from
-            // the one load narrowed to it.
-            let excluded = health
-                .get(key)
-                .and_then(|index| index.over(&key.0, &key.1, window));
-            let events = sessions
-                .and_then(|sessions| sessions.get(id))
-                .map(|events| hands_off::within(events, window))
-                .filter(|events| !events.is_empty());
-            let mut stored = None;
-            let repeats = self.loaded_repeats(
-                excluded,
-                events,
-                id,
-                thresholds,
-                CallScope::WithoutExpectedRepeats,
-                &mut stored,
-            )?;
-            let evidence = self.warning_evidence(window, id, repeats, &mut stored)?;
+            let evidence = self.warning_evidence(window, id, &mut None)?;
             answers.insert(
                 id.to_owned(),
                 NeutralWholeSessionWarnings::Read {
@@ -1736,12 +1435,11 @@ impl MetricsDb {
     /// [`MetricsDb::whole_session_warnings`] reads it, so a warning shown for
     /// a range is the same warning every other view shows for that session.
     /// Sessions without such a warning are left out; the rest are ordered by
-    /// identifier, each with its warnings earliest first. One snapshot and one
-    /// event load, however many sessions are active.
+    /// identifier, each with its warnings earliest first. One snapshot,
+    /// however many sessions are active.
     pub fn warnings_in_window(
         &self,
         window: Window,
-        thresholds: RepeatThresholds,
         zone: &TimeZone,
     ) -> Result<Vec<WindowSessionWarnings>> {
         self.read_snapshot(|db| {
@@ -1757,7 +1455,7 @@ impl MetricsDb {
             named.sort_unstable();
             named.dedup();
             let mut found = Vec::new();
-            let (answers, spans) = db.whole_in_snapshot(&named, thresholds, zone)?;
+            let (answers, spans) = db.whole_in_snapshot(&named, zone)?;
             for (id, answer) in answers {
                 let WholeSessionWarnings::Read { warnings, .. } = answer else {
                     continue;
@@ -1783,7 +1481,6 @@ impl MetricsDb {
         &self,
         window: Window,
         session_id: &str,
-        repeats: SessionRepeats,
         stored: &mut Option<StoredCalls>,
     ) -> Result<Evidence> {
         struct Row {
@@ -1917,8 +1614,6 @@ impl MetricsDb {
             tool_results_known: 0,
             outcome_not_saved: 0,
             outcome_unknown: 0,
-            repeats,
-            tool_only_calls: BTreeSet::new(),
         };
         for row in rows
             .iter()
@@ -1969,29 +1664,6 @@ impl MetricsDb {
                 });
             }
         }
-        // Whether each circling stretch's most repeated call names the tool
-        // only, for its reason's wording.
-        if let SessionRepeats::Measured { stretches, .. } = &evidence.repeats {
-            for stretch in stretches.iter().filter(|s| s.circling == Some(true)) {
-                let RepeatDensity::Measured {
-                    worst: Some(group), ..
-                } = &stretch.repeats
-                else {
-                    continue;
-                };
-                let block = &group.representative;
-                let tool_only = self
-                    .stored_calls_once(stored, session_id)?
-                    .get(&block.record_uuid)
-                    .and_then(|calls| calls.iter().find(|c| c.block_index == block.block_index))
-                    .is_some_and(|call| call.names_no_argument());
-                if tool_only {
-                    evidence
-                        .tool_only_calls
-                        .insert((block.record_uuid.clone(), block.block_index));
-                }
-            }
-        }
         evidence.records = rows.into_iter().map(|row| row.record).collect();
         Ok(evidence)
     }
@@ -2000,10 +1672,6 @@ impl MetricsDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        repeats::{RepeatGroup, StretchRepeats},
-        session_stretches::ToolBlock,
-    };
 
     const T0: i64 = 1_790_000_000_000; // 2026-09-21T14:13:20Z
     const MINUTE: i64 = 60_000;
@@ -2067,35 +1735,10 @@ mod tests {
                 },
                 "Bash failed 3 times",
             ),
-            (
-                WarningReason::RepeatedCalls {
-                    repeats: 6,
-                    active_duration_ms: 26 * MINUTE as u64 + 59_999,
-                    worst: None,
-                    start_ms: 0,
-                },
-                "6 repeats · 26 active min",
-            ),
         ];
         for (reason, expected) in cases {
             assert_eq!(reason.compact(), expected);
         }
-        let with_worst = WarningReason::RepeatedCalls {
-            repeats: 6,
-            active_duration_ms: 26 * MINUTE as u64,
-            worst: Some(WorstCall {
-                tool: "Bash".into(),
-                tool_only: false,
-                count: 5,
-            }),
-            start_ms: 0,
-        };
-        assert_eq!(with_worst.compact(), "6 repeats · 26 active min");
-        assert!(
-            with_worst
-                .render(&utc())
-                .contains("most often the same Bash call (5 times)")
-        );
     }
 
     fn agent(uuid: &str, minute: i64) -> EvidenceRecord {
@@ -2145,11 +1788,6 @@ mod tests {
             tool_results_known: 0,
             outcome_not_saved: 0,
             outcome_unknown: 0,
-            repeats: SessionRepeats::Measured {
-                thresholds: RepeatThresholds::default(),
-                stretches: vec![],
-            },
-            tool_only_calls: BTreeSet::new(),
         }
     }
     fn of_kind(warnings: &SessionWarnings, kind: WarningKind) -> Vec<&SessionWarning> {
@@ -2337,63 +1975,6 @@ mod tests {
         // A message that only mentions a tag later is a prompt like any other.
         assert!(!tool_written("fix the <div> in the header"));
         assert!(!tool_written("< 3 items"));
-    }
-
-    #[test]
-    fn expected_repeats_are_named_from_the_tool_name_only() {
-        for name in [
-            "TodoWrite",
-            "TaskUpdate",
-            "update_plan",
-            "mcp__ccd_turn__update_plan",
-            "ScheduleWakeup",
-            "Monitor",
-            "sleep",
-            "wait_agent",
-            "SubagentHandback",
-            "mcp__computer-use__app_screenshot",
-            "mcp__Claude_Preview__preview_screenshot",
-        ] {
-            assert!(expected_repeat(name), "{name}");
-        }
-        // Starting, messaging, listing and stopping other agents.
-        for name in [
-            "Agent",
-            "Task",
-            "SendMessage",
-            "ListAgents",
-            "TaskStop",
-            "spawn_agent",
-            "send_message",
-            "followup_task",
-            "list_agents",
-            "interrupt_agent",
-            "Subagent",
-            "mcp__ccd_session__spawn_task",
-            "mcp__ccd_session__start_session",
-            "mcp__ccd_session_mgmt__send_message",
-        ] {
-            assert!(expected_repeat(name), "{name}");
-            assert!(AGENT_TOOLS.contains(&name), "{name}");
-        }
-        // An exact name, never a part of one: an MCP tool that only mentions
-        // agents is compared like any other.
-        for name in ["agent", "mcp__memhub__list_agent_brains", "send_messages"] {
-            assert!(!expected_repeat(name), "{name}");
-        }
-        // Tools whose calls name no command, path or pattern are compared
-        // like any other: M-20's key decides what "the same call" is.
-        for name in [
-            "Bash",
-            "Edit",
-            "Read",
-            "WebFetch",
-            "WebSearch",
-            "Skill",
-            "mcp__Claude_Browser__computer",
-        ] {
-            assert!(!expected_repeat(name), "{name}");
-        }
     }
 
     #[test]
@@ -2916,145 +2497,6 @@ mod tests {
         assert_eq!(found.checks.repeated_failure, missing);
         assert_eq!(found.checks.interruption, missing);
         assert!(found.checks.correction.is_complete());
-    }
-
-    fn stretch(
-        start: &str,
-        end: &str,
-        repeats: RepeatDensity,
-        circling: Option<bool>,
-    ) -> StretchRepeats {
-        StretchRepeats {
-            start_uuid: start.into(),
-            end_uuid: end.into(),
-            start: Timestamp::from_millisecond(T0).unwrap().to_string(),
-            end: Timestamp::from_millisecond(T0 + 10 * MINUTE)
-                .unwrap()
-                .to_string(),
-            duration_ms: 600_000,
-            active_duration_ms: 540_000,
-            repeats,
-            circling,
-        }
-    }
-    fn bash_group(count: u64) -> RepeatDensity {
-        RepeatDensity::Measured {
-            repeats: 6,
-            worst: Some(RepeatGroup {
-                tool_name: "Bash".into(),
-                count,
-                representative: ToolBlock {
-                    record_uuid: "a1".into(),
-                    block_index: 0,
-                },
-            }),
-        }
-    }
-
-    #[test]
-    fn circling_is_m20_s_own_verdict() {
-        let mut evidence = evidence(vec![
-            person("p1", 0, "go"),
-            agent("a1", 1),
-            agent("a2", 9),
-            person("p2", 20, "next"),
-            agent("a3", 21),
-        ]);
-        evidence.repeats = SessionRepeats::Measured {
-            thresholds: RepeatThresholds::default(),
-            stretches: vec![
-                stretch("p1", "a2", bash_group(5), Some(true)),
-                // Measured and not circling: no warning, nothing missing.
-                stretch(
-                    "p2",
-                    "a3",
-                    RepeatDensity::Measured {
-                        repeats: 1,
-                        worst: None,
-                    },
-                    Some(false),
-                ),
-            ],
-        };
-        let found = decide(&evidence, &utc());
-        let circling = of_kind(&found, WarningKind::RepeatedCalls);
-        assert_eq!(circling.len(), 1);
-        assert_eq!(circling[0].record_uuids, uuids(&["p1", "a1", "a2"]));
-        assert_eq!(circling[0].at_ms, T0);
-        assert_eq!(
-            circling[0].points_at(),
-            WarningPoint {
-                record_uuid: "a1".into(),
-                block: Some(0),
-            }
-        );
-        assert_eq!(circling[0].id(), "repeated_calls:p1");
-        assert!(
-            circling[0].reason.starts_with(
-                "6 repeated calls in 9 active minutes, most often the same Bash call (5 times)"
-            ),
-            "{}",
-            circling[0].reason
-        );
-        assert!(found.checks.repeated_calls.is_complete());
-
-        // An uncounted stretch and an unmeasured session are unknowns.
-        evidence.repeats = SessionRepeats::Measured {
-            thresholds: RepeatThresholds::default(),
-            stretches: vec![stretch(
-                "p1",
-                "a2",
-                RepeatDensity::Unknown {
-                    reason: UnknownRepeats::MissingKey,
-                },
-                None,
-            )],
-        };
-        assert_eq!(
-            decide(&evidence, &utc()).checks.repeated_calls,
-            CheckState::Incomplete {
-                missing: vec![Missing::RepeatsUnknown {
-                    reason: UnknownRepeats::MissingKey,
-                    stretches: 1
-                }]
-            }
-        );
-        evidence.repeats = SessionRepeats::Unmeasured {
-            excluded_surface: None,
-        };
-        assert_eq!(
-            decide(&evidence, &utc()).checks.repeated_calls,
-            CheckState::Incomplete {
-                missing: vec![Missing::StretchesUnmeasured]
-            }
-        );
-    }
-
-    #[test]
-    fn a_circling_warning_starts_when_its_stretch_does() {
-        // The stretch's start record is not among the evidence records (it
-        // began before the records this read holds): M-20's own start time
-        // is used, never zero.
-        let mut evidence = evidence(vec![agent("a1", 1), agent("a2", 9)]);
-        evidence.repeats = SessionRepeats::Measured {
-            thresholds: RepeatThresholds::default(),
-            stretches: vec![stretch("gone", "a2", bash_group(5), Some(true))],
-        };
-        evidence.tool_only_calls.insert(("a1".into(), 0));
-        let found = decide(&evidence, &utc());
-        let circling = of_kind(&found, WarningKind::RepeatedCalls);
-        assert_eq!(circling[0].at_ms, T0);
-        assert!(
-            circling[0].reason.contains("(from 14:13)"),
-            "{}",
-            circling[0].reason
-        );
-        // Its most repeated call names only the tool.
-        assert!(
-            circling[0].reason.contains(", most often Bash (5 times)"),
-            "{}",
-            circling[0].reason
-        );
     }
 
     #[test]

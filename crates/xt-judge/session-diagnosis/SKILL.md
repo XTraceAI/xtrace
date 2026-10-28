@@ -53,9 +53,8 @@ Reply with the JSON object now.
 `warning_kind` is one of: `correction` (the person wrote words like "no",
 "wrong" or "still not working" after a reply), `interruption` (the person
 stopped the agent, or declined a tool the agent wanted to use),
-`repeated_calls` (the agent made many repeated tool calls in a short
-stretch), `repeated_prompt` (the person sent the same message two or more
-times), `repeated_failure` (the same tool call failed two or more times).
+`repeated_prompt` (the person sent the same message two or more times),
+`repeated_failure` (the same tool call failed two or more times).
 
 `host` is the coding tool the session ran in; `other` means XTrace does
 not know which.

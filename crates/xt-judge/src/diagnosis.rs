@@ -41,7 +41,6 @@ mod tests {
         for kind in [
             input::WarningKind::Correction,
             input::WarningKind::Interruption,
-            input::WarningKind::RepeatedCalls,
             input::WarningKind::RepeatedPrompt,
             input::WarningKind::RepeatedFailure,
         ] {

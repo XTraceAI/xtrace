@@ -11,7 +11,7 @@
 use jiff::tz::TimeZone;
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{BTreeMap, BTreeSet};
-use xt_metrics::{CheckState, MetricsDb, Missing, RepeatThresholds, WarningKind, Window};
+use xt_metrics::{CheckState, MetricsDb, Missing, WarningKind, Window};
 
 const EXAMPLES: usize = 8;
 
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window = Window::new(first, last + 2_000)?;
     let zone = TimeZone::system();
     let started = std::time::Instant::now();
-    let all = metrics.session_warnings(window, RepeatThresholds::default(), &zone)?;
+    let all = metrics.session_warnings(window, &zone)?;
     let elapsed = started.elapsed();
 
     let host = |id: &str| -> rusqlite::Result<(String, Option<String>)> {
@@ -216,7 +216,5 @@ fn reason_name(missing: &Missing) -> String {
         Missing::OutcomeUnknown { .. } => "tool outcome unknown".into(),
         Missing::UnmatchedResults { .. } => "result names an unknown call".into(),
         Missing::FailedCallKey { reason, .. } => format!("failed call key: {reason:?}"),
-        Missing::StretchesUnmeasured => "M-20 has no stretches for it".into(),
-        Missing::RepeatsUnknown { reason, .. } => format!("M-20 repeats unknown: {reason:?}"),
     }
 }

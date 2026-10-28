@@ -437,7 +437,6 @@ fn kind(kind: WarningKind) -> input::WarningKind {
     match kind {
         WarningKind::Correction => input::WarningKind::Correction,
         WarningKind::Interruption => input::WarningKind::Interruption,
-        WarningKind::RepeatedCalls => input::WarningKind::RepeatedCalls,
         WarningKind::RepeatedPrompt => input::WarningKind::RepeatedPrompt,
         WarningKind::RepeatedFailure => input::WarningKind::RepeatedFailure,
     }

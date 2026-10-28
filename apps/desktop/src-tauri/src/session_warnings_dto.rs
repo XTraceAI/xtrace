@@ -16,10 +16,13 @@
 //! page so it can be undone. A dismissal is keyed by the warning's identity
 //! (`kind:anchor`), which a growing session keeps, and stores the warning's
 //! size then ([`SessionWarning::size`]): a dismissed repeated prompt sent
-//! once more, a repeated failure that fails again, or a repeated-calls
-//! stretch with more repeats has grown past it, so it shows again everywhere
-//! and its page says so (`returned`). A correction or an interruption is one
-//! event and stays dismissed.
+//! once more, or a repeated failure that fails again, has grown past it, so it
+//! shows again everywhere and its page says so (`returned`). A correction or
+//! an interruption is one event and stays dismissed.
+//!
+//! A dismissal stored for a kind that no longer exists (`repeated_calls:…`,
+//! from before that rule was removed) names no warning any answer has, so it
+//! is never shown, counted or offered for undo.
 use crate::state::StateError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -101,7 +104,6 @@ pub struct WarningsText {
 pub struct KindWords {
     pub correction: &'static str,
     pub interruption: &'static str,
-    pub repeated_calls: &'static str,
     pub repeated_prompt: &'static str,
     pub repeated_failure: &'static str,
 }
@@ -131,7 +133,6 @@ pub const TEXT: WarningsText = WarningsText {
     flagged_headings: KindWords {
         correction: "You corrected the agent.",
         interruption: "You stopped the agent.",
-        repeated_calls: "Another attempt. The same inputs.",
         repeated_prompt: "The same request, sent again.",
         repeated_failure: "Another attempt. The same failure.",
     },
@@ -139,7 +140,6 @@ pub const TEXT: WarningsText = WarningsText {
     message_tags: KindWords {
         correction: "Correction",
         interruption: "Interruption",
-        repeated_calls: "Repeated call",
         repeated_prompt: "Repeated prompt",
         repeated_failure: "Repeated failure",
     },
@@ -160,15 +160,12 @@ pub fn export_text(directory: &std::path::Path) -> std::io::Result<()> {
     )
 }
 
-/// The five checks.
+/// The four checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionWarningKind {
     Correction,
     Interruption,
-    /// M-20's circling verdict over the calls that are not expected repeats,
-    /// named so it is never read as the Dashboard's own M-20 number.
-    RepeatedCalls,
     RepeatedPrompt,
     RepeatedFailure,
 }
@@ -178,7 +175,6 @@ impl From<WarningKind> for SessionWarningKind {
         match kind {
             WarningKind::Correction => Self::Correction,
             WarningKind::Interruption => Self::Interruption,
-            WarningKind::RepeatedCalls => Self::RepeatedCalls,
             WarningKind::RepeatedPrompt => Self::RepeatedPrompt,
             WarningKind::RepeatedFailure => Self::RepeatedFailure,
         }
@@ -190,7 +186,6 @@ fn kind_label(kind: WarningKind) -> &'static str {
     match kind {
         WarningKind::Correction => "Correction",
         WarningKind::Interruption => "Interruption",
-        WarningKind::RepeatedCalls => "Repeated calls",
         WarningKind::RepeatedPrompt => "Repeated prompt",
         WarningKind::RepeatedFailure => "Repeated failure",
     }
@@ -201,7 +196,6 @@ fn check_label(kind: WarningKind) -> &'static str {
     match kind {
         WarningKind::Correction => "corrections",
         WarningKind::Interruption => "interruptions",
-        WarningKind::RepeatedCalls => "repeated calls",
         WarningKind::RepeatedPrompt => "repeated prompts",
         WarningKind::RepeatedFailure => "repeated failures",
     }
@@ -216,7 +210,7 @@ pub struct SessionWarningItem {
     /// in it, `record#block`). See `xt_metrics::SessionWarning::anchor`.
     pub id: String,
     pub kind: SessionWarningKind,
-    /// The kind in words: "Correction", "Repeated calls", …
+    /// The kind in words: "Correction", "Repeated prompt", …
     pub label: String,
     /// The moment it points at, UTC milliseconds: where a dot is drawn.
     #[ts(type = "number")]
@@ -301,9 +295,6 @@ fn returned_text(warning: &SessionWarning, dismissal: &Dismissal) -> Option<Stri
         WarningKind::RepeatedFailure => format!(
             "Shown again: you dismissed it at {then} failures; the call has now failed {now} times."
         ),
-        WarningKind::RepeatedCalls => {
-            format!("Shown again: you dismissed it at {then} repeated calls; there are now {now}.")
-        }
         WarningKind::Correction | WarningKind::Interruption => return None,
     })
 }
@@ -343,7 +334,7 @@ pub enum SessionWarningsAnswer {
         /// The warnings found now that the user dismissed, earliest first:
         /// listed apart on the session's page, each with an undo.
         dismissed: Vec<SessionWarningItem>,
-        /// The five checks, in a fixed order.
+        /// The four checks, in a fixed order.
         checks: Vec<SessionWarningCheck>,
         /// How many checks could not read everything.
         #[ts(type = "number")]
@@ -497,13 +488,6 @@ fn missing_text(missing: &Missing) -> String {
             "{} could not be compared with the others",
             plural(*calls, "failed call", "failed calls")
         ),
-        Missing::StretchesUnmeasured => {
-            "this session's working stretches could not be measured".to_owned()
-        }
-        Missing::RepeatsUnknown { stretches, .. } => format!(
-            "the calls in {} could not be counted",
-            plural(*stretches, "working stretch", "working stretches")
-        ),
     }
 }
 
@@ -605,6 +589,7 @@ pub fn answer(
         })
         .collect();
     let incomplete = checks.iter().filter(|check| !check.complete).count() as u32;
+    let total = checks.len();
     let (hidden, warnings): (Vec<_>, Vec<_>) = warnings
         .into_iter()
         .partition(|warning| is_dismissed(dismissed, warning));
@@ -613,20 +598,18 @@ pub fn answer(
     let summary = match (count, incomplete, hidden.len()) {
         (0, 0, 0) => "No warnings. Every check read everything it needed.".to_owned(),
         (0, n, 0) => format!(
-            "No warnings found, but {} of 5 checks could not read everything, so something may still have gone wrong.",
-            n
+            "No warnings found, but {n} of {total} checks could not read everything, so something may still have gone wrong."
         ),
         (0, 0, gone) => format!(
             "No warnings left: you dismissed {gone}. Every check read everything it needed."
         ),
         (0, n, gone) => format!(
-            "No warnings left: you dismissed {gone}, but {n} of 5 checks could not read everything, so something may still have gone wrong."
+            "No warnings left: you dismissed {gone}, but {n} of {total} checks could not read everything, so something may still have gone wrong."
         ),
         (count, 0, _) => format!("{} to review.", plural(count, "warning", "warnings")),
         (count, n, _) => format!(
-            "{} to review. {} of 5 checks could not read everything, so there may be more.",
+            "{} to review. {n} of {total} checks could not read everything, so there may be more.",
             plural(count, "warning", "warnings"),
-            n
         ),
     };
     SessionWarningsAnswer::Read {
@@ -639,7 +622,7 @@ pub fn answer(
             .collect(),
         count_label,
         summary,
-        checks_summary: checks_summary(checks.len(), incomplete as usize),
+        checks_summary: checks_summary(total, incomplete as usize),
         dismissed: hidden
             .into_iter()
             .map(|warning| {
@@ -679,7 +662,7 @@ pub struct SessionWarningDismissal {
 }
 
 /// A dismissal or undo names one session as a warnings request does and one
-/// warning identity, `kind:anchor` with one of the five kinds and an anchor.
+/// warning identity, `kind:anchor` with one of the four kinds and an anchor.
 /// Refused before storage is touched otherwise.
 pub fn validate_dismissal(session_id: &str, warning_id: &str) -> Result<(), StateError> {
     validate_ids(&[session_id.to_owned()]).map_err(|_| StateError::InvalidWarningDismissal)?;

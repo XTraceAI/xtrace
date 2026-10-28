@@ -9904,7 +9904,7 @@
           "warnings": [],
           "count_label": null,
           "summary": "No warnings. Every check read everything it needed.",
-          "checks_summary": "Checks · all 5 complete",
+          "checks_summary": "Checks · all 4 complete",
           "dismissed": [],
           "checks": [
             {
@@ -9916,11 +9916,6 @@
               "kind": "interruption",
               "complete": true,
               "text": "Checked: interruptions"
-            },
-            {
-              "kind": "repeated_calls",
-              "complete": true,
-              "text": "Checked: repeated calls"
             },
             {
               "kind": "repeated_prompt",
@@ -9960,7 +9955,7 @@
           ],
           "count_label": "1 warning",
           "summary": "1 warning to review.",
-          "checks_summary": "Checks · all 5 complete",
+          "checks_summary": "Checks · all 4 complete",
           "dismissed": [],
           "checks": [
             {
@@ -9972,11 +9967,6 @@
               "kind": "interruption",
               "complete": true,
               "text": "Checked: interruptions"
-            },
-            {
-              "kind": "repeated_calls",
-              "complete": true,
-              "text": "Checked: repeated calls"
             },
             {
               "kind": "repeated_prompt",
@@ -9998,8 +9988,8 @@
           "state": "read",
           "warnings": [],
           "count_label": null,
-          "summary": "No warnings found, but 3 of 5 checks could not read everything, so something may still have gone wrong.",
-          "checks_summary": "Checks · 3 of 5 incomplete",
+          "summary": "No warnings found, but 3 of 4 checks could not read everything, so something may still have gone wrong.",
+          "checks_summary": "Checks · 3 of 4 incomplete",
           "dismissed": [],
           "checks": [
             {
@@ -10011,11 +10001,6 @@
               "kind": "interruption",
               "complete": false,
               "text": "Not fully checked: interruptions — 2 tool results do not say how they ended"
-            },
-            {
-              "kind": "repeated_calls",
-              "complete": true,
-              "text": "Checked: repeated calls"
             },
             {
               "kind": "repeated_prompt",
@@ -10101,22 +10086,6 @@
               "returned": null
             },
             {
-              "id": "repeated_calls:w-h4",
-              "kind": "repeated_calls",
-              "label": "Repeated calls",
-              "at_ms": 1788796800000,
-              "day": "Sep 7",
-              "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-              "compact_reason": "5 repeats · 5 active min",
-              "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-              "record_uuids": ["w-h4", "w-c4", "w-a3"],
-              "points_at": {
-                "record_uuid": "w-c4",
-                "block": 0
-              },
-              "returned": null
-            },
-            {
               "id": "repeated_prompt:w-h2",
               "kind": "repeated_prompt",
               "label": "Repeated prompt",
@@ -10133,9 +10102,9 @@
               "returned": null
             }
           ],
-          "count_label": "6 warnings",
-          "summary": "6 warnings to review.",
-          "checks_summary": "Checks · all 5 complete",
+          "count_label": "5 warnings",
+          "summary": "5 warnings to review.",
+          "checks_summary": "Checks · all 4 complete",
           "dismissed": [],
           "checks": [
             {
@@ -10147,11 +10116,6 @@
               "kind": "interruption",
               "complete": true,
               "text": "Checked: interruptions"
-            },
-            {
-              "kind": "repeated_calls",
-              "complete": true,
-              "text": "Checked: repeated calls"
             },
             {
               "kind": "repeated_prompt",
@@ -10330,30 +10294,6 @@
                 "title": "Fix the flaky build",
                 "automated_review": false,
                 "last_ms": 1788797100000,
-                "text": "Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                "warning": {
-                  "id": "repeated_calls:w-h4",
-                  "kind": "repeated_calls",
-                  "label": "Repeated calls",
-                  "at_ms": 1788796800000,
-                  "day": "Sep 7",
-                  "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "compact_reason": "5 repeats · 5 active min",
-                  "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "record_uuids": ["w-h4", "w-c4", "w-a3"],
-                  "points_at": {
-                    "record_uuid": "w-c4",
-                    "block": 0
-                  },
-                  "returned": null
-                }
-              },
-              {
-                "session_id": "s-warned",
-                "host": "claude",
-                "title": "Fix the flaky build",
-                "automated_review": false,
-                "last_ms": 1788797100000,
                 "text": "Repeated prompt: same prompt sent twice (14:00, 16:00)",
                 "warning": {
                   "id": "repeated_prompt:w-h2",
@@ -10373,8 +10313,8 @@
                 }
               }
             ],
-            "listed": 5,
-            "count_label": "5 warnings",
+            "listed": 4,
+            "count_label": "4 warnings",
             "more_label": null
           }
         ]
@@ -10540,30 +10480,6 @@
                 "title": "Fix the flaky build",
                 "automated_review": false,
                 "last_ms": 1788797100000,
-                "text": "Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                "warning": {
-                  "id": "repeated_calls:w-h4",
-                  "kind": "repeated_calls",
-                  "label": "Repeated calls",
-                  "at_ms": 1788796800000,
-                  "day": "Sep 7",
-                  "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "compact_reason": "5 repeats · 5 active min",
-                  "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "record_uuids": ["w-h4", "w-c4", "w-a3"],
-                  "points_at": {
-                    "record_uuid": "w-c4",
-                    "block": 0
-                  },
-                  "returned": null
-                }
-              },
-              {
-                "session_id": "s-warned",
-                "host": "claude",
-                "title": "Fix the flaky build",
-                "automated_review": false,
-                "last_ms": 1788797100000,
                 "text": "Repeated prompt: same prompt sent twice (14:00, 16:00)",
                 "warning": {
                   "id": "repeated_prompt:w-h2",
@@ -10583,8 +10499,8 @@
                 }
               }
             ],
-            "listed": 5,
-            "count_label": "5 warnings",
+            "listed": 4,
+            "count_label": "4 warnings",
             "more_label": null
           }
         ]
@@ -10750,30 +10666,6 @@
                 "title": "Fix the flaky build",
                 "automated_review": false,
                 "last_ms": 1788797100000,
-                "text": "Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                "warning": {
-                  "id": "repeated_calls:w-h4",
-                  "kind": "repeated_calls",
-                  "label": "Repeated calls",
-                  "at_ms": 1788796800000,
-                  "day": "Sep 7",
-                  "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "compact_reason": "5 repeats · 5 active min",
-                  "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "record_uuids": ["w-h4", "w-c4", "w-a3"],
-                  "points_at": {
-                    "record_uuid": "w-c4",
-                    "block": 0
-                  },
-                  "returned": null
-                }
-              },
-              {
-                "session_id": "s-warned",
-                "host": "claude",
-                "title": "Fix the flaky build",
-                "automated_review": false,
-                "last_ms": 1788797100000,
                 "text": "Repeated prompt: same prompt sent twice (14:00, 16:00)",
                 "warning": {
                   "id": "repeated_prompt:w-h2",
@@ -10793,8 +10685,8 @@
                 }
               }
             ],
-            "listed": 5,
-            "count_label": "5 warnings",
+            "listed": 4,
+            "count_label": "4 warnings",
             "more_label": null
           }
         ]
@@ -10814,7 +10706,7 @@
             "warnings": [],
             "count_label": null,
             "summary": "No warnings. Every check read everything it needed.",
-            "checks_summary": "Checks · all 5 complete",
+            "checks_summary": "Checks · all 4 complete",
             "dismissed": [],
             "checks": [
               {
@@ -10826,11 +10718,6 @@
                 "kind": "interruption",
                 "complete": true,
                 "text": "Checked: interruptions"
-              },
-              {
-                "kind": "repeated_calls",
-                "complete": true,
-                "text": "Checked: repeated calls"
               },
               {
                 "kind": "repeated_prompt",
@@ -10870,7 +10757,7 @@
             ],
             "count_label": "1 warning",
             "summary": "1 warning to review.",
-            "checks_summary": "Checks · all 5 complete",
+            "checks_summary": "Checks · all 4 complete",
             "dismissed": [],
             "checks": [
               {
@@ -10882,11 +10769,6 @@
                 "kind": "interruption",
                 "complete": true,
                 "text": "Checked: interruptions"
-              },
-              {
-                "kind": "repeated_calls",
-                "complete": true,
-                "text": "Checked: repeated calls"
               },
               {
                 "kind": "repeated_prompt",
@@ -10908,8 +10790,8 @@
             "state": "read",
             "warnings": [],
             "count_label": null,
-            "summary": "No warnings found, but 3 of 5 checks could not read everything, so something may still have gone wrong.",
-            "checks_summary": "Checks · 3 of 5 incomplete",
+            "summary": "No warnings found, but 3 of 4 checks could not read everything, so something may still have gone wrong.",
+            "checks_summary": "Checks · 3 of 4 incomplete",
             "dismissed": [],
             "checks": [
               {
@@ -10921,11 +10803,6 @@
                 "kind": "interruption",
                 "complete": false,
                 "text": "Not fully checked: interruptions — 2 tool results do not say how they ended"
-              },
-              {
-                "kind": "repeated_calls",
-                "complete": true,
-                "text": "Checked: repeated calls"
               },
               {
                 "kind": "repeated_prompt",
@@ -10995,22 +10872,6 @@
                 "returned": null
               },
               {
-                "id": "repeated_calls:w-h4",
-                "kind": "repeated_calls",
-                "label": "Repeated calls",
-                "at_ms": 1788796800000,
-                "day": "Sep 7",
-                "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                "compact_reason": "5 repeats · 5 active min",
-                "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                "record_uuids": ["w-h4", "w-c4", "w-a3"],
-                "points_at": {
-                  "record_uuid": "w-c4",
-                  "block": 0
-                },
-                "returned": null
-              },
-              {
                 "id": "repeated_prompt:w-h2",
                 "kind": "repeated_prompt",
                 "label": "Repeated prompt",
@@ -11027,9 +10888,9 @@
                 "returned": null
               }
             ],
-            "count_label": "5 warnings",
-            "summary": "5 warnings to review.",
-            "checks_summary": "Checks · all 5 complete",
+            "count_label": "4 warnings",
+            "summary": "4 warnings to review.",
+            "checks_summary": "Checks · all 4 complete",
             "dismissed": [
               {
                 "id": "correction:w-h3",
@@ -11058,11 +10919,6 @@
                 "kind": "interruption",
                 "complete": true,
                 "text": "Checked: interruptions"
-              },
-              {
-                "kind": "repeated_calls",
-                "complete": true,
-                "text": "Checked: repeated calls"
               },
               {
                 "kind": "repeated_prompt",
@@ -11217,30 +11073,6 @@
                   "title": "Fix the flaky build",
                   "automated_review": false,
                   "last_ms": 1788797100000,
-                  "text": "Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "warning": {
-                    "id": "repeated_calls:w-h4",
-                    "kind": "repeated_calls",
-                    "label": "Repeated calls",
-                    "at_ms": 1788796800000,
-                    "day": "Sep 7",
-                    "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                    "compact_reason": "5 repeats · 5 active min",
-                    "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                    "record_uuids": ["w-h4", "w-c4", "w-a3"],
-                    "points_at": {
-                      "record_uuid": "w-c4",
-                      "block": 0
-                    },
-                    "returned": null
-                  }
-                },
-                {
-                  "session_id": "s-warned",
-                  "host": "claude",
-                  "title": "Fix the flaky build",
-                  "automated_review": false,
-                  "last_ms": 1788797100000,
                   "text": "Repeated prompt: same prompt sent twice (14:00, 16:00)",
                   "warning": {
                     "id": "repeated_prompt:w-h2",
@@ -11260,8 +11092,8 @@
                   }
                 }
               ],
-              "listed": 4,
-              "count_label": "4 warnings",
+              "listed": 3,
+              "count_label": "3 warnings",
               "more_label": null
             }
           ]
@@ -11403,30 +11235,6 @@
                   "title": "Fix the flaky build",
                   "automated_review": false,
                   "last_ms": 1788797100000,
-                  "text": "Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "warning": {
-                    "id": "repeated_calls:w-h4",
-                    "kind": "repeated_calls",
-                    "label": "Repeated calls",
-                    "at_ms": 1788796800000,
-                    "day": "Sep 7",
-                    "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                    "compact_reason": "5 repeats · 5 active min",
-                    "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                    "record_uuids": ["w-h4", "w-c4", "w-a3"],
-                    "points_at": {
-                      "record_uuid": "w-c4",
-                      "block": 0
-                    },
-                    "returned": null
-                  }
-                },
-                {
-                  "session_id": "s-warned",
-                  "host": "claude",
-                  "title": "Fix the flaky build",
-                  "automated_review": false,
-                  "last_ms": 1788797100000,
                   "text": "Repeated prompt: same prompt sent twice (14:00, 16:00)",
                   "warning": {
                     "id": "repeated_prompt:w-h2",
@@ -11446,8 +11254,8 @@
                   }
                 }
               ],
-              "listed": 4,
-              "count_label": "4 warnings",
+              "listed": 3,
+              "count_label": "3 warnings",
               "more_label": null
             }
           ]
@@ -11589,30 +11397,6 @@
                   "title": "Fix the flaky build",
                   "automated_review": false,
                   "last_ms": 1788797100000,
-                  "text": "Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                  "warning": {
-                    "id": "repeated_calls:w-h4",
-                    "kind": "repeated_calls",
-                    "label": "Repeated calls",
-                    "at_ms": 1788796800000,
-                    "day": "Sep 7",
-                    "reason": "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                    "compact_reason": "5 repeats · 5 active min",
-                    "name": "Warning. Sep 7, Repeated calls: 5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)",
-                    "record_uuids": ["w-h4", "w-c4", "w-a3"],
-                    "points_at": {
-                      "record_uuid": "w-c4",
-                      "block": 0
-                    },
-                    "returned": null
-                  }
-                },
-                {
-                  "session_id": "s-warned",
-                  "host": "claude",
-                  "title": "Fix the flaky build",
-                  "automated_review": false,
-                  "last_ms": 1788797100000,
                   "text": "Repeated prompt: same prompt sent twice (14:00, 16:00)",
                   "warning": {
                     "id": "repeated_prompt:w-h2",
@@ -11632,8 +11416,8 @@
                   }
                 }
               ],
-              "listed": 4,
-              "count_label": "4 warnings",
+              "listed": 3,
+              "count_label": "3 warnings",
               "more_label": null
             }
           ]

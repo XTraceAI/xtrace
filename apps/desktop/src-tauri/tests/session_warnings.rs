@@ -93,8 +93,9 @@ const DECLINED: &str =
 /// The synthetic sessions, each a case a screen must keep apart:
 ///
 /// * `s-warned`: a correction on Sep 4 (outside the lanes' 48 hours) and, on
-///   Sep 7, a repeated failure, a declined call, a correction, repeated calls
-///   and a repeated prompt; every check read everything.
+///   Sep 7, a repeated failure, a declined call, a correction and a repeated
+///   prompt; every check read everything. Its six identical reads on Sep 7
+///   are no warning (there is no repeated-calls rule).
 /// * `s-unchecked`: a Codex session indexed without its words, whose
 ///   results never say whether they failed: no warning, and two checks could
 ///   not read everything.
@@ -324,11 +325,6 @@ fn every_screen_reads_one_worded_answer_per_session() {
                 "you wrote \"still not\" after a reply (15:00)"
             ),
             (
-                SessionWarningKind::RepeatedCalls,
-                "Repeated calls",
-                "5 repeated calls in 5 active minutes, most often the same Read call (6 times) (from 16:00)"
-            ),
-            (
                 SessionWarningKind::RepeatedPrompt,
                 "Repeated prompt",
                 "same prompt sent twice (14:00, 16:00)"
@@ -347,14 +343,15 @@ fn every_screen_reads_one_worded_answer_per_session() {
             "repeated_failure:w-r1#0",
             "interruption:w-r3#0",
             "correction:w-h3",
-            "repeated_calls:w-h4",
             "repeated_prompt:w-h2",
         ]
     );
-    assert_eq!(count_label.as_deref(), Some("6 warnings"));
+    assert_eq!(count_label.as_deref(), Some("5 warnings"));
     assert_eq!(*incomplete_checks, 0);
-    assert_eq!(checks_summary, "Checks · all 5 complete");
-    assert_eq!(summary, "6 warnings to review.");
+    assert_eq!(checks_summary, "Checks · all 4 complete");
+    assert_eq!(summary, "5 warnings to review.");
+    assert_eq!(checks.len(), 4);
+    assert!(!json.contains("repeated_calls") && !json.contains("Repeated call"));
     assert!(checks.iter().all(|check| check.complete));
 
     // No warning, but not everything could be read: never "no warnings".
@@ -373,10 +370,10 @@ fn every_screen_reads_one_worded_answer_per_session() {
     assert!(warnings.is_empty());
     assert_eq!(count_label, &None);
     assert_eq!(*incomplete_checks, 3);
-    assert_eq!(checks_summary, "Checks · 3 of 5 incomplete");
+    assert_eq!(checks_summary, "Checks · 3 of 4 incomplete");
     assert_eq!(
         summary,
-        "No warnings found, but 3 of 5 checks could not read everything, so something may still have gone wrong."
+        "No warnings found, but 3 of 4 checks could not read everything, so something may still have gone wrong."
     );
     let texts: Vec<_> = checks.iter().map(|c| c.text.as_str()).collect();
     assert_eq!(
@@ -385,7 +382,6 @@ fn every_screen_reads_one_worded_answer_per_session() {
             // Its one message opens the session: no reply came before it.
             "Checked: corrections",
             "Not fully checked: interruptions — 2 tool results do not say how they ended",
-            "Checked: repeated calls",
             "Not fully checked: repeated prompts — the words of 1 of your messages were not kept",
             "Not fully checked: repeated failures — 2 tool results do not say how they ended",
         ]
@@ -450,7 +446,6 @@ fn a_session_shows_the_same_warnings_whichever_range_asks() {
                     pair("s-warned", "repeated_failure:w-r1#0"),
                     pair("s-warned", "interruption:w-r3#0"),
                     pair("s-warned", "correction:w-h3"),
-                    pair("s-warned", "repeated_calls:w-h4"),
                     pair("s-warned", "repeated_prompt:w-h2"),
                 ]
             ),
@@ -495,8 +490,8 @@ fn a_session_shows_the_same_warnings_whichever_range_asks() {
         .iter()
         .find(|day| day.date == "2026-09-07")
         .unwrap();
-    assert_eq!(sep7.listed, 5);
-    assert_eq!(sep7.count_label, "5 warnings");
+    assert_eq!(sep7.listed, 4);
+    assert_eq!(sep7.count_label, "4 warnings");
     assert_eq!(sep7.more_label, None);
     assert_eq!(
         sep7.warnings[0].text,
@@ -655,14 +650,14 @@ fn a_session_with_no_timed_record_is_never_said_to_have_no_warnings() {
     };
     assert!(warnings.is_empty());
     assert_eq!(count_label, None);
-    assert_eq!(incomplete_checks, 5);
+    assert_eq!(incomplete_checks, 4);
     assert_eq!(
         summary,
         "Not checked: none of this session's 3 saved records says when it happened, so no warning can be found and none is shown."
     );
     assert!(checks.iter().all(|check| !check.complete));
     assert_eq!(
-        checks[4].text,
+        checks[3].text,
         "Not checked: repeated failures — none of this session's 3 saved records says when it happened"
     );
 }
@@ -726,12 +721,11 @@ fn a_dismissed_warning_is_listed_apart_and_counted_nowhere_else() {
                 "correction:w-h1",
                 "repeated_failure:w-r1#0",
                 "interruption:w-r3#0",
-                "repeated_calls:w-h4",
                 "repeated_prompt:w-h2",
             ],
             vec!["correction:w-h3"],
-            Some("5 warnings"),
-            "5 warnings to review."
+            Some("4 warnings"),
+            "4 warnings to review."
         )
     );
     assert_eq!(
@@ -778,8 +772,8 @@ fn a_dismissed_warning_is_listed_apart_and_counted_nowhere_else() {
         "Sep 3's only warning is dismissed"
     );
     let seventh = &days.days[1];
-    assert_eq!(seventh.count_label, "4 warnings");
-    assert_eq!(seventh.listed, 4);
+    assert_eq!(seventh.count_label, "3 warnings");
+    assert_eq!(seventh.listed, 3);
     assert!(
         seventh
             .warnings
@@ -799,9 +793,9 @@ fn a_dismissed_warning_is_listed_apart_and_counted_nowhere_else() {
     let metrics = xt_metrics::MetricsDb::open(&path).unwrap();
     let list = session_warnings(&metrics, &["s-warned"], &zone, "UTC".into()).unwrap();
     let (ids, gone, count, _) = shown(&list.sessions[0].answer);
-    assert_eq!((ids.len(), gone.len(), count), (6, 0, Some("6 warnings")));
+    assert_eq!((ids.len(), gone.len(), count), (5, 0, Some("5 warnings")));
     let days = week();
-    assert_eq!(days.days.last().unwrap().count_label, "5 warnings");
+    assert_eq!(days.days.last().unwrap().count_label, "4 warnings");
 }
 
 /// A dismissal keeps the warning's size: a dismissed repeated prompt or
@@ -926,7 +920,7 @@ fn a_dismissed_warning_that_grows_shows_again() {
         ]
     );
     // Counted again, and on its Effort day.
-    assert!(summary.starts_with("6 warnings"), "{summary}");
+    assert!(summary.starts_with("5 warnings"), "{summary}");
     for id in ids {
         assert!(effort.iter().any(|shown| shown == id), "{id} {effort:?}");
     }
@@ -1042,6 +1036,8 @@ fn the_commands_dismiss_only_a_warning_the_session_has_and_undo_it() {
         ("s-warned", ""),
         ("s-warned", "correction:"),
         ("s-warned", "circling:w-h1"),
+        // The removed kind: no warning has it any more.
+        ("s-warned", "repeated_calls:w-h4"),
         ("s-warned", "w-h1"),
         ("s-warned", long.as_str()),
     ] {
@@ -1072,7 +1068,7 @@ fn the_commands_dismiss_only_a_warning_the_session_has_and_undo_it() {
             gone.into_iter().map(str::to_owned).collect::<Vec<_>>(),
         )
     };
-    assert_eq!(ids(&state).0.len(), 6);
+    assert_eq!(ids(&state).0.len(), 5);
     // The one lookup a dismissal checks with: the same warning in any zone,
     // only its reason's clock times differ; none for one it does not have.
     let found = |zone: &str| {
@@ -1105,7 +1101,7 @@ fn the_commands_dismiss_only_a_warning_the_session_has_and_undo_it() {
             .dismissed
     );
     let (active, gone) = ids(&state);
-    assert_eq!(active.len(), 5);
+    assert_eq!(active.len(), 4);
     assert_eq!(gone, ["interruption:w-r3#0"]);
     let undone = state
         .restore_session_warning("s-warned", "interruption:w-r3#0")
@@ -1151,7 +1147,6 @@ fn active_all() -> Vec<String> {
         "repeated_failure:w-r1#0",
         "interruption:w-r3#0",
         "correction:w-h3",
-        "repeated_calls:w-h4",
         "repeated_prompt:w-h2",
     ]
     .map(str::to_owned)
@@ -1166,9 +1161,7 @@ fn saved_missing_and_invalid_payload_answers_equal_the_direct_answer() {
     for zone_name in ["UTC", "America/Los_Angeles", "Asia/Tokyo"] {
         let zone = jiff::tz::TimeZone::get(zone_name).unwrap();
         let metrics = xt_metrics::MetricsDb::open(&path).unwrap();
-        let direct = metrics
-            .whole_session_warnings(&ids, xt_metrics::RepeatThresholds::default(), &zone)
-            .unwrap();
+        let direct = metrics.whole_session_warnings(&ids, &zone).unwrap();
         let expected: Vec<_> = direct
             .into_iter()
             .map(|(id, found)| {
@@ -1250,23 +1243,52 @@ fn excluded_sessions_disappear_from_both_answers_and_cannot_be_dismissed() {
     state.shutdown();
 }
 
+/// Dismissals stored before the repeated-calls rule was removed stay in the
+/// table (no migration touches it): they name no warning any answer has, so
+/// they are never shown, counted or offered for undo, and more identical
+/// calls never bring a warning back.
 #[test]
-fn repeated_calls_reappear_after_growth_and_only_the_selected_warning_changes() {
+fn an_old_repeated_calls_dismissal_is_harmless_and_more_repeats_add_no_warning() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("data")).unwrap();
     let path = root.path().join("data/xtrace.db");
     seed(&path);
     let state = live(root.path());
     let read = || state.session_warnings(&["s-warned".into()], "UTC").unwrap();
-    let before = read();
-    state
-        .dismiss_session_warning("s-warned", "repeated_calls:w-h4")
+    let week = || state.window_warnings(7, ms(NOW), "UTC").unwrap();
+    let before = (read(), week());
+    {
+        // As the app stored it when the warning existed, at 5 repeats.
+        let mut store = Store::open(&path).unwrap();
+        assert!(
+            store
+                .dismiss_warning("s-warned", "repeated_calls:w-h4", Some(5), 1)
+                .unwrap()
+        );
+    }
+    let stored: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM dismissed_warnings WHERE warning_id='repeated_calls:w-h4'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
-    let gone = read();
-    let (active, dismissed, count, _) = shown(&gone.sessions[0].answer);
-    assert_eq!(dismissed, ["repeated_calls:w-h4"]);
-    assert_eq!(active.len(), 5);
+    assert_eq!(stored, 1);
+    // Every answer is exactly what it was without the row.
+    assert_eq!((read(), week()), before);
+    let (active, dismissed, count, summary) = shown(&before.0.sessions[0].answer);
+    assert_eq!(active, active_all());
+    assert!(dismissed.is_empty());
     assert_eq!(count, Some("5 warnings"));
+    assert_eq!(summary, "5 warnings to review.");
+    // Its undo, should anything send one, is refused like any unknown kind.
+    assert!(
+        state
+            .restore_session_warning("s-warned", "repeated_calls:w-h4")
+            .is_err()
+    );
+    // A seventh identical read: still no warning about repeats.
     let mut store = Store::open(&path).unwrap();
     store
         .upsert_records(
@@ -1283,54 +1305,13 @@ fn repeated_calls_reappear_after_growth_and_only_the_selected_warning_changes() 
             true,
         )
         .unwrap();
+    drop(store);
     let grown = read();
-    let SessionWarningsAnswer::Read {
-        warnings,
-        dismissed,
-        ..
-    } = &grown.sessions[0].answer
-    else {
-        panic!("read")
-    };
+    let (active, dismissed, _, _) = shown(&grown.sessions[0].answer);
+    assert_eq!(active, active_all());
     assert!(dismissed.is_empty());
-    let repeated = warnings
-        .iter()
-        .find(|warning| warning.id == "repeated_calls:w-h4")
-        .unwrap();
-    assert_eq!(
-        repeated.returned.as_deref(),
-        Some("Shown again: you dismissed it at 5 repeated calls; there are now 6.")
-    );
-    let window = state.window_warnings(7, ms(NOW), "UTC").unwrap();
-    assert!(
-        window
-            .days
-            .iter()
-            .flat_map(|day| &day.warnings)
-            .any(|entry| entry.warning == *repeated)
-    );
-    state
-        .restore_session_warning("s-warned", "repeated_calls:w-h4")
-        .unwrap();
-    assert!(read().sessions.iter().all(|entry| match &entry.answer {
-        SessionWarningsAnswer::Read { warnings, .. } =>
-            warnings.iter().all(|warning| warning.returned.is_none()),
-        _ => false,
-    }));
-    let before_others: Vec<_> = match &before.sessions[0].answer {
-        SessionWarningsAnswer::Read { warnings, .. } => warnings
-            .iter()
-            .filter(|warning| warning.id != "repeated_calls:w-h4")
-            .cloned()
-            .collect(),
-        _ => panic!("read"),
-    };
-    let after_others: Vec<_> = warnings
-        .iter()
-        .filter(|warning| warning.id != "repeated_calls:w-h4")
-        .cloned()
-        .collect();
-    assert_eq!(before_others, after_others);
+    let json = serde_json::to_string(&(grown, week())).unwrap();
+    assert!(!json.contains("repeated_calls"), "{json}");
     state.shutdown();
 }
 

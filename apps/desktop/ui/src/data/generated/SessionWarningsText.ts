@@ -60,7 +60,6 @@ export const SESSION_WARNINGS_TEXT = {
   "flagged_headings": {
     "correction": "You corrected the agent.",
     "interruption": "You stopped the agent.",
-    "repeated_calls": "Another attempt. The same inputs.",
     "repeated_prompt": "The same request, sent again.",
     "repeated_failure": "Another attempt. The same failure."
   },
@@ -68,7 +67,6 @@ export const SESSION_WARNINGS_TEXT = {
   "message_tags": {
     "correction": "Correction",
     "interruption": "Interruption",
-    "repeated_calls": "Repeated call",
     "repeated_prompt": "Repeated prompt",
     "repeated_failure": "Repeated failure"
   }

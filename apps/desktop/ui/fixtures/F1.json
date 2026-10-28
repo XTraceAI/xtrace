@@ -1562,7 +1562,7 @@
           "warnings": [],
           "count_label": null,
           "summary": "No warnings. Every check read everything it needed.",
-          "checks_summary": "Checks · all 5 complete",
+          "checks_summary": "Checks · all 4 complete",
           "dismissed": [],
           "checks": [
             {
@@ -1574,11 +1574,6 @@
               "kind": "interruption",
               "complete": true,
               "text": "Checked: interruptions"
-            },
-            {
-              "kind": "repeated_calls",
-              "complete": true,
-              "text": "Checked: repeated calls"
             },
             {
               "kind": "repeated_prompt",
