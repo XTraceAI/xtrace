@@ -808,6 +808,20 @@
   line-height: 1.3;
   letter-spacing: -0.01em;
 }
+/* The heading carries the reason in a tooltip: a dotted underline says there
+   is more, and it is a tab stop so focus opens it as hover does. */
+.xt-warning-modal-why h3.xt-warning-modal-heading {
+  justify-self: start;
+  text-decoration: underline dotted var(--meta);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  cursor: help;
+}
+.xt-warning-modal-heading:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .xt-warning-modal-reason {
   margin: 0;
   color: var(--body);
