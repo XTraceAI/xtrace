@@ -92,7 +92,9 @@ export function SessionReview({
           {warning.day} · {clock(warning.at_ms)}
         </span>
         <strong>{warning.label}</strong>
-        <span className="xt-session-issue-fact">{warning.compact_reason}</span>
+        {warning.compact_reason && (
+          <span className="xt-session-issue-fact">{warning.compact_reason}</span>
+        )}
       </button>
     </li>
   );

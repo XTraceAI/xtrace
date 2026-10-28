@@ -1039,8 +1039,9 @@ function DayWarningDot({
 
 /**
  * One pointed warning in a day's hint: its session (the host's mark and the
- * session's name), the warning's label, its short reason and, while one is
- * running or kept, its diagnosis.
+ * session's name), the warning's label, its short reason when the native side
+ * gives one (none for an admitted mistake, whose label says it) and, while one
+ * is running or kept, its diagnosis.
  */
 function DayWarningTipLine({ entry, name }: { entry: DashboardDayWarning; name: string }) {
   const status = useDiagnosisStatus(entry.session_id, entry.warning.id);
@@ -1058,7 +1059,9 @@ function DayWarningTipLine({ entry, name }: { entry: DashboardDayWarning; name: 
         <span className="xt-warning-tip-dot" aria-hidden="true" />
         <b>{entry.warning.label}</b>
       </span>
-      <span className="xt-warning-tip-reason">{entry.warning.compact_reason}</span>
+      {entry.warning.compact_reason && (
+        <span className="xt-warning-tip-reason">{entry.warning.compact_reason}</span>
+      )}
       <DiagnosisStatusLine status={status} />
     </span>
   );

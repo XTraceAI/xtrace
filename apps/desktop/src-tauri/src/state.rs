@@ -2000,7 +2000,7 @@ mod tests {
             at_ms: 0,
             record_uuids: records.iter().map(|id| (*id).to_owned()).collect(),
             reason: String::new(),
-            compact_reason: String::new(),
+            compact_reason: None,
             correction_phrase: None,
             repeat: None,
             size: None,

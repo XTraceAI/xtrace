@@ -66,6 +66,26 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.getByTestId('agent-day-total')).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  test(`an admitted mistake's dot shows its label alone, ${scheme}`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/e2e/dashboard-warning.html?admitted&path=/dashboard?range=7d');
+    await page.evaluate(() => document.fonts.ready);
+    await page.getByRole('radio', { name: 'human + agent', exact: true }).click();
+    const dot = effortDay(page, '2026-09-03').getByTestId('day-warning-dot');
+    await expect(dot).toHaveAttribute('data-kind', 'admitted_mistake');
+    const { x, y } = await centre(page, dot);
+    await page.mouse.move(x, y);
+    const line = page.getByTestId('day-warning-tip').getByTestId('day-warning-tip-line');
+    // The session and "Admitted mistake", and no grey line under it.
+    await expect(line).toHaveText(['Rename the config moduleAdmitted mistake']);
+    await expect(line.locator('.xt-warning-tip-reason')).toHaveCount(0);
+    if (shots) await page.screenshot({ path: `${shots}/effort-dot-admitted-${scheme}.png` });
+    expect(errors).toEqual([]);
+  });
 }
 
 for (const scheme of ['light', 'dark'] as const) {

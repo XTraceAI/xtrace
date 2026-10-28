@@ -81,6 +81,11 @@ fn warnings(db: &TempDb, id: &str) -> SessionWarnings {
         .find(|s| s.session_id == id)
         .unwrap()
 }
+/// The words a reason quotes: an admitted mistake's phrase.
+fn quoted(reason: &str) -> &str {
+    reason.split('"').nth(1).unwrap_or_default()
+}
+
 fn uuids(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| (*s).to_owned()).collect()
 }
@@ -1674,7 +1679,8 @@ fn an_admitted_mistake_is_read_from_saved_names_without_kept_content() {
             warning.reason,
             "the agent replied \"you're right\" after your message (12:00)"
         );
-        assert_eq!(warning.compact_reason, "Agent said \"you're right\"");
+        // "Admitted mistake" says it alone: no short line under the label.
+        assert_eq!(warning.compact_reason, None);
         assert_eq!(warning.points_at().record_uuid, "a2");
         assert_eq!(warning.points_at().block, None);
         assert_eq!(
@@ -1703,12 +1709,9 @@ fn replies_without_readable_saved_names_leave_the_check_incomplete() {
         .warnings
         .iter()
         .filter(|w| w.kind == WarningKind::AdmittedMistake)
-        .map(|w| (w.record_uuids.clone(), w.compact_reason.as_str()))
+        .map(|w| (w.record_uuids.clone(), quoted(&w.reason)))
         .collect();
-    assert_eq!(
-        admitted,
-        vec![(uuids(&["h1", "a3"]), "Agent said \"sorry\"")]
-    );
+    assert_eq!(admitted, vec![(uuids(&["h1", "a3"]), "sorry")]);
     assert_eq!(
         found.checks.admitted_mistake,
         CheckState::Incomplete {
@@ -1754,12 +1757,9 @@ fn a_phrase_after_a_preamble_record_warns_and_an_overlong_id_is_not_checked() {
         .warnings
         .iter()
         .filter(|w| w.kind == WarningKind::AdmittedMistake)
-        .map(|w| (w.record_uuids.clone(), w.compact_reason.as_str()))
+        .map(|w| (w.record_uuids.clone(), quoted(&w.reason)))
         .collect();
-    assert_eq!(
-        admitted,
-        vec![(uuids(&["h1", "a3"]), "Agent said \"good catch\"")]
-    );
+    assert_eq!(admitted, vec![(uuids(&["h1", "a3"]), "good catch")]);
     assert_eq!(
         found.checks.admitted_mistake,
         CheckState::Incomplete {

@@ -618,7 +618,7 @@ fn the_flagged_record_is_the_one_the_warning_points_at() {
             at_ms: 0,
             record_uuids: records.iter().map(|n| uuid(*n)).collect(),
             reason: "you wrote \"no\" after a reply (10:00)".into(),
-            compact_reason: "After an agent reply".into(),
+            compact_reason: Some("After an agent reply".into()),
             correction_phrase: None,
             repeat,
             size: None,

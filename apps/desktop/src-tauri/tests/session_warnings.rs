@@ -332,6 +332,21 @@ fn every_screen_reads_one_worded_answer_per_session() {
             ),
         ]
     );
+    // Every other kind keeps its short line under the label.
+    let compact: Vec<_> = warnings
+        .iter()
+        .map(|w| w.compact_reason.as_deref())
+        .collect();
+    assert_eq!(
+        compact,
+        vec![
+            Some("After an agent reply"),
+            Some("the same Bash call failed twice"),
+            Some("Declined Edit"),
+            Some("After an agent reply"),
+            Some("Same prompt sent twice"),
+        ]
+    );
     // Nothing a screen shows says "circling": that is M-20's own word.
     let json = serde_json::to_string(&list).unwrap();
     assert!(!json.to_lowercase().contains("circl"), "{json}");
@@ -1402,7 +1417,9 @@ fn an_admitted_mistake_is_worded_once_and_dismissed_like_one_event() {
         warning.reason,
         "the agent replied \"you're right\" after your message (10:01)"
     );
-    assert_eq!(warning.compact_reason, "Agent said \"you're right\"");
+    // The label alone names it: no short line under it in the dot's hint
+    // or the session page's list.
+    assert_eq!(warning.compact_reason, None);
     assert_eq!(
         warning.name,
         "Warning. Sep 7, Admitted mistake: the agent replied \"you're right\" after your message (10:01)"

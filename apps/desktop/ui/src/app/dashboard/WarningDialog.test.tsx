@@ -718,7 +718,7 @@ it('names an admitted mistake with its own heading and tag and shows its native 
     kind: 'admitted_mistake' as const,
     label: 'Admitted mistake',
     reason: 'Supplied admission reason (10:05)',
-    compact_reason: 'Supplied admission summary',
+    compact_reason: null,
     record_uuids: [selected.warning.points_at.record_uuid, 'synthetic-reply'],
     points_at: { record_uuid: 'synthetic-reply', block: null, sent_by: 'agent' as const },
   };

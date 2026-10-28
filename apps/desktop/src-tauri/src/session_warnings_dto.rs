@@ -241,8 +241,10 @@ pub struct SessionWarningItem {
     /// Why, in one sentence, with clock times in the requested zone. Quotes
     /// at most the few words a correction matched.
     pub reason: String,
-    /// A short native summary for the issue navigator; full reason stays available.
-    pub compact_reason: String,
+    /// A short native line under the label where room is short (a dot's
+    /// hint, the session page's list of warnings); the full reason stays
+    /// available. `null` when the label alone says it: an admitted mistake.
+    pub compact_reason: Option<String>,
     /// What a mark for this warning alone is named: "Warning. Sep 4,
     /// Correction: …", its day, label and reason.
     pub name: String,

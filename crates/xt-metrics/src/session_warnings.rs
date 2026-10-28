@@ -217,10 +217,12 @@ pub struct SessionWarning {
     /// One short sentence. A correction quotes its matched span, including
     /// words between "still" and its nearby negative word.
     pub reason: String,
-    /// Compact presentation from the same native facts as `reason`.
-    /// Not part of the saved neutral answer's storage shape.
+    /// Compact presentation from the same native facts as `reason`, shown
+    /// under the kind's label where room is short; `None` when the label
+    /// alone says it (an admitted mistake). Not part of the saved neutral
+    /// answer's storage shape.
     #[serde(skip)]
-    pub compact_reason: String,
+    pub compact_reason: Option<String>,
     /// A correction's matched words, as [`correction`] gave them (the
     /// phrase its `reason` quotes); `None` for every other kind. Not
     /// serialised.
@@ -811,8 +813,11 @@ pub(crate) enum WarningReason {
 }
 
 impl WarningReason {
-    fn compact(&self) -> String {
-        match self {
+    /// The short line under the kind's label, or `None` when the label alone
+    /// is enough: "Admitted mistake" already says the agent admitted one, and
+    /// the phrase it used stays in the full reason.
+    fn compact(&self) -> Option<String> {
+        Some(match self {
             Self::Correction { .. } => "After an agent reply".into(),
             Self::Interrupted { .. } => "Agent interrupted".into(),
             Self::StoppedCall { declined, tool, .. } => {
@@ -836,10 +841,8 @@ impl WarningReason {
                     times_word(*count as usize)
                 )
             }
-            Self::AdmittedMistake { phrase, .. } => {
-                format!("Agent said \"{}\"", phrase.label())
-            }
-        }
+            Self::AdmittedMistake { .. } => return None,
+        })
     }
 
     fn render(&self, zone: &TimeZone) -> String {
@@ -1885,11 +1888,11 @@ mod tests {
                     phrase: "no".into(),
                     moment: 0,
                 },
-                "After an agent reply",
+                Some("After an agent reply"),
             ),
             (
                 WarningReason::Interrupted { moment: 0 },
-                "Agent interrupted",
+                Some("Agent interrupted"),
             ),
             (
                 WarningReason::StoppedCall {
@@ -1897,7 +1900,7 @@ mod tests {
                     tool: "Edit".into(),
                     moment: 0,
                 },
-                "Declined Edit",
+                Some("Declined Edit"),
             ),
             (
                 WarningReason::StoppedCall {
@@ -1905,14 +1908,14 @@ mod tests {
                     tool: "Bash".into(),
                     moment: 0,
                 },
-                "Interrupted Bash",
+                Some("Interrupted Bash"),
             ),
             (
                 WarningReason::RepeatedPrompt {
                     moments: vec![0, 1],
                     count: 2,
                 },
-                "Same prompt sent twice",
+                Some("Same prompt sent twice"),
             ),
             (
                 WarningReason::RepeatedFailure {
@@ -1921,7 +1924,7 @@ mod tests {
                     moments: vec![0, 1],
                     count: 2,
                 },
-                "the same Bash call failed twice",
+                Some("the same Bash call failed twice"),
             ),
             (
                 WarningReason::RepeatedFailure {
@@ -1930,18 +1933,18 @@ mod tests {
                     moments: vec![0, 1, 2],
                     count: 3,
                 },
-                "Bash failed 3 times",
+                Some("Bash failed 3 times"),
             ),
             (
                 WarningReason::AdmittedMistake {
                     phrase: Phrase::YouAreRight,
                     moment: 0,
                 },
-                "Agent said \"you're right\"",
+                None,
             ),
         ];
         for (reason, expected) in cases {
-            assert_eq!(reason.compact(), expected);
+            assert_eq!(reason.compact().as_deref(), expected);
         }
     }
 
@@ -2766,7 +2769,8 @@ mod tests {
         assert_eq!(warning.anchor, "a1");
         assert_eq!(warning.at_ms, T0 + 5 * MINUTE);
         assert_eq!(warning.size, None);
-        assert_eq!(warning.compact_reason, "Agent said \"you're right\"");
+        // The label alone names it: no short line under it.
+        assert_eq!(warning.compact_reason, None);
         assert_eq!(
             warning.points_at(),
             WarningPoint {
