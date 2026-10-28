@@ -127,21 +127,9 @@ impl SessionExcerptStatus {
         let Some(target) = records.iter_mut().find(|entry| entry.target) else {
             return self;
         };
-        let whole = persons
-            .get(&target.record.id)
-            .and_then(|facts| facts.whole_message);
-        if whole != Some(true) {
+        let Some((joined, blocks)) = whole_text(target, persons) else {
             return self;
-        }
-        // Each text block's index and its byte range in the joined text.
-        let mut joined = String::new();
-        let mut blocks: Vec<(u32, std::ops::Range<usize>)> = Vec::new();
-        for block in &target.record.blocks {
-            if let SourceBlock::Text { index, text } = block {
-                blocks.push((*index, joined.len()..joined.len() + text.len()));
-                joined.push_str(text);
-            }
-        }
+        };
         if xt_metrics::correction(&joined).as_deref() != Some(phrase) {
             return self;
         }
@@ -167,6 +155,21 @@ impl SessionExcerptStatus {
         }
         target.correction_marks = marks;
         self
+    }
+    /// The words the matcher finds in the target record when the whole
+    /// record is the person's message: the cheap gates of
+    /// [`Self::with_correction_marks`], checked before anything asks which
+    /// warning is shown. `None` means no mark could be sent, whatever the
+    /// warning.
+    pub fn correction_candidate(
+        &self,
+        persons: &std::collections::BTreeMap<String, xt_store::RecordPerson>,
+    ) -> Option<String> {
+        let Self::Loaded { records, .. } = self else {
+            return None;
+        };
+        let target = records.iter().find(|entry| entry.target)?;
+        xt_metrics::correction(&whole_text(target, persons)?.0)
     }
     /// Sets each record's M-02 answer from the index's, by record ID.
     pub fn with_persons(
@@ -243,6 +246,33 @@ impl SessionExcerptStatus {
         }
         Ok(status)
     }
+}
+/// A text block's `index`, and its byte range in the joined text.
+type BlockSpan = (u32, std::ops::Range<usize>);
+
+/// The record's text blocks joined with nothing between them, as the check
+/// joined them (`xt_store::record_text::joined`), with each block's index and
+/// byte range in the joined text; `None` unless M-02 counts the whole record
+/// as the person's message.
+fn whole_text(
+    entry: &SessionExcerptRecord,
+    persons: &std::collections::BTreeMap<String, xt_store::RecordPerson>,
+) -> Option<(String, Vec<BlockSpan>)> {
+    let whole = persons
+        .get(&entry.record.id)
+        .and_then(|facts| facts.whole_message);
+    if whole != Some(true) {
+        return None;
+    }
+    let mut joined = String::new();
+    let mut blocks = Vec::new();
+    for block in &entry.record.blocks {
+        if let SourceBlock::Text { index, text } = block {
+            blocks.push((*index, joined.len()..joined.len() + text.len()));
+            joined.push_str(text);
+        }
+    }
+    Some((joined, blocks))
 }
 struct OutputCounter {
     bytes: usize,

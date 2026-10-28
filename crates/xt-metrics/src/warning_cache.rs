@@ -109,13 +109,36 @@ impl MetricsDb {
         if ids.len() > crate::MAX_SESSIONS {
             return Err(crate::Error::TooManySessions);
         }
-        self.read_snapshot(|db| Ok(db.saved_warning_answers(&ids, zone)?.0))
+        self.read_snapshot(|db| Ok(db.saved_warning_answers(&ids, zone, true)?.0))
     }
 
+    /// [`MetricsDb::saved_whole_session_warnings`] from saved answers only,
+    /// never recounting: a session whose saved answer is out of date or
+    /// unusable is [`WholeSessionWarnings::Missing`] here (and marked for the
+    /// background refresh as usual). For a detail that may wait for the next
+    /// refresh rather than hold its caller for a whole-session recount.
+    pub fn current_saved_whole_session_warnings(
+        &self,
+        sessions: &[&str],
+        zone: &TimeZone,
+    ) -> Result<BTreeMap<String, WholeSessionWarnings>> {
+        let mut ids = sessions.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.len() > crate::MAX_SESSIONS {
+            return Err(crate::Error::TooManySessions);
+        }
+        self.read_snapshot(|db| Ok(db.saved_warning_answers(&ids, zone, false)?.0))
+    }
+
+    /// The saved answers for `ids`; out-of-date or unusable ones are
+    /// recounted when `recount`, and left [`WholeSessionWarnings::Missing`]
+    /// otherwise.
     fn saved_warning_answers(
         &self,
         ids: &[&str],
         zone: &TimeZone,
+        recount: bool,
     ) -> Result<(
         BTreeMap<String, WholeSessionWarnings>,
         BTreeMap<String, i64>,
@@ -175,6 +198,8 @@ impl MetricsDb {
         }
         if !stale.is_empty() {
             self.warning_refresh_needed.set(true);
+        }
+        if recount && !stale.is_empty() {
             let named: Vec<_> = stale.iter().map(String::as_str).collect();
             let (fresh, fresh_spans) =
                 self.whole_neutral_in_snapshot(&named, RepeatThresholds::default(), &|| false)?;
@@ -202,7 +227,7 @@ impl MetricsDb {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let named: Vec<_> = ids.iter().map(String::as_str).collect();
-            let (answers, spans) = db.saved_warning_answers(&named, zone)?;
+            let (answers, spans) = db.saved_warning_answers(&named, zone, true)?;
             Ok(answers
                 .into_iter()
                 .filter_map(|(id, answer)| {

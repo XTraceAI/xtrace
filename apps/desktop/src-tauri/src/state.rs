@@ -860,16 +860,16 @@ impl AppState {
             self.with_store(|store| Ok(store.record_persons(session_id, &ids)?))
                 .unwrap_or_default()
         };
-        // The warning's own stored phrase, looked up by its ID, so a mark
-        // never names other words than the warning does. Only a caption
-        // detail: when it cannot be read, nothing is marked.
-        let phrase = match (&status, warning) {
-            (crate::dto::SessionExcerptStatus::Loaded { .. }, Some((warning_id, timezone))) => self
-                .session_warning(session_id, warning_id, timezone)
-                .ok()
-                .flatten()
-                .filter(|(found, _)| found.kind == xt_metrics::WarningKind::Correction)
-                .and_then(|(found, _)| found.correction_phrase),
+        // The warning's own stored phrase, so a mark never names other words
+        // than the warning does. Looked up only when a mark could be sent at
+        // all (the whole record is the person's and the matcher finds
+        // words), and only from a current saved answer: this caption never
+        // waits for a recount. Unread, out of date or another kind: nothing
+        // is marked and the view shows the warning's reason.
+        let phrase = match (status.correction_candidate(&persons), warning) {
+            (Some(_), Some((warning_id, timezone))) => {
+                self.current_correction_phrase(session_id, warning_id, timezone)
+            }
             _ => None,
         };
         let status = status
@@ -1435,6 +1435,36 @@ impl AppState {
             });
             Ok(warning.map(|warning| (warning, zone)))
         })
+    }
+
+    /// The stored phrase of one of a session's correction warnings, by its
+    /// identity, from a current saved answer only
+    /// ([`xt_metrics::MetricsDb::current_saved_whole_session_warnings`]):
+    /// `None` when the saved answer is out of date, the warning is not there
+    /// or not a correction, or the read fails. Never recounts.
+    fn current_correction_phrase(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+        timezone: &str,
+    ) -> Option<String> {
+        let named = [session_id.to_owned()];
+        let ids = crate::session_warnings_dto::validate_ids(&named).ok()?;
+        self.with_metric_inputs(|metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            Ok(metrics.current_saved_whole_session_warnings(&ids, &zone)?)
+        })
+        .ok()?
+        .into_values()
+        .find_map(|answer| match answer {
+            xt_metrics::WholeSessionWarnings::Read { warnings, .. } => warnings
+                .warnings
+                .into_iter()
+                .find(|warning| warning.id() == warning_id),
+            _ => None,
+        })
+        .filter(|warning| warning.kind == xt_metrics::WarningKind::Correction)
+        .and_then(|warning| warning.correction_phrase)
     }
 
     /// Dismisses one of a session's warnings: from now on no mark, count or

@@ -18,7 +18,7 @@ pub use crate::session_diagnosis_dto::{
     SavedSkill, SessionDiagnosis,
 };
 pub use crate::session_excerpt_dto::{
-    SessionExcerptLimit, SessionExcerptReason, SessionExcerptStatus,
+    SessionExcerptLimit, SessionExcerptReason, SessionExcerptStatus, TextMark,
 };
 pub use crate::session_page_dto::{
     SessionPageReason, SessionPageSelection, SessionPageStatus, SessionPageTargetKind,
