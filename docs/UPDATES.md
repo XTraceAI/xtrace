@@ -149,12 +149,12 @@ each release. They remain unverified unless that release's notes record the exac
 checks and results. Signed packaging, native fixture/source checks and updater
 download checks do not establish those results.
 
-## Prepared 0.1.9 acceptance
+## Prepared 0.2.0 acceptance
 
-The hosted harness targets the 0.1.9 candidate from source
-`8bbc6c96d56780337cdc1644a0deebfde56514f1`, installed as `XTrace.app`, and uses
-the published 0.1.8 (`XTrace.app`, archive
-`XTrace-0.1.8-macos-arm64.app.tar.gz`, 11,843,476 bytes, 101 entries) as
+The hosted harness targets the 0.2.0 candidate from source
+`65efa43ae1ae1621e32a4beaf5cd44eebebb9070`, installed as `XTrace.app`, and uses
+the published 0.1.9 (`XTrace.app`, archive
+`XTrace-0.1.9-macos-arm64.app.tar.gz`, 12,597,709 bytes, 102 entries) as
 the update starting point. Both releases use `/Applications/XTrace.app`.
 After Restart to update, a distinct successor must show the Dashboard. After a
 normal quit, the same folder must hold identical signed contents; reopening it
@@ -164,19 +164,19 @@ must show the Dashboard without Welcome. Every phase rejects extra app copies.
 
 The ten signed build values are in the `release` object of
 `scripts/ci/hosted-release.mjs`, between `BEGIN SIGNED BUILD VALUES` and `END
-SIGNED BUILD VALUES`. They identify the final signed 0.1.9 files: DMG 13,279,128
-bytes, app inventory 102 entries, updater archive 12,597,709 bytes, signature 448
-bytes, and `latest.json` 958 bytes. Runtime requires the exact public files and
+SIGNED BUILD VALUES`. They identify the final signed 0.2.0 files: DMG 13,446,451
+bytes, app inventory 102 entries, updater archive 12,766,674 bytes, signature 448
+bytes, and `latest.json` 1,545 bytes. Runtime requires the exact public files and
 source tag. If any value is missing or malformed, every hosted runner (first
 launch, telemetry, updater failures and update) refuses before it downloads,
 installs or launches anything. Each value comes from the matching signed file:
 
 | Value                                 | Computed from                                                               |
 | ------------------------------------- | --------------------------------------------------------------------------- |
-| `bytes`, `sha256`                     | `XTrace-0.1.9-macos-arm64.dmg`: `stat -f %z` and `shasum -a 256`            |
+| `bytes`, `sha256`                     | `XTrace-0.2.0-macos-arm64.dmg`: `stat -f %z` and `shasum -a 256`            |
 | `inventoryEntries`, `inventorySha256` | `XTrace.app` inside that DMG, mounted read-only                             |
-| `archiveBytes`, `archiveSha256`       | `XTrace-0.1.9-macos-arm64.app.tar.gz`: `stat -f %z` and `shasum -a 256`     |
-| `signatureBytes`, `signatureSha256`   | `XTrace-0.1.9-macos-arm64.app.tar.gz.sig`: `stat -f %z` and `shasum -a 256` |
+| `archiveBytes`, `archiveSha256`       | `XTrace-0.2.0-macos-arm64.app.tar.gz`: `stat -f %z` and `shasum -a 256`     |
+| `signatureBytes`, `signatureSha256`   | `XTrace-0.2.0-macos-arm64.app.tar.gz.sig`: `stat -f %z` and `shasum -a 256` |
 | `feedBytes`, `feedSha256`             | `latest.json`: `stat -f %z` and `shasum -a 256`                             |
 
 Compute the inventory with the harness's own function, from the repository root:
@@ -186,15 +186,18 @@ node --input-type=module -e 'import { appInventory } from "./scripts/ci/hosted-r
 ```
 
 The app that `/usr/bin/tar -xzf` extracts from the updater archive gives the same
-result (0.1.8: 101 entries; 0.1.9: 102 entries, the same SHA-256 as the DMG app),
+result (0.1.9: 102 entries; 0.2.0: 102 entries, the same SHA-256 as the DMG app),
 and the archive holds exactly `inventoryEntries` members under one `XTrace.app`
 folder. `scripts/ci/fixtures/hosted-update-latest.json` holds the exact candidate
 `latest.json` bytes; the tests require it to match `feedBytes` and `feedSha256`,
-name version 0.1.9, and point only at the public v0.1.9 archive.
+name version 0.2.0, and point only at the public v0.2.0 archive under
+`XTraceAI/xtrace`. The published 0.1.9 feed still names the archive under the
+former repository name `XTraceAI/xtrace-desktop`; the harness downloads the 0.1.9
+starting archive from `XTraceAI/xtrace`, which serves the same release.
 `fixture.lockSha256` in `scripts/ci/hosted-updater-failures.mjs` is the actual
 harness checkout's `Cargo.lock`, which a unit test also compares with the pin.
 The SDK helper is built from this harness checkout, separately from the fixed
-0.1.9 product source. Change that pin only if the harness's `Cargo.lock` changes.
+0.2.0 product source. Change that pin only if the harness's `Cargo.lock` changes.
 
 ### Limits
 
@@ -203,7 +206,7 @@ except the separate telemetry mode. This suppresses the default telemetry notice
 as well as telemetry sending. Their reports and success messages identify that
 scope.
 
-These pins prepare 0.1.9 acceptance; they do not establish successful hosted
+These pins prepare 0.2.0 acceptance; they do not establish successful hosted
 checks. The checks require the existing reviewed workflow guards and exact public
 assets; the update additionally requires separate authorization to promote the
 pinned production feed. Not covered by the update check: a Mac that already has

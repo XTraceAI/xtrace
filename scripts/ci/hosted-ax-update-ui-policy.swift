@@ -2,8 +2,8 @@
 // update starts from the published earlier version; both versions use the
 // same fixed folder, and the updater replaces its contents in place.
 enum Release {
-    static let candidate = "0.1.9"
-    static let earlier = "0.1.8"
+    static let candidate = "0.2.0"
+    static let earlier = "0.1.9"
     static let candidateBundle = "/Applications/XTrace.app"
     static let earlierBundle = "/Applications/XTrace.app"
     static func bundle(_ mode: String) -> String {

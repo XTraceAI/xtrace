@@ -2,20 +2,22 @@ import { basename } from 'node:path';
 import { release, sha256, appInventory } from './hosted-release.mjs';
 import { requireProbeHost } from './hosted-validation.mjs';
 
-// The published 0.1.8 baseline, installed as "XTrace.app". Its public archive
-// and all 101 paths/bytes/modes were checked independently against its DMG.
+// The published 0.1.9 baseline, installed as "XTrace.app". Its public archive
+// and all 102 paths/bytes/modes were checked independently against its DMG.
+// It was published before the repository rename; its public archive is still
+// served under the current repository name.
 export const previousRelease = Object.freeze({
   identifier: release.identifier,
   bundle: '/Applications/XTrace.app',
   team: release.team,
-  inventoryEntries: 101,
-  version: '0.1.8',
-  tag: 'v0.1.8',
-  source: '75d49d54f6717d32d72eeb7a933eebb13f5be148',
-  archive: 'XTrace-0.1.8-macos-arm64.app.tar.gz',
-  bytes: 11843476,
-  sha256: 'ba52098989d15ab6aab7600609b030460c2840d0757dff06e88beab5f5412c2e',
-  inventorySha256: '68c08e83836c518fcc27f1571bb28114b3ca3435c01a2a9b53cd0312bf4df524',
+  inventoryEntries: 102,
+  version: '0.1.9',
+  tag: 'v0.1.9',
+  source: '8bbc6c96d56780337cdc1644a0deebfde56514f1',
+  archive: 'XTrace-0.1.9-macos-arm64.app.tar.gz',
+  bytes: 12597709,
+  sha256: '05f73f2f7af4b5b0b698b4603ad3b97cb1487a1b6fa3b28104bd9d43f6b1238e',
+  inventorySha256: '7e4a76b78bd3d83a7c9474b26a7e1e2b0ba1e2d1dcc62e8f521698456c52420f',
 });
 export const updateBudget = Object.freeze({ workMs: 14 * 60_000, cleanupMs: 2 * 60_000 });
 export const productionFeed =
@@ -55,14 +57,15 @@ export function verifyProductionFeed(bytes, pins = release) {
       `Production feed prerequisite unmet: canonical ${pins.version} is not available`,
     );
   // Defense in depth: the pinned bytes must also name this version and only
-  // the public archive of its own tag. The published 0.1.9 feed was made
-  // before the repository rename, so its archive URL keeps the old name.
+  // the public archive of its own tag under the current repository name. (The
+  // published 0.1.9 feed predates the rename and names XTraceAI/xtrace-desktop;
+  // the 0.2.0 feed names XTraceAI/xtrace.)
   const feed = JSON.parse(bytes);
   if (
     feed.version !== pins.version ||
     JSON.stringify(Object.keys(feed.platforms || {})) !== '["darwin-aarch64"]' ||
     feed.platforms['darwin-aarch64'].url !==
-      `https://github.com/XTraceAI/xtrace-desktop/releases/download/${pins.tag}/${pins.archive}`
+      `https://github.com/XTraceAI/xtrace/releases/download/${pins.tag}/${pins.archive}`
   )
     throw new Error('Pinned feed names a different version, platform or archive');
   return { bytes: bytes.length, sha256: sha256(bytes), version: feed.version };
