@@ -10,10 +10,15 @@
 //!   with no pop-up. Renaming sends the new nickname; Leave asks the
 //!   leaderboard to delete everything it has.
 //! * **What is public.** The nickname, the 7-day leverage number and the
-//!   member's country. The app never sends a country: the leaderboard takes
-//!   it from the IP address its requests come from (Vercel's
-//!   `x-vercel-ip-country`), at joining and with each number, and keeps only
-//!   the two-letter code. The email and the IP address are not shown.
+//!   member's country. The app never sends a country: at joining and with
+//!   each number, the leaderboard reads Vercel's `x-vercel-ip-country`
+//!   request header, whose documented meaning is the two-letter country of
+//!   the caller's public IP address
+//!   (<https://vercel.com/docs/headers/request-headers>), and keeps only that
+//!   code. Vercel's docs do not say whether a copy sent by the client is
+//!   replaced; if it is not, the worst case is a member setting their own
+//!   flag, since a request can only change the membership whose key it
+//!   holds. The email and the IP address are not shown.
 //! * **What is read.** While joined, the page's status asks the leaderboard
 //!   for the member's rank, and the page reads the public list
 //!   ([`LeaderboardService::table`]), with each member's country.
@@ -478,15 +483,19 @@ struct Listed {
 }
 
 /// A listed member's country as the page may show it: exactly two
-/// uppercase ASCII letters, else none. Any JSON value is accepted, so a bad
-/// country only hides the flag and never refuses the list.
+/// uppercase ASCII letters, and not `XX` (which means no country), else
+/// none. The app's one country rule; the page only draws what it keeps.
+/// Any JSON value is accepted, so a bad country only hides the flag and
+/// never refuses the list.
 fn listed_country<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error> {
     let value = Value::deserialize(deserializer)?;
     Ok(value
         .as_str()
-        .filter(|code| code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase()))
+        .filter(|code| {
+            code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase()) && *code != "XX"
+        })
         .map(str::to_owned))
 }
 

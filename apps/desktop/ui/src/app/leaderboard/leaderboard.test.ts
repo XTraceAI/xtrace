@@ -61,13 +61,12 @@ it('shows the native answer as given', () => {
   expect(refusalText(undefined)).toBe('The leaderboard could not be reached.');
 });
 
-it('writes a country code as its flag, and nothing for anything else', () => {
+it('writes a country code as its two regional-indicator letters', () => {
   expect(countryFlag('US')).toBe('\u{1F1FA}\u{1F1F8}');
   expect(countryFlag('GB')).toBe('🇬🇧');
   expect(countryFlag('AZ')).toBe('\u{1F1E6}\u{1F1FF}');
-  for (const code of [null, '', 'us', 'USA', 'U', '<b', 'ÉS']) {
-    expect(countryFlag(code), String(code)).toBeNull();
-  }
+  expect(countryFlag('ZA')).toBe('\u{1F1FF}\u{1F1E6}');
+  expect([...countryFlag('JP')]).toHaveLength(2);
 });
 
 it('says that the country is public and where it comes from', () => {

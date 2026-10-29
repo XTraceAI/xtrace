@@ -44,7 +44,7 @@ after(async () => {
 
 test('schema.sql can be applied again without changes', async () => {
   const { db, query } = await openLocalDatabase();
-  assert.equal(await applySchema(query, readSchema()), 6);
+  assert.equal(await applySchema(query, readSchema()), 8);
   const indexes = (await query(`select indexname from pg_indexes where schemaname = 'public'`)).map(
     (row) => String(row.indexname),
   );
@@ -67,7 +67,7 @@ test('schema.sql can be applied again without changes', async () => {
       'country',
     ],
   );
-  for (const country of ['us', 'USA', 'U', 'ÉS', ''])
+  for (const country of ['us', 'USA', 'U', 'ÉS', '', 'XX'])
     await assert.rejects(
       query(
         `insert into members (nickname, nickname_key, email, key_hash, country) values ('c','c','c',decode('03','hex'),$1)`,
@@ -80,7 +80,7 @@ test('schema.sql can be applied again without changes', async () => {
     `insert into members (nickname, nickname_key, email, key_hash, country) values ('d','d','d',decode('04','hex'),'NZ')`,
   );
   // Running it again keeps the column, its check and the stored country.
-  assert.equal(await applySchema(query, readSchema()), 6);
+  assert.equal(await applySchema(query, readSchema()), 8);
   assert.deepEqual(await query(`select country from members where nickname = 'd'`), [
     { country: 'NZ' },
   ]);
@@ -99,6 +99,60 @@ test('schema.sql can be applied again without changes', async () => {
   await query(
     `insert into members (nickname, nickname_key, email, key_hash, leverage_tenths) values ('b','b','b',decode('02','hex'),1000000000)`,
   );
+  await db.close();
+});
+
+/** The check constraints on members that mention the country. */
+const countryChecks = async (query: Query) =>
+  (
+    await query(
+      `select conname, pg_get_constraintdef(oid) as definition from pg_constraint
+       where conrelid = 'members'::regclass and contype = 'c'
+         and pg_get_constraintdef(oid) like '%country%'`,
+    )
+  ).map((row) => String(row.conname));
+
+test('rerunning schema.sql on a table with rows keeps them and one country check', async () => {
+  const { db, query } = await openLocalDatabase();
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country, leverage_tenths)
+     values ('kept','kept','kept@example.com',decode('10','hex'),'SE', 42),
+            ('blank','blank','blank@example.com',decode('11','hex'),null, 7)`,
+  );
+  for (let run = 0; run < 3; run += 1) await applySchema(query, readSchema());
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  assert.deepEqual(
+    await query('select nickname, country, leverage_tenths from members order by nickname'),
+    [
+      { nickname: 'blank', country: null, leverage_tenths: 7 },
+      { nickname: 'kept', country: 'SE', leverage_tenths: 42 },
+    ],
+  );
+  // XX means no country, so the database refuses it as a stored value.
+  await assert.rejects(
+    query(`update members set country = 'XX' where nickname = 'kept'`),
+    /check constraint/,
+  );
+  await db.close();
+});
+
+test("schema.sql replaces the first version's country check rather than adding a second", async () => {
+  const { db, query } = await openLocalDatabase();
+  // The table as the first version of this column left it: an inline check, no XX rule.
+  await query('alter table members drop column country');
+  await query(
+    `alter table members add column country text
+       check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$')`,
+  );
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country)
+     values ('old','old','old@example.com',decode('12','hex'),'NL')`,
+  );
+  await applySchema(query, readSchema());
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  assert.deepEqual(await query('select country from members'), [{ country: 'NL' }]);
+  await assert.rejects(query(`update members set country = 'XX'`), /check constraint/);
   await db.close();
 });
 

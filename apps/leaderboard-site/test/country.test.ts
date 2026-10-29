@@ -2,7 +2,7 @@
 // saved at verify and on every score, kept when unknown, shown as a flag.
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { COUNTRY_HEADER, countryFlag, requestCountry } from '../src/country.js';
+import { COUNTRY_HEADER, countryFlag, isCountryCode, requestCountry } from '../src/country.js';
 import { flagHtml, renderPage } from '../src/page.js';
 import { harness, me, nextIp, readJson, request, startJoin, type Harness } from './support.js';
 
@@ -129,6 +129,25 @@ describe('saving the country', () => {
     assert.equal(await storedCountry('Refused'), 'CA');
   });
 
+  test('renaming keeps the country', async () => {
+    const key = await joinFrom('Renamer', 'ES');
+    const renamed = await h.app.me.PATCH(
+      request('PATCH', '/api/me', { key, body: { nickname: 'Renamed' } }),
+    );
+    assert.equal(renamed.status, 200);
+    assert.equal(await storedCountry('Renamed'), 'ES');
+    // A rename never reads the header, so even a different country changes nothing.
+    const again = await h.app.me.PATCH(
+      request('PATCH', '/api/me', {
+        key,
+        body: { nickname: 'Renamed_2' },
+        headers: withCountry('PT'),
+      }),
+    );
+    assert.equal(again.status, 200);
+    assert.equal(await storedCountry('Renamed_2'), 'ES');
+  });
+
   test('the IP is not stored with the country', async () => {
     const key = await joinFrom('Private', 'BR');
     await scoreFrom(key, 5, 'BR');
@@ -173,7 +192,12 @@ describe('showing the country', () => {
       html.includes(`<div class="line">${flag}<span class="nick">Leader</span>`),
       'flag right before the nickname on the board',
     );
-    assert.ok(html.includes(`<dt>1UP</dt><dd>${flag}Leader</dd>`), 'flag before the 1UP name');
+    assert.ok(
+      html.includes(
+        `<dt>1UP</dt><dd><span class="lead">${flag}<span class="nick">Leader</span></span></dd>`,
+      ),
+      'flag before the 1UP name, on one flex line with it',
+    );
     // No flag, and nothing standing in for one, for a member with no country.
     assert.ok(html.includes('<div class="line"><span class="nick">Plain</span>'));
     assert.equal(html.split('class="flag"').length - 1, 2);
@@ -184,14 +208,24 @@ describe('showing the country', () => {
     const key = await joinFrom('Solo');
     await scoreFrom(key, 15);
     const html = await (await h.app.page.GET(request('GET', '/'))).text();
-    assert.ok(html.includes('<dt>1UP</dt><dd>Solo</dd>'));
+    assert.ok(
+      html.includes(
+        '<dt>1UP</dt><dd><span class="lead"><span class="nick">Solo</span></span></dd>',
+      ),
+    );
     assert.ok(!html.includes('class="flag"'));
   });
 
-  test('the flag never wraps on its own and the nickname still wraps', async () => {
+  test('the flag stays on the line with the first characters of the nickname', () => {
     const html = renderPage([]);
+    // Board rows and the 1UP name both put the flag and the nickname in one
+    // flex line that does not wrap: the flag never shrinks, only the nickname
+    // wraps, so no line break can fall between them.
+    assert.match(html, /\.line \{ display: flex;/);
+    assert.match(html, /\.lead \{ display: inline-flex;[^}]*max-width: 100%;/);
+    assert.ok(!/flex-wrap/.test(html));
     assert.match(html, /\.flag \{[^}]*flex: none;/);
-    assert.match(html, /\.nick \{[^}]*overflow-wrap: anywhere;/);
+    assert.match(html, /\.nick \{[^}]*min-width: 0; overflow-wrap: anywhere;/);
   });
 });
 
@@ -203,13 +237,15 @@ describe('the flag helpers', () => {
     assert.equal([...countryFlag('GB')].length, 2);
   });
 
-  test('anything else gives no flag', () => {
-    for (const value of ['', 'us', 'USA', 'U', '<b', '"X', 'U&'])
-      assert.equal(countryFlag(value), '', JSON.stringify(value));
+  test('one rule says what a country code is: two uppercase letters, not XX', () => {
+    for (const value of ['US', 'DE', 'AA', 'ZZ']) assert.equal(isCountryCode(value), true, value);
+    for (const value of ['XX', '', 'us', 'USA', 'U', '<b', '"X', 'U&', 'ÜS'])
+      assert.equal(isCountryCode(value), false, JSON.stringify(value));
   });
 
-  test('flagHtml is empty for null or a bad code, so nothing is injected', () => {
+  test('flagHtml is empty for null, XX or a bad code, so nothing is injected', () => {
     assert.equal(flagHtml(null), '');
+    assert.equal(flagHtml('XX'), '');
     assert.equal(flagHtml('"><script>'), '');
     assert.equal(flagHtml('a"'), '');
     assert.equal(
@@ -223,6 +259,6 @@ describe('the flag helpers', () => {
     const html = renderPage([{ rank: 1, nickname: 'Odd', leverage_tenths: 10, country: '<i>' }]);
     assert.ok(!html.includes('<i>'));
     assert.ok(!html.includes('class="flag"'));
-    assert.ok(html.includes('<dd>Odd</dd>'));
+    assert.ok(html.includes('<dd><span class="lead"><span class="nick">Odd</span></span></dd>'));
   });
 });

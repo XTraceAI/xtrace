@@ -129,11 +129,10 @@ function RankCell({ rank }: { rank: number }) {
 
 /** The member's flag before their nickname, named by its code; nothing without a country. */
 function CountryFlag({ country }: { country: string | null }) {
-  const flag = countryFlag(country);
-  if (flag === null || country === null) return null;
+  if (country === null) return null;
   return (
     <span className="xt-leaderboard-flag" role="img" aria-label={country} title={country}>
-      {flag}
+      {countryFlag(country)}
     </span>
   );
 }

@@ -8,7 +8,9 @@ another nickname and send the same code again.
 The first step answers the same way for every valid email, so it never shows whether an email has joined.
 The app then sends their 7-day leverage, and the site lists it next to their nickname.
 Joining again with the same email (for example on a new Mac) signs you back in to the same entry.
-The page shows only the nickname and the number. Emails are never shown or returned.
+The page shows only the nickname, the number and a flag for the member's country. The country is
+taken from the IP address of their requests (Vercel's `x-vercel-ip-country` header); the IP address
+itself is never stored. Emails are never shown or returned.
 
 The exact API is in [API.md](API.md).
 

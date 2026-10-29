@@ -316,13 +316,20 @@ Everything above still holds unless replaced here.
 
 ## Where the country comes from
 
-- The only source is the `x-vercel-ip-country` request header, which Vercel adds from the caller's IP address.
-  One function (`requestCountry` in `src/country.ts`) reads it, and every endpoint uses that function.
-- The value counts only when it is exactly two uppercase ASCII letters (`/^[A-Z]{2}$/`) and is not `XX`. Anything
-  else (no header, `XX`, lowercase, longer or shorter) is _unknown_.
+- The only source is the `x-vercel-ip-country` request header. Its documented meaning is "a two-character
+  ISO 3166-1 country code" for the location of the requester's public IP address
+  ([Vercel request headers](https://vercel.com/docs/headers/request-headers)). One function (`requestCountry` in
+  `src/country.ts`) reads it, and every endpoint uses that function.
+- Vercel's docs do not say whether a copy of this header sent by the client is replaced or removed (they say so
+  only for `X-Forwarded-For`). If a client can send its own, the worst case is a member setting their own flag: a
+  join sets only the country of the membership it creates or signs back in to, and a score only that of the
+  membership whose key it sends.
+- The value counts only when it is exactly two uppercase ASCII letters (`/^[A-Z]{2}$/`) and is not `XX` (no
+  country) — `isCountryCode` in `src/country.ts`. Anything else (no header, `XX`, lowercase, longer or shorter) is
+  _unknown_. The page draws a flag only for a code this rule accepts.
 - It is saved on the member when a join is verified (a new member, or a member signing back in), and on every
   successful `PUT /api/score`. When it is unknown, the stored country is kept as it is. A refused request
-  (4xx) does not change it.
+  (4xx) and a rename (`PATCH /api/me`) do not change it.
 - The IP address is still never stored; only the two-letter country is.
 - The local development server drops any client-sent `x-vercel-ip-country` (as it does `x-real-ip` and
   `x-forwarded-for`), so a local client cannot claim a country; its members have none. Tests set the header on
@@ -339,17 +346,23 @@ Everything above still holds unless replaced here.
 - A flag is shown just before each nickname on the board, and before the leader's name in the **1UP** box. It is the
   country code written as two Unicode regional-indicator letters (`US` → 🇺🇸), in a
   `<span class="flag" role="img" aria-label="US" title="US">`. A member with no country has no flag and no gap.
+  The flag and the nickname share one line that does not wrap (a flex line on the board, an inline flex line in
+  1UP): only the nickname wraps, so the flag always stays beside its first characters.
 - The page still runs no scripts and has the same Content-Security-Policy; nicknames are still escaped, shown in
   full and fit from 320 px up.
 
 ## Schema addition
 
 ```sql
-alter table members add column if not exists country text
-  check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$');
+alter table members add column if not exists country text;
+alter table members drop constraint if exists members_country_check;
+alter table members add constraint members_country_check
+  check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$' and country <> 'XX');
 ```
 
-Safe to run again: a second run leaves the column, its check and the stored countries unchanged.
+Safe to run again: each run keeps the column and the stored countries and leaves exactly one country check,
+`members_country_check` (also the name Postgres gave the first version's inline check, without the `XX` rule, which
+this replaces).
 
 ## Deploy note
 

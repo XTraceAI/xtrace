@@ -1366,6 +1366,7 @@ fn a_listed_country_is_kept_and_a_bad_or_missing_one_shows_no_flag() {
                     { "rank": 9, "nickname": "object", "leverage_tenths": 40, "country": { "code": "US" } },
                     { "rank": 10, "nickname": "markup", "leverage_tenths": 30, "country": "<b" },
                     { "rank": 11, "nickname": "accent", "leverage_tenths": 20, "country": "ÉS" },
+                    { "rank": 12, "nickname": "nowhere", "leverage_tenths": 10, "country": "XX" },
                 ] }),
             )
         }),
@@ -1391,6 +1392,8 @@ fn a_listed_country_is_kept_and_a_bad_or_missing_one_shows_no_flag() {
             ("object", None),
             ("markup", None),
             ("accent", None),
+            // XX means no country.
+            ("nowhere", None),
         ]
     );
     assert!(table.rows[1].is_you);

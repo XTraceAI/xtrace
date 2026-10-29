@@ -35,14 +35,13 @@ export const TABLE_READING = 'Reading the public list…';
 /** The medal drawn before the top three ranks, for fun; the number stays. */
 export const rankMedal = (rank: number): string | null => ['🥇', '🥈', '🥉'][rank - 1] ?? null;
 /**
- * A two-letter country code as its flag (`US` → 🇺🇸): the two Unicode
- * regional-indicator letters for it. Null when there is no country or the
- * code is not two uppercase ASCII letters, so no flag is drawn.
+ * A row's country code as its flag (`US` → 🇺🇸): the two Unicode
+ * regional-indicator letters for it. It only converts: the native side
+ * decides which codes reach a row (`listed_country` in leaderboard.rs), and a
+ * row without one has `null`, which draws no flag.
  */
-export function countryFlag(country: string | null): string | null {
-  if (country === null || !/^[A-Z]{2}$/.test(country)) return null;
-  return String.fromCodePoint(...[...country].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
-}
+export const countryFlag = (country: string): string =>
+  String.fromCodePoint(...[...country].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
 /** Said to assistive technology after the member's own nickname. */
 export const YOU_LABEL = '(this is you)';
 

@@ -51,9 +51,13 @@ const openPlaces = (html: string) =>
   [...html.matchAll(/<tr data-empty aria-hidden="true"><td class="rank">([^<]*)<\/td>/g)].map(
     (m) => m[1],
   );
+/** The top line's labels and their text (the 1UP name sits in its own spans). */
 const hud = (html: string) =>
   Object.fromEntries(
-    [...html.matchAll(/<div><dt>([^<]*)<\/dt><dd>([^<]*)<\/dd><\/div>/g)].map((m) => [m[1], m[2]]),
+    [...html.matchAll(/<div><dt>([^<]*)<\/dt><dd>(.*?)<\/dd><\/div>/g)].map((m) => [
+      m[1],
+      m[2]!.replace(/<[^>]*>/g, ''),
+    ]),
   );
 const openLine = (html: string) => /<p class="open">([^<]*)<\/p>/.exec(html)?.[1];
 
