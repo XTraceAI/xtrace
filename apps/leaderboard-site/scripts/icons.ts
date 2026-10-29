@@ -1,62 +1,58 @@
 // Draws the page's tab and home-screen icons: the XTrace mark (src/mark.ts,
-// the same shape as the header logo) as 8-bit pixel art.
+// the same shape as the header logo) as chunky 8-bit pixel art in the arcade
+// title's style: yellow with a hard violet shadow, on the page's navy.
 // Usage: node --import ./scripts/ts-resolve.mjs scripts/icons.ts
 // Writes public/favicon.svg, public/favicon-32.png and public/apple-touch-icon.png;
 // a test checks the files in public/ are what this draws.
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { insideMark, MARK_COLORS } from '../src/mark.js';
+import { insideMark } from '../src/mark.js';
+import { PAGE_COLORS } from '../src/page.js';
 
-/** Pixels across the mark: 5 per cell of its 3×3 grid. */
-export const ICON_GRID = 15;
+/** Pixels across the mark. Few enough that the steps still show in a 16px tab. */
+export const MARK_PIXELS = 8;
 
-/** The page background, behind the home-screen icon. */
-const BACKGROUND = '#07071a';
+/** Pixels across the whole icon: the mark, a one-pixel edge, and its shadow one pixel down and right. */
+export const ICON_TILE = MARK_PIXELS + 2;
 
-function rgb(hex: string): [number, number, number] {
-  const n = Number.parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-function hex(color: number[]): string {
-  return `#${color.map((c) => Math.round(c).toString(16).padStart(2, '0').toUpperCase()).join('')}`;
-}
-
-/** The mark's gradient in three flat steps: its two ends and the colour halfway. */
-export const ICON_SHADES = [
-  MARK_COLORS[0],
-  hex(rgb(MARK_COLORS[0]).map((c, i) => (c + rgb(MARK_COLORS[1])[i]!) / 2)),
-  MARK_COLORS[1],
-];
-
-/** Each pixel's shade index into ICON_SHADES, or null where the mark is not drawn. */
-export function iconPixels(): (number | null)[][] {
-  const step = 3 / ICON_GRID;
-  return Array.from({ length: ICON_GRID }, (_, row) =>
-    Array.from({ length: ICON_GRID }, (_, col) => {
-      const x = (col + 0.5) * step;
-      const y = (row + 0.5) * step;
-      if (!insideMark(x, y)) return null;
-      // Gradient position: 0 at the top right, 1 at the bottom left.
-      const t = (3 - x + y) / 6;
-      return Math.min(ICON_SHADES.length - 1, Math.floor(t * ICON_SHADES.length));
+/** Each icon pixel's colour, row by row: navy, the violet shadow, or the yellow mark. */
+export function iconPixels(): string[][] {
+  const mark = (col: number, row: number) =>
+    col >= 0 &&
+    row >= 0 &&
+    col < MARK_PIXELS &&
+    row < MARK_PIXELS &&
+    insideMark(((col + 0.5) * 3) / MARK_PIXELS, ((row + 0.5) * 3) / MARK_PIXELS);
+  return Array.from({ length: ICON_TILE }, (_, y) =>
+    Array.from({ length: ICON_TILE }, (_, x) => {
+      if (mark(x - 1, y - 1)) return PAGE_COLORS.yellow;
+      if (mark(x - 2, y - 2)) return PAGE_COLORS.violet;
+      return PAGE_COLORS.bg;
     }),
   );
 }
 
-/** The tab icon as SVG: one square per pixel, drawn without smoothing. */
+/** The tab icon as SVG: the navy tile, then one square per shadow or mark pixel, drawn without smoothing. */
 export function iconSvg(): string {
   const rects = iconPixels()
     .flatMap((row, y) =>
-      row.map((shade, x) =>
-        shade === null
+      row.map((color, x) =>
+        color === PAGE_COLORS.bg
           ? ''
-          : `<rect x="${x}" y="${y}" width="1" height="1" fill="${ICON_SHADES[shade]}"/>`,
+          : `<rect x="${x}" y="${y}" width="1" height="1" fill="${color}"/>`,
       ),
     )
     .join('');
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ICON_GRID} ${ICON_GRID}" shape-rendering="crispEdges">${rects}</svg>\n`;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ICON_TILE} ${ICON_TILE}" shape-rendering="crispEdges">` +
+    `<rect width="${ICON_TILE}" height="${ICON_TILE}" fill="${PAGE_COLORS.bg}"/>${rects}</svg>\n`
+  );
+}
+
+function rgb(hex: string): [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
 function chunk(type: string, data: Buffer): Buffer {
@@ -71,39 +67,32 @@ function chunk(type: string, data: Buffer): Buffer {
 /** The three icon files, as public/ holds them. */
 export const ICON_FILES = {
   'favicon.svg': () => iconSvg(),
-  // 15 pixels × 2 = 30, centred in 32 with a 1px clear edge.
-  'favicon-32.png': () => iconPng(32, 2, null),
-  // 15 × 10 = 150, centred in 180 on the page background.
-  'apple-touch-icon.png': () => iconPng(180, 10, BACKGROUND),
+  // 10 pixels × 3 = 30, centred in 32 on navy.
+  'favicon-32.png': () => iconPng(32, 3),
+  // 10 × 18 = 180 exactly.
+  'apple-touch-icon.png': () => iconPng(180, 18),
 } as const;
 
 /** The unfiltered RGBA rows a PNG of iconPng stores, so tests can compare pixels, not compressed bytes. */
-export function iconRows(size: number, scale: number, background: string | null): Buffer {
+export function iconRows(size: number, scale: number): Buffer {
   const pixels = iconPixels();
-  const offset = Math.floor((size - ICON_GRID * scale) / 2);
-  const back = background === null ? null : rgb(background);
+  const offset = Math.floor((size - ICON_TILE * scale) / 2);
   const raw = Buffer.alloc(size * (size * 4 + 1));
   for (let y = 0; y < size; y++) {
     raw[y * (size * 4 + 1)] = 0; // no filter
     for (let x = 0; x < size; x++) {
       const gx = Math.floor((x - offset) / scale);
       const gy = Math.floor((y - offset) / scale);
-      const inGrid = x >= offset && y >= offset && gx < ICON_GRID && gy < ICON_GRID;
-      const shade = inGrid ? (pixels[gy]![gx] ?? null) : null;
-      const color = shade === null ? back : rgb(ICON_SHADES[shade]!);
-      const at = y * (size * 4 + 1) + 1 + x * 4;
-      if (color) raw.set([...color, 255], at);
+      const color = pixels[gy]?.[gx] ?? PAGE_COLORS.bg;
+      raw.set([...rgb(color), 255], y * (size * 4 + 1) + 1 + x * 4);
     }
   }
   return raw;
 }
 
-/**
- * A square RGBA PNG of `size` pixels: each mark pixel becomes a `scale`-wide
- * block, centred, on `background` (transparent when null).
- */
-export function iconPng(size: number, scale: number, background: string | null): Buffer {
-  const raw = iconRows(size, scale, background);
+/** A square, opaque RGBA PNG of `size` pixels: each icon pixel is a `scale`-wide block, centred on navy. */
+export function iconPng(size: number, scale: number): Buffer {
+  const raw = iconRows(size, scale);
   const header = Buffer.alloc(13);
   header.writeUInt32BE(size, 0);
   header.writeUInt32BE(size, 4);

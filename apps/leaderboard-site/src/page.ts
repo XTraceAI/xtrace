@@ -197,6 +197,9 @@ function starShadows(count: number, seed: number, colors: string[]): string {
 const SMALL_STARS = starShadows(56, 7, ['#f2f2ff', '#f2f2ff', '#f2f2ff', '#4de8ff', '#a35cff']);
 const BIG_STARS = starShadows(14, 41, ['#f2f2ff', '#ffe14d', '#4de8ff', '#a35cff']);
 
+/** The page colours other files draw with too (the tab icons in scripts/icons.ts). */
+export const PAGE_COLORS = { bg: '#07071a', yellow: '#ffe14d', violet: '#a35cff' } as const;
+
 const STYLE = `
 @font-face {
   font-family: "Press Start 2P";
@@ -205,9 +208,9 @@ const STYLE = `
 }
 :root {
   color-scheme: dark;
-  --bg: #07071a;
+  --bg: ${PAGE_COLORS.bg};
   --fg: #f2f2ff;
-  --yellow: #ffe14d;
+  --yellow: ${PAGE_COLORS.yellow};
   --orange: #ff9b3d;
   --pink: #ff4dd2;
   --cyan: #4de8ff;
@@ -215,7 +218,7 @@ const STYLE = `
   --dim: #7a7aa8;
   --empty: #4a4a78;
   --hill: #1a1550;
-  --violet: #a35cff;
+  --violet: ${PAGE_COLORS.violet};
   --deep: #3a1f7a;
   --pixel: "Press Start 2P", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -481,7 +484,7 @@ export function renderPage(rows: ListedRow[]): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XTrace Leaderboard</title>
 <meta name="description" content="Leverage over the last 7 days, shared by people who opted in from the XTrace app.">
-<meta name="theme-color" content="#07071a">
+<meta name="theme-color" content="${PAGE_COLORS.bg}">
 ${ICON_LINKS}
 <link rel="preload" href="${PAGE_FONT_PATH}" as="font" type="font/ttf" crossorigin>
 <style>${STYLE}</style>
