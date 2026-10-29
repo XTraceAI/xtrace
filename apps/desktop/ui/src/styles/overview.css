@@ -561,10 +561,10 @@
   }
 }
 
-/* "human + agent": a day's date opens its sessions box, and shows that it
-   does on hover, quietly. */
+/* "human + agent": a day's date opens its sessions box on hover, and shows
+   that it does, quietly. A click does nothing, so the cursor stays an arrow. */
 .xt-human[data-variant='paired'] .xt-human-day {
-  cursor: pointer;
+  cursor: default;
 }
 .xt-human[data-variant='paired'] .xt-human-day:hover,
 .xt-human[data-variant='paired'] .xt-human-day[data-popup-open] {

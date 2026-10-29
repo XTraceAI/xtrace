@@ -16,7 +16,7 @@ const first = commit('b');
 const head = commit('c');
 const sourceOne = commit('d');
 const sourceTwo = commit('e');
-const repository = 'XTraceAI/xtrace-desktop';
+const repository = 'XTraceAI/xtrace';
 const checked = `- [x] ${ATTESTATION}`;
 const entry = (number, before, after, source) => ({
   baseCommit: { oid: before },
@@ -29,7 +29,7 @@ test('only a single visible checked attestation passes', () => {
   for (const prefix of [
     '<img src="app.png" alt="App">',
     '<br>',
-    '<https://github.com/XTraceAI/xtrace-desktop/issues/1>',
+    '<https://github.com/XTraceAI/xtrace/issues/1>',
   ])
     requireAttestation(`${prefix}\n\n${checked}`);
   for (const body of [
@@ -66,21 +66,18 @@ test('code and HTML comments cannot invent issue references', () => {
     [{ repository, number: 7 }],
   );
   assert.deepEqual(
-    linkedIssues(
-      'Actual [issue](https://github.com/XTraceAI/xtrace-desktop/issues/7).',
-      repository,
-    ),
+    linkedIssues('Actual [issue](https://github.com/XTraceAI/xtrace/issues/7).', repository),
     [{ repository, number: 7 }],
   );
 });
 
 test('rendered HTML issue anchors are included without reading comments or code examples', () => {
-  const url = 'https://github.com/XTraceAI/xtrace-desktop/issues/7';
+  const url = 'https://github.com/XTraceAI/xtrace/issues/7';
   for (const body of [
     `<a href="${url}">Issue</a>`,
     `<div><a href="${url}">Issue</a></div>`,
-    '<a href="/XTraceAI/xtrace-desktop/issues/7">Issue</a>',
-    '<a href="//github.com/XTraceAI/xtrace-desktop/%69ssues/7">Issue</a>',
+    '<a href="/XTraceAI/xtrace/issues/7">Issue</a>',
+    '<a href="//github.com/XTraceAI/xtrace/%69ssues/7">Issue</a>',
     `<a href="${url.replace('issues', '&#105;ssues')}">Issue</a>`,
   ])
     assert.deepEqual(linkedIssues(body, repository), [{ repository, number: 7 }]);
@@ -226,7 +223,7 @@ test('unsupported or mismatched event shapes fail before scanning', async () => 
 
 test('explicit GitHub issue references are deduplicated without fetching arbitrary URLs', () => {
   const result = linkedIssues(
-    'Closes #3, also (other/project#4). Details https://github.com/XTraceAI/xtrace-desktop/issues/3 and https://github.com/other/project/pull/4. External https://example.com/private.',
+    'Closes #3, also (other/project#4). Details https://github.com/XTraceAI/xtrace/issues/3 and https://github.com/other/project/pull/4. External https://example.com/private.',
     repository,
   );
   assert.deepEqual(
@@ -239,7 +236,7 @@ test('explicit GitHub issue references are deduplicated without fetching arbitra
   assert.throws(() => linkedIssues('#0', repository), /invalid pull request/);
   assert.deepEqual(
     linkedIssues(
-      '/XTraceAI/xtrace-desktop/issues/3 http://github.com/XTraceAI/xtrace-desktop/issues/3 https://GitHub.com/XTraceAI/xtrace-desktop/issues/3',
+      '/XTraceAI/xtrace/issues/3 http://github.com/XTraceAI/xtrace/issues/3 https://GitHub.com/XTraceAI/xtrace/issues/3',
       repository,
     ),
     [{ repository, number: 3 }],

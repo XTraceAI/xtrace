@@ -257,7 +257,7 @@ async function main() {
     report.tagSource = await verifyTag(
       await readTagMetadata(
         'release-tag',
-        `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/ref/tags/${release.tag}`,
+        `https://api.github.com/repos/XTraceAI/xtrace/git/ref/tags/${release.tag}`,
       ),
       (url) => readTagMetadata('release-tag-annotation', url),
     );
@@ -283,7 +283,7 @@ async function main() {
         String(release.bytes),
         '--output',
         dmg,
-        `https://github.com/XTraceAI/xtrace-desktop/releases/download/${release.tag}/${release.dmg}`,
+        `https://github.com/XTraceAI/xtrace/releases/download/${release.tag}/${release.dmg}`,
       ],
       95_000,
     );

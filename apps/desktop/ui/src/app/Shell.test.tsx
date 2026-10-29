@@ -256,34 +256,34 @@ it('CmdK focuses a present page Search and leaves focus alone when none exists',
   expect(document.activeElement).toBe(button);
 });
 
-// The app keeps the kit's default Leaderboard row: nothing ranks in this local
-// build, so the row is disabled and marked "soon" and never navigates, while a
-// typed or bookmarked /leaderboard still opens its named placeholder.
-it('keeps Leaderboard unavailable in the sidebar while its address still opens', async () => {
+// Leaderboard is an ordinary row that opens the page where you can join the
+// public leaderboard, while Rulebook keeps the kit's disabled "soon" row and a
+// typed or bookmarked /rulebook still opens its page.
+it('opens Leaderboard from the sidebar while Rulebook stays unavailable', async () => {
   const view = mount('/dashboard');
   await opened();
   expect(await screen.findByRole('heading', { name: 'What your agents did' })).toBeTruthy();
-  const leaderboard = screen.getByRole('button', { name: /Leaderboard/ });
-  expect(leaderboard.hasAttribute('disabled')).toBe(true);
-  expect(within(leaderboard).getByText('soon')).toBeTruthy();
+  const leaderboard = screen.getByRole('button', { name: 'Leaderboard' });
+  expect(leaderboard.hasAttribute('disabled')).toBe(false);
+  expect(within(leaderboard).queryByText('soon')).toBeNull();
   expect(leaderboard.getAttribute('aria-current')).toBeNull();
-  // A pointer press on the disabled row leaves the Dashboard as the page.
+  // The keyboard reaches it like the rows around it.
+  leaderboard.focus();
+  expect(document.activeElement).toBe(leaderboard);
   fireEvent.click(leaderboard);
-  expect(screen.getByRole('heading', { name: 'What your agents did' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-current')).toBe(
+  expect(await screen.findByRole('heading', { level: 1, name: 'Leaderboard' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Leaderboard' }).getAttribute('aria-current')).toBe(
     'page',
   );
-  // The keyboard cannot reach it: a disabled control takes no focus, so it is
-  // out of the tab order with nothing for Enter or Space to activate, while
-  // the working rows around it still take focus and navigate.
-  leaderboard.focus();
-  expect(document.activeElement).not.toBe(leaderboard);
-  // Rulebook is hidden the same way: disabled, marked "soon", out of the tab order.
+  expect(
+    within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByText('leaderboard'),
+  ).toBeTruthy();
+  // Rulebook is disabled, marked "soon", out of the tab order.
   const rulebook = screen.getByRole('button', { name: /Rulebook/ });
   expect(rulebook.hasAttribute('disabled')).toBe(true);
   expect(within(rulebook).getByText('soon')).toBeTruthy();
   fireEvent.click(rulebook);
-  expect(screen.getByRole('heading', { name: 'What your agents did' })).toBeTruthy();
+  expect(screen.getByRole('heading', { level: 1, name: 'Leaderboard' })).toBeTruthy();
   rulebook.focus();
   expect(document.activeElement).not.toBe(rulebook);
   const scores = screen.getByRole('button', { name: 'Scores' });
@@ -298,13 +298,9 @@ it('keeps Leaderboard unavailable in the sidebar while its address still opens',
   cleanup();
   mount('/leaderboard');
   await opened();
-  expect(screen.getByRole('heading', { name: 'Leaderboard' })).toBeTruthy();
-  expect(screen.getByText('This view is coming next.')).toBeTruthy();
-  expect(
-    within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByText('leaderboard'),
-  ).toBeTruthy();
-  const row = screen.getByRole('button', { name: /Leaderboard/ });
-  expect(row.hasAttribute('disabled')).toBe(true);
-  expect(row.getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('heading', { level: 1, name: 'Leaderboard' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Leaderboard' }).getAttribute('aria-current')).toBe(
+    'page',
+  );
   await act(async () => {});
 });
