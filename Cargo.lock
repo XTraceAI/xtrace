@@ -5622,6 +5622,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "xt-fixtures",
+ "xt-store",
  "xtrace-desktop",
 ]
 

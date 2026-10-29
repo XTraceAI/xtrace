@@ -14,3 +14,4 @@ xt-fixtures = { path = "../crates/xt-fixtures" }
 
 [dev-dependencies]
 tempfile = "=3.27.0"
+xt-store = { path = "../crates/xt-store" }
