@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { escapeHtml, formatLeverage } from '../src/page.js';
+import { barPercent, escapeHtml, formatLeverage } from '../src/page.js';
 import {
   HOUR,
   harness,
@@ -38,7 +38,9 @@ const page = async () => {
 const standing = async (key: string) =>
   (await readJson(await me(h.app, key))) as { listed: boolean; rank: number | null };
 const pageNames = (html: string) =>
-  [...html.matchAll(/<tr><td>([^<]*)<\/td><td>([^<]*)<\/td><\/tr>/g)].map((m) => [m[1], m[2]]);
+  [
+    ...html.matchAll(/<td class="name">([^<]*)<\/td>[\s\S]*?<span class="value">([^<]*)<\/span>/g),
+  ].map((m) => [m[1], m[2]]);
 
 describe('the 48-hour rule', () => {
   test('listed through exactly 48 hours, hidden after; page, list and me agree', async () => {
@@ -152,7 +154,7 @@ describe('GET /api/leaderboard', () => {
 });
 
 describe('GET /', () => {
-  test('title, line, two columns, cache header', async () => {
+  test('title, line, three columns, cache header', async () => {
     await score(h.app, await join(h, 'Ada'), 123);
     const { response, html } = await page();
     assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8');
@@ -168,7 +170,7 @@ describe('GET /', () => {
       ),
     );
     const headers = [...html.matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1]);
-    assert.deepEqual(headers, ['Nickname', 'Leverage (7 days)']);
+    assert.deepEqual(headers, ['Rank', 'Nickname', 'Leverage, 7 days']);
     assert.deepEqual(pageNames(html), [['Ada', '12.3×']]);
     assert.match(html, /name="viewport" content="width=device-width, initial-scale=1"/);
     assert.match(html, /prefers-color-scheme: dark/);
@@ -201,6 +203,32 @@ describe('GET /', () => {
     const { html } = await page();
     assert.match(html, /No one is listed yet\./);
     assert.ok(!html.includes('<table>'));
+    assert.match(html, /<dt>Members<\/dt><dd>0<\/dd>/);
+  });
+
+  test('ranks with medals for the top three, bars against the top number, and counts', async () => {
+    await score(h.app, await join(h, 'First'), 400);
+    await score(h.app, await join(h, 'Second'), 200);
+    await score(h.app, await join(h, 'TiedA'), 100);
+    await score(h.app, await join(h, 'TiedB'), 100);
+    await score(h.app, await join(h, 'Fifth'), 1);
+    const { html } = await page();
+    const rows = [
+      ...html.matchAll(
+        /<tr data-rank="(\d+)"><td class="rank">([\s\S]*?)<\/td>[\s\S]*?width:(\d+)%/g,
+      ),
+    ].map((m) => [m[1], (m[2] ?? '').replace(/<[^>]*>/g, ''), m[3]]);
+    assert.deepEqual(rows, [
+      ['1', '🥇1', '100'],
+      ['2', '🥈2', '50'],
+      ['3', '🥉3', '25'],
+      ['3', '🥉3', '25'],
+      ['5', '5', '2'],
+    ]);
+    assert.ok(html.includes('<span class="medal" aria-hidden="true">🥇</span>'));
+    assert.match(html, /<dt>Members<\/dt><dd>5<\/dd>/);
+    assert.match(html, /<dt>Top leverage<\/dt><dd>40\.0×<\/dd>/);
+    assert.ok(html.includes('in the last 48 hours'));
   });
 
   test('nicknames are HTML-escaped', async () => {
@@ -227,5 +255,9 @@ describe('GET /', () => {
     assert.equal(formatLeverage(1234567890), '123456789.0×');
     assert.equal(formatLeverage(1000000000), '100000000.0×');
     assert.equal(escapeHtml(`a&b<c>d"e'f`), 'a&amp;b&lt;c&gt;d&quot;e&#39;f');
+    assert.equal(barPercent(0, 0), 2);
+    assert.equal(barPercent(1, 1000), 2);
+    assert.equal(barPercent(333, 1000), 33);
+    assert.equal(barPercent(1000, 1000), 100);
   });
 });
