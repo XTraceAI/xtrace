@@ -23,6 +23,8 @@ export const SHARED_FACTS: readonly string[] = [
 /** The joined page's public list: its title and what it says when it has no rows. */
 export const TABLE_TITLE = 'Public leaderboard';
 export const TABLE_EMPTY = 'No one is listed yet.';
+/** Said under the list: the leaderboard serves it from a short-lived cache. */
+export const TABLE_UPDATES = 'The public list updates every minute or two.';
 /** Said when the app could not answer at all (the native call itself failed). */
 export const TABLE_UNREADABLE = 'The public list could not be read.';
 /** Said while the list is being read. */

@@ -120,12 +120,18 @@ the app's **Leaderboard** page.
   hour while it runs. No sessions, projects, prompts
   or other data from your history are sent. Like any web request, each one
   also lets the leaderboard see your IP address and the app's version.
-- **While you are joined**, opening the Leaderboard page also asks the
-  leaderboard for your rank and reads its public list (the nicknames and
-  numbers anyone can see at leaderboard.xtrace.ai), which the page shows with
-  your row marked. These reads send only your key for the rank, and nothing at
-  all for the list. Before you join, nothing is read: the blurred list behind
-  the join card is a made-up example drawn by the app.
+- **While you are joined**, the Leaderboard page also asks the leaderboard
+  for your rank and reads its public list (the nicknames and numbers anyone
+  can see at leaderboard.xtrace.ai), which the page shows with your row
+  marked. The rank request sends your key; the list request sends no key and
+  no data of yours. Like any web request, both let the leaderboard see your
+  IP address and the app's version. The page reads the list when it opens,
+  again after you join or change your nickname, after each hourly send while
+  the page is open, and once more about two minutes after your last join,
+  nickname change or number sent, when the leaderboard's copy of the list
+  (refreshed every minute or two) surely shows it. Before you join, nothing
+  is read: the blurred list behind the join card is a made-up example drawn
+  by the app.
 - **Change nickname** sends the new nickname.
 - **Leave leaderboard** deletes your nickname, email and number from the
   leaderboard. The database host's backups can keep a copy for a limited time

@@ -53,20 +53,23 @@ const board = (): LeaderboardTable => {
       state: 'unavailable',
       rows: [],
       reason: 'Join the leaderboard to see the public list here.',
+      refresh_after_seconds: null,
     };
   if (params.get('board') === 'error')
     return {
       state: 'error',
       rows: [],
       reason: 'Could not reach the leaderboard. Check your internet connection and try again.',
+      refresh_after_seconds: null,
     };
-  if (params.get('board') === 'empty') return { state: 'ok', rows: [], reason: null };
+  if (params.get('board') === 'empty')
+    return { state: 'ok', rows: [], reason: null, refresh_after_seconds: null };
   const you = { rank: 2, nickname: status.nickname!, leverage_tenths: 123 };
   const rows = [others[0], you, ...others.slice(1)].map((row) => ({
     ...row,
     is_you: row.nickname.toLowerCase() === status.nickname!.toLowerCase(),
   }));
-  return { state: 'ok', rows, reason: null };
+  return { state: 'ok', rows, reason: null, refresh_after_seconds: null };
 };
 const tableReads = () => (window as { tableReads?: number }).tableReads ?? 0;
 const refuseTaken = async (nickname: string) => {

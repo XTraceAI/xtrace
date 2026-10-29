@@ -14,4 +14,10 @@ rows: Array<LeaderboardRow>,
 /**
  * Why there is no list, in plain words, when there is none.
  */
-reason: string | null, };
+reason: string | null, 
+/**
+ * While the leaderboard may still serve a list from before this Mac's
+ * last change (a join, a rename or a number sent), how many seconds
+ * until it surely shows that change: read the list once more then.
+ */
+refresh_after_seconds: number | null, };

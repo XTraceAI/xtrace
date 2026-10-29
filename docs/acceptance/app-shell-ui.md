@@ -1,6 +1,6 @@
 # App shell frontend acceptance
 
-The app composes the shared Sidebar and TopBar around Dashboard, Sessions and session details, pull requests, recorded rule activity, Settings and first-launch views. Each page reads through the same data interface used by native IPC. Leaderboard has its own page for joining the public leaderboard: before joining, the join card sits in front of a blurred list drawn from made-up rows (hidden from assistive technology, and nothing is read from the leaderboard); once joined, the membership details and controls sit above the public list read from the leaderboard, with the member's own row marked. This document covers the shell; each product page has its own acceptance checks.
+The app composes the shared Sidebar and TopBar around Dashboard, Sessions and session details, pull requests, recorded rule activity, Settings and first-launch views. Each page reads through the same data interface used by native IPC. Leaderboard has its own page for joining the public leaderboard: before joining, the join card sits in front of a blurred list drawn from made-up rows (hidden from assistive technology, and nothing is read from the leaderboard); once joined, the membership details and controls sit above the public list read from the leaderboard, with the member's own row marked, read once more when a recent join, rename or number sent may not yet show in the leaderboard's cached list. This document covers the shell; each product page has its own acceptance checks.
 
 ## Verified behavior
 

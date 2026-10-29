@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { useData } from '../../data/DataProvider';
 import type { LeaderboardControls } from '../../data/DataSource';
 import type { LeaderboardRow } from '../../data/generated/LeaderboardRow';
@@ -21,6 +29,7 @@ import {
   TABLE_READING,
   TABLE_TITLE,
   TABLE_UNREADABLE,
+  TABLE_UPDATES,
   YOU_LABEL,
   codeSentText,
   LEAVE_QUESTION,
@@ -144,6 +153,16 @@ function PublicBoard({ controls }: { controls: LeaderboardControls }) {
     queryFn: () => controls.table(),
   });
   const data = table.data;
+  // The leaderboard may still serve a list from before the last change: the
+  // native side says when it surely shows it, and the list is read once more
+  // then. Each answer sets at most one timer.
+  const refreshAfter = data?.refresh_after_seconds ?? null;
+  const { refetch, dataUpdatedAt } = table;
+  useEffect(() => {
+    if (refreshAfter === null) return;
+    const timer = setTimeout(() => void refetch(), refreshAfter * 1000);
+    return () => clearTimeout(timer);
+  }, [refreshAfter, dataUpdatedAt, refetch]);
   return (
     <SectionCard title={TABLE_TITLE}>
       {table.isError && <p role="alert">{TABLE_UNREADABLE}</p>}
@@ -158,6 +177,7 @@ function PublicBoard({ controls }: { controls: LeaderboardControls }) {
       ) : (
         <PublicTable rows={data.rows} label={TABLE_TITLE} />
       )}
+      {data?.state === 'ok' && <p className="xt-settings-note">{TABLE_UPDATES}</p>}
     </SectionCard>
   );
 }
@@ -176,7 +196,7 @@ function useLeaderboard(
   const rereadTable = () => void client.invalidateQueries({ queryKey: queryKeys.leaderboardTable });
   const saved = (next: LeaderboardStatus, focusHeading: boolean) => {
     client.setQueryData(queryKeys.leaderboard, next);
-    rereadTable();
+    if (next.joined) rereadTable();
     // After the new state renders. The code step and the form focus their
     // own first field instead.
     if (focusHeading) requestAnimationFrame(() => heading.current?.focus());
@@ -204,6 +224,12 @@ function useLeaderboard(
   const cancelCode = useMutation(change(() => controls.cancelCode(), false));
   const rename = useMutation(change((nickname: string) => controls.rename(nickname)));
   const leave = useMutation(change(() => controls.leave()));
+  // Not joined (left, or the leaderboard no longer has the membership): no
+  // earlier answer about the public list may show after the next join.
+  const joined = status.data?.joined;
+  useEffect(() => {
+    if (joined === false) client.removeQueries({ queryKey: queryKeys.leaderboardTable });
+  }, [joined, client]);
   return { status, join, confirm, cancelCode, rename, leave };
 }
 

@@ -180,8 +180,12 @@
   font-weight: 700;
   vertical-align: 1px;
 }
-/* In the joined card the table runs to the card's edges. */
+/* In the joined card the table runs to the card's edges, with the note on
+   how often the list updates under a divider. */
 .xt-leaderboard .xt-section-panel > .xt-leaderboard-table {
-  margin: -12px -14px -10px;
+  margin: -12px -14px 0;
   width: calc(100% + 28px);
+}
+.xt-leaderboard .xt-section-panel > .xt-leaderboard-table tr:last-child td {
+  border-bottom: 1px solid var(--divider);
 }

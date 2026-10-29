@@ -188,6 +188,7 @@ for (const scheme of ['light', 'dark'] as const) {
     const you = table.locator('tr[data-you]');
     await expect(you).toContainText('ada');
     await expect(you.getByText('You', { exact: true })).toBeVisible();
+    await expect(page.getByText('The public list updates every minute or two.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Change nickname' })).toBeVisible();
     await page.locator('.xt-shell-main').screenshot({
       path: info.outputPath(`leaderboard-table-${scheme}.png`),

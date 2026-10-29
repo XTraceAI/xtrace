@@ -56,6 +56,24 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest answer read; the leaderboard's are a few dozen bytes.
 const MAX_ANSWER: usize = 64 * 1024;
+/// The largest public list read ([`LeaderboardService::table`]): about 60
+/// bytes a member, so room for well over 10,000 of them.
+const MAX_LIST_ANSWER: usize = 1024 * 1024;
+/// How long the leaderboard's public list can be served from its cache
+/// after a change (`s-maxage=60, stale-while-revalidate=60`), with a margin.
+const LIST_CACHE_SECONDS: i64 = 130;
+/// The shortest wait before the page reads the list again.
+const MIN_LIST_REFRESH_SECONDS: u32 = 5;
+
+/// Whether `nickname` follows the leaderboard's rule: 3 to 20 characters,
+/// each a letter, a digit, `_` or `-` (ASCII only). The one place the app
+/// checks it; the leaderboard itself decides what it accepts on a join.
+pub fn nickname_follows_rule(nickname: &str) -> bool {
+    (3..=20).contains(&nickname.len())
+        && nickname
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
 /// What the app calls itself to the leaderboard.
 const USER_AGENT: &str = concat!("XTrace-Desktop/", env!("CARGO_PKG_VERSION"));
 
@@ -123,6 +141,9 @@ pub struct Request {
     /// Sent as `Authorization: Bearer <key>`.
     pub key: Option<String>,
     pub body: Option<Value>,
+    /// The largest answer body read; a longer one is cut one byte past it,
+    /// which [`Api`] refuses as [`Refusal::TooLong`].
+    pub max_answer: usize,
 }
 
 impl std::fmt::Debug for Request {
@@ -138,6 +159,7 @@ impl std::fmt::Debug for Request {
             .field("path", &self.path)
             .field("key", &self.key.as_ref().map(|_| "<hidden>"))
             .field("body_fields", &fields)
+            .field("max_answer", &self.max_answer)
             .finish()
     }
 }
@@ -158,7 +180,7 @@ pub struct Answer {
     pub body: Vec<u8>,
 }
 
-/// No answer arrived: not connected, refused, timed out, or too long.
+/// No answer arrived: not connected, refused or timed out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unreachable;
 
@@ -216,19 +238,28 @@ impl Transport for HttpTransport {
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_vec(body).map_err(|_| Unreachable)?);
         }
+        let limit = request.max_answer;
         tauri::async_runtime::block_on(async move {
             let mut response = builder.send().await.map_err(|_| Unreachable)?;
             let status = response.status().as_u16();
             let mut body = Vec::new();
             while let Some(chunk) = response.chunk().await.map_err(|_| Unreachable)? {
-                if body.len() + chunk.len() > MAX_ANSWER {
-                    return Err(Unreachable);
+                if !keep_within(&mut body, &chunk, limit) {
+                    break;
                 }
-                body.extend_from_slice(&chunk);
             }
             Ok(Answer { status, body })
         })
     }
+}
+
+/// Adds `chunk` to `body` while it stays within `limit` bytes. Past it, the
+/// body is cut one byte over the limit, so the caller can tell it was too
+/// long without reading the rest, and reading stops (false).
+fn keep_within(body: &mut Vec<u8>, chunk: &[u8], limit: usize) -> bool {
+    let room = (limit + 1).saturating_sub(body.len());
+    body.extend_from_slice(&chunk[..chunk.len().min(room)]);
+    body.len() <= limit
 }
 
 /// Why a call did not do what was asked.
@@ -244,6 +275,8 @@ pub enum Refusal {
     Status(u16),
     /// The expected status with a body this build cannot read.
     Unreadable,
+    /// An answer longer than this call reads.
+    TooLong,
 }
 
 impl Refusal {
@@ -284,6 +317,10 @@ pub fn refusal_message(refusal: &Refusal) -> String {
         Refusal::RateLimited(seconds) => format!("Too many tries. Try again {}.", wait_text(*seconds)),
         Refusal::Status(413) => "That nickname or email is too long.".into(),
         Refusal::Unreadable => "The leaderboard answered in a way XTrace could not read.".into(),
+        Refusal::TooLong => {
+            "The leaderboard's answer was larger than XTrace can read. Try again later, or update XTrace."
+                .into()
+        }
         Refusal::Status(status) => {
             format!("The leaderboard answered with an error ({status}). Try again later.")
         }
@@ -431,22 +468,14 @@ struct Listed {
     leverage_tenths: u32,
 }
 
-/// The longest nickname a listed row may carry. The leaderboard allows 20
-/// characters; anything far longer is not a nickname.
-const MAX_LISTED_NICKNAME: usize = 64;
-
 impl Listing {
     /// Whether every row is one the page can show: ranks from 1 that never
-    /// go down, and a nickname that is short, trimmed and has no control
-    /// characters. One bad row refuses the whole answer.
+    /// go down, and a nickname that follows the leaderboard's rule
+    /// ([`nickname_follows_rule`]). One bad row refuses the whole answer.
     fn readable(&self) -> bool {
         let mut previous = 1;
         self.rows.iter().all(|row| {
-            let ok = row.rank >= previous
-                && !row.nickname.is_empty()
-                && row.nickname.trim() == row.nickname
-                && row.nickname.chars().count() <= MAX_LISTED_NICKNAME
-                && !row.nickname.chars().any(char::is_control);
+            let ok = row.rank >= previous && nickname_follows_rule(&row.nickname);
             previous = row.rank;
             ok
         })
@@ -459,6 +488,10 @@ struct Api<'a>(&'a dyn Transport);
 impl Api<'_> {
     fn call(&self, request: Request, ok: u16) -> Result<Vec<u8>, Refusal> {
         let answer = self.0.send(&request).map_err(|_| Refusal::Unreachable)?;
+        // Every transport is held to the limit, cut short or not.
+        if answer.body.len() > request.max_answer {
+            return Err(Refusal::TooLong);
+        }
         if answer.status == ok {
             return Ok(answer.body);
         }
@@ -496,6 +529,7 @@ impl Api<'_> {
                 path: "/api/join",
                 key: None,
                 body: Some(json!({ "nickname": nickname, "email": email })),
+                max_answer: MAX_ANSWER,
             },
             202,
         )?;
@@ -524,6 +558,7 @@ impl Api<'_> {
                 path: "/api/join/verify",
                 key: None,
                 body: Some(body),
+                max_answer: MAX_ANSWER,
             },
             201,
         )?;
@@ -541,6 +576,7 @@ impl Api<'_> {
                 path: "/api/score",
                 key: Some(key.into()),
                 body: Some(json!({ "leverage_tenths": leverage_tenths })),
+                max_answer: MAX_ANSWER,
             },
             204,
         )
@@ -554,6 +590,7 @@ impl Api<'_> {
                 path: "/api/me",
                 key: Some(key.into()),
                 body: None,
+                max_answer: MAX_ANSWER,
             },
             200,
         )?;
@@ -567,6 +604,7 @@ impl Api<'_> {
                 path: "/api/me",
                 key: Some(key.into()),
                 body: Some(json!({ "nickname": nickname })),
+                max_answer: MAX_ANSWER,
             },
             200,
         )?;
@@ -581,13 +619,10 @@ impl Api<'_> {
                 path: "/api/leaderboard",
                 key: None,
                 body: None,
+                max_answer: MAX_LIST_ANSWER,
             },
             200,
         )?;
-        // The HTTP transport stops reading past this; any other is held to it too.
-        if body.len() > MAX_ANSWER {
-            return Err(Refusal::Unreadable);
-        }
         let listing: Listing = Self::parse(&body)?;
         if !listing.readable() {
             return Err(Refusal::Unreadable);
@@ -602,6 +637,7 @@ impl Api<'_> {
                 path: "/api/me",
                 key: Some(key.into()),
                 body: None,
+                max_answer: MAX_ANSWER,
             },
             204,
         )
@@ -764,6 +800,10 @@ pub struct LeaderboardTable {
     pub rows: Vec<LeaderboardRow>,
     /// Why there is no list, in plain words, when there is none.
     pub reason: Option<String>,
+    /// While the leaderboard may still serve a list from before this Mac's
+    /// last change (a join, a rename or a number sent), how many seconds
+    /// until it surely shows that change: read the list once more then.
+    pub refresh_after_seconds: Option<u32>,
 }
 
 impl LeaderboardTable {
@@ -772,8 +812,23 @@ impl LeaderboardTable {
             state,
             rows: Vec::new(),
             reason: Some(reason),
+            refresh_after_seconds: None,
         }
     }
+}
+
+/// Seconds until a change at `changed_ms` has surely left the leaderboard's
+/// cached list, read at `now_ms`; none once it has. At least
+/// [`MIN_LIST_REFRESH_SECONDS`], at most [`LIST_CACHE_SECONDS`] (a change
+/// timed in the future, after a clock change, waits no longer than that).
+pub fn list_refresh_after(changed_ms: Option<i64>, now_ms: i64) -> Option<u32> {
+    let window_ms = LIST_CACHE_SECONDS * 1000;
+    let left_ms = changed_ms?.saturating_add(window_ms).saturating_sub(now_ms);
+    if left_ms <= 0 {
+        return None;
+    }
+    let seconds = u32::try_from((left_ms.min(window_ms) + 999) / 1000).ok()?;
+    Some(seconds.max(MIN_LIST_REFRESH_SECONDS))
 }
 
 /// Why the public list was not asked for: this Mac is not joined.
@@ -796,6 +851,9 @@ struct Notes {
     upload_error: Option<String>,
     gone: bool,
     pending: Option<PendingJoin>,
+    /// When a join or rename was last accepted in this launch. A number sent
+    /// is saved with the membership (`last_sent`) instead.
+    list_changed_at: Option<i64>,
 }
 
 /// Wall time in Unix milliseconds.
@@ -913,9 +971,10 @@ impl LeaderboardService {
 
     /// The public list, read from the leaderboard only while joined and only
     /// in a copy that may send ([`may_send`]); otherwise nothing is asked.
-    /// The member's own row is marked by the saved nickname. The list is the
-    /// leaderboard's (it caches it for a minute), so a rename can take that
-    /// long to show in it.
+    /// The member's own row is marked by the saved nickname. The leaderboard
+    /// serves the list from a cache for up to two minutes, so after a join,
+    /// a rename or a number sent the answer says when to read it again
+    /// ([`list_refresh_after`]).
     pub fn table(&self) -> LeaderboardTable {
         let api = match self.api() {
             Ok(api) => api,
@@ -938,8 +997,12 @@ impl LeaderboardService {
                 );
             }
         };
+        let changed_at = lock(&self.notes)
+            .list_changed_at
+            .max(membership.last_sent.map(|sent| sent.at_ms));
         match api.listing() {
             Ok(listing) => LeaderboardTable {
+                refresh_after_seconds: list_refresh_after(changed_at, (self.clock)()),
                 state: LeaderboardTableState::Ok,
                 rows: listing
                     .rows
@@ -1104,7 +1167,10 @@ impl LeaderboardService {
                 }
                 .into());
             }
-            *lock(&self.notes) = Notes::default();
+            *lock(&self.notes) = Notes {
+                list_changed_at: Some((self.clock)()),
+                ..Notes::default()
+            };
             joined.rejoined.then(|| {
                 format!(
                     "Welcome back. You are signed in to your existing entry as {}.",
@@ -1141,10 +1207,12 @@ impl LeaderboardService {
             let _work = lock(&self.work);
             let membership = self.joined()?;
             match api.rename(&membership.key, nickname) {
-                Ok(renamed) => self
-                    .host
-                    .rename(&membership.key, &renamed.nickname)
-                    .map_err(saved_state_failed)?,
+                Ok(renamed) => {
+                    lock(&self.notes).list_changed_at = Some((self.clock)());
+                    self.host
+                        .rename(&membership.key, &renamed.nickname)
+                        .map_err(saved_state_failed)?;
+                }
                 Err(refusal) if refusal.gone() => self.forget_gone(&membership.key),
                 Err(refusal) => return Err(LeaderboardRefusal::from(&refusal)),
             }

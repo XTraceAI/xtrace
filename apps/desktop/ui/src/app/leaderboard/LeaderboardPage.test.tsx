@@ -19,7 +19,9 @@ import {
   SAMPLE_ROWS,
   SHARED_FACTS,
   TABLE_EMPTY,
+  TABLE_READING,
   TABLE_UNREADABLE,
+  TABLE_UPDATES,
 } from './leaderboard';
 
 const exported = fixture as FixtureExport;
@@ -61,6 +63,7 @@ const board: LeaderboardTable = {
     { rank: 3, nickname: 'linus', leverage_tenths: 90, is_you: false },
   ],
   reason: null,
+  refresh_after_seconds: null,
 };
 
 /** A synthetic leaderboard: the status lives here, never on a server. */
@@ -516,7 +519,12 @@ it('shows the public list under the membership, with your row marked', async () 
 
 it('says when no one is listed, and keeps the controls when the list cannot be read', async () => {
   const leaderboard = controls(joined);
-  leaderboard.table.mockResolvedValueOnce({ state: 'ok', rows: [], reason: null });
+  leaderboard.table.mockResolvedValueOnce({
+    state: 'ok',
+    rows: [],
+    reason: null,
+    refresh_after_seconds: null,
+  });
   await mount(leaderboard);
   expect(await screen.findByText(TABLE_EMPTY)).toBeTruthy();
   expect(screen.queryByRole('table')).toBeNull();
@@ -526,6 +534,7 @@ it('says when no one is listed, and keeps the controls when the list cannot be r
     state: 'error',
     rows: [],
     reason: 'Could not reach the leaderboard. Check your internet connection and try again.',
+    refresh_after_seconds: null,
   });
   await mount(failing);
   expect((await screen.findByRole('alert')).textContent).toBe(
@@ -562,4 +571,77 @@ it('reads the public list again after an upload and after a rename', async () =>
   fireEvent.change(screen.getByLabelText('New nickname'), { target: { value: 'Ada_2' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save nickname' }));
   await waitFor(() => expect(leaderboard.table.mock.calls.length).toBeGreaterThan(afterUpload));
+});
+
+it('reads the list once more when the native side says a change has left the cache', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const leaderboard = controls(joined);
+    leaderboard.table
+      .mockResolvedValueOnce({ ...board, refresh_after_seconds: 30 })
+      .mockResolvedValue({
+        ...board,
+        rows: [{ rank: 1, nickname: 'ada', leverage_tenths: 500, is_you: true }],
+      });
+    await mount(leaderboard);
+    await screen.findByRole('table', { name: 'Public leaderboard' });
+    expect(screen.getByText(TABLE_UPDATES)).toBeTruthy();
+    expect(leaderboard.table).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_000);
+    });
+    expect(leaderboard.table).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await waitFor(() =>
+      expect(rowsOf(screen.getByRole('table'))).toEqual([['1', 'adaYou (this is you)', '50×']]),
+    );
+    expect(leaderboard.table).toHaveBeenCalledTimes(2);
+    // The second answer asks for nothing more.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(leaderboard.table).toHaveBeenCalledTimes(2);
+    // Leaving the page drops a timer still waiting.
+    cleanup();
+    const left = controls(joined);
+    left.table.mockResolvedValue({ ...board, refresh_after_seconds: 30 });
+    await mount(left);
+    await screen.findByRole('table', { name: 'Public leaderboard' });
+    cleanup();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(left.table).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('never shows an answer from before leaving after joining again', async () => {
+  const leaderboard = controls(joined);
+  // A read that raced the leave: the native side already saw no membership.
+  leaderboard.table.mockResolvedValueOnce({
+    state: 'unavailable',
+    rows: [],
+    reason: 'Join the leaderboard to see the public list here.',
+    refresh_after_seconds: null,
+  });
+  await mount(leaderboard);
+  expect(await screen.findByText('Join the leaderboard to see the public list here.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Leave leaderboard' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Leave the leaderboard?' });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Leave leaderboard' }));
+  await screen.findByRole('button', { name: 'Join' });
+  // Joining again: the list's next read has not answered yet.
+  leaderboard.table.mockReturnValue(new Promise(() => {}));
+  fireEvent.change(screen.getByLabelText('Nickname'), { target: { value: 'ada' } });
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ada@example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+  fireEvent.change(await screen.findByLabelText('Code'), { target: { value: CODE } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  await screen.findByText('You are on the leaderboard');
+  expect(await screen.findByText(TABLE_READING)).toBeTruthy();
+  expect(screen.queryByText('Join the leaderboard to see the public list here.')).toBeNull();
 });

@@ -981,6 +981,7 @@ fn a_request_never_shows_its_key_or_email_when_printed() {
         path: "/api/join",
         key: Some(KEY.into()),
         body: Some(json!({ "nickname": "ada", "email": "ada@example.com" })),
+        max_answer: MAX_ANSWER,
     };
     let text = format!("{request:?}");
     assert!(!text.contains(KEY) && !text.contains("example.com") && !text.contains("ada\""));
@@ -1386,7 +1387,6 @@ fn the_public_list_is_not_asked_for_before_joining_or_in_a_copy_that_may_not_sen
 fn a_malformed_or_oversized_public_list_is_refused() {
     let unreadable = "The leaderboard answered in a way XTrace could not read.";
     let row = |rank: Value, nickname: Value, tenths: Value| json!({ "rows": [{ "rank": rank, "nickname": nickname, "leverage_tenths": tenths }] });
-    let long = "a".repeat(MAX_LISTED_NICKNAME + 1);
     let bodies = [
         json!({}),
         json!({ "rows": null }),
@@ -1396,7 +1396,13 @@ fn a_malformed_or_oversized_public_list_is_refused() {
         row(json!(1), json!(""), json!(1)),
         row(json!(1), json!(" ada"), json!(1)),
         row(json!(1), json!("a\u{7}da"), json!(1)),
-        row(json!(1), json!(long), json!(1)),
+        row(json!(1), json!("ab"), json!(1)),
+        row(json!(1), json!("a".repeat(21)), json!(1)),
+        // Right-to-left override and zero-width space: not in the rule.
+        row(json!(1), json!("ad\u{202E}a"), json!(1)),
+        row(json!(1), json!("ad\u{200B}a"), json!(1)),
+        row(json!(1), json!("adá"), json!(1)),
+        row(json!(1), json!("ada!"), json!(1)),
         row(json!(1), json!(7), json!(1)),
         row(json!(1), json!("ada"), json!(null)),
         row(json!(1), json!("ada"), json!(-3)),
@@ -1417,23 +1423,43 @@ fn a_malformed_or_oversized_public_list_is_refused() {
         assert_eq!(table.reason.as_deref(), Some(unreadable), "{shown}");
         assert!(table.rows.is_empty(), "{shown}");
     }
-    // Past the limit, even when it would parse.
-    let mut rows = Vec::new();
-    let mut size = 0;
-    while size <= MAX_ANSWER {
-        let row = json!({ "rank": 1, "nickname": format!("member_{}", rows.len()), "leverage_tenths": 1 });
-        size += row.to_string().len() + 1;
-        rows.push(row);
-    }
-    let big = json!({ "rows": rows });
-    assert!(serde_json::to_vec(&big).unwrap().len() > MAX_ANSWER);
+    // Over 64 KiB is still a list: only the list read takes up to 1 MiB.
+    let list_of = |limit: usize| {
+        let mut rows = Vec::new();
+        let mut size = 0;
+        while size <= limit {
+            let row = json!({ "rank": 1, "nickname": format!("member_{}", rows.len()), "leverage_tenths": 1 });
+            size += row.to_string().len() + 1;
+            rows.push(row);
+        }
+        json!({ "rows": rows })
+    };
+    let large = list_of(MAX_ANSWER);
+    assert!(serde_json::to_vec(&large).unwrap().len() > MAX_ANSWER);
     let rig = setup(
         FakeHost::joined("ada", Some(1)),
-        FakeTransport::new(move |_| answer(200, big.clone())),
+        FakeTransport::new(move |_| answer(200, large.clone())),
+    );
+    let table = rig.service.table();
+    assert_eq!(table.state, LeaderboardTableState::Ok);
+    assert!(table.rows.len() > 1000);
+    // Past 1 MiB, even when it would parse: its own words, not a lost
+    // connection.
+    let huge = list_of(MAX_LIST_ANSWER);
+    let rig = setup(
+        FakeHost::joined("ada", Some(1)),
+        FakeTransport::new(move |_| answer(200, huge.clone())),
     );
     let table = rig.service.table();
     assert_eq!(table.state, LeaderboardTableState::Error);
-    assert_eq!(table.reason.as_deref(), Some(unreadable));
+    assert_eq!(
+        table.reason.as_deref(),
+        Some(refusal_message(&Refusal::TooLong).as_str())
+    );
+    assert_eq!(
+        refusal_message(&Refusal::TooLong),
+        "The leaderboard's answer was larger than XTrace can read. Try again later, or update XTrace."
+    );
     // Not answered as text.
     let rig = setup(
         FakeHost::joined("ada", Some(1)),
@@ -1485,4 +1511,161 @@ fn a_public_list_the_leaderboard_could_not_give_says_why() {
         assert!(table.rows.is_empty());
         assert!(rig.host.saved().is_some());
     }
+}
+
+/// The leaderboard's nickname rule, the one place the app checks it.
+#[test]
+fn listed_nicknames_follow_the_leaderboard_rule() {
+    for good in ["ada", "Ada_2", "a-b", "x".repeat(20).as_str(), "123"] {
+        assert!(nickname_follows_rule(good), "{good}");
+    }
+    for bad in [
+        "",
+        "ab",
+        "a".repeat(21).as_str(),
+        "ad\u{202E}a",
+        "ad\u{200B}a",
+        "adá",
+        "a da",
+        "ada.",
+    ] {
+        assert!(!nickname_follows_rule(bad), "{bad:?}");
+    }
+}
+
+/// The real transport reads at most each call's limit: 64 KiB for the
+/// member's own calls, 1 MiB for the public list. Longer answers are cut
+/// short and refused in their own words, not as a lost connection.
+#[test]
+fn the_http_transport_reads_each_call_up_to_its_own_limit() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let list_rows: Vec<Value> = (0..2000)
+        .map(|n| json!({ "rank": n + 1, "nickname": format!("member_{n}"), "leverage_tenths": 1 }))
+        .collect();
+    let list = serde_json::to_vec(&json!({ "rows": list_rows })).unwrap();
+    assert!(list.len() > MAX_ANSWER && list.len() < MAX_LIST_ANSWER);
+    let served = Arc::new(AtomicUsize::new(0));
+    let count = served.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                if header.trim().is_empty() {
+                    break;
+                }
+            }
+            let body = match count.fetch_add(1, Ordering::SeqCst) {
+                // The list, over 64 KiB and under 1 MiB.
+                0 => list.clone(),
+                // The member's own call, over 64 KiB.
+                1 => vec![b' '; MAX_ANSWER + 1],
+                // The list, over 1 MiB.
+                _ => vec![b' '; MAX_LIST_ANSWER + 4096],
+            };
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+            // The app stops reading past its limit, so the rest may not land.
+            let _ = stream.write_all(&body);
+        }
+    });
+    let transport = HttpTransport::new(&base_url(Some(&base))).unwrap();
+    let api = Api(&transport);
+    assert_eq!(api.listing().map(|l| l.rows.len()).ok(), Some(2000));
+    assert_eq!(api.me(KEY).err(), Some(Refusal::TooLong));
+    assert_eq!(api.listing().err(), Some(Refusal::TooLong));
+    assert_eq!(served.load(Ordering::SeqCst), 3);
+}
+
+/// The reading step keeps at most one byte past the limit and says when to
+/// stop.
+#[test]
+fn an_answer_is_cut_one_byte_past_its_limit() {
+    let mut body = Vec::new();
+    assert!(keep_within(&mut body, b"abc", 5));
+    assert!(keep_within(&mut body, b"de", 5));
+    assert!(!keep_within(&mut body, b"fghij", 5));
+    assert_eq!(body, b"abcdef");
+    let mut body = Vec::new();
+    assert!(!keep_within(&mut body, &[0; 100], 10));
+    assert_eq!(body.len(), 11);
+}
+
+/// A rig whose clock the test moves.
+fn setup_at(host: Arc<FakeHost>, now: Arc<std::sync::atomic::AtomicI64>) -> Rig {
+    let rig = setup(host, FakeTransport::new(accepting_with_list));
+    let clock = now.clone();
+    Rig {
+        service: LeaderboardService::new(
+            DEFAULT_URL,
+            Ok(rig.transport.clone() as Arc<dyn Transport>),
+            rig.host.clone(),
+            Arc::new(move || clock.load(Ordering::SeqCst)),
+            Arc::new(|| {}),
+            Arc::new(|| {}),
+        ),
+        ..rig
+    }
+}
+
+/// [`accepting`], with a public list.
+fn accepting_with_list(request: &Request) -> Result<Answer, Unreachable> {
+    if request.path == "/api/leaderboard" {
+        listing(request)
+    } else {
+        accepting(request)
+    }
+}
+
+/// After a join, a rename or a number sent, the list is read once more when
+/// the leaderboard's cached copy has surely aged out, and not after that.
+#[test]
+fn the_list_is_read_again_once_a_change_has_left_the_cache() {
+    use std::sync::atomic::AtomicI64;
+    assert_eq!(list_refresh_after(None, NOW), None);
+    assert_eq!(list_refresh_after(Some(NOW), NOW), Some(130));
+    assert_eq!(list_refresh_after(Some(NOW - 60_000), NOW), Some(70));
+    assert_eq!(list_refresh_after(Some(NOW - 60_001), NOW), Some(70));
+    assert_eq!(list_refresh_after(Some(NOW - 129_500), NOW), Some(5));
+    assert_eq!(list_refresh_after(Some(NOW - 130_000), NOW), None);
+    // A change timed in the future waits no longer than the cache.
+    assert_eq!(list_refresh_after(Some(NOW + 3_600_000), NOW), Some(130));
+
+    // Joined long ago with nothing sent in this launch: no wait.
+    let now = Arc::new(AtomicI64::new(NOW));
+    let rig = setup_at(FakeHost::joined("ada", Some(1)), now.clone());
+    assert_eq!(rig.service.table().refresh_after_seconds, None);
+    // A rename: read again when it has left the cache.
+    rig.service.rename("ada_2").unwrap();
+    assert_eq!(rig.service.table().refresh_after_seconds, Some(130));
+    now.store(NOW + 100_000, Ordering::SeqCst);
+    assert_eq!(rig.service.table().refresh_after_seconds, Some(30));
+    now.store(NOW + 130_000, Ordering::SeqCst);
+    assert_eq!(rig.service.table().refresh_after_seconds, None);
+    // A number sent (saved with the membership) counts the same way.
+    rig.service.upload();
+    now.store(NOW + 190_000, Ordering::SeqCst);
+    assert_eq!(rig.service.table().refresh_after_seconds, Some(70));
+    // An error answer asks for nothing.
+    rig.transport.reroute(|_| Err(Unreachable));
+    assert_eq!(rig.service.table().refresh_after_seconds, None);
+
+    // A join: its own time, then the number sent right after it.
+    let now = Arc::new(AtomicI64::new(NOW));
+    let rig = setup_at(FakeHost::new(Some(1)), now.clone());
+    join(&rig.service, "ada", "ada@example.com").unwrap();
+    now.store(NOW + 10_000, Ordering::SeqCst);
+    let table = rig.service.table();
+    assert_eq!(table.state, LeaderboardTableState::Ok);
+    assert_eq!(table.refresh_after_seconds, Some(120));
 }
