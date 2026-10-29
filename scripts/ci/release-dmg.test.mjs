@@ -158,7 +158,7 @@ async function fakeRelease(
 test('packaging rebuilds a misplaced layout, then notarizes, staples and names the image', async (t) => {
   const fake = await fakeRelease(t, { layouts: [['XTrace.app is at 208,151.'], []] });
   const result = await packageDmg(fake.options);
-  assert.equal(result.name, 'XTrace-0.1.9-macos-arm64.dmg');
+  assert.equal(result.name, 'XTrace-0.2.0-macos-arm64.dmg');
   assert.equal(fake.calls.filter((call) => call.startsWith('pnpm tauri bundle')).length, 2);
   assert.equal(fake.keys.length, 2);
   const order = [
@@ -178,7 +178,7 @@ test('packaging rebuilds a misplaced layout, then notarizes, staples and names t
   assert.equal(await readFile(output, 'utf8'), 'disk image bytes');
   assert.equal(
     await readFile(`${output}.sha256`, 'utf8'),
-    `${result.sha256}  XTrace-0.1.9-macos-arm64.dmg\n`,
+    `${result.sha256}  XTrace-0.2.0-macos-arm64.dmg\n`,
   );
   // The key never appears on a command line, and its file is gone afterwards.
   assert.equal(
