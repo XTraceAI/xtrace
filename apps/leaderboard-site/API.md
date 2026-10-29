@@ -355,14 +355,16 @@ Everything above still holds unless replaced here.
 
 ```sql
 alter table members add column if not exists country text;
-alter table members drop constraint if exists members_country_check;
-alter table members add constraint members_country_check
-  check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$' and country <> 'XX');
+alter table members
+  drop constraint if exists members_country_check,
+  add constraint members_country_check
+    check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$' and country <> 'XX');
 ```
 
 Safe to run again: each run keeps the column and the stored countries and leaves exactly one country check,
 `members_country_check` (also the name Postgres gave the first version's inline check, without the `XX` rule, which
-this replaces).
+this replaces). The drop and the add are one statement, so if a stored row breaks the new check the migration
+fails and the previous check stays in place.
 
 ## Deploy note
 

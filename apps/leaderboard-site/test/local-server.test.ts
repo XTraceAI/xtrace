@@ -44,7 +44,7 @@ after(async () => {
 
 test('schema.sql can be applied again without changes', async () => {
   const { db, query } = await openLocalDatabase();
-  assert.equal(await applySchema(query, readSchema()), 8);
+  assert.equal(await applySchema(query, readSchema()), 7);
   const indexes = (await query(`select indexname from pg_indexes where schemaname = 'public'`)).map(
     (row) => String(row.indexname),
   );
@@ -80,7 +80,7 @@ test('schema.sql can be applied again without changes', async () => {
     `insert into members (nickname, nickname_key, email, key_hash, country) values ('d','d','d',decode('04','hex'),'NZ')`,
   );
   // Running it again keeps the column, its check and the stored country.
-  assert.equal(await applySchema(query, readSchema()), 8);
+  assert.equal(await applySchema(query, readSchema()), 7);
   assert.deepEqual(await query(`select country from members where nickname = 'd'`), [
     { country: 'NZ' },
   ]);
@@ -153,6 +153,33 @@ test("schema.sql replaces the first version's country check rather than adding a
   assert.deepEqual(await countryChecks(query), ['members_country_check']);
   assert.deepEqual(await query('select country from members'), [{ country: 'NL' }]);
   await assert.rejects(query(`update members set country = 'XX'`), /check constraint/);
+  await db.close();
+});
+
+test('a country check that cannot be added again leaves the previous one in place', async () => {
+  const { db, query } = await openLocalDatabase();
+  // The first version's inline check, which allowed XX, and a stored XX row.
+  await query('alter table members drop column country');
+  await query(
+    `alter table members add column country text
+       check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$')`,
+  );
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country)
+     values ('xx','xx','xx@example.com',decode('13','hex'),'XX')`,
+  );
+  // The new check refuses the stored XX, so the migration fails...
+  await assert.rejects(applySchema(query, readSchema()), /check constraint/);
+  // ...and the drop is undone with it: the old check is still there and still refuses.
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  await assert.rejects(
+    query(
+      `insert into members (nickname, nickname_key, email, key_hash, country)
+       values ('bad','bad','bad@example.com',decode('14','hex'),'zz!')`,
+    ),
+    /check constraint/,
+  );
+  assert.deepEqual(await query('select country from members'), [{ country: 'XX' }]);
   await db.close();
 });
 
