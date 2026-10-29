@@ -4,7 +4,8 @@
 // Writes public/favicon.svg, public/favicon-32.png and public/apple-touch-icon.png;
 // a test checks the files in public/ are what this draws.
 import { writeFileSync } from 'node:fs';
-import { deflateSync } from 'node:zlib';
+import { pathToFileURL } from 'node:url';
+import { crc32, deflateSync } from 'node:zlib';
 import { insideMark, MARK_COLORS } from '../src/mark.js';
 
 /** Pixels across the mark: 5 per cell of its 3×3 grid. */
@@ -56,18 +57,6 @@ export function iconSvg(): string {
     )
     .join('');
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ICON_GRID} ${ICON_GRID}" shape-rendering="crispEdges">${rects}</svg>\n`;
-}
-
-const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-
-function crc32(bytes: Buffer): number {
-  let c = 0xffffffff;
-  for (const byte of bytes) c = CRC_TABLE[(c ^ byte) & 255]! ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
 }
 
 function chunk(type: string, data: Buffer): Buffer {
@@ -127,7 +116,7 @@ export function iconPng(size: number, scale: number, background: string | null):
   ]);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   for (const [name, draw] of Object.entries(ICON_FILES))
     writeFileSync(new URL(`../public/${name}`, import.meta.url), draw());
   console.log('Wrote public/favicon.svg, favicon-32.png and apple-touch-icon.png.');

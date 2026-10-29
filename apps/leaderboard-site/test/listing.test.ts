@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { inflateSync } from 'node:zlib';
+import { crc32, inflateSync } from 'node:zlib';
 import { ICON_FILES } from '../scripts/icons.js';
 import { markCutsPath } from '../src/mark.js';
 import { escapeHtml, formatLeverage, ordinal, PAGE_FONT_PATH, renderPage } from '../src/page.js';
@@ -398,20 +398,26 @@ describe('GET /', () => {
   });
 });
 
-/** A PNG's size and its decompressed pixel rows, so the check does not depend on zlib's output. */
-function pngPixels(png: Buffer): { width: number; height: number; rows: Buffer } {
+/**
+ * A PNG's chunks with the image data decompressed, so the check does not depend
+ * on zlib's output. Every chunk's checksum must be right.
+ */
+function pngPixels(png: Buffer): { chunks: string[]; width: number; height: number; rows: Buffer } {
+  const chunks: string[] = [];
   const data: Buffer[] = [];
-  let width = 0;
-  let height = 0;
   for (let at = 8; at < png.length;) {
     const length = png.readUInt32BE(at);
-    const type = png.toString('ascii', at + 4, at + 8);
-    const body = png.subarray(at + 8, at + 8 + length);
-    if (type === 'IHDR') [width, height] = [body.readUInt32BE(0), body.readUInt32BE(4)];
-    if (type === 'IDAT') data.push(body);
+    const typed = png.subarray(at + 4, at + 8 + length);
+    assert.equal(png.readUInt32BE(at + 8 + length), crc32(typed), 'chunk checksum');
+    const type = typed.toString('ascii', 0, 4);
+    if (type === 'IDAT') data.push(typed.subarray(4));
+    else chunks.push(`${type}:${typed.subarray(4).toString('hex')}`);
     at += 12 + length;
   }
-  return { width, height, rows: inflateSync(Buffer.concat(data)) };
+  const header = chunks.find((c) => c.startsWith('IHDR:'))!;
+  const width = Number.parseInt(header.slice(5, 13), 16);
+  const height = Number.parseInt(header.slice(13, 21), 16);
+  return { chunks, width, height, rows: inflateSync(Buffer.concat(data)) };
 }
 
 test('the icons in public/ are the pixel-art mark scripts/icons.ts draws', () => {
