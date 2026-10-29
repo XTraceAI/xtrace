@@ -1,53 +1,42 @@
 // Draws the page's tab and home-screen icons: the XTrace mark (src/mark.ts,
-// the same shape as the header logo) as chunky 8-bit pixel art in the arcade
-// title's style: yellow with a hard violet shadow, on the page's navy.
+// the same shape as the header logo) as chunky 8-bit pixel art in its own two
+// colours, with few enough pixels that the steps still show in a 16px tab.
 // Usage: node --import ./scripts/ts-resolve.mjs scripts/icons.ts
 // Writes public/favicon.svg, public/favicon-32.png and public/apple-touch-icon.png;
 // a test checks the files in public/ are what this draws.
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { insideMark } from '../src/mark.js';
+import { insideMark, MARK_COLORS } from '../src/mark.js';
 import { PAGE_COLORS } from '../src/page.js';
 
-/** Pixels across the mark. Few enough that the steps still show in a 16px tab. */
+/** Pixels across the mark. */
 export const MARK_PIXELS = 8;
 
-/** Pixels across the whole icon: the mark, a one-pixel edge, and its shadow one pixel down and right. */
-export const ICON_TILE = MARK_PIXELS + 2;
-
-/** Each icon pixel's colour, row by row: navy, the violet shadow, or the yellow mark. */
-export function iconPixels(): string[][] {
-  const mark = (col: number, row: number) =>
-    col >= 0 &&
-    row >= 0 &&
-    col < MARK_PIXELS &&
-    row < MARK_PIXELS &&
-    insideMark(((col + 0.5) * 3) / MARK_PIXELS, ((row + 0.5) * 3) / MARK_PIXELS);
-  return Array.from({ length: ICON_TILE }, (_, y) =>
-    Array.from({ length: ICON_TILE }, (_, x) => {
-      if (mark(x - 1, y - 1)) return PAGE_COLORS.yellow;
-      if (mark(x - 2, y - 2)) return PAGE_COLORS.violet;
-      return PAGE_COLORS.bg;
+/**
+ * Each pixel's colour, row by row, or null where the mark is not drawn: the
+ * gradient's first colour above the diagonal from top left to bottom right,
+ * its second below, as the smooth logo runs from top right to bottom left.
+ */
+export function iconPixels(): (string | null)[][] {
+  return Array.from({ length: MARK_PIXELS }, (_, y) =>
+    Array.from({ length: MARK_PIXELS }, (_, x) => {
+      if (!insideMark(((x + 0.5) * 3) / MARK_PIXELS, ((y + 0.5) * 3) / MARK_PIXELS)) return null;
+      return y <= x ? MARK_COLORS[0] : MARK_COLORS[1];
     }),
   );
 }
 
-/** The tab icon as SVG: the navy tile, then one square per shadow or mark pixel, drawn without smoothing. */
+/** The tab icon as SVG: one square per pixel, drawn without smoothing, on a clear background. */
 export function iconSvg(): string {
   const rects = iconPixels()
     .flatMap((row, y) =>
       row.map((color, x) =>
-        color === PAGE_COLORS.bg
-          ? ''
-          : `<rect x="${x}" y="${y}" width="1" height="1" fill="${color}"/>`,
+        color === null ? '' : `<rect x="${x}" y="${y}" width="1" height="1" fill="${color}"/>`,
       ),
     )
     .join('');
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ICON_TILE} ${ICON_TILE}" shape-rendering="crispEdges">` +
-    `<rect width="${ICON_TILE}" height="${ICON_TILE}" fill="${PAGE_COLORS.bg}"/>${rects}</svg>\n`
-  );
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${MARK_PIXELS} ${MARK_PIXELS}" shape-rendering="crispEdges">${rects}</svg>\n`;
 }
 
 function rgb(hex: string): [number, number, number] {
@@ -67,32 +56,35 @@ function chunk(type: string, data: Buffer): Buffer {
 /** The three icon files, as public/ holds them. */
 export const ICON_FILES = {
   'favicon.svg': () => iconSvg(),
-  // 10 pixels × 3 = 30, centred in 32 on navy.
-  'favicon-32.png': () => iconPng(32, 3),
-  // 10 × 18 = 180 exactly.
-  'apple-touch-icon.png': () => iconPng(180, 18),
+  // 8 pixels × 4 = 32, on a clear background like the SVG.
+  'favicon-32.png': () => iconPng(32, 4, null),
+  // 8 × 18 = 144, centred in 180 on the page's navy: home screens fill clear pixels with black.
+  'apple-touch-icon.png': () => iconPng(180, 18, PAGE_COLORS.bg),
 } as const;
 
 /** The unfiltered RGBA rows a PNG of iconPng stores, so tests can compare pixels, not compressed bytes. */
-export function iconRows(size: number, scale: number): Buffer {
+export function iconRows(size: number, scale: number, background: string | null): Buffer {
   const pixels = iconPixels();
-  const offset = Math.floor((size - ICON_TILE * scale) / 2);
+  const offset = Math.floor((size - MARK_PIXELS * scale) / 2);
   const raw = Buffer.alloc(size * (size * 4 + 1));
   for (let y = 0; y < size; y++) {
     raw[y * (size * 4 + 1)] = 0; // no filter
     for (let x = 0; x < size; x++) {
       const gx = Math.floor((x - offset) / scale);
       const gy = Math.floor((y - offset) / scale);
-      const color = pixels[gy]?.[gx] ?? PAGE_COLORS.bg;
-      raw.set([...rgb(color), 255], y * (size * 4 + 1) + 1 + x * 4);
+      const color = (x >= offset && y >= offset ? pixels[gy]?.[gx] : null) ?? background;
+      if (color) raw.set([...rgb(color), 255], y * (size * 4 + 1) + 1 + x * 4);
     }
   }
   return raw;
 }
 
-/** A square, opaque RGBA PNG of `size` pixels: each icon pixel is a `scale`-wide block, centred on navy. */
-export function iconPng(size: number, scale: number): Buffer {
-  const raw = iconRows(size, scale);
+/**
+ * A square RGBA PNG of `size` pixels: each mark pixel is a `scale`-wide block,
+ * centred, on `background` (clear when null).
+ */
+export function iconPng(size: number, scale: number, background: string | null): Buffer {
+  const raw = iconRows(size, scale, background);
   const header = Buffer.alloc(13);
   header.writeUInt32BE(size, 0);
   header.writeUInt32BE(size, 4);
