@@ -400,12 +400,19 @@ export interface DataSource {
    * read is resolved behind this seam, from what the index recorded — a view
    * that could name a path could name any path, and this read opens files.
    */
-  /** A bounded original-source excerpt around the saved warning point; never cached. */
+  /**
+   * A bounded original-source excerpt around the saved warning point; never
+   * cached. `warning` names the warning shown (its ID, and the zone the view
+   * reads warnings in): the native side looks it up, and a correction's
+   * target is marked where its text says so
+   * (`SessionExcerptRecord.correction_marks`).
+   */
   sessionWarningContext(
     sessionId: string,
     recordUuid: string,
     block: number | null,
     readId: string,
+    warning?: { readonly id: string; readonly timezone: string },
   ): Promise<SessionExcerptStatus>;
   sessionTranscriptPage?(
     sessionId: string,

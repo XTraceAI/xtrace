@@ -66,7 +66,7 @@ Object.defineProperties(source, {
   },
 });
 Object.assign(window, { __dismissals: dismissals });
-source.sessionWarningContext = async () => {
+source.sessionWarningContext = async (_session, recordUuid, _block, _readId, shown) => {
   if (params.get('context') === 'large') {
     const response = await fetch('/e2e/warning-large-context.synthetic.json');
     return response.json() as Promise<SessionExcerptStatus>;
@@ -79,11 +79,41 @@ source.sessionWarningContext = async () => {
     subagent ? 'main-target' : warning.points_at.record_uuid,
   );
   if (subagent) status.records[6]!.id = warning.points_at.record_uuid;
+  // A long agent reply (Markdown with a table) before the flagged message.
+  if (params.has('longreply'))
+    status.records[1]!.blocks = [
+      {
+        kind: 'text',
+        index: 0,
+        text: [
+          'Synthetic long reply.',
+          '',
+          ...Array.from({ length: 16 }, (_, line) => `Synthetic paragraph ${line + 1}.\n`),
+          '| Step | Result |',
+          '| --- | --- |',
+          ...Array.from({ length: 22 }, (_, row) => `| Synthetic step ${row + 1} | passed |`),
+        ].join('\n'),
+      },
+    ];
   if (params.has('long'))
     status.records[2]!.blocks = [
       { kind: 'text', index: 0, text: 'Synthetic long content. '.repeat(500) },
     ];
-  return contextExcerpt(status, warning.points_at.record_uuid, warning.points_at.block);
+  // The native marks for the correction's own message ("Still not fixed. …"):
+  // "Still" and "not", as M-21's matcher finds them. Stated here, never
+  // looked for in the UI; none for another warning, a sub-agent's or a
+  // replaced message.
+  const marks =
+    shown?.id === after.warning_id &&
+    recordUuid === warning.points_at.record_uuid &&
+    !subagent &&
+    !params.has('long')
+      ? [
+          { block: 0, start: 0, end: 5 },
+          { block: 0, start: 6, end: 9 },
+        ]
+      : [];
+  return contextExcerpt(status, warning.points_at.record_uuid, warning.points_at.block, marks);
 };
 if (params.has('full-session-targets')) {
   const host = params.get('host') === 'codex' ? 'codex' : 'claude';

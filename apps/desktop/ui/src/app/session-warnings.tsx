@@ -26,6 +26,7 @@ import type { SessionWarningItem } from '../data/generated/SessionWarningItem';
 import type { SessionWarningsAnswer } from '../data/generated/SessionWarningsAnswer';
 import { SESSION_WARNINGS_TEXT } from '../data/generated/SessionWarningsText';
 import { queryKeys } from '../data/query-client';
+import { DiagnosisStatusLine, useDiagnosisStatus, withDiagnosisStatus } from './diagnosis-status';
 
 /** One session's cached answers, in every zone. */
 function sessionFilter(sessionId: string): QueryFilters {
@@ -420,14 +421,18 @@ export function WarningLine({ warning, id }: { warning: SessionWarningItem; id?:
  * bar. It is a focusable, named control, like the compaction ticks beside it are
  * focusable marks; hovering or focusing it shows the warning's label and
  * reason. `to` opens its session page; `onOpen` opens Dashboard detail.
+ * While the warning is being diagnosed an arc circles the dot, and its hint
+ * and name say so (`useDiagnosisStatus`).
  */
 export function WarningDot({
+  sessionId,
   warning,
   left,
   to,
   onOpen,
   suppressTooltip = false,
 }: {
+  sessionId: string;
   warning: SessionWarningItem;
   left: number;
   suppressTooltip?: boolean;
@@ -437,6 +442,7 @@ export function WarningDot({
   const id = useId();
   const [open, setOpen] = useState(false);
   const theme = useSurfaceTheme();
+  const status = useDiagnosisStatus(sessionId, warning.id);
   return (
     <Tooltip.Root disableHoverablePopup open={open && !suppressTooltip} onOpenChange={setOpen}>
       <Tooltip.Trigger
@@ -448,6 +454,7 @@ export function WarningDot({
               data-kind={warning.kind}
               data-testid="warning-dot"
               data-warning-id={warning.id}
+              data-diagnosis={status?.kind}
               style={{ left: `${left * 100}%` }}
               tabIndex={0}
               aria-haspopup="dialog"
@@ -460,6 +467,7 @@ export function WarningDot({
               data-kind={warning.kind}
               data-testid="warning-dot"
               data-warning-id={warning.id}
+              data-diagnosis={status?.kind}
               style={{ left: `${left * 100}%` }}
               // WebKit leaves links out of the Tab order unless told.
               tabIndex={0}
@@ -467,7 +475,7 @@ export function WarningDot({
           )
         }
         // The dot has no text for a name to label.
-        aria-label={warning.name}
+        aria-label={withDiagnosisStatus(warning.name, status)}
         aria-describedby={id}
         delay={0}
       />
@@ -487,6 +495,7 @@ export function WarningDot({
             data-testid="warning-tip"
           >
             <WarningLine warning={warning} />
+            <DiagnosisStatusLine status={status} />
             {!onOpen && (
               <span className="xt-warning-tip-hint">{SESSION_WARNINGS_TEXT.open_hint}</span>
             )}
@@ -726,6 +735,66 @@ export function SessionWarningsDetail({
 }
 
 /**
+ * Under a warning: that it was shown again after growing past its
+ * dismissal, and that the last Dismiss or Undo press was refused.
+ */
+export function WarningNotes({
+  warning,
+  undo,
+  refused,
+}: {
+  warning: SessionWarningItem;
+  undo: boolean;
+  refused: boolean;
+}) {
+  return (
+    <>
+      {warning.returned && (
+        <span className="xt-warning-returned" data-testid="warning-returned">
+          {warning.returned}
+        </span>
+      )}
+      {refused && (
+        <span className="xt-warning-refused" role="alert" data-testid="warning-refused">
+          {undo ? SESSION_WARNINGS_TEXT.restore_failed : SESSION_WARNINGS_TEXT.dismiss_failed}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * A warning's Dismiss button, or Undo for a dismissed one: it waits while
+ * its press is stored and read back.
+ */
+export function DismissButton({
+  undo,
+  busy,
+  onPress,
+  describedBy,
+}: {
+  undo: boolean;
+  busy: boolean;
+  onPress: () => void;
+  describedBy?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="xt-warning-action"
+      data-action={undo ? 'restore' : 'dismiss'}
+      aria-describedby={describedBy}
+      // WebKit leaves buttons out of the Tab order unless told.
+      tabIndex={0}
+      aria-disabled={busy || undefined}
+      onClick={busy ? undefined : onPress}
+    >
+      {undo ? SESSION_WARNINGS_TEXT.restore : SESSION_WARNINGS_TEXT.dismiss}
+    </button>
+  );
+}
+
+/**
  * One warning on its session's page: its line and, where dismissals are
  * stored, its button (Dismiss, or Undo for a dismissed one), described by
  * the line. `actions` go before the button.
@@ -740,7 +809,6 @@ export function WarningRow({
   actions,
   below,
   summary,
-  context,
 }: {
   warning: SessionWarningItem;
   undo: boolean;
@@ -750,8 +818,8 @@ export function WarningRow({
   onPress?: () => void;
   actions?: ReactNode;
   below?: ReactNode;
+  /** What stands for the warning's line (the session page's selected warning). */
   summary?: ReactNode;
-  context?: ReactNode;
 }) {
   const line = useId();
   return (
@@ -765,36 +833,15 @@ export function WarningRow({
       tabIndex={-1}
     >
       {summary ? <div id={line}>{summary}</div> : <WarningLine warning={warning} id={line} />}
-      {context}
       {(onPress || actions) && (
         <span className="xt-warning-actions">
           {actions}
           {onPress && (
-            <button
-              type="button"
-              className="xt-warning-action"
-              data-action={undo ? 'restore' : 'dismiss'}
-              aria-describedby={line}
-              // WebKit leaves buttons out of the Tab order unless told.
-              tabIndex={0}
-              aria-disabled={busy || undefined}
-              onClick={busy ? undefined : onPress}
-            >
-              {undo ? SESSION_WARNINGS_TEXT.restore : SESSION_WARNINGS_TEXT.dismiss}
-            </button>
+            <DismissButton undo={undo} busy={busy} onPress={onPress} describedBy={line} />
           )}
         </span>
       )}
-      {warning.returned && (
-        <span className="xt-warning-returned" data-testid="warning-returned">
-          {warning.returned}
-        </span>
-      )}
-      {refused && (
-        <span className="xt-warning-refused" role="alert" data-testid="warning-refused">
-          {undo ? SESSION_WARNINGS_TEXT.restore_failed : SESSION_WARNINGS_TEXT.dismiss_failed}
-        </span>
-      )}
+      <WarningNotes warning={warning} undo={undo} refused={refused} />
       {below}
     </li>
   );

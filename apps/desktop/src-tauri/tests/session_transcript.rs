@@ -414,7 +414,14 @@ fn fixture_startup_names_no_local_source_for_any_session() {
         "not_indexed"
     );
     let excerpt = state
-        .session_warning_context("any-session", "target", None, &CancelToken::new(), &readers)
+        .session_warning_context(
+            "any-session",
+            "target",
+            None,
+            None,
+            &CancelToken::new(),
+            &readers,
+        )
         .unwrap();
     assert_eq!(
         serde_json::to_value(excerpt).unwrap()["reason"]["source"]["reason"],
@@ -926,6 +933,7 @@ fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
             &id,
             &uuid(2),
             Some(0),
+            None,
             &CancelToken::new(),
             &bundle_with(&python),
         )
@@ -937,8 +945,62 @@ fn native_page_and_excerpt_resolve_indexed_claude_without_a_reader() {
     assert!(records[1].target);
     assert_eq!(records[1].record.id, uuid(2));
     assert_eq!(records[1].record.blocks[0].index(), 0);
+    // Who sent each message is M-02's answer from the index, the same one the
+    // diagnosis evidence reads (`StoredRecord::human_is_eligible`).
+    let stored = Store::open(&db).unwrap().records(&id).unwrap();
+    for entry in &records {
+        let indexed = stored
+            .iter()
+            .find(|record| record.uuid == entry.record.id)
+            .and_then(|record| record.human_is_eligible);
+        assert_eq!(entry.person, indexed, "{}", entry.record.id);
+    }
+    assert!(records.iter().any(|entry| entry.person.is_some()));
+    // A warning ID the session does not have marks nothing, and the excerpt
+    // still loads.
+    let E::Loaded { records, .. } = state
+        .session_warning_context(
+            &id,
+            &uuid(2),
+            None,
+            Some(("correction:no-such-warning", "UTC")),
+            &CancelToken::new(),
+            &bundle_with(&python),
+        )
+        .unwrap()
+    else {
+        panic!("excerpt for an unknown warning")
+    };
+    assert!(records.iter().any(|entry| entry.target));
+    assert!(
+        records
+            .iter()
+            .all(|entry| entry.correction_marks.is_empty())
+    );
     assert!(!marker.exists());
     assert_eq!(counts(&db), before);
+    // When the index cannot answer who sent a message, the excerpt still
+    // shows, with every caption neutral. A synthetic break: the view M-02's
+    // answer is read from is gone.
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch("DROP VIEW v_human_inputs;")
+        .unwrap();
+    let E::Loaded { records, .. } = state
+        .session_warning_context(
+            &id,
+            &uuid(2),
+            Some(0),
+            None,
+            &CancelToken::new(),
+            &bundle_with(&python),
+        )
+        .unwrap()
+    else {
+        panic!("excerpt without M-02's answer")
+    };
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|entry| entry.person.is_none()));
 }
 
 #[test]
@@ -1026,6 +1088,7 @@ fn native_codex_page_and_bounded_warning_context_share_pinned_resolution() {
             "codex-c0de",
             &uuid(1),
             None,
+            None,
             &CancelToken::new(),
             &bundle_with(&python),
         )
@@ -1060,6 +1123,7 @@ fn native_warning_excerpt_enforces_encoded_bytes_without_truncating_required_tex
             .session_warning_context(
                 &id,
                 &uuid(0),
+                None,
                 None,
                 &CancelToken::new(),
                 &DetailReaders::disabled()
@@ -1172,6 +1236,7 @@ fn native_source_ranges_keep_empty_files_and_page_groups_while_excerpts_stay_in_
             &id,
             &uuid(3),
             None,
+            None,
             &CancelToken::new(),
             &DetailReaders::disabled(),
         )
@@ -1250,4 +1315,160 @@ fn diagnosis_context_falls_back_only_for_supported_byte_limit_refusals() {
     }
     assert_eq!(counts(&db), before);
     state.shutdown();
+}
+
+/// A Claude session whose person corrects the agent ("That is wrong, use the
+/// other file") after a reply, and sends one prompt twice, indexed with its
+/// saved warnings made current.
+fn correction_scene() -> (tempfile::TempDir, PathBuf, AppState, String) {
+    const CORRECTED: &str = "00000000-0000-4000-8000-00000000cccc";
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let line = |index: usize, kind: &str, second: u32, text: &str| {
+        json!({
+            "uuid": uuid(100 + index), "type": kind, "sessionId": CORRECTED,
+            "cwd": "/repo/fixture",
+            "timestamp": format!("2026-09-07T12:00:{second:02}.000Z"),
+            "message": {"role": kind, "model": "claude-fixture", "content": [
+                {"type": "text", "text": text}]}
+        })
+        .to_string()
+            + "\n"
+    };
+    let body = [
+        line(0, "user", 0, "please run the full test suite"),
+        line(1, "assistant", 1, "Done, two tests failed."),
+        line(2, "user", 2, "That is wrong, use the other file"),
+        line(3, "assistant", 3, "Switched to the other file."),
+        line(4, "user", 4, "please run the full test suite"),
+        line(5, "assistant", 5, "Running them again."),
+    ]
+    .concat();
+    let home = home_with(&root, CORRECTED, &body);
+    let db = root.join("data/xtrace.db");
+    index(&db, &home);
+    let metrics = xt_metrics::MetricsDb::open(&db).unwrap();
+    if let Some(candidate) = metrics.prepare_session_warning_refresh(&[]).unwrap() {
+        let published = Store::open(&db)
+            .unwrap()
+            .publish_session_warnings(&candidate.rows)
+            .unwrap();
+        assert_eq!(published.rejected, 0);
+    }
+    assert!(metrics.session_warning_cache_is_current().unwrap());
+    let id = canonical_id(&db, CORRECTED);
+    let state = state(&root);
+    (temp, db, state, id)
+}
+
+fn marks(
+    state: &AppState,
+    id: &str,
+    record: &str,
+    warning: Option<(&str, &str)>,
+) -> Vec<xtrace_desktop::dto::TextMark> {
+    let xtrace_desktop::dto::SessionExcerptStatus::Loaded { records, .. } = state
+        .session_warning_context(
+            id,
+            record,
+            None,
+            warning,
+            &CancelToken::new(),
+            &DetailReaders::disabled(),
+        )
+        .unwrap()
+    else {
+        panic!("excerpt")
+    };
+    let target = records.into_iter().find(|entry| entry.target).unwrap();
+    target.correction_marks
+}
+
+#[test]
+fn a_current_correction_by_id_is_marked_and_nothing_else_is() {
+    let (_temp, _db, state, id) = correction_scene();
+    let list = state
+        .session_warnings(std::slice::from_ref(&id), "UTC")
+        .unwrap();
+    let xtrace_desktop::dto::SessionWarningsAnswer::Read { warnings, .. } =
+        &list.sessions[0].answer
+    else {
+        panic!("read")
+    };
+    let correction = warnings
+        .iter()
+        .find(|warning| warning.label == "Correction")
+        .expect("a correction");
+    let other = warnings
+        .iter()
+        .find(|warning| warning.label != "Correction")
+        .expect("another warning");
+    let record = &correction.points_at.record_uuid;
+    assert_eq!(record, &uuid(102));
+    // The stored correction, found by its ID in the current saved answer.
+    assert_eq!(
+        marks(&state, &id, record, Some((&correction.id, "UTC"))),
+        [xtrace_desktop::dto::TextMark {
+            block: 0,
+            start: 8,
+            end: 13
+        }]
+    );
+    // Another warning's ID, even over the same message: no marks.
+    assert!(marks(&state, &id, record, Some((&other.id, "UTC"))).is_empty());
+    // An ID the session does not have, and no warning at all: no marks.
+    assert!(marks(&state, &id, record, Some(("correction:missing", "UTC"))).is_empty());
+    assert!(marks(&state, &id, record, None).is_empty());
+}
+
+#[test]
+fn an_out_of_date_saved_answer_marks_nothing_and_is_not_recounted() {
+    let (_temp, db, state, id) = correction_scene();
+    let list = state
+        .session_warnings(std::slice::from_ref(&id), "UTC")
+        .unwrap();
+    let xtrace_desktop::dto::SessionWarningsAnswer::Read { warnings, .. } =
+        &list.sessions[0].answer
+    else {
+        panic!("read")
+    };
+    let correction = warnings
+        .iter()
+        .find(|warning| warning.label == "Correction")
+        .unwrap()
+        .clone();
+    // The saved answer goes out of date, as after an ingest.
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("UPDATE saved_session_warnings SET rule_version=1", [])
+        .unwrap();
+    let metrics = xt_metrics::MetricsDb::open(&db).unwrap();
+    assert!(!metrics.session_warning_cache_is_current().unwrap());
+    // The saved-only read the caption uses does not recount: the session is
+    // missing there, while the recounting read still answers.
+    let zone = jiff::tz::TimeZone::UTC;
+    assert!(matches!(
+        metrics
+            .current_saved_whole_session_warnings(&[id.as_str()], &zone)
+            .unwrap()[&id],
+        xt_metrics::WholeSessionWarnings::Missing
+    ));
+    assert!(matches!(
+        metrics
+            .saved_whole_session_warnings(&[id.as_str()], &zone)
+            .unwrap()[&id],
+        xt_metrics::WholeSessionWarnings::Read { .. }
+    ));
+    // The excerpt still loads, with no marks: the view shows the reason.
+    let started = std::time::Instant::now();
+    assert!(
+        marks(
+            &state,
+            &id,
+            &correction.points_at.record_uuid,
+            Some((&correction.id, "UTC"))
+        )
+        .is_empty()
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

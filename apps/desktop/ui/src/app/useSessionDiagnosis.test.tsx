@@ -239,17 +239,28 @@ it('drops completed answers when the app source is replaced', async () => {
   expect(h.kept).toBeUndefined();
 });
 
-it('cancels on page unmount and refuses a late answer even if the page returns to the same source', async () => {
+// The running diagnosis belongs to the source runtime, not to a page: closing
+// the Dashboard's warning window or leaving a session page leaves it running,
+// and the next view shows Stop and then the kept answer. Only the runtime
+// ending (the source replaced, above) stops it.
+it('keeps running after the page unmounts, shows the same run to the next view and keeps its answer', async () => {
   const h = harness();
   await h.ready();
   h.ask();
   h.send();
+  const stage = h.diagnose!.stage;
+  expect(stage?.kind).toBe('running');
   h.rerender({ visible: false });
-  expect(h.controls.cancel).toHaveBeenCalledOnce();
+  expect(h.controls.cancel).not.toHaveBeenCalled();
   h.rerender({ visible: true });
+  await h.ready();
+  expect(h.diagnose!.stage).toEqual(stage);
+  // The view that sent it is gone: the new view does not take focus to Stop.
+  expect(h.diagnose!.sentHere).toBeNull();
   await act(async () => h.runs[0]!.resolve(answer));
-  expect(h.kept).toBeUndefined();
+  await waitFor(() => expect(h.kept).toMatchObject({ answer }));
   expect(h.diagnose!.stage).toBeNull();
+  expect(h.controls.cancel).not.toHaveBeenCalled();
 });
 
 it('keeps an invoke failure as a failed answer and never saves automatically', async () => {

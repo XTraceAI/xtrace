@@ -531,6 +531,8 @@ async fn session_warning_context(
     record_uuid: String,
     block: Option<u32>,
     read_id: String,
+    warning_id: Option<String>,
+    timezone: Option<String>,
 ) -> Result<dto::SessionExcerptStatus, String> {
     on_worker(READ_WORKER_FAILED, move || {
         let reads = app
@@ -549,6 +551,7 @@ async fn session_warning_context(
             &session_id,
             &record_uuid,
             block,
+            warning_id.as_deref().zip(timezone.as_deref()),
             read.token(),
             index.detail_readers(),
         )

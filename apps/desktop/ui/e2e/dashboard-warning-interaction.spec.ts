@@ -33,9 +33,16 @@ for (const scheme of ['light', 'dark'] as const) {
     const { x, y } = await centre(page, sep3.getByTestId('day-warning-dot'));
     await page.mouse.move(x, y);
     const tip = page.getByTestId('day-warning-tip');
+    // The session (host mark and name), the kind, then the short reason; no day.
     await expect(tip.getByTestId('day-warning-tip-line')).toHaveText([
-      'Rename the config moduleSep 3 Correction you wrote "wrong" after a reply (09:30)',
+      'Rename the config moduleCorrectionAfter an agent reply',
     ]);
+    // The host mark is found by its element, not its role: the hint is
+    // aria-hidden (the dot's own name says everything), so it has no image role.
+    await expect(tip.locator('.xt-host-glyph-mark')).toHaveAttribute(
+      'data-host',
+      /^(claude|codex|cursor)$/,
+    );
     await expect(tip).not.toContainText(SESSION_WARNINGS_TEXT.open_hint);
     // The day's own card gives way while a dot's warning shows.
     await expect(page.getByTestId('day-warning')).toHaveCount(0);
@@ -47,8 +54,8 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.mouse.move(at.x, at.y);
     const lines = tip.getByTestId('day-warning-tip-line');
     await expect(lines).toHaveText([
-      'Fix the flaky buildSep 7 Repeated failure the same Bash call failed twice (14:02, 14:04)',
-      'Fix the flaky buildSep 7 Interruption you declined a call to Edit (14:06)',
+      'Fix the flaky buildRepeated failurethe same Bash call failed twice',
+      'Fix the flaky buildInterruptionDeclined Edit',
     ]);
     if (shots) await page.screenshot({ path: `${shots}/effort-dots-overlap-${scheme}.png` });
     // Off the dots, on the same day: the day's card again.
@@ -81,7 +88,12 @@ for (const scheme of ['light', 'dark'] as const) {
     const modal = page.getByTestId('dashboard-warning-modal');
     await expect(modal).toHaveAccessibleName('Correction Fix the flaky build');
     await expect(modal.getByRole('button', { name: 'Close' })).toBeFocused();
-    await expect(modal).toContainText('you wrote "still not" after a reply (15:00)');
+    // A correction's reason is its whole message, the native marks shown.
+    const reason = modal.getByTestId('warning-reason');
+    await expect(reason).toContainText(
+      `${SESSION_WARNINGS_TEXT.you_wrote}Still not fixed. The sample build fails at the same step.`,
+    );
+    await expect(reason.locator('mark')).toHaveText(['Still', 'not']);
     await expect(page.getByTestId('warning-tip')).toHaveCount(0);
     await expect(page).toHaveURL(location);
     if (shots) await page.screenshot({ path: `${shots}/lane-warning-modal-${scheme}.png` });

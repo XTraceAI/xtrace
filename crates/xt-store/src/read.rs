@@ -74,6 +74,16 @@ pub struct StoredRecord {
     pub human_excluded: bool,
 }
 
+/// M-02's answers for one record ([`Store::record_persons`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecordPerson {
+    /// Whether it is a person's message; `None` where M-02 has no answer.
+    pub person: Option<bool>,
+    /// Whether all of its text is the person's (`human_text_len ==
+    /// text_len`); `None` when either length is unknown.
+    pub whole_message: Option<bool>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StoreCounts {
     pub sessions: u64,
@@ -110,6 +120,47 @@ impl Store {
             (a.0.is_none(), &a.0, &a.1.uuid).cmp(&(b.0.is_none(), &b.0, &b.1.uuid))
         });
         Ok(keyed.into_iter().map(|(_, record)| record).collect())
+    }
+
+    /// M-02's answers for a few of one session's records, by UUID, read
+    /// in one statement each: whether each is a person's message, and
+    /// whether all of its text is (the person's retained length is the
+    /// record's whole text length). The same columns [`Store::records`]
+    /// reads as [`StoredRecord::human_is_eligible`] and
+    /// [`StoredRecord::human_text_len`] beside [`StoredRecord::text_len`]. A
+    /// UUID the session does not hold is left out.
+    pub fn record_persons(
+        &self,
+        session_id: &str,
+        uuids: &[&str],
+    ) -> Result<BTreeMap<String, RecordPerson>> {
+        let mut statement = self.connection.prepare(
+            "SELECT r.uuid,
+                    (SELECT human_is_eligible FROM v_human_inputs WHERE uuid=r.uuid),
+                    (SELECT human_text_len FROM v_human_inputs WHERE uuid=r.uuid),
+                    r.text_len
+             FROM records r WHERE r.session_id=?1 AND r.uuid=?2",
+        )?;
+        let mut persons = BTreeMap::new();
+        for uuid in uuids {
+            let found = statement
+                .query_row([session_id, uuid], |row| {
+                    let human: Option<i64> = row.get(2)?;
+                    let text: Option<i64> = row.get(3)?;
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        RecordPerson {
+                            person: row.get(1)?,
+                            whole_message: human.zip(text).map(|(human, text)| human == text),
+                        },
+                    ))
+                })
+                .optional()?;
+            if let Some((uuid, facts)) = found {
+                persons.insert(uuid, facts);
+            }
+        }
+        Ok(persons)
     }
 
     pub fn counts(&self) -> Result<StoreCounts> {

@@ -9,6 +9,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent,
+  type MouseEvent,
 } from 'react';
 import type { DashboardMetrics } from '../../data/generated/DashboardMetrics';
 import type { DashboardWindow } from '../../data/generated/DashboardWindow';
@@ -26,7 +27,8 @@ import type { DashboardWarningDay } from '../../data/generated/DashboardWarningD
 import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
 import { queryKeys } from '../../data/query-client';
 import { displayTitle, shortId } from '../session-context';
-import { WarningLine } from '../session-warnings';
+import { HostGlyph } from '../../kit/HostGlyph';
+import { DiagnosisStatusLine, useDiagnosisStatus, withDiagnosisStatus } from '../diagnosis-status';
 import { WarningDialog } from './WarningDialog';
 import { useSessionTitles } from '../session-titles';
 import '../../styles/session-warnings.css';
@@ -420,6 +422,7 @@ export function HumanTimeline({
             warning: selected.entry.warning,
             name: selected.name,
             sessionId: selected.entry.session_id,
+            host: selected.entry.host,
             timezone: selected.timezone,
           }
         }
@@ -691,21 +694,16 @@ function Row({
       )}
       {warned?.warnings.map((entry, index) => (
         // The day is the tab stop; Right arrow reaches each warning button.
-        <button
+        <DayWarningDot
           key={`${entry.session_id}:${entry.warning.id}`}
-          ref={(element) => {
+          entry={entry}
+          name={nameOf(entry)}
+          buttonRef={(element) => {
             dots.current[index] = element;
           }}
-          type="button"
-          aria-haspopup="dialog"
           onClick={(event) => onWarning(entry, event.currentTarget, nameOf(entry))}
-          tabIndex={-1}
-          className="xt-human-warning"
-          data-testid="day-warning-dot"
-          data-kind={entry.warning.kind}
-          data-pointed={shownDots.includes(index) || undefined}
-          aria-label={`${nameOf(entry)}, ${entry.warning.name}`}
-          style={{ left: `${dotAt(entry) * 100}%` }}
+          pointed={shownDots.includes(index)}
+          left={dotAt(entry)}
           onFocus={() => setFocusedDot(index)}
           onBlur={() => setFocusedDot((current) => (current === index ? null : current))}
           onKeyDown={(event) => {
@@ -938,19 +936,16 @@ function Row({
           collisionPadding={8}
         >
           <Tooltip.Popup
-            className="xt-rule-popover xt-warning-tip"
+            className="xt-rule-popover xt-warning-tip xt-day-warning-tip"
             aria-hidden="true"
             data-testid="day-warning-tip"
           >
             {pointedEntries.map((entry) => (
-              <span
+              <DayWarningTipLine
                 key={`${entry.session_id}:${entry.warning.id}`}
-                className="xt-warning-pointed"
-                data-testid="day-warning-tip-line"
-              >
-                <span className="xt-warning-session">{nameOf(entry)}</span>
-                <WarningLine warning={entry.warning} />
-              </span>
+                entry={entry}
+                name={nameOf(entry)}
+              />
             ))}
           </Tooltip.Popup>
         </Tooltip.Positioner>
@@ -1021,5 +1016,73 @@ function Row({
         </Popover.Positioner>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+/**
+ * One warning's dot on a day's track: a button in the danger ink, circled by
+ * an arc while its warning is being diagnosed, and named with that state.
+ */
+function DayWarningDot({
+  entry,
+  name,
+  buttonRef,
+  pointed,
+  left,
+  ...handlers
+}: {
+  entry: DashboardDayWarning;
+  name: string;
+  buttonRef: (element: HTMLButtonElement | null) => void;
+  pointed: boolean;
+  left: number;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
+}) {
+  const status = useDiagnosisStatus(entry.session_id, entry.warning.id);
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      aria-haspopup="dialog"
+      tabIndex={-1}
+      className="xt-human-warning"
+      data-testid="day-warning-dot"
+      data-kind={entry.warning.kind}
+      data-pointed={pointed || undefined}
+      data-diagnosis={status?.kind}
+      aria-label={withDiagnosisStatus(`${name}, ${entry.warning.name}`, status)}
+      style={{ left: `${left * 100}%` }}
+      {...handlers}
+    />
+  );
+}
+
+/**
+ * One pointed warning in a day's hint: its session (the host's mark and the
+ * session's name), the warning's label, its short reason and, while one is
+ * running or kept, its diagnosis.
+ */
+function DayWarningTipLine({ entry, name }: { entry: DashboardDayWarning; name: string }) {
+  const status = useDiagnosisStatus(entry.session_id, entry.warning.id);
+  return (
+    <span
+      className="xt-warning-pointed"
+      data-kind={entry.warning.kind}
+      data-testid="day-warning-tip-line"
+    >
+      <span className="xt-warning-tip-session">
+        <HostGlyph host={entry.host} />
+        <b className="xt-warning-session">{name}</b>
+      </span>
+      <span className="xt-warning-tip-kind">
+        <span className="xt-warning-tip-dot" aria-hidden="true" />
+        <b>{entry.warning.label}</b>
+      </span>
+      <span className="xt-warning-tip-reason">{entry.warning.compact_reason}</span>
+      <DiagnosisStatusLine status={status} />
+    </span>
   );
 }

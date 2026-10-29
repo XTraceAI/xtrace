@@ -268,12 +268,15 @@ export class TauriDataSource implements DataSource {
     recordUuid: string,
     block: number | null,
     readId: string,
+    warning?: { readonly id: string; readonly timezone: string },
   ) {
     return invoke<SessionExcerptStatus>(commands.sessionWarningContext, {
       sessionId,
       recordUuid,
       block,
       readId,
+      warningId: warning?.id ?? null,
+      timezone: warning?.timezone ?? null,
     });
   }
   sessionTranscriptPage(sessionId: string, selection: SessionPageSelection, readId: string) {

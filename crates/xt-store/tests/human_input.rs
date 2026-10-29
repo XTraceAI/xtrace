@@ -173,3 +173,58 @@ fn human_origins_and_input_adjustments_invalidate_saved_warnings_on_change() {
     store.apply_human_input_adjustments(&[adjustment]).unwrap();
     assert_eq!(Some(revision()), Some(changed_again));
 }
+
+#[test]
+fn record_persons_reads_the_same_m02_answer_as_records() {
+    let (_dir, mut store) = setup();
+    // A reply saved under the assistant role, and an injected reminder saved
+    // under the user role: neither is a person's message.
+    let reply: CanonicalRecord = serde_json::from_value(json!({"uuid":"reply","type":"assistant","timestamp":"2026-09-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}})).unwrap();
+    let reminder: CanonicalRecord = serde_json::from_value(json!({"uuid":"reminder","type":"user","isMeta":true,"timestamp":"2026-09-01T00:00:02Z","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>synthetic</system-reminder>"}]}})).unwrap();
+    store
+        .upsert_records("codex-child", &[reply, reminder], false)
+        .unwrap();
+    let persons = store
+        .record_persons("codex-child", &["input", "reply", "reminder", "missing"])
+        .unwrap();
+    // Known answers, not just agreement with `records()`.
+    assert_eq!(persons["input"].person, Some(true));
+    assert_eq!(persons["input"].whole_message, Some(true));
+    assert_eq!(persons["reminder"].person, Some(false));
+    for stored in store.records("codex-child").unwrap() {
+        let facts = persons[&stored.uuid];
+        assert_eq!(facts.person, stored.human_is_eligible, "{}", stored.uuid);
+        assert_eq!(
+            facts.whole_message,
+            stored
+                .human_text_len
+                .zip(stored.text_len)
+                .map(|(human, text)| human == text),
+            "{}",
+            stored.uuid
+        );
+    }
+    assert!(!persons.contains_key("missing"));
+    // Only part of the message is the person's: a reply to a question kept
+    // its first five characters.
+    store
+        .apply_human_input_adjustments(&[InputAdjustment {
+            record_uuid: "input".into(),
+            session_id: "codex-child".into(),
+            original_ts: "2026-09-01T00:00:00Z".into(),
+            original_length: 12,
+            retained_length: Some(5),
+            reason: "question_reply".into(),
+            native_item_id: None,
+        }])
+        .unwrap();
+    let persons = store.record_persons("codex-child", &["input"]).unwrap();
+    assert_eq!(persons["input"].person, Some(true));
+    assert_eq!(persons["input"].whole_message, Some(false));
+    assert!(
+        store
+            .record_persons("another-session", &["input"])
+            .unwrap()
+            .is_empty()
+    );
+}

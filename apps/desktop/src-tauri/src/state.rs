@@ -785,11 +785,17 @@ impl AppState {
         }
     }
 
+    /// `warning` names the warning shown (its ID, and the zone the view
+    /// reads warnings in): when it is one of the session's corrections now,
+    /// its target record is marked where its text says so
+    /// (`SessionExcerptStatus::with_correction_marks`). Unknown, missing or
+    /// any other kind: no marks.
     pub fn session_warning_context(
         &self,
         session_id: &str,
         record_uuid: &str,
         block: Option<u32>,
+        warning: Option<(&str, &str)>,
         cancel: &xt_ingest::native::readers_cli::CancelToken,
         readers: &crate::native_index::DetailReaders,
     ) -> Result<crate::dto::SessionExcerptStatus, StateError> {
@@ -844,6 +850,33 @@ impl AppState {
                 Err(reason) => unavailable(reason),
             }
         };
+        // Who sent each message is M-02's answer from the index, as the
+        // diagnosis evidence reads it; the excerpt's saved role never is. It
+        // only chooses a caption: when the index cannot answer, every record
+        // keeps `person: null` (the neutral caption) and the excerpt still
+        // shows, rather than the whole read failing over a caption.
+        let ids = status.record_ids();
+        let persons = if ids.is_empty() {
+            Default::default()
+        } else {
+            self.with_store(|store| Ok(store.record_persons(session_id, &ids)?))
+                .unwrap_or_default()
+        };
+        // The warning's own stored phrase, so a mark never names other words
+        // than the warning does. Looked up only when a mark could be sent at
+        // all (the whole record is the person's and the matcher finds
+        // words), and only from a current saved answer: this caption never
+        // waits for a recount. Unread, out of date or another kind: nothing
+        // is marked and the view shows the warning's reason.
+        let phrase = match (status.correction_candidate(&persons), warning) {
+            (Some(_), Some((warning_id, timezone))) => {
+                self.current_correction_phrase(session_id, warning_id, timezone)
+            }
+            _ => None,
+        };
+        let status = status
+            .with_persons(&persons)
+            .with_correction_marks(phrase.as_deref(), &persons);
         Ok(settled_excerpt(status, cancel))
     }
 
@@ -1404,6 +1437,36 @@ impl AppState {
             });
             Ok(warning.map(|warning| (warning, zone)))
         })
+    }
+
+    /// The stored phrase of one of a session's correction warnings, by its
+    /// identity, from a current saved answer only
+    /// ([`xt_metrics::MetricsDb::current_saved_whole_session_warnings`]):
+    /// `None` when the saved answer is out of date, the warning is not there
+    /// or not a correction, or the read fails. Never recounts.
+    fn current_correction_phrase(
+        &self,
+        session_id: &str,
+        warning_id: &str,
+        timezone: &str,
+    ) -> Option<String> {
+        let named = [session_id.to_owned()];
+        let ids = crate::session_warnings_dto::validate_ids(&named).ok()?;
+        self.with_metric_inputs(|metrics, inputs| {
+            let zone = crate::dashboard::report_zone(timezone, &inputs.zone, inputs.clock)?;
+            Ok(metrics.current_saved_whole_session_warnings(&ids, &zone)?)
+        })
+        .ok()?
+        .into_values()
+        .find_map(|answer| match answer {
+            xt_metrics::WholeSessionWarnings::Read { warnings, .. } => warnings
+                .warnings
+                .into_iter()
+                .find(|warning| warning.id() == warning_id),
+            _ => None,
+        })
+        .filter(|warning| warning.kind == xt_metrics::WarningKind::Correction)
+        .and_then(|warning| warning.correction_phrase)
     }
 
     /// Dismisses one of a session's warnings: from now on no mark, count or
@@ -2957,6 +3020,8 @@ mod tests {
                 target: true,
                 omitted_blocks: false,
                 only_tool_results: false,
+                person: None,
+                correction_marks: Vec::new(),
             }],
         };
         assert!(

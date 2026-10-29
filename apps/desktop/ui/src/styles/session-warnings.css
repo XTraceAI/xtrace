@@ -286,34 +286,196 @@
   line-height: 1.5;
 }
 .xt-warning-context-message {
+  display: grid;
+  gap: 6px;
   min-width: 0;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
 }
-.xt-warning-context-message:last-child {
-  border-bottom: 0;
-}
-.xt-warning-context-trigger {
-  display: block;
-  margin-bottom: 6px;
+.xt-warning-context-caption {
+  margin: 0;
   color: var(--meta);
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 1.5;
 }
-.xt-warning-context .xt-turn {
-  padding: 0;
-  border: 0;
-  background: transparent;
+.xt-warning-context-foot {
+  display: flex;
+  justify-content: flex-start;
 }
-.xt-warning-context .xt-transcript {
-  gap: 0;
-  padding: 0;
+
+/* The conversation as chat: your messages on the right in a bubble, the
+   agent's text on the left under its mark, tool calls and results as cards.
+   The warning's own message is outlined in the danger ink and tagged. */
+.xt-chat {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.xt-chat-turn {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.xt-chat-who {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--meta);
+  font-size: 11px;
+  line-height: 16px;
+}
+.xt-chat-turn[data-own] {
+  justify-items: end;
+}
+.xt-chat-turn[data-own] > .xt-chat-who {
+  margin-right: 2px;
+}
+.xt-chat-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  font-size: 10px;
+}
+.xt-chat-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.xt-chat-turn:not([data-own]) > .xt-chat-body {
+  padding-left: 23px;
+}
+.xt-chat-turn[data-own] > .xt-chat-body {
+  justify-items: end;
+  max-width: 92%;
+}
+.xt-chat-bubble {
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 11px;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px 12px 3px 12px;
+  background: var(--accent-tint);
+}
+.xt-chat-turn[data-flagged] .xt-chat-bubble {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
+  box-shadow: 0 0 0 2px var(--danger-tint);
+}
+.xt-chat-turn:not([data-own])[data-flagged] > .xt-chat-body {
+  padding: 8px 10px 8px 12px;
+  margin-left: 23px;
+  border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--border));
+  border-radius: 9px;
+}
+.xt-chat-text,
+.xt-chat-bubble {
+  overflow-wrap: anywhere;
 }
 .xt-warning-context .xt-tx-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.xt-chat-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--danger);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.xt-chat-flag-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.xt-chat-tools {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.xt-chat-tool {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+/* A tool card in the chat: the tool's name over its command in mono, an
+   error line in the danger ink. The card itself is the session page's. */
+.xt-warning-context .xt-tool-card {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--subtle);
+}
+.xt-warning-context .xt-tool-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  background: var(--track);
+}
+.xt-warning-context .xt-tool-name {
+  grid-row: 1;
+  grid-column: 1;
+  color: var(--secondary);
+  font-weight: 500;
+  font-size: 10.5px;
+}
+.xt-warning-context .xt-tool-name::before {
+  content: '›_ ';
+  color: var(--meta);
+}
+.xt-warning-context .xt-tool-arg {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  color: var(--ink);
   font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.xt-warning-context .xt-tool-card-head > :not(.xt-tool-name, .xt-tool-arg) {
+  grid-row: 1;
+  grid-column: 2;
+}
+.xt-warning-context .xt-tool-card-head > .xt-chat-flag {
+  grid-column: 3;
+}
+.xt-warning-context .xt-tool-card > .xt-tool-note {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.xt-warning-context .xt-tool-card > .xt-tool-note[data-tone='error'] {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  background: var(--danger-tint);
+  font-family: 'Geist Mono', Menlo, monospace;
+}
+.xt-warning-context .xt-tool-card > .xt-tool-note[data-tone='error']::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  transform: translateY(-1px);
+  border-radius: 50%;
+  background: var(--danger);
+}
+.xt-warning-context .xt-tool-card > :not(.xt-tool-card-head, .xt-tool-note) {
+  margin: 0;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--border);
 }
 .xt-warning-context .xt-tool-card[data-highlighted] {
-  box-shadow: none;
+  outline: 0;
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
+  box-shadow: 0 0 0 2px var(--danger-tint);
 }
 
 .xt-warning-pointed {
@@ -363,54 +525,379 @@
   align-self: center;
 }
 
-/* One selected warning, using the Dashboard's existing scrolling modal. */
-.xt-warning-modal {
-  overflow-wrap: anywhere;
+/* A dot whose warning is being diagnosed: an arc circles it (a still arc
+   where motion is reduced). The arc is drawn over the dot's surface ring and
+   takes no pointer events. */
+.xt-warning-dot[data-diagnosis='running']::after,
+.xt-human-warning[data-diagnosis='running']::after {
+  content: '';
+  position: absolute;
+  border: 1.5px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: xt-warning-arc 1s linear infinite;
 }
-.xt-warning-modal-session {
-  margin: 0;
-  color: var(--meta);
+.xt-warning-dot[data-diagnosis='running']::after {
+  inset: -2px;
 }
-.xt-warning-modal .xt-dash-modal-header h2 {
+.xt-human-warning[data-diagnosis='running']::after {
+  inset: -5px;
+}
+@keyframes xt-warning-arc {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .xt-warning-dot[data-diagnosis='running']::after,
+  .xt-human-warning[data-diagnosis='running']::after {
+    animation: none;
+    transform: rotate(45deg);
+  }
+}
+
+/* A dot's hint: the session (its host's mark and its name), the warning's
+   kind after a red dot, its short reason, and the diagnosis state. */
+.xt-rule-popover.xt-day-warning-tip {
+  gap: 10px;
+  min-width: 200px;
+  padding: 10px 12px;
+  font:
+    400 12px/1.4 'Manrope',
+    system-ui,
+    sans-serif;
+}
+.xt-day-warning-tip .xt-warning-pointed {
+  gap: 3px;
+}
+.xt-warning-tip-session,
+.xt-warning-tip-kind {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 18px;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ink);
 }
-.xt-warning-modal-dot {
-  width: 8px;
-  height: 8px;
+.xt-warning-tip-session {
+  margin-bottom: 3px;
+}
+.xt-warning-tip-session b,
+.xt-warning-tip-kind b {
+  font-weight: 650;
+}
+.xt-warning-tip-session b {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xt-warning-tip-kind b {
+  font-size: 13px;
+}
+.xt-warning-tip-dot {
+  width: 7px;
+  height: 7px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: var(--danger);
 }
-.xt-warning-modal-day {
-  margin: -10px 0 0;
-  color: var(--meta);
-  font-size: 11px;
+.xt-warning-tip-reason {
+  color: var(--secondary);
 }
-.xt-warning-modal .xt-warnings-list > li {
-  display: grid;
-  gap: 16px;
+.xt-diagnosis-status {
+  display: block;
+  color: var(--accent-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One selected warning: a window with the session's name and Close, a
+   header with the warning's kind, then the conversation on the left and
+   why it was flagged on the right, each scrolling on its own. In a narrow
+   window the two stack and the window scrolls as one. */
+.xt-modal.xt-warning-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(1080px, calc(100vw - 16px));
+  height: min(760px, calc(100vh - 16px));
   padding: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
-.xt-warning-modal .xt-warnings-list > li::before {
-  content: none;
+.xt-warning-modal-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--subtle);
+  color: var(--meta);
+  font-size: 11.5px;
+}
+.xt-warning-modal-crumb {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xt-warning-modal-close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--secondary);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.xt-warning-modal-close:hover {
+  background: var(--track);
+  color: var(--ink);
+}
+.xt-warning-modal-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.xt-warning-modal-head {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.xt-warning-modal-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.xt-warning-modal-spark {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  font-size: 14px;
+}
+.xt-warning-modal-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: 6px;
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.xt-warning-modal-tag[data-dismissed] {
+  border-color: var(--border);
+  background: var(--subtle);
+  color: var(--meta);
+}
+.xt-warning-modal-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.xt-warning-modal-tag[data-dismissed] .xt-warning-modal-dot {
+  background: var(--meta);
+}
+.xt-warning-modal-body {
+  display: grid;
+  /* One bounded row: the columns get the window's height, not their
+     content's, so each scrolls inside it. */
+  grid-template-rows: minmax(0, 1fr);
+  /* A zero basis: the body's height is the window's leftover space, never
+     its content's, in every engine. */
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+.xt-warning-modal-item {
+  display: grid;
+  grid-template-columns: minmax(0, 47fr) minmax(0, 53fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+.xt-warning-modal-item:focus {
+  outline: none;
+}
+.xt-warning-modal-item > .xt-warning-context {
+  align-content: start;
+  min-height: 0;
+  padding: 16px 18px 20px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+.xt-warning-modal-item > .xt-warning-context .xt-warning-context-head {
+  margin-bottom: 4px;
+}
+.xt-warning-modal-item > .xt-warning-context .xt-warning-context-head h3 {
+  font-size: 13px;
+}
+.xt-warning-modal-side {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  min-width: 0;
+  padding: 18px 22px 22px;
+  overflow: auto;
+}
+.xt-warning-modal-why {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.xt-warning-modal-label {
+  margin: 0;
+  color: var(--meta);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.xt-warning-modal-why h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
 }
 .xt-warning-modal-reason {
   margin: 0;
-  padding: 0;
-  color: var(--ink);
+  color: var(--body);
+  font-size: 13px;
   line-height: 1.6;
 }
-.xt-warning-modal .xt-warning-actions {
-  justify-content: flex-end;
+/* A correction's whole message, as written (line breaks kept), with the
+   words that made it a correction marked in the danger ink. */
+.xt-warning-modal-reason[data-quote] {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.xt-warning-modal-wrote {
+  color: var(--secondary);
+}
+.xt-warning-quote {
   margin: 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  border-radius: 0 6px 6px 0;
+  background: var(--subtle);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.xt-warning-mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-weight: 650;
+}
+.xt-warning-modal-side > .xt-warning-actions {
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 0;
 }
 .xt-warning-modal .xt-warning-action {
   height: 30px;
   padding-inline: 12px;
   font-size: 12px;
+  line-height: 28px;
+}
+.xt-warning-modal .xt-warning-action[data-variant='primary'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 14px;
+  font-weight: 600;
+}
+.xt-diagnosis-mark {
+  font-size: 13px;
+}
+.xt-warning-modal-side > .xt-diagnosis {
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.xt-warning-modal-side > [data-testid='diagnosis-running'] {
+  justify-items: center;
+  padding-top: 18vh;
+  text-align: center;
+}
+.xt-warning-modal-side .xt-diagnosis-head h4 {
+  font-size: 17px;
+}
+.xt-warning-modal-side .xt-warning-returned,
+.xt-warning-modal-side .xt-warning-refused {
+  display: block;
+  margin: 0;
+}
+.xt-warning-modal-side[data-alone] {
+  padding: 18px;
+}
+@media (max-width: 760px) {
+  .xt-modal.xt-warning-modal {
+    height: auto;
+    max-height: calc(100vh - 16px);
+    overflow: auto;
+  }
+  .xt-warning-modal-body {
+    flex: 0 0 auto;
+    grid-template-rows: none;
+  }
+  .xt-warning-modal-item {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+  .xt-warning-modal-item > .xt-warning-context,
+  .xt-warning-modal-side {
+    overflow: visible;
+  }
+  .xt-warning-modal-item > .xt-warning-context {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .xt-warning-modal-side > [data-testid='diagnosis-running'] {
+    padding-top: 12px;
+  }
+}
+
+/* A read under way: the spinner beside its sentence. */
+.xt-warning-context-note[data-loading],
+.xt-warning-modal-side [data-testid='warnings-state'][data-loading] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

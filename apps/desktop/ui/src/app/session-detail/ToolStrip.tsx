@@ -1,4 +1,4 @@
-import { useContext, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { RepeatNotice, type ConversationMarker } from './ConversationActivity';
 import { StatePill } from '../../kit';
 import { CodeSurface } from './TranscriptText';
@@ -81,8 +81,19 @@ export function ToolCallCard({
   block,
   cardRef,
   highlighted = false,
+  tag,
+  excerpt = false,
 }: {
   block: ToolBlock;
+  /**
+   * The card is in a few messages cut from a conversation (the warning
+   * window): whether a call was answered somewhere else in it is not a
+   * question those few messages can settle, so `not_checked` says nothing
+   * here. A transcript's cards keep the note.
+   */
+  excerpt?: boolean;
+  /** Drawn at the end of the card's header: the warning window's flag. */
+  tag?: ReactNode;
   /** Where the owning row keeps this card, so a reveal takes it by position. */
   cardRef?: (element: HTMLDivElement | null) => void;
   /** This card is the one a reveal was asked for and landed on. */
@@ -119,6 +130,7 @@ export function ToolCallCard({
             failed
           </StatePill>
         ) : null}
+        {tag}
       </div>
 
       {failed && outcome.error?.trim() ? (
@@ -127,7 +139,7 @@ export function ToolCallCard({
         </p>
       ) : null}
 
-      {outcome.state === 'not_checked' ? (
+      {outcome.state === 'not_checked' && !excerpt ? (
         <p className="xt-tool-note">
           Results for this call are not checked across the whole conversation.
         </p>

@@ -20,6 +20,7 @@ import { ThemeProvider } from '../../theme/ThemeProvider';
 import diagnosisSynthetic from '../session-diagnosis.synthetic.json';
 import synthetic from '../session-warnings.synthetic.json';
 import { WarningDialog, type SelectedWarning } from './WarningDialog';
+import { Modal } from '../../kit/Modal';
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
 afterEach(cleanup);
@@ -195,8 +196,11 @@ it('keeps a refused dismissal honest and retryable', async () => {
   }
 });
 
+// Closing the window no longer stops a running diagnosis: it belongs to the
+// source runtime, and the warning's dot shows it running. Reopening the
+// warning shows Stop, then the kept answer.
 for (const from of ['Close', 'Escape'] as const)
-  it(`${from} retains Stop until the diagnosis actually settles after cancellation acknowledgement`, async () => {
+  it(`${from} closes at once and leaves the diagnosis running for the reopened warning`, async () => {
     const test = setup();
     await run(test);
     expect(vi.mocked(test.controls.diagnose).mock.calls[0]!.slice(0, 3)).toEqual([
@@ -206,52 +210,61 @@ for (const from of ['Close', 'Escape'] as const)
     ]);
     if (from === 'Close') fireEvent.click(close());
     else fireEvent.keyDown(screen.getByRole('button', { name: words.stop }), { key: 'Escape' });
-    await waitFor(() => expect(test.controls.cancel).toHaveBeenCalledOnce());
-    expect(test.controls.cancel).toHaveBeenCalledWith(
-      vi.mocked(test.controls.diagnose).mock.calls[0]![3],
-    );
-    expect(test.onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: words.stop })).toBeTruthy();
-    await test.answer(answers.cancelled!);
     await waitFor(() => expect(test.onClose).toHaveBeenCalledOnce());
+    expect(test.controls.cancel).not.toHaveBeenCalled();
+    test.select(selected);
+    expect(await screen.findByRole('button', { name: words.stop })).toBeTruthy();
+    // Focus stays with the reopened window, not on Stop.
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: words.stop }));
+    await test.answer(answers.make_skill!);
+    expect(await screen.findByTestId('diagnosis-result')).toBeTruthy();
+    expect(test.controls.cancel).not.toHaveBeenCalled();
   });
 
-it('keeps Close and Stop retryable after refused and failed cancellation', async () => {
+it('keeps Stop retryable after refused and failed cancellation', async () => {
   const test = setup();
   vi.mocked(test.controls.cancel)
     .mockResolvedValueOnce(false)
     .mockRejectedValueOnce(new Error('IPC'));
   await run(test);
-  for (let count = 1; count <= 2; count++) {
-    fireEvent.click(close());
-    await waitFor(() => expect(close().getAttribute('aria-disabled')).toBeNull());
-    expect(test.controls.cancel).toHaveBeenCalledTimes(count);
-    expect(test.onClose).not.toHaveBeenCalled();
+  const stop = () => screen.getByRole('button', { name: words.stop });
+  for (let count = 1; count <= 3; count++) {
+    fireEvent.click(stop());
+    await waitFor(() => expect(test.controls.cancel).toHaveBeenCalledTimes(count));
+    if (count < 3) await waitFor(() => expect(stop().getAttribute('aria-disabled')).toBeNull());
   }
-  fireEvent.click(screen.getByRole('button', { name: words.stop }));
-  await waitFor(() => expect(test.controls.cancel).toHaveBeenCalledTimes(3));
   await test.answer(answers.cancelled!);
   expect(test.onClose).not.toHaveBeenCalled();
   expect(screen.getByTestId('diagnosis-result').dataset.state).toBe('cancelled');
 });
 
 for (const replace of [false, true])
-  it(`cancels its own run on ${replace ? 'forced selection replacement' : 'view disappearance'} and discards late results`, async () => {
+  it(`keeps its run on ${replace ? 'selection replacement' : 'view disappearance'} and keeps the answer for its warning`, async () => {
     const test = setup();
     await run(test);
-    const readId = vi.mocked(test.controls.diagnose).mock.calls[0]![3];
-    const replacement = { ...test.controls, cancel: vi.fn(async () => true) };
-    Object.defineProperty(test.source, 'diagnosis', { value: replacement });
-    if (replace) test.select({ ...selected, warning: read.warnings[0]! });
-    else test.show(false);
-    expect(test.controls.cancel).toHaveBeenCalledWith(readId);
-    expect(replacement.cancel).not.toHaveBeenCalled();
+    const other = read.warnings.find((one) => one.id !== selected.warning.id)!;
+    if (replace) {
+      test.select({ ...selected, warning: other });
+      // One runs at a time: the other warning waits, and says why.
+      expect(await screen.findByTestId('diagnosis-busy')).toBeTruthy();
+      expect(
+        screen
+          .getByRole('button', { name: /^Diagnose this warning:/ })
+          .getAttribute('aria-disabled'),
+      ).toBe('true');
+      // The same sentence and Stop as a session page shows for another
+      // warning's run.
+      expect(screen.getByTestId('diagnosis-busy').textContent).toContain(words.busy);
+      expect(screen.getByRole('button', { name: words.stop })).toBeTruthy();
+    } else test.show(false);
+    expect(test.controls.cancel).not.toHaveBeenCalled();
     await test.answer(answers.make_skill!);
     expect(
       test.client().getQueryData(['session-diagnosis', selected.sessionId, selected.warning.id]),
-    ).toBeUndefined();
-    expect(screen.queryByTestId('diagnosis-result')).toBeNull();
+    ).toMatchObject({ answer: answers.make_skill });
     if (!replace) test.show(true);
+    test.select(selected);
+    expect(await screen.findByTestId('diagnosis-result')).toBeTruthy();
     expect(test.controls.saveSkill).not.toHaveBeenCalled();
   });
 
@@ -493,7 +506,7 @@ it('opens the current issue with its saved warning ID and range', async () => {
   );
 });
 
-it('keeps a dismissed issue link and prevents full-session navigation while diagnosis stops', async () => {
+it('keeps a dismissed issue link, and opens the full session while a diagnosis runs without stopping it', async () => {
   const dismissed = setup();
   dismissed.warnings.mockResolvedValue(
     structuredClone(synthetic.after_dismissal.session_warnings) as SessionWarningsList,
@@ -505,13 +518,237 @@ it('keeps a dismissed issue link and prevents full-session navigation while diag
   const test = setup();
   await run(test);
   const link = screen.getByRole('link', { name: 'View in full session' });
-  expect(link.getAttribute('aria-disabled')).toBe('true');
-  expect(link.hasAttribute('href')).toBe(false);
+  expect(link.getAttribute('aria-disabled')).toBeNull();
   fireEvent.click(link);
-  expect(test.onClose).not.toHaveBeenCalled();
+  expect(test.onClose).toHaveBeenCalledOnce();
+  expect(screen.getByTestId('current-location').textContent).toContain('/sessions/s-warned');
+  expect(test.controls.cancel).not.toHaveBeenCalled();
+});
+
+// Once Stop is accepted it waits in every view, a reopened window included,
+// until the run actually ends.
+it('keeps Stop waiting after an accepted Stop, in a reopened window too, until the run ends', async () => {
+  const test = setup();
+  await run(test);
+  fireEvent.click(screen.getByRole('button', { name: words.stop }));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: words.stop }).getAttribute('aria-disabled')).toBe(
+      'true',
+    ),
+  );
   fireEvent.click(close());
-  await waitFor(() => expect(test.controls.cancel).toHaveBeenCalled());
-  expect(link.getAttribute('aria-disabled')).toBe('true');
+  test.select(selected);
+  const stop = await screen.findByRole('button', { name: words.stop });
+  expect(stop.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(stop);
+  expect(test.controls.cancel).toHaveBeenCalledOnce();
   await test.answer(answers.cancelled!);
+  expect((await screen.findByTestId('diagnosis-result')).dataset.state).toBe('cancelled');
+});
+
+// An ingest re-reads the session's warnings. While that re-read is in
+// flight the window keeps the last finished answer: the conversation is not
+// read again, the confirm step stays and Send still works.
+it('keeps the window, its conversation and the confirm step while a re-read is in flight', async () => {
+  const test = setup();
+  await ask(test);
+  await screen.findByText(/Still not fixed/);
+  expect(test.transcript).toHaveBeenCalledOnce();
+  test.warnings.mockImplementationOnce(() => new Promise(() => {}));
+  act(() => {
+    void test.client().invalidateQueries({
+      queryKey: queryKeys.sessionWarnings(selected.timezone, selected.sessionId),
+    });
+  });
+  await waitFor(() => expect(test.warnings).toHaveBeenCalledTimes(2));
+  expect(screen.queryByTestId('warnings-state')).toBeNull();
+  expect(screen.getByTestId('warning-item')).toBeTruthy();
+  expect(screen.getByTestId('warning-context').textContent).toContain('Still not fixed');
+  expect(screen.getByTestId('diagnosis-confirm')).toBeTruthy();
+  expect(test.transcript).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: words.confirm }));
+  expect(test.controls.diagnose).toHaveBeenCalledOnce();
+  expect(await screen.findByTestId('diagnosis-running')).toBeTruthy();
+});
+
+it('drops the warning, its confirm step and its actions when a finished re-read no longer lists it', async () => {
+  const test = setup();
+  await ask(test);
+  test.warnings.mockResolvedValueOnce({
+    timezone: selected.timezone,
+    sessions: [
+      {
+        session_id: selected.sessionId,
+        answer: {
+          ...read,
+          warnings: read.warnings.filter((one) => one.id !== selected.warning.id),
+          dismissed: [],
+        },
+      },
+    ],
+  });
+  await act(async () => {
+    await test.client().invalidateQueries({
+      queryKey: queryKeys.sessionWarnings(selected.timezone, selected.sessionId),
+    });
+  });
+  expect(screen.queryByTestId('diagnosis-confirm')).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Diagnose/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  expect(screen.getByTestId('warnings-state').textContent).toBe(
+    SESSION_WARNINGS_TEXT.session_unavailable,
+  );
+  expect(test.controls.diagnose).not.toHaveBeenCalled();
+});
+
+// Selecting another warning while the window stays open remounts its content
+// (the content is keyed by session and warning), so that warning, too, acts
+// only on a read finished after it opened, not on the cached answer.
+it('waits for a fresh read after switching to another warning in the open window', async () => {
+  const test = setup();
+  test.mount();
+  await screen.findByRole('button', { name: /^Diagnose/ });
+  const other = read.warnings.find((one) => one.id !== selected.warning.id)!;
+  let finish: (value: SessionWarningsList) => void = () => {};
+  test.warnings.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  test.select({ ...selected, warning: other });
+  await waitFor(() => expect(test.warnings).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId('warnings-state').textContent).toBe(
+    SESSION_WARNINGS_TEXT.session_reading,
+  );
+  expect(screen.queryByRole('button', { name: /^Diagnose/ })).toBeNull();
+  await act(async () => finish(structuredClone(list)));
+  expect((await screen.findByTestId('warning-item')).dataset.warningId).toBe(other.id);
+});
+
+const quoted = (
+  marks = [
+    { block: 0, start: 0, end: 5 },
+    { block: 0, start: 6, end: 9 },
+  ],
+) =>
+  contextExcerpt(
+    contextFixture(selected.warning.points_at.record_uuid),
+    selected.warning.points_at.record_uuid,
+    null,
+    marks,
+  );
+
+// A correction's reason is its whole message with the native marks shown;
+// the conversation and the reason share one read.
+it('shows a correction as "you wrote" and its whole message with the native marks', async () => {
+  const test = setup();
+  test.transcript.mockResolvedValue(quoted());
+  test.mount();
+  await waitFor(() => expect(screen.getByTestId('warning-reason').dataset.quote).toBe(''));
+  const reason = screen.getByTestId('warning-reason');
+  expect(reason.textContent).toBe(
+    `${SESSION_WARNINGS_TEXT.you_wrote}Still not fixed. The sample build fails at the same step. Please check the retry limit instead of changing the timeout again.`,
+  );
+  expect([...reason.querySelectorAll('mark')].map((mark) => mark.textContent)).toEqual([
+    'Still',
+    'not',
+  ]);
+  expect(reason.textContent).not.toContain(selected.warning.reason);
+  expect(test.transcript).toHaveBeenCalledOnce();
+  expect((test.transcript.mock.calls[0] as unknown[])[4]).toEqual({
+    id: selected.warning.id,
+    timezone: selected.timezone,
+  });
+  expect(dialog().textContent).not.toContain('take a closer look');
+});
+
+for (const state of ['loading', 'failed', 'unmarked', 'unavailable'] as const)
+  it(`shows the correction's own reason while the message is ${state}`, async () => {
+    const test = setup();
+    if (state === 'loading') test.transcript.mockImplementation(() => new Promise(() => {}));
+    else if (state === 'failed') test.transcript.mockRejectedValue(new Error('unreadable'));
+    else if (state === 'unmarked') test.transcript.mockResolvedValue(quoted([]));
+    else
+      test.transcript.mockResolvedValue({
+        state: 'unavailable',
+        reason: { reason: 'target_missing' },
+      });
+    test.mount();
+    await screen.findByTestId('warning-reason');
+    await waitFor(() => expect(test.transcript).toHaveBeenCalled());
+    if (state !== 'loading')
+      await waitFor(() =>
+        expect(screen.queryByText('Loading the original conversation…')).toBeNull(),
+      );
+    const reason = screen.getByTestId('warning-reason');
+    expect(reason.textContent).toBe(selected.warning.reason);
+    expect(reason.querySelector('mark')).toBeNull();
+    expect(dialog().textContent).not.toContain('take a closer look');
+  });
+
+// The native side marks only a correction it can stand behind; for any
+// other warning it sends no marks, and the window shows the reason.
+it('asks for every warning by its own ID and shows its reason when nothing is marked', async () => {
+  const test = setup();
+  const other = read.warnings.find((one) => one.kind !== 'correction')!;
+  test.transcript.mockResolvedValue(quoted([]));
+  test.mount();
+  await screen.findByTestId('warning-reason');
+  test.select({ ...selected, warning: other });
+  await waitFor(() => expect(screen.getByTestId('warning-item').dataset.warningId).toBe(other.id));
+  await waitFor(() => expect(test.transcript).toHaveBeenCalledTimes(2));
+  expect((test.transcript.mock.calls[1] as unknown[])[4]).toEqual({
+    id: other.id,
+    timezone: selected.timezone,
+  });
+  expect(screen.getByTestId('warning-reason').textContent).toBe(other.reason);
+  expect(screen.getByTestId('warning-reason').querySelector('mark')).toBeNull();
+});
+
+/** A full press on the window's backdrop, as a pointer makes it. */
+function pressBackdrop() {
+  const backdrop = document.querySelector<HTMLElement>('.xt-modal-backdrop')!;
+  fireEvent.pointerDown(backdrop, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseDown(backdrop, { button: 0 });
+  fireEvent.pointerUp(backdrop, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseUp(backdrop, { button: 0 });
+  fireEvent.click(backdrop, { button: 0 });
+}
+
+// A press outside the window closes it the way × and Escape do: a running
+// diagnosis keeps running, and focus goes back to what opened it.
+it('closes on a press outside the window, keeps a running diagnosis, and returns focus', async () => {
+  const test = setup();
+  await run(test);
+  // A press inside, on the conversation, does not close it.
+  const context = screen.getByTestId('warning-context');
+  fireEvent.pointerDown(context, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseDown(context, { button: 0 });
+  fireEvent.pointerUp(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.mouseUp(document.body, { button: 0 });
+  fireEvent.click(document.body, { button: 0 });
+  expect(test.onClose).not.toHaveBeenCalled();
+  pressBackdrop();
   await waitFor(() => expect(test.onClose).toHaveBeenCalledOnce());
+  expect(test.controls.cancel).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Origin' })),
+  );
+});
+
+it('leaves every other window open on a press outside it', async () => {
+  const onOpenChange = vi.fn();
+  render(
+    <ThemeProvider>
+      <Modal open onOpenChange={onOpenChange} aria-label="Synthetic other window">
+        <button type="button">Inside</button>
+      </Modal>
+    </ThemeProvider>,
+  );
+  await screen.findByRole('dialog', { name: 'Synthetic other window' });
+  pressBackdrop();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(onOpenChange).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog', { name: 'Synthetic other window' })).toBeTruthy();
 });

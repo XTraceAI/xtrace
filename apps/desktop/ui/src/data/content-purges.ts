@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useSyncExternalStore } from 'react';
-import { gradingRunDetailsPrefix } from './query-client';
+import { diagnosisAnswersPrefix, gradingRunDetailsPrefix } from './query-client';
 
 /**
  * How many committed content purges this QueryClient has heard of. Kept in
@@ -23,7 +23,8 @@ export const purgeEpoch = (client: QueryClient) => client.getQueryData<number>(p
  * epoch they began in; raising it stops those reads and drops their answers,
  * cached or still to come, so the next open reads again. A grade's details
  * hold its summary and findings: every cached one is dropped too, so a closed
- * details dialog reopens on a fresh read.
+ * details dialog reopens on a fresh read. Kept diagnosis answers are put away
+ * and a running diagnosis is stopped, its late answer dropped.
  */
 export function discardStoredWords(client: QueryClient) {
   client.setQueryData<number>(purgeKey, purgeEpoch(client) + 1);
@@ -31,6 +32,10 @@ export function discardStoredWords(client: QueryClient) {
     void client.cancelQueries({ queryKey });
     client.removeQueries({ queryKey });
   }
+  // A kept diagnosis answer can quote the conversation: put every one away,
+  // so the views showing one let go of it at once. The running diagnosis
+  // hears the raised epoch and stops (`createDiagnosisRuns`).
+  client.setQueriesData({ queryKey: diagnosisAnswersPrefix }, null);
 }
 
 /** The current purge epoch, re-rendering when a purge raises it. */

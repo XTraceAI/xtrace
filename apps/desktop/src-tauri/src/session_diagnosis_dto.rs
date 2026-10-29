@@ -501,17 +501,29 @@ pub struct DiagnoseText {
     pub reason: &'static str,
     /// Said when the diagnosis could not be asked for at all.
     pub failed: &'static str,
+    /// A warning dot's hint while its diagnosis runs; `{elapsed}` is the
+    /// time since it was sent, as `m:ss`.
+    pub dot_running: &'static str,
+    /// Added to a warning dot's name while its diagnosis runs.
+    pub dot_running_name: &'static str,
+    /// A warning dot's hint, and an addition to its name, once its answer is
+    /// kept: whatever it says, the diagnosis has finished (a run you stopped
+    /// is not shown).
+    pub dot_finished: &'static str,
+    /// Beside a waiting Diagnose button while another warning's diagnosis
+    /// runs: one runs at a time.
+    pub busy: &'static str,
 }
 
 pub const DIAGNOSE_TEXT: DiagnoseText = DiagnoseText {
     button: "Diagnose",
     button_name: "Diagnose this warning: {label}",
-    confirm: "Send and diagnose",
+    confirm: "Send & diagnose",
     not_now: "Not now",
     running: "Diagnosing… This can take a minute.",
     stop: "Stop",
     close: "Hide diagnosis",
-    heading: "Diagnosis",
+    heading: "Diagnosis result",
     what_happened: "What happened",
     why: "Supporting evidence",
     details: "Details",
@@ -533,6 +545,10 @@ pub const DIAGNOSE_TEXT: DiagnoseText = DiagnoseText {
     copy_failed: "Could not copy. Select the line and copy it yourself.",
     reason: "Reason",
     failed: "The diagnosis could not be run. Try again.",
+    dot_running: "Diagnosing… {elapsed}",
+    dot_running_name: "Diagnosing",
+    dot_finished: "Diagnosis finished",
+    busy: "Another warning is being diagnosed. One diagnosis runs at a time.",
 };
 
 /// Fixed sentences.

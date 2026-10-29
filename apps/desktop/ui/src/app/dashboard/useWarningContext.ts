@@ -1,15 +1,30 @@
 import { useCallback } from 'react';
 import { useData } from '../../data/DataProvider';
-import type { SessionWarningPoint } from '../../data/generated/SessionWarningPoint';
+import type { SessionWarningItem } from '../../data/generated/SessionWarningItem';
 import { useSourceRead } from '../session-detail/useSessionTranscript';
 
-export function useWarningContext(sessionId: string, point: SessionWarningPoint) {
+/**
+ * The original messages around one warning, read once for as long as the
+ * caller stays mounted on the same warning. The warning's ID and the zone
+ * go with the read: the native side looks the warning up and marks a
+ * correction's words in its target message.
+ */
+export function useWarningContext(
+  sessionId: string,
+  warning: Pick<SessionWarningItem, 'id' | 'points_at'>,
+  timezone: string,
+) {
   const { source } = useData();
-  const identity = JSON.stringify([sessionId, point.record_uuid, point.block]);
+  const { id, points_at: point } = warning;
+  const identity = JSON.stringify([sessionId, point.record_uuid, point.block, id, timezone]);
   const load = useCallback(
-    (id: string) => source.sessionWarningContext(sessionId, point.record_uuid, point.block, id),
-    [source, sessionId, point.record_uuid, point.block],
+    (readId: string) =>
+      source.sessionWarningContext(sessionId, point.record_uuid, point.block, readId, {
+        id,
+        timezone,
+      }),
+    [source, sessionId, point.record_uuid, point.block, id, timezone],
   );
-  const cancel = useCallback((id: string) => source.cancelSessionTranscript(id), [source]);
+  const cancel = useCallback((readId: string) => source.cancelSessionTranscript(readId), [source]);
   return useSourceRead(identity, load, cancel);
 }

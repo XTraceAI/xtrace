@@ -19,7 +19,7 @@ import './transcript.css';
  * not do and is not given the data for. `User` is the role the record was saved under, not a
  * claim that a person typed it — another agent's prompt is saved under the same role.
  */
-const ROLE_LABEL: Record<TranscriptRole, string> = {
+export const ROLE_LABEL: Record<TranscriptRole, string> = {
   user: 'User',
   assistant: 'Agent',
   system: 'System',

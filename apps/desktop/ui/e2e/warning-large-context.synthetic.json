@@ -20,7 +20,9 @@
       },
       "target": false,
       "omitted_blocks": false,
-      "only_tool_results": false
+      "only_tool_results": false,
+      "person": null,
+      "correction_marks": []
     },
     {
       "record": {
@@ -37,7 +39,12 @@
       },
       "target": true,
       "omitted_blocks": false,
-      "only_tool_results": false
+      "only_tool_results": false,
+      "person": true,
+      "correction_marks": [
+        { "block": 0, "start": 0, "end": 5 },
+        { "block": 0, "start": 6, "end": 9 }
+      ]
     },
     {
       "record": {
@@ -54,7 +61,9 @@
       },
       "target": false,
       "omitted_blocks": false,
-      "only_tool_results": false
+      "only_tool_results": false,
+      "person": null,
+      "correction_marks": []
     }
   ]
 }

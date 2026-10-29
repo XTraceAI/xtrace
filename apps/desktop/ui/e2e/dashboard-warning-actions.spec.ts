@@ -18,10 +18,7 @@ const answer = (page: Page, key: string) =>
     key,
   );
 const modal = (page: Page) => page.getByTestId('dashboard-warning-modal');
-const close = (page: Page) =>
-  modal(page)
-    .locator('header.xt-dash-modal-header')
-    .getByRole('button', { name: 'Close', exact: true });
+const close = (page: Page) => modal(page).getByRole('button', { name: 'Close', exact: true });
 async function open(page: Page, theme: 'light' | 'dark', deferred = false) {
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.emulateMedia({ colorScheme: theme });
@@ -43,9 +40,10 @@ async function dot(page: Page, surface: 'lane' | 'effort') {
   await expect(target).toBeAttached();
   if (surface === 'effort') {
     const name = await target.getAttribute('aria-label');
+    // The name gains the diagnosis state at its end while one runs or is kept.
     return page
       .getByTestId('day-warning-dot')
-      .and(page.locator(`[aria-label=${JSON.stringify(name)}]`));
+      .and(page.locator(`[aria-label^=${JSON.stringify(name)}]`));
   }
   return target;
 }
@@ -104,7 +102,9 @@ for (const theme of ['light', 'dark'] as const) {
       expect(presses).toEqual({ dismiss: [['s-warned', id]], restore: [['s-warned', id]] });
     });
 
-    test(`Dashboard ${surface} modal asks first and keeps Stop until a close request actually settles, ${theme}`, async ({
+    // Closing the window leaves the diagnosis running: the dot circles with
+    // an arc and its hint says how long it has run, then that it finished.
+    test(`Dashboard ${surface} modal asks first, keeps running after Close and shows it on the dot, ${theme}`, async ({
       page,
     }) => {
       await open(page, theme, true);
@@ -128,6 +128,12 @@ for (const theme of ['light', 'dark'] as const) {
       await target.focus();
       await page.keyboard.press('Enter');
       await expect(modal(page).getByTestId('diagnosis-confirm')).toHaveCount(0);
+      if (process.env.WARNING_SHOTS) {
+        await expect(modal(page).getByTestId('warning-context')).toContainText('Still not fixed.');
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-modal-before-${theme}.png`,
+        });
+      }
       await button.click();
       if (process.env.WARNING_SHOTS)
         await page.screenshot({
@@ -139,15 +145,61 @@ for (const theme of ['light', 'dark'] as const) {
       const sent = (await calls(page)).runs;
       expect(sent).toHaveLength(1);
       expect(sent[0]!.slice(0, 3)).toEqual(['s-warned', id, 'UTC']);
+      if (process.env.WARNING_SHOTS)
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-modal-running-${theme}.png`,
+        });
       if (surface === 'lane') await close(page).click();
       else await page.keyboard.press('Escape');
-      await expect.poll(async () => (await calls(page)).stops).toEqual([sent[0]![3]]);
-      await expect(modal(page)).toBeVisible();
-      await expect(stop).toBeVisible();
-      await expect(close(page)).toHaveAttribute('aria-disabled', 'true');
-      await answer(page, 'cancelled');
       await expect(modal(page)).toHaveCount(0);
       await expect(target).toBeFocused();
+      expect((await calls(page)).stops).toEqual([]);
+      await expect(target).toHaveAttribute('data-diagnosis', 'running');
+      await expect(target).toHaveAccessibleName(new RegExp(`; ${words.dot_running_name}$`));
+      const hint =
+        surface === 'lane' ? page.getByTestId('warning-tip') : page.getByTestId('day-warning-tip');
+      // A lane dot's hint opens on hover; an Effort dot's on focus.
+      // Its right side sits under the neighbouring dot, so point at its left edge.
+      if (surface === 'lane') await target.hover({ position: { x: 1, y: 5 } });
+      await expect(hint.getByTestId('diagnosis-status')).toHaveText(/^Diagnosing… 0:0\d$/);
+      if (process.env.WARNING_SHOTS) {
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-dot-running-${theme}.png`,
+        });
+        // Close up: the arc around the dot, and its hint.
+        const box = (await target.boundingBox())!;
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-dot-running-closeup-${theme}.png`,
+          clip: {
+            x: Math.max(0, Math.min(box.x - 300, 500)),
+            y: Math.max(0, box.y - 150),
+            width: 600,
+            height: 220,
+          },
+        });
+      }
+      // Reopened, it shows the same run with Stop, and focus stays at Close.
+      await page.keyboard.press('Enter');
+      await expect(stop).toBeVisible();
+      await expect(stop).not.toBeFocused();
+      await close(page).click();
+      await expect(target).toBeFocused();
+      // The answer arrives while the window is closed: the dot says it finished.
+      await answer(page, 'make_skill');
+      await expect(target).toHaveAttribute('data-diagnosis', 'finished');
+      await expect(target).toHaveAccessibleName(new RegExp(`; ${words.dot_finished}$`));
+      if (surface === 'lane') {
+        await page.mouse.move(0, 0);
+        await target.hover({ position: { x: 1, y: 5 } });
+      }
+      await expect(hint.getByTestId('diagnosis-status')).toHaveText(words.dot_finished);
+      if (process.env.WARNING_SHOTS)
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/${surface}-dot-finished-${theme}.png`,
+        });
+      await page.keyboard.press('Enter');
+      await expect(modal(page).getByTestId('diagnosis-result')).toBeVisible();
+      expect((await calls(page)).stops).toEqual([]);
     });
   }
 
@@ -243,6 +295,11 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(context).toContainText('Synthetic subagent correction.');
     await expect(context).toContainText('Synthetic subagent reply.');
     await expect(context).not.toContainText('The sample build is ready.');
+    // A sub-agent's messages are saved under the user role but are not a
+    // person's (M-02): the neutral caption, never "You" on the right.
+    await expect(context.locator('[data-own]')).toHaveCount(0);
+    await expect(context).not.toContainText(SESSION_WARNINGS_TEXT.you);
+    await expect(context.locator('.xt-chat-who').first()).toContainText('User');
     if (process.env.WARNING_SHOTS)
       await page.screenshot({
         path: `${process.env.WARNING_SHOTS}/subagent-neighbours-${theme}.png`,
@@ -337,3 +394,93 @@ for (const theme of ['light', 'dark'] as const) {
     });
   }
 }
+
+// The conversation column scrolls inside the window: a long reply before the
+// flagged message must not push it out of reach, and the right column stays.
+for (const theme of ['light', 'dark'] as const)
+  test(`the conversation scrolls on its own to the flagged message, ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 640 });
+    await page.emulateMedia({ colorScheme: theme });
+    await page.goto(
+      '/e2e/dashboard-warning.html?diagnosis&context&longreply&path=/dashboard?range=7d',
+    );
+    await page.evaluate(() => document.fonts.ready);
+    const target = await dot(page, 'lane');
+    await target.focus();
+    await page.keyboard.press('Enter');
+    const context = modal(page).getByTestId('warning-context');
+    await expect(context).toContainText('Synthetic long reply.');
+    await context.getByRole('button', { name: 'Show the rest of this block' }).click();
+    await expect(context).toContainText('Synthetic step 22');
+    await context.evaluate((node) => {
+      node.scrollTop = 0;
+    });
+    const side = modal(page).locator('.xt-warning-modal-side');
+    const before = (await side.boundingBox())!;
+    const sizes = await context.evaluate((node) => ({
+      scroll: node.scrollHeight,
+      client: node.clientHeight,
+      top: node.scrollTop,
+    }));
+    expect(sizes.scroll).toBeGreaterThan(sizes.client + 1);
+    expect(sizes.top).toBe(0);
+    const flagged = context.locator('[data-trigger]');
+    /** Whether the flagged message lies wholly inside the column's visible box. */
+    const shown = () =>
+      flagged.evaluate((node) => {
+        const column = node.closest('[data-testid="warning-context"]')!.getBoundingClientRect();
+        const own = node.getBoundingClientRect();
+        return own.top >= column.top - 1 && own.bottom <= column.bottom + 1;
+      });
+    expect(await shown()).toBe(false);
+    // The wheel scrolls the column itself.
+    const box = (await context.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 2000);
+    await expect.poll(() => context.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await expect.poll(shown).toBe(true);
+    expect(await side.boundingBox()).toEqual(before);
+    await expect(
+      modal(page).getByRole('button', { name: /^Diagnose this warning:/ }),
+    ).toBeInViewport();
+    if (process.env.WARNING_SHOTS)
+      await page.screenshot({
+        path: `${process.env.WARNING_SHOTS}/context-scrolled-${theme}.png`,
+      });
+  });
+
+// A press outside the warning window closes it, as × and Escape do; a
+// selection that starts inside and ends outside does not; and another
+// Dashboard window still ignores presses outside it.
+for (const theme of ['light', 'dark'] as const)
+  test(`a press outside closes only the warning window, ${theme}`, async ({ page }) => {
+    await open(page, theme);
+    const target = await dot(page, 'lane');
+    await target.focus();
+    await page.keyboard.press('Enter');
+    await expect(modal(page).getByTestId('warning-context')).toContainText('Still not fixed.');
+    // Select text from inside the conversation out past the window's edge.
+    const text = modal(page).getByTestId('warning-context').getByText('The sample build is ready.');
+    const box = (await text.boundingBox())!;
+    await page.mouse.move(box.x + 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(4, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect(modal(page)).toBeVisible();
+    // A press on the backdrop closes it and gives focus back to the dot.
+    await page.mouse.click(4, 4);
+    await expect(modal(page)).toHaveCount(0);
+    await expect(target).toBeFocused();
+    expect((await calls(page)).stops).toEqual([]);
+    // Another window on the Dashboard keeps its own rule.
+    const trigger = page.locator('.xt-dashboard').getByRole('button', { name: /^Coverage/ });
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    const coverage = page.getByRole('dialog', { name: 'Coverage' });
+    await expect(coverage).toBeVisible();
+    await page.mouse.click(4, 4);
+    await page.waitForTimeout(200);
+    await expect(coverage).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(coverage).toHaveCount(0);
+  });

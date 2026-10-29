@@ -58,11 +58,13 @@ function Samples() {
         <SessionWarningMarker answer={query.data} to={warningHref('synthetic-session', '')} />
         <span style={{ position: 'relative', width: 180, height: 28, background: 'var(--track)' }}>
           <WarningDot
+            sessionId="synthetic-session"
             warning={warning}
             left={0.25}
             to={warningHref('synthetic-session', warning.id)}
           />
           <WarningDot
+            sessionId="synthetic-session"
             warning={{ ...warning, name: 'Open synthetic warning detail' }}
             left={0.75}
             onOpen={() => setOpened((n) => n + 1)}

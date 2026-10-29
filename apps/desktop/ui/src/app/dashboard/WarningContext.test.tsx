@@ -7,6 +7,7 @@ import type { DataSource } from '../../data/DataSource';
 import { FixtureDataSource } from '../../data/FixtureDataSource';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { SessionExcerptStatus } from '../../data/generated/SessionExcerptStatus';
+import { SESSION_WARNINGS_TEXT } from '../../data/generated/SessionWarningsText';
 import { WarningContext } from './WarningContext';
 import { contextExcerpt, contextFixture } from './warning-context.synthetic';
 
@@ -61,9 +62,15 @@ const excerpt = () => contextExcerpt(contextFixture('target'), 'target');
 it('reads the exact saved point once, and shows only the native bounded records', async () => {
   const h = mount();
   await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
-  expect(h.read).toHaveBeenCalledWith('session-a', 'target', null, expect.any(String));
+  expect(h.read).toHaveBeenCalledWith('session-a', 'target', null, expect.any(String), {
+    id: point.id,
+    timezone: 'UTC',
+  });
   await act(async () => h.calls[0]!.resolve(excerpt()));
-  expect(screen.getByText('Issue message')).toBeTruthy();
+  // The warning's own message is tagged with its kind, once.
+  expect(screen.getByTestId('warning-context-flag').textContent).toBe(
+    SESSION_WARNINGS_TEXT.message_tags[point.kind],
+  );
   expect(screen.getByText(/Still not fixed/)).toBeTruthy();
   expect(screen.queryByText(/unrelated message/)).toBeNull();
   expect(screen.getByTestId('warning-context').querySelectorAll('[data-record-id]')).toHaveLength(
@@ -80,7 +87,10 @@ it('cancels a replaced point and drops its late text while the new point is load
   h.change({ record: 'new-target', block: 150 });
   expect(h.cancel).toHaveBeenCalledExactlyOnceWith(id);
   await waitFor(() => expect(h.read).toHaveBeenCalledTimes(2));
-  expect(h.read).toHaveBeenLastCalledWith('session-a', 'new-target', 150, expect.any(String));
+  expect(h.read).toHaveBeenLastCalledWith('session-a', 'new-target', 150, expect.any(String), {
+    id: point.id,
+    timezone: 'UTC',
+  });
   await act(async () => h.calls[0]!.resolve(excerpt()));
   expect(screen.queryByText(/Still not fixed/)).toBeNull();
   expect(screen.getByRole('status').textContent).toBe('Loading the original conversation…');
@@ -116,14 +126,16 @@ it('retries a failed read with a new ID and clears the old failure', async () =>
   expect(screen.getByText(/Still not fixed/)).toBeTruthy();
 });
 
-it('shows omitted blocks with a neutral User caption and never invents a person from text', async () => {
+it('shows omitted blocks under the native "You" caption and never invents a person from text', async () => {
   const h = mount();
   await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
   const status = excerpt();
   if (status.state !== 'loaded') throw Error('Missing fixture');
   status.records = [{ ...status.records[1]!, omitted_blocks: true, only_tool_results: false }];
   await act(async () => h.calls[0]!.resolve(status));
-  expect(screen.getByText('User')).toBeTruthy();
+  // What was saved under the user role is captioned with the native word for
+  // it, never a name read from the text.
+  expect(screen.getByText(SESSION_WARNINGS_TEXT.you)).toBeTruthy();
   expect(screen.queryByText('Person')).toBeNull();
   expect(
     screen.getByText('Other blocks in this message are not shown in this excerpt.'),
@@ -154,4 +166,51 @@ it('shows the exact generation note and unavailable-history sentence without ren
   expect(screen.getByTestId('warning-context').querySelectorAll('[data-record-id]')).toHaveLength(
     0,
   );
+});
+
+it('says "You" only for a message M-02 counts as a person\'s, and the neutral role caption otherwise', async () => {
+  const h = mount();
+  await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
+  const status = excerpt();
+  if (status.state !== 'loaded') throw Error('Missing fixture');
+  // A sub-agent prompt, a reminder or command output is saved under the user
+  // role too: without M-02's yes it is not "You".
+  status.records = status.records.map((entry) => ({ ...entry, person: null }));
+  await act(async () => h.calls[0]!.resolve(status));
+  expect(screen.queryByText(SESSION_WARNINGS_TEXT.you)).toBeNull();
+  const target = screen
+    .getByTestId('warning-context')
+    .querySelector<HTMLElement>('[data-record-id="target"]')!;
+  expect(target.dataset.own).toBeUndefined();
+  expect(target.querySelector('.xt-chat-who')!.textContent).toContain('User');
+  expect(target.querySelector('.xt-chat-bubble')).toBeNull();
+});
+
+// An excerpt holds a few messages, so whether a call was answered elsewhere
+// is never settled there: its cards say nothing about it. A transcript's
+// cards keep the note (ToolStrip.test).
+it('shows a call without its result with no "not checked" note in the excerpt', async () => {
+  const h = mount();
+  await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
+  const status = excerpt();
+  if (status.state !== 'loaded') throw Error('Missing fixture');
+  status.records[0] = {
+    ...status.records[0]!,
+    record: {
+      ...status.records[0]!.record,
+      blocks: [
+        {
+          kind: 'tool_call',
+          index: 0,
+          call_id: 'synthetic-call',
+          name: 'Bash',
+          input: { kind: 'json', value: { command: 'pnpm test' } },
+        },
+      ],
+    },
+  };
+  await act(async () => h.calls[0]!.resolve(status));
+  const card = await screen.findByText('pnpm test');
+  expect(card.closest('.xt-tool-card')!.getAttribute('data-tool-state')).toBe('not_checked');
+  expect(screen.getByTestId('warning-context').textContent).not.toMatch(/not checked/);
 });

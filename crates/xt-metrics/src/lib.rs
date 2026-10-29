@@ -70,7 +70,7 @@ pub use session_warnings::{
     Missing, NO_MAX_WORDS, PROMPT_MIN_WORDS, REPEAT_AT_LEAST, STILL_NEGATIVES, STILL_REACH,
     SessionWarning, SessionWarnings, TASK_LIST_TOOLS, WAITING_TOOLS, WarningChecks, WarningKind,
     WarningPoint, WholeSessionWarnings, WindowSessionWarnings, comparable_prompt, correction,
-    expected_repeat, tool_written,
+    correction_spans, expected_repeat, tool_written,
 };
 pub use sessions::{DaySessions, SessionsPerDay};
 pub use span_detail::{
