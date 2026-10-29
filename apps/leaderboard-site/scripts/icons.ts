@@ -62,8 +62,8 @@ export const ICON_FILES = {
   'apple-touch-icon.png': () => iconPng(180, 18, PAGE_COLORS.bg),
 } as const;
 
-/** The unfiltered RGBA rows a PNG of iconPng stores, so tests can compare pixels, not compressed bytes. */
-export function iconRows(size: number, scale: number, background: string | null): Buffer {
+/** The unfiltered RGBA rows iconPng compresses: one filter byte, then each pixel's colour. */
+function iconRows(size: number, scale: number, background: string | null): Buffer {
   const pixels = iconPixels();
   const offset = Math.floor((size - MARK_PIXELS * scale) / 2);
   const raw = Buffer.alloc(size * (size * 4 + 1));

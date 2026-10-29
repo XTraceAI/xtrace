@@ -197,7 +197,7 @@ function starShadows(count: number, seed: number, colors: string[]): string {
 const SMALL_STARS = starShadows(56, 7, ['#f2f2ff', '#f2f2ff', '#f2f2ff', '#4de8ff', '#a35cff']);
 const BIG_STARS = starShadows(14, 41, ['#f2f2ff', '#ffe14d', '#4de8ff', '#a35cff']);
 
-/** The page colours other files draw with too (the tab icons in scripts/icons.ts). */
+/** Page colours named once; scripts/icons.ts draws the home-screen icon's background in `bg`. */
 export const PAGE_COLORS = { bg: '#07071a', yellow: '#ffe14d', violet: '#a35cff' } as const;
 
 const STYLE = `
