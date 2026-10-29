@@ -136,6 +136,11 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(backdrop).toHaveAttribute('aria-hidden', 'true');
     await expect(backdrop).toHaveAttribute('inert', '');
     await expect(backdrop.locator('tbody tr')).toHaveCount(36);
+    // The medals on the top three ranks keep their rows as tall as the rest.
+    const heights = await backdrop
+      .locator('tbody tr')
+      .evaluateAll((rows) => rows.slice(0, 5).map((row) => row.getBoundingClientRect().height));
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(0.5);
     // Blurred, dimmed, and out of reach of the pointer and of selection.
     const drawn = await backdrop.evaluate((element) => {
       const frame = getComputedStyle(element);

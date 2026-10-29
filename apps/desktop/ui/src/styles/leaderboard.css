@@ -166,6 +166,8 @@
 .xt-leaderboard-table td:first-child {
   width: 56px;
   color: var(--meta);
+  /* A medal and its rank stay on one line. */
+  white-space: nowrap;
 }
 .xt-leaderboard-table th:last-child,
 .xt-leaderboard-table td:last-child {
