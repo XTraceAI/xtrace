@@ -390,16 +390,33 @@ it('human + agent: a taller quarter than the scale is drawn at the top', async (
   );
 });
 
-it('human + agent: the day card adds agent time, the busiest quarter and the quarter under the pointer', async () => {
+it('human + agent: the date’s box has the day’s lines; the day card names the day and the quarter under the pointer', async () => {
   await mountPaired(paired());
   const last = screen.getAllByTestId('human-day').at(-1)!;
-  // Keyboard focus: the day's card without a pointer line, and no sessions.
+  // The date's box: agent time, the busiest quarter and leverage, above its
+  // sessions; the times you worked are left to the bands.
+  hoverDate(last);
+  const summary = within(await sessionsBox()).getByTestId('day-summary');
+  expect(summary.querySelector('.xt-effort-tip-head')!.textContent).toBe('Sep 70 h 30 m');
+  expect(within(summary).queryByText('12:00 AM–12:30 AM')).toBeNull();
+  expect(within(summary).queryByText('one message')).toBeNull();
+  expect(within(summary).getByText('Busiest 15 min')).toBeTruthy();
+  expect(within(summary).getByText('12:30 AM · 3 agents')).toBeTruthy();
+  expect(within(summary).getByTestId('agent-day-total').textContent).toBe('1 h 18 m');
+  expect(within(summary).getByTestId('leverage-day').textContent).toBe(
+    'Agent time per hour of yours2.6×',
+  );
+  expect(summary.nextElementSibling!.textContent).toBe('Sessions on Sep 7');
+  fireEvent.mouseLeave(within(last).getByRole('button', { name: 'Sessions on Sep 7' }));
+  fireEvent.mouseLeave(last);
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  // Keyboard focus: the day's card names the day only, with no pointer line,
+  // none of the day's lines, and no sessions.
   fireEvent.focus(last);
-  await screen.findByText('Busiest 15 min');
-  expect(screen.getByText('12:30 AM · 3 agents')).toBeTruthy();
-  expect(screen.getByText('Agent time').nextSibling!.textContent).toBe('1 h 18 m');
-  expect(screen.getByTestId('agent-day-total').textContent).toBe('1 h 18 m');
-  expect(screen.getByTestId('leverage-day').textContent).toBe('Agent time per hour of yours2.6×');
+  const card = await screen.findByTestId('day-card');
+  expect(card.textContent).toBe('Sep 70 h 30 m');
+  expect(screen.queryByText('Busiest 15 min')).toBeNull();
+  expect(screen.queryByTestId('agent-day-total')).toBeNull();
   expect(screen.queryByTestId('agent-quarter')).toBeNull();
   expect(screen.queryByTestId('agent-hairline')).toBeNull();
   expect(screen.queryByTestId('day-sessions-head')).toBeNull();
@@ -422,9 +439,9 @@ it('human + agent: the day card adds agent time, the busiest quarter and the qua
   expect(screen.queryByTestId('agent-hairline')).toBeNull();
   expect(screen.getByTestId('agent-quarter').textContent).toBe('8:00 AM–8:15 AM0.2 agents');
   fireEvent.blur(last);
-  await waitFor(() => expect(screen.queryByText('Busiest 15 min')).toBeNull());
+  await waitFor(() => expect(screen.queryByTestId('day-card')).toBeNull());
   fireEvent.focus(last);
-  await screen.findByText('Busiest 15 min');
+  await screen.findByTestId('day-card');
   expect(screen.queryByTestId('agent-quarter')).toBeNull();
 });
 
@@ -447,18 +464,14 @@ it('human + agent: a day without leverage says none when your time was zero, unk
   expect(rows[1]!.getAttribute('aria-label')).toMatch(
     /; agent time per hour of yours: none; Enter opens the day’s sessions$/,
   );
-  fireEvent.focus(rows[1]!);
-  await waitFor(() =>
-    expect(screen.getByTestId('leverage-day').textContent).toBe('Agent time per hour of yoursnone'),
+  // The date's box says the same in words.
+  hoverDate(rows[1]!);
+  expect(within(await sessionsBox('Sep 2')).getByTestId('leverage-day').textContent).toBe(
+    'Agent time per hour of yoursnone',
   );
-  fireEvent.blur(rows[1]!);
-  fireEvent.focus(rows[0]!);
-  await waitFor(() =>
-    expect(
-      screen
-        .getAllByTestId('leverage-day')
-        .some((line) => line.textContent === 'Agent time per hour of yoursunknown'),
-    ).toBe(true),
+  hoverDate(rows[0]!);
+  expect(within(await sessionsBox('Sep 1')).getByTestId('leverage-day').textContent).toBe(
+    'Agent time per hour of yoursunknown',
   );
 });
 
@@ -482,18 +495,10 @@ it('human + agent: a day the report marks at or below even is red, and says so i
   expect(rows[6]!.getAttribute('aria-label')).toMatch(
     /; agent time per hour of yours: 2\.6×; Enter opens the day’s sessions$/,
   );
-  fireEvent.focus(rows[2]!);
-  await waitFor(() =>
-    expect(
-      screen
-        .getAllByTestId('leverage-day')
-        .some(
-          (line) =>
-            line.dataset.low === '' &&
-            line.textContent === 'Agent time per hour of yours0.8×at or below even',
-        ),
-    ).toBe(true),
-  );
+  hoverDate(rows[2]!);
+  const line = within(await sessionsBox('Sep 3')).getByTestId('leverage-day');
+  expect(line.dataset.low).toBe('');
+  expect(line.textContent).toBe('Agent time per hour of yours0.8×at or below even');
 });
 
 it('human + agent: unknown human time still says so', async () => {
@@ -550,7 +555,7 @@ it('human + agent: hovering a date opens its sessions box instead of the day’s
   const last = screen.getAllByTestId('human-day').at(-1)!;
   // The rest of the day shows its card, without sessions; nothing is read.
   fireEvent.mouseEnter(last);
-  await screen.findByText('Busiest 15 min');
+  await screen.findByTestId('day-card');
   expect(screen.queryByTestId('day-sessions-head')).toBeNull();
   expect(read).not.toHaveBeenCalled();
   // The date: a named popup trigger, never a tab stop.
@@ -564,7 +569,7 @@ it('human + agent: hovering a date opens its sessions box instead of the day’s
     name: `Open session ${F1_SESSION}, 23 minutes this day`,
   });
   // One box at a time: the day's card has gone.
-  await waitFor(() => expect(screen.queryByText('Busiest 15 min')).toBeNull());
+  await waitFor(() => expect(screen.queryByTestId('day-card')).toBeNull());
   expect(document.querySelectorAll('.xt-effort-tip')).toHaveLength(1);
   expect(read).toHaveBeenCalledExactlyOnceWith(7, paired().window.end_ms, 'UTC', '2026-09-07');
   expect(within(box).getByTestId('day-sessions-head').textContent).toBe('Sessions on Sep 7');
@@ -656,7 +661,7 @@ it('human + agent: Enter on the focused day opens its sessions box onto its firs
   const last = days.at(-1)!;
   // Focus shows the day's card, as before; the sessions box stays closed.
   last.focus();
-  await screen.findByText('Busiest 15 min');
+  await screen.findByTestId('day-card');
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(last.getAttribute('aria-label')).toMatch(/; Enter opens the day’s sessions$/);
   // Enter opens the box; focus lands on the first session once it is read.
@@ -664,7 +669,7 @@ it('human + agent: Enter on the focused day opens its sessions box onto its firs
   const box = await sessionsBox();
   const link = await within(box).findByRole('link');
   await waitFor(() => expect(document.activeElement).toBe(link));
-  await waitFor(() => expect(screen.queryByText('Busiest 15 min')).toBeNull());
+  await waitFor(() => expect(screen.queryByTestId('day-card')).toBeNull());
   // Arrow keys inside the box are the box's own, not the days'.
   fireEvent.keyDown(link, { key: 'ArrowUp' });
   expect(document.activeElement).toBe(link);
@@ -672,7 +677,7 @@ it('human + agent: Enter on the focused day opens its sessions box onto its firs
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(document.activeElement).toBe(last);
   // The focused day's card is back once the box has gone.
-  await screen.findByText('Busiest 15 min');
+  await screen.findByTestId('day-card');
   // Space opens it again, straight onto the session; the same day of the
   // same report is not read again.
   fireEvent.keyDown(last, { key: ' ' });

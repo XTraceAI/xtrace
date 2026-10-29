@@ -111,6 +111,8 @@ pub enum StateError {
     TelemetryEnvironmentOff,
     #[error("the telemetry event list could not be opened in the browser")]
     TelemetryDocUnavailable,
+    #[error("the leaderboard page could not be opened in the browser")]
+    LeaderboardPageUnavailable,
     /// A linked-session request named something no report could have shown:
     /// the detail names the part, never the value.
     #[error("invalid pull-request session request: {0}")]

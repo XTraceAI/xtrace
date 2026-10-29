@@ -8,8 +8,9 @@
 export type MetricLeverageDay = { date: string, start_ms: number, end_ms: number, agent_ms: number, human_ms: number | null, value: number | null, 
 /**
  * Whether the day's leverage, as the screen writes it (one decimal),
- * is at or below even, 1×: `value` under `ABOVE_EVEN_FROM`. `null` when
- * `value` is.
+ * is at or below even, 1×: `value` written as at most ten tenths by
+ * `written_tenths`, the one leverage rounding rule. `null` when `value`
+ * is.
  */
 at_or_below_even: boolean | null, 
 /**

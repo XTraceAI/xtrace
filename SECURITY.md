@@ -6,7 +6,7 @@ security updates for older beta releases.
 
 Use the repository's **Security → Report a vulnerability** option if private
 vulnerability reporting is available:
-[XTraceAI/xtrace-desktop security page](https://github.com/XTraceAI/xtrace-desktop/security).
+[XTraceAI/xtrace security page](https://github.com/XTraceAI/xtrace/security).
 This document does not assert that GitHub private reporting has been enabled.
 If the option is absent, contact a maintainer through an established private
 channel. If you lack one, ask how to make private contact without disclosing the

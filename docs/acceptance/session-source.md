@@ -237,9 +237,13 @@ Exact tool-block reveals still use held refs and preserve caller focus.
 ## Bounded Codex conversation portions
 
 The producer remains the sole Codex converter. Its version 1 context mode
-supports one flat original rollout or one original paginated root, without
-forks, inherited history or multiple rollout files. Those unsupported shapes
-are refused explicitly. The pinned source is a public reader snapshot; it does
+supports one flat original rollout, one original paginated root, or one
+Codex Desktop fork rollout whose history reference resolves to another
+session's rollout. A fork's parent is read only up to the fork point and only
+for its token counters, so the fork's usage starts after the parent's; none of
+the parent's rows become the fork's records, and a change to the parent
+refuses the page. Sub-agent threads with inherited context and sessions spread
+over several rollout files are still refused explicitly. The pinned source is a public reader snapshot; it does
 not upgrade the installed MemHub plugin or change marketplace releases.
 
 Each request keeps at most 200 complete records and 1 MiB of encoded producer

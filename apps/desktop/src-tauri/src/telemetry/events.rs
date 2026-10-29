@@ -112,11 +112,12 @@ impl TelemetryEvent {
     /// documented as not sent yet.
     pub fn sent_by_this_build(self) -> bool {
         match self {
-            Self::AppOpened | Self::DailyActive | Self::HourlyActive => true,
+            Self::AppOpened | Self::DailyActive | Self::HourlyActive | Self::LeaderboardOptedIn => {
+                true
+            }
             Self::PluginDetected { .. }
             | Self::PluginInstalled { .. }
             | Self::RuleActivated { .. }
-            | Self::LeaderboardOptedIn
             | Self::CloudConnected
             | Self::UpdateInstalled => false,
         }

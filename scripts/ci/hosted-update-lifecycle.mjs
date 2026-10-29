@@ -351,7 +351,7 @@ export async function prepareUpdateInstall(
   const archive = join(owned, previousRelease.archive);
   await fetch(
     'old-download',
-    `https://github.com/XTraceAI/xtrace-desktop/releases/download/${previousRelease.tag}/${previousRelease.archive}`,
+    `https://github.com/XTraceAI/xtrace/releases/download/${previousRelease.tag}/${previousRelease.archive}`,
     archive,
     previousRelease.bytes,
   );

@@ -72,6 +72,13 @@ export const commands = {
   telemetrySetEnabled: 'telemetry_set_enabled',
   telemetryDisclosureShown: 'telemetry_disclosure_shown',
   openTelemetryDoc: 'open_telemetry_doc',
+  leaderboardStatus: 'leaderboard_status',
+  leaderboardJoin: 'leaderboard_join',
+  leaderboardConfirm: 'leaderboard_confirm',
+  leaderboardCancelCode: 'leaderboard_cancel_code',
+  leaderboardRename: 'leaderboard_rename',
+  leaderboardLeave: 'leaderboard_leave',
+  leaderboardOpenPage: 'leaderboard_open_page',
 } as const;
 export const events = {
   importReceived: 'ingest://import-received',
@@ -87,6 +94,7 @@ export const events = {
   gradingChanged: 'grading://changed',
   gradingRubricProgress: 'grading://rubric-progress',
   claudeSignInEnded: 'account-usage://sign-in-ended',
+  leaderboardChanged: 'leaderboard://changed',
   contentPurged: 'store://content-purged',
 } as const;
 export type DataEvent = (typeof events)[keyof typeof events];

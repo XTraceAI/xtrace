@@ -147,9 +147,10 @@ export function Shell() {
       <Sidebar
         activeKey={current?.active}
         onNavigate={onNavigate}
-        // Leaderboard keeps the kit's disabled "soon" row: this local build has
-        // no ranking to show, and /leaderboard is only a named placeholder.
-        // Rulebook is hidden the same way for now; its addresses still open.
+        // Leaderboard opens the page where you can join the public leaderboard.
+        leaderboardEnabled
+        // Rulebook keeps the kit's disabled "soon" row for now; its addresses
+        // still open.
         rulebookEnabled={false}
         // A background re-read keeps the values on screen; only the first
         // read and an explicit Refresh show the reading state.

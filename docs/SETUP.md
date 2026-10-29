@@ -5,11 +5,11 @@
 The beta download targets Apple Silicon (M-series) Macs with macOS 14 or newer.
 Intel Macs, Windows and Linux do not have a supported download. A deployment
 target of macOS 14 is not proof of testing on every supported Mac; check the
-[release notes](https://github.com/XTraceAI/xtrace-desktop/releases/latest) and
+[release notes](https://github.com/XTraceAI/xtrace/releases/latest) and
 [testing limits](UPDATES.md#beta-testing-limits) for the actual release evidence.
 
-1. Open the [current update release](https://github.com/XTraceAI/xtrace-desktop/releases/latest),
-   or visit [all releases](https://github.com/XTraceAI/xtrace-desktop/releases) for
+1. Open the [current update release](https://github.com/XTraceAI/xtrace/releases/latest),
+   or visit [all releases](https://github.com/XTraceAI/xtrace/releases) for
    newer testing candidates. The latest-release link and automatic updates can
    remain on an earlier release while a newer beta is being tested. Choose the release's `XTrace-<version>-macos-arm64.dmg` asset
    (releases up to 0.1.7, which the latest-release link may still show, name it
@@ -136,7 +136,7 @@ For empty or incomplete results, check **Settings → Native index** first. For
 missing PR facts, check the GitHub CLI's sign-in and repository access. For stale
 account limits, use the Usage refresh control and inspect the displayed error.
 
-Report bugs through [GitHub issues](https://github.com/XTraceAI/xtrace-desktop/issues)
+Report bugs through [GitHub issues](https://github.com/XTraceAI/xtrace/issues)
 with the app version, macOS version, steps and expected/actual result. Redact
 conversation text, repository paths, account details and credentials from
 screenshots and logs; do not attach your local database.
