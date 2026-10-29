@@ -412,15 +412,15 @@ for (const scheme of ['light', 'dark'] as const)
     // A see-through colour mix (your colour at about a fifth), not a solid fill.
     expect(geometry.barColor).toMatch(/^(color\(srgb|rgba\(|oklab)/);
     // Pointing at a day's track draws the hairline and names that quarter;
-    // the card keeps the day's agent total.
+    // the card names the day, and its agent total is in the date's box.
     const track = days.last().locator('.xt-human-track');
     const box = (await track.boundingBox())!;
     await page.mouse.move(box.x + box.width * 0.5 + 2, box.y + box.height / 2);
     await expect(page.getByTestId('agent-hairline')).toBeVisible();
     await expect(page.getByTestId('agent-quarter')).toBeVisible();
     const card = page.locator('.xt-effort-tip[data-open]');
-    await expect(card).toContainText('Agent time');
-    await expect(card.getByTestId('agent-day-total')).toHaveText(/^\d+ h \d+ m$/);
+    await expect(card.locator('.xt-effort-tip-head')).toContainText('Sep 7');
+    await expect(card.getByTestId('agent-day-total')).toHaveCount(0);
     if (shots) await page.screenshot({ path: `${shots}/dashboard-7d-paired-${scheme}.png` });
     await page.mouse.move(0, 0);
     // In a narrow card the headline wraps whole items onto a second line and
@@ -564,6 +564,7 @@ test('in human + agent, hovering a date opens its sessions box, the rest of the 
   const days = page.getByTestId('human-day');
   const today = days.last();
   const shown = page.locator('.xt-effort-tip[data-open]');
+  const card = page.getByTestId('day-card');
   const centre = async (locator: ReturnType<Page['locator']>, across = 0.5) => {
     const box = (await locator.boundingBox())!;
     return [box.x + box.width * across, box.y + box.height / 2] as const;
@@ -584,22 +585,25 @@ test('in human + agent, hovering a date opens its sessions box, the rest of the 
   // The track shows the day's card as before, without sessions.
   await page.mouse.move(...(await centre(today.locator('.xt-human-track'), 0.3)));
   await expect(shown).toHaveCount(1);
-  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(card).toBeVisible();
   await expect(page.getByTestId('day-sessions-head')).toHaveCount(0);
-  // The date opens its sessions box instead, and the card closes.
+  // The date opens its sessions box instead, with the day's own lines above
+  // its sessions, and the card closes.
   const date = today.getByRole('button', { name: 'Sessions on Sep 7' });
   await page.mouse.move(...(await centre(date)), { steps: 5 });
   const box = page.getByRole('dialog', { name: 'Sessions on Sep 7' });
   await expect(box.getByTestId('day-sessions-head')).toHaveText('Sessions on Sep 7');
+  await expect(box.getByTestId('agent-day-total')).toHaveText(/^\d+ h \d+ m$/);
   await expect(shown).toHaveCount(1);
-  await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
-  // The date shows, quietly, that it opens something.
+  await expect(card).toHaveCount(0);
+  // The date shows, quietly, that it opens something; a click does nothing,
+  // so the cursor stays an arrow.
   expect(
     await date.evaluate((element) => [
       getComputedStyle(element).cursor,
       getComputedStyle(element).textDecorationLine,
     ]),
-  ).toEqual(['pointer', 'underline']);
+  ).toEqual(['default', 'underline']);
   const link = box.getByRole('link', { name: `Open session ${id}, 23 minutes this day` });
   await expect(link).toHaveText('Session 000000000 h 23 m');
   await expect(link).toHaveAttribute('href', href);
@@ -611,7 +615,7 @@ test('in human + agent, hovering a date opens its sessions box, the rest of the 
   // Back onto the track: the box closes and the day's card returns.
   await page.mouse.move(...(await centre(today.locator('.xt-human-track'), 0.6)), { steps: 15 });
   await expect(box).toBeHidden();
-  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(card).toBeVisible();
   await expect(shown).toHaveCount(1);
   // And the date again, into the box, to open the session.
   await page.mouse.move(...(await centre(date)), { steps: 5 });
@@ -631,16 +635,16 @@ test('in human + agent, hovering a date opens its sessions box, the rest of the 
   await page.keyboard.press('Shift+Tab');
   await page.keyboard.press('Tab');
   await expect(today).toBeFocused();
-  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(card).toBeVisible();
   await expect(box).toBeHidden();
   await page.keyboard.press('Enter');
   await expect(link).toBeFocused();
-  await expect(page.getByTestId('agent-day-total')).toHaveCount(0);
+  await expect(card).toHaveCount(0);
   await expect(shown).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(today).toBeFocused();
   await expect(box).toBeHidden();
-  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(card).toBeVisible();
   await page.keyboard.press('ArrowUp');
   await expect(days.nth(-2)).toBeFocused();
   await page.keyboard.press('ArrowDown');
@@ -688,7 +692,7 @@ test('in human + agent, a click on a date neither pins nor toggles its sessions 
     steps: 15,
   });
   await expect(boxes).toHaveCount(0);
-  await expect(shown.getByTestId('agent-day-total')).toBeVisible();
+  await expect(page.getByTestId('day-card')).toBeVisible();
   await expect(shown).toHaveCount(1);
   // And a click on a date, then off the timeline: nothing stays open.
   await page.mouse.move(...(await centre(date('Sep 7'))), { steps: 5 });

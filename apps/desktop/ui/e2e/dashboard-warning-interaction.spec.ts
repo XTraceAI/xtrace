@@ -56,7 +56,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.mouse.move(track.x + track.width * 0.3, track.y + track.height / 2);
     await expect(tip).toHaveCount(0);
     await expect(page.getByTestId('day-warning')).toHaveCount(0);
-    await expect(page.getByTestId('agent-day-total')).toBeVisible();
+    await expect(page.getByTestId('day-card')).toBeVisible();
     expect(errors).toEqual([]);
   });
 }

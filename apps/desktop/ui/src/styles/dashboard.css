@@ -774,6 +774,18 @@
   border-top: 1px dashed var(--divider);
   color: var(--ink);
 }
+/* Straight under the day's name, the head's own line is enough. */
+.xt-effort-tip-head + .xt-effort-tip-row[data-pointer] {
+  margin-top: 0;
+  padding-top: 2px;
+  border-top: 0;
+}
+/* A date's box: the day's lines, then its sessions under their own head. */
+.xt-day-summary {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 8px;
+}
 .xt-effort-tip-note {
   padding-top: 2px;
   color: var(--secondary);
