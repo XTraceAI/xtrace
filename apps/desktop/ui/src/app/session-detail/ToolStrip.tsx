@@ -71,10 +71,15 @@ const TASK_STATUS: Record<TaskStatus, { mark: string; word: string }> = {
  * (`transcript_dto::task_list`); this only draws them.
  */
 export function TaskChecklist({ items }: { items: readonly TaskListItem[] }) {
+  const headingId = useId();
   return (
     <div className="xt-task-list" data-payload="input">
-      <span className="xt-tx-code-label">Tasks</span>
-      <ul aria-label="Tasks">
+      <span className="xt-tx-code-label" id={headingId}>
+        Tasks
+      </span>
+      {/* Bounded like the input box it replaces, and focusable for the same reason
+          (`CodeSurface`): WebKit puts no plain scroll box in the tab order. */}
+      <ul aria-labelledby={headingId} tabIndex={0}>
         {items.map((item, index) => {
           const status = TASK_STATUS[item.status];
           return (
@@ -83,7 +88,7 @@ export function TaskChecklist({ items }: { items: readonly TaskListItem[] }) {
                 {status.mark}
               </span>
               <span className="xt-task-text">{item.text}</span>
-              <span className="xt-task-status">{` (${status.word})`}</span>
+              <span className="sr-only">{` (${status.word})`}</span>
             </li>
           );
         })}

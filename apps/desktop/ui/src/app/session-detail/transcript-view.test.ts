@@ -101,6 +101,7 @@ it('reads an MCP tool name after its server, whatever the server is called', () 
   expect(humanizeToolName('mcp__ccd_turn__update_plan')).toBe('Update plan');
   expect(humanizeToolName('mcp__plugin_memhub_memhub__link_pr')).toBe('Link pr');
   expect(humanizeToolName('mcp__claude-in-chrome__navigate')).toBe('Navigate');
+  expect(humanizeToolName('mcp__a__b__c')).toBe('C');
   expect(humanizeToolName('mcp__memhub__search_memory')).toBe('Search memory');
   // Names that are not MCP names keep their old reading.
   expect(humanizeToolName('Bash')).toBe('Bash');

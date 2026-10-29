@@ -82,3 +82,37 @@ for (const scheme of ['light', 'dark'] as const) {
     });
   }
 }
+
+for (const scheme of ['light', 'dark'] as const) {
+  test(`a long plan update in the warning window is a bounded checklist, ${scheme}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1120, height: 850 });
+    await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
+    await page.goto('/e2e/warning-context.html?plan');
+    const context = page.getByTestId('warning-context');
+    const card = context.locator('.xt-tool-card[data-tool="mcp__ccd_turn__update_plan"]');
+    await expect(card).toBeVisible();
+    await expect(card.locator('.xt-tool-name')).toHaveText('Update plan');
+    const list = card.getByRole('list', { name: 'Tasks' });
+    await expect(list.getByRole('listitem')).toHaveCount(40);
+    await expect(card).not.toContainText('"items"');
+    // Capped like the input box it replaces: 16rem, scrolling inside the card.
+    const box = await list.evaluate((node) => ({
+      client: node.clientHeight,
+      scroll: node.scrollHeight,
+      max: getComputedStyle(node).maxHeight,
+    }));
+    expect(box.max).toBe('256px');
+    expect(box.client).toBeLessThanOrEqual(256);
+    expect(box.scroll).toBeGreaterThan(box.client);
+    if (process.env.CONTEXT_SHOTS)
+      await card.screenshot({
+        path: `${process.env.CONTEXT_SHOTS}/warning-plan-card-${scheme}.png`,
+      });
+    // Reachable from the keyboard, so the hidden steps are too.
+    await list.focus();
+    await page.keyboard.press('End');
+    await expect.poll(() => list.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  });
+}

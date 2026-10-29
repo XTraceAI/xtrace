@@ -337,9 +337,11 @@ const TASK_LISTS: [(&str, &str, &[&str]); 3] = [
 ];
 
 /// Fields a task may carry beside its words and status that a checklist
-/// leaves out: Claude Code's present-tense `activeForm`, and the `id` and
-/// `priority` its older versions wrote.
-const TASK_EXTRA_FIELDS: [&str; 3] = ["activeForm", "id", "priority"];
+/// leaves out: Claude Code's present-tense `activeForm`, the `id` and
+/// `priority` its older versions wrote, and the `session` Claude Desktop names
+/// when a step is handed to another session (a string, or the task is not
+/// read).
+const TASK_EXTRA_FIELDS: [&str; 4] = ["activeForm", "id", "priority", "session"];
 
 /// Whether a tool call's input is a task list, and its tasks if so.
 ///
@@ -381,7 +383,10 @@ pub fn task_list(input: &Value) -> Option<Vec<TaskListItem>> {
             let task = task.as_object()?;
             if !task.keys().all(|key| {
                 key == words || key == "status" || TASK_EXTRA_FIELDS.contains(&key.as_str())
-            }) {
+            }) || task
+                .get("session")
+                .is_some_and(|session| !session.is_string())
+            {
                 return None;
             }
             let text = task.get(*words)?.as_str()?;
@@ -960,6 +965,22 @@ mod tests {
         );
         // Without a scope too.
         assert!(tasks(json!({"items": [{"content": "a", "status": "pending"}]})).is_some());
+        // A step handed to another session names it; the checklist leaves it out.
+        assert_eq!(
+            tasks(json!({"items": [
+                {"content": "Fix the hover", "status": "completed"},
+                {"content": "Build the runner", "status": "in_progress", "session": "runner"},
+            ], "scope": "continuation"})),
+            Some(vec![
+                ("Fix the hover".into(), TaskStatus::Done),
+                ("Build the runner".into(), TaskStatus::InProgress),
+            ])
+        );
+        // A session that is not a name is not one.
+        assert_eq!(
+            tasks(json!({"items": [{"content": "a", "status": "pending", "session": 1}]})),
+            None
+        );
         // A scope that is not a word is not this tool's scope.
         assert_eq!(
             tasks(json!({"items": [{"content": "a", "status": "pending"}], "scope": 1})),

@@ -100,6 +100,14 @@ it('draws a task list as a checklist in place of its JSON, in a transcript and a
     ]);
     expect(container.textContent).not.toContain('"items"');
     expect(container.querySelector('[data-payload="input"] pre')).toBeNull();
+    // Named once, by its visible heading, and reachable from the keyboard when it scrolls.
+    const list = screen.getByRole('list', { name: 'Tasks' });
+    expect(list.hasAttribute('aria-label')).toBe(false);
+    expect(document.getElementById(list.getAttribute('aria-labelledby')!)!.textContent).toBe(
+      'Tasks',
+    );
+    expect(list.tabIndex).toBe(0);
+    expect(list.querySelectorAll('.sr-only')).toHaveLength(3);
     unmount();
   }
 });

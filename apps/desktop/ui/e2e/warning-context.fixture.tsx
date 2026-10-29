@@ -31,6 +31,30 @@ if (params.has('omitted'))
     failed: true,
     parts: [{ kind: 'text', text: 'Synthetic tool failure. No linked call name is available.' }],
   });
+// `?plan`: the flagged call is a long plan update, as the native side sends
+// it — the input as recorded and its tasks read out (`transcript_dto::task_list`).
+if (params.has('plan')) {
+  const tasks = Array.from({ length: 40 }, (_, n) => ({
+    content: `Synthetic step ${n + 1}`,
+    status: n < 12 ? 'completed' : n === 12 ? 'in_progress' : 'pending',
+  }));
+  status.records[2]!.blocks.push({
+    kind: 'tool_call',
+    index: 98,
+    name: 'mcp__ccd_turn__update_plan',
+    call_id: 'plan-call',
+    input: { kind: 'json', value: { items: tasks, scope: 'continuation' } },
+    task_list: tasks.map((task) => ({
+      text: task.content,
+      status:
+        task.status === 'completed'
+          ? 'done'
+          : task.status === 'pending'
+            ? 'not_started'
+            : 'in_progress',
+    })),
+  });
+}
 // The person's message an admitted mistake answers, kept by the native side
 // ahead of the reply's neighbours: right before them (`lead-adjacent`), or
 // with an agent step between that the excerpt leaves out (`lead`).
@@ -43,7 +67,7 @@ if (params.has('lead')) {
   });
   status.record_ranges = [{ start: 0, end: status.records.length }];
 }
-const block = params.has('omitted') ? 99 : null;
+const block = params.has('omitted') ? 99 : params.has('plan') ? 98 : null;
 const calls = { reads: [] as unknown[][], cancels: [] as string[] };
 Object.defineProperty(source, 'sessionWarningContext', {
   value: async (...args: unknown[]): Promise<SessionExcerptStatus> => {
