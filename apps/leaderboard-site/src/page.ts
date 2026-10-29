@@ -129,14 +129,31 @@ function rocket(pixelSize: number): string {
   );
 }
 
-// The XTrace mark (the app's sidebar logo) as inline SVG.
-const LOGO =
-  '<svg width="22" height="22" viewBox="0 0 3 3" aria-hidden="true" focusable="false">' +
+// The XTrace mark (the app's sidebar logo), drawn on a 3×3 grid. The header
+// logo and public/favicon.svg both draw exactly this; a test keeps them equal.
+export const LOGO_MARK =
   '<defs><linearGradient id="xg" x1="1" y1="0" x2="0" y2="1">' +
   '<stop offset="0" stop-color="#7F8CFF"/><stop offset="1" stop-color="#A35CFF"/></linearGradient>' +
   '<mask id="xm"><rect width="3" height="3" fill="#fff"/>' +
   '<path d="M1 1V0A1 1 0 0 1 2 1Z M1 1H0A1 1 0 0 0 1 2Z M2 2V1A1 1 0 0 1 3 2Z M2 2H1A1 1 0 0 0 2 3Z" fill="#000"/>' +
-  '</mask></defs><rect width="3" height="3" rx="0.42" fill="url(#xg)" mask="url(#xm)"/></svg>';
+  '</mask></defs><rect width="3" height="3" rx="0.42" fill="url(#xg)" mask="url(#xm)"/>';
+
+const LOGO = `<svg width="22" height="22" viewBox="0 0 3 3" aria-hidden="true" focusable="false">${LOGO_MARK}</svg>`;
+
+/** The tab and home-screen icons in public/, as the page's head links them. */
+export const PAGE_ICONS = [
+  { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+  { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' },
+  { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
+] as const;
+
+const ICON_LINKS = PAGE_ICONS.map(
+  (icon) =>
+    `<link rel="${icon.rel}" href="${icon.href}"` +
+    ('type' in icon ? ` type="${icon.type}"` : '') +
+    ('sizes' in icon ? ` sizes="${icon.sizes}"` : '') +
+    '>',
+).join('\n');
 
 // The stepped hill along the bottom: column heights on an 8-step grid.
 const HILL_HEIGHTS = [
@@ -466,6 +483,7 @@ export function renderPage(rows: ListedRow[]): string {
 <title>XTrace Leaderboard</title>
 <meta name="description" content="Leverage over the last 7 days, shared by people who opted in from the XTrace app.">
 <meta name="theme-color" content="#07071a">
+${ICON_LINKS}
 <link rel="preload" href="${PAGE_FONT_PATH}" as="font" type="font/ttf" crossorigin>
 <style>${STYLE}</style>
 </head>
@@ -506,7 +524,7 @@ export function pageResponse(rows: ListedRow[]): Response {
       'cache-control': PAGE_CACHE_CONTROL,
       'x-content-type-options': 'nosniff',
       'content-security-policy':
-        "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     },
   });
 }

@@ -13,6 +13,7 @@ import {
 } from '../src/local.js';
 import { consoleMailer } from '../src/mail.js';
 import { installApp } from '../src/runtime.js';
+import { PAGE_ICONS } from '../src/page.js';
 import { existsSync, readFileSync } from 'node:fs';
 
 let server: Server;
@@ -313,6 +314,20 @@ test('files in public/ are served like Vercel serves them, and nothing outside i
   assert.equal(license.status, 200);
   assert.equal(license.headers.get('content-type'), 'text/plain; charset=utf-8');
   assert.match(await license.text(), /SIL OPEN FONT LICENSE/);
+  // Every icon the page links is served with its own type and its exact bytes.
+  for (const icon of PAGE_ICONS) {
+    assert.ok(page.includes(`<link rel="${icon.rel}" href="${icon.href}"`), icon.href);
+    const served = await fetch(`${origin}${icon.href}`);
+    assert.equal(served.status, 200, icon.href);
+    assert.equal(
+      served.headers.get('content-type'),
+      icon.href.endsWith('.svg') ? 'image/svg+xml' : 'image/png',
+    );
+    assert.deepEqual(
+      Buffer.from(await served.arrayBuffer()),
+      readFileSync(new URL(`../public${icon.href}`, import.meta.url)),
+    );
+  }
   const robots = await fetch(`${origin}/robots.txt`);
   assert.equal(robots.status, 200);
   assert.equal(robots.headers.get('content-type'), 'text/plain; charset=utf-8');

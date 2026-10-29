@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { escapeHtml, formatLeverage, ordinal, PAGE_FONT_PATH } from '../src/page.js';
+import { escapeHtml, formatLeverage, LOGO_MARK, ordinal, PAGE_FONT_PATH } from '../src/page.js';
 import {
   HOUR,
   harness,
@@ -225,14 +225,14 @@ describe('GET /', () => {
     assert.ok(!/<script/i.test(html));
     assert.ok(!/\son[a-z]+=/i.test(html), 'no inline event handlers');
     assert.ok(!/\ssrc=/i.test(html), 'no src attributes');
-    // The only thing the page loads is its own font.
+    // The only things the page loads are its own icons and font.
     assert.deepEqual(
       [...html.matchAll(/url\("([^"]*)"\)/g)].map((m) => m[1]),
       [PAGE_FONT_PATH],
     );
     assert.deepEqual(
       [...html.matchAll(/<link [^>]*href="([^"]*)"/g)].map((m) => m[1]),
-      [PAGE_FONT_PATH],
+      ['/favicon.svg', '/favicon-32.png', '/apple-touch-icon.png', PAGE_FONT_PATH],
     );
     // Links people can follow are fine; nothing else points at another site.
     const elsewhere = [...html.matchAll(/https?:\/\/[^"\s)]+/g)].map((m) => m[0]);
@@ -269,7 +269,7 @@ describe('GET /', () => {
     const { response } = await page();
     assert.equal(
       response.headers.get('content-security-policy'),
-      "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
   });
 
@@ -393,4 +393,12 @@ describe('GET /', () => {
     assert.equal(formatLeverage(1000000000), '100000000.0X');
     assert.equal(escapeHtml(`a&b<c>d"e'f`), 'a&amp;b&lt;c&gt;d&quot;e&#39;f');
   });
+});
+
+test('the tab icon draws exactly the header logo', () => {
+  const favicon = readFileSync(new URL('../public/favicon.svg', import.meta.url), 'utf8');
+  assert.equal(
+    favicon,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 3">${LOGO_MARK}</svg>\n`,
+  );
 });

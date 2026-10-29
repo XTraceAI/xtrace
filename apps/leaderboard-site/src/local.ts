@@ -16,6 +16,8 @@ const publicDir = resolve(root, 'public');
 
 /** The static file types this site serves from public/. Anything else is 404 locally. */
 const STATIC_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
   '.ttf': 'font/ttf',
   '.txt': 'text/plain; charset=utf-8',
 };
