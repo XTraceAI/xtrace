@@ -116,7 +116,10 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
   });
   const page = await fetch(`${origin}/`);
   assert.equal(page.headers.get('cache-control'), 'public, s-maxage=60, stale-while-revalidate=60');
-  assert.match(await page.text(), /<td>Http_User<\/td><td>4\.5×<\/td>/);
+  assert.match(
+    await page.text(),
+    /<td class="name">Http_User<\/td>[\s\S]*?<span class="value">4\.5×<\/span>/,
+  );
 
   const big = await fetch(`${origin}/api/score`, {
     method: 'PUT',
