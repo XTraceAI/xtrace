@@ -88,6 +88,18 @@ const drawings = {
     </>
   ),
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  checkCircle: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12.5l2.8 2.8L16.2 9.5" />
+    </>
+  ),
+  question: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.4 9.2a2.7 2.7 0 0 1 5.2 1c0 1.8-2.6 2.4-2.6 3.8M12 17h.01" />
+    </>
+  ),
   close: <path d="M6 6l12 12M18 6L6 18" />,
 };
 

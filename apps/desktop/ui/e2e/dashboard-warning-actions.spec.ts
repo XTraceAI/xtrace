@@ -484,3 +484,37 @@ for (const theme of ['light', 'dark'] as const)
     await page.keyboard.press('Escape');
     await expect(coverage).toHaveCount(0);
   });
+
+// The warning window shows the same verdict callout as a session page: each
+// verdict's own sign beside the native words, in the window's right column.
+for (const theme of ['light', 'dark'] as const)
+  test(`Dashboard warning window shows each verdict as its own callout, ${theme}`, async ({
+    page,
+  }, testInfo) => {
+    await open(page, theme);
+    const target = await dot(page, 'lane');
+    await target.focus();
+    await page.keyboard.press('Enter');
+    const dialog = modal(page);
+    for (const [key, kind] of [
+      ['problem_no_suggestion', 'yes'],
+      ['nothing', 'no'],
+      ['not_sure', 'not_sure'],
+    ] as const) {
+      await dialog.getByRole('button', { name: /^Diagnose this warning:/ }).click();
+      await dialog.getByRole('button', { name: words.confirm }).click();
+      await expect(dialog.getByTestId('diagnosis-running')).toBeVisible();
+      await answer(page, key);
+      const verdict = dialog.getByTestId('diagnosis-real');
+      await expect(verdict).toHaveText(diagnosis.diagnoses[key].real_problem_text);
+      await expect(verdict).toHaveAttribute('data-value', kind);
+      await expect(verdict.locator('.xt-diagnosis-sign svg')).toBeVisible();
+      if (process.env.WARNING_SHOTS)
+        await page.screenshot({
+          path: `${process.env.WARNING_SHOTS}/verdict-window-${kind}-${testInfo.project.name}-${theme}.png`,
+        });
+      await dialog.getByRole('button', { name: words.close, exact: true }).click();
+      await expect(dialog.getByTestId('diagnosis-result')).toHaveCount(0);
+    }
+    expect((await calls(page)).runs).toHaveLength(3);
+  });

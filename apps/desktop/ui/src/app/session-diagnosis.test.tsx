@@ -168,6 +168,38 @@ it('runs one at a time, with Stop naming its own run', async () => {
   );
 });
 
+// One answer of each verdict kind, as Rust assembled it.
+const verdicts = [
+  ['problem_no_suggestion', 'yes'],
+  ['nothing', 'no'],
+  ['not_sure', 'not_sure'],
+] as const;
+
+it('draws each verdict as a callout with its own sign and the native words', async () => {
+  const signs = new Set<string>();
+  for (const [key, kind] of verdicts) {
+    const { source, answer } = withDiagnosis();
+    const row = await run(source);
+    await answer(answers[key]!);
+    const made = answers[key] as Extract<SessionDiagnosis, { state: 'diagnosed' }>;
+    expect(made.real_problem).toBe(kind);
+    const verdict = within(row).getByTestId('diagnosis-real');
+    expect(verdict.tagName).toBe('P');
+    expect(verdict.className).toBe('xt-diagnosis-verdict');
+    expect(verdict.dataset.value).toBe(kind);
+    // The words a reader hears are the native verdict, whole; the sign is
+    // hidden from them and has a different shape for each kind.
+    expect(verdict.textContent).toBe(made.real_problem_text);
+    const sign = verdict.querySelector('.xt-diagnosis-sign')!;
+    expect(sign.getAttribute('aria-hidden')).toBe('true');
+    expect(sign.querySelector('svg')).not.toBeNull();
+    signs.add(sign.innerHTML);
+    expect(verdict.firstElementChild).toBe(sign);
+    cleanup();
+  }
+  expect(signs.size).toBe(3);
+});
+
 it('shows a suggested skill whole, where it saves, and saves it on a click', async () => {
   const { source, controls, answer } = withDiagnosis();
   const row = await run(source);

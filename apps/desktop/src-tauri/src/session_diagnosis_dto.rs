@@ -41,6 +41,10 @@ pub fn tool_name(tool: Tool) -> &'static str {
     }
 }
 
+/// The verdict's kind: whether the model found a problem. The screen draws
+/// the verdict's callout (its sign and colour) from this value alone and
+/// shows [`real_problem_text`] as its words; it never reads the words to
+/// tell the verdicts apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosisRealProblem {
@@ -750,6 +754,30 @@ mod tests {
         );
         assert!(suggestion_text(Suggestion::MakeSkill).contains("Save a skill"));
         assert!(suggestion_text(Suggestion::AddToClaudeMd).contains("Copy this line"));
+    }
+
+    #[test]
+    fn each_verdict_sends_its_own_kind_with_its_words() {
+        let kinds: Vec<_> = [RealProblem::Yes, RealProblem::No, RealProblem::NotSure]
+            .into_iter()
+            .map(|answer| {
+                (
+                    serde_json::to_value(DiagnosisRealProblem::from(answer)).unwrap(),
+                    real_problem_text(answer),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (serde_json::json!("yes"), "The model found a problem"),
+                (serde_json::json!("no"), "The model found no problem"),
+                (
+                    serde_json::json!("not_sure"),
+                    "The messages were not enough to tell"
+                ),
+            ]
+        );
     }
 
     #[test]
