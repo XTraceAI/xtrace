@@ -13,6 +13,11 @@ rank: number, nickname: string,
  */
 leverage_tenths: number, 
 /**
+ * The member's country as two uppercase letters (`US`), from the
+ * leaderboard; none when it is not known. The page shows its flag.
+ */
+country: string | null, 
+/**
  * This row is this Mac's membership: its nickname is the saved one,
  * ignoring case (the leaderboard keeps nicknames unique that way).
  */

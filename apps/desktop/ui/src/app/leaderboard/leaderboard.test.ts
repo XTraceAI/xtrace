@@ -1,6 +1,13 @@
 import { expect, it } from 'vitest';
 import { leverageText } from '../metric-format';
-import { leaderboardNumber, refusalField, refusalText, standingText } from './leaderboard';
+import {
+  countryFlag,
+  leaderboardNumber,
+  refusalField,
+  refusalText,
+  SHARED_FACTS,
+  standingText,
+} from './leaderboard';
 
 // The tenths Rust sends for these 7-day leverage values
 // (`written_tenths_round_the_stored_value_half_up` in dashboard.rs). From
@@ -52,4 +59,19 @@ it('shows the native answer as given', () => {
   expect(refusalField({ message: 'Taken.', field: 'nickname' })).toBe('nickname');
   expect(refusalField('plain words')).toBeNull();
   expect(refusalText(undefined)).toBe('The leaderboard could not be reached.');
+});
+
+it('writes a country code as its two regional-indicator letters', () => {
+  expect(countryFlag('US')).toBe('\u{1F1FA}\u{1F1F8}');
+  expect(countryFlag('GB')).toBe('🇬🇧');
+  expect(countryFlag('AZ')).toBe('\u{1F1E6}\u{1F1FF}');
+  expect(countryFlag('ZA')).toBe('\u{1F1FF}\u{1F1E6}');
+  expect([...countryFlag('JP')]).toHaveLength(2);
+});
+
+it('says that the country is public and where it comes from', () => {
+  expect(SHARED_FACTS[0]).toBe(
+    'Public: your nickname, 7-day leverage and country (from your IP address).',
+  );
+  expect(SHARED_FACTS).toContain('The site also sees your IP address and app version.');
 });

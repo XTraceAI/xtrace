@@ -133,7 +133,7 @@
 .xt-leaderboard-shared li + li {
   margin-top: 4px;
 }
-/* The public list: rank, nickname, 7-day leverage. */
+/* The public list: rank, flag and nickname, 7-day leverage. */
 .xt-leaderboard-table {
   width: 100%;
   border-collapse: collapse;
@@ -188,6 +188,10 @@
 .xt-leaderboard-table tr[data-you] td {
   background: var(--accent-tint);
   font-weight: 700;
+}
+/* The member's country flag, just before the nickname. */
+.xt-leaderboard-flag {
+  margin-right: 6px;
 }
 .xt-leaderboard-you {
   margin-left: 8px;

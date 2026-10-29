@@ -59,9 +59,9 @@ const joined: LeaderboardStatus = {
 const board: LeaderboardTable = {
   state: 'ok',
   rows: [
-    { rank: 1, nickname: 'grace', leverage_tenths: 412, is_you: false },
-    { rank: 2, nickname: 'ada', leverage_tenths: 123, is_you: true },
-    { rank: 3, nickname: 'linus', leverage_tenths: 90, is_you: false },
+    { rank: 1, nickname: 'grace', leverage_tenths: 412, country: 'US', is_you: false },
+    { rank: 2, nickname: 'ada', leverage_tenths: 123, country: 'GB', is_you: true },
+    { rank: 3, nickname: 'linus', leverage_tenths: 90, country: null, is_you: false },
   ],
   reason: null,
   refresh_after_seconds: null,
@@ -505,10 +505,17 @@ it('shows the public list under the membership, with your row marked', async () 
   expect(table.hasAttribute('aria-busy')).toBe(false);
   expect(screen.queryByTestId('leaderboard-sample')).toBeNull();
   expect(rowsOf(table)).toEqual([
-    ['🥇1', 'grace', '41.2×'],
-    ['🥈2', 'adaYou (this is you)', '12.3×'],
+    ['🥇1', '🇺🇸grace', '41.2×'],
+    ['🥈2', '🇬🇧adaYou (this is you)', '12.3×'],
     ['🥉3', 'linus', '9×'],
   ]);
+  // Each flag comes just before the nickname and is named by its country code;
+  // a member with no country has none.
+  expect(within(table).getByRole('img', { name: 'US' }).textContent).toBe('🇺🇸');
+  expect(within(table).getByRole('img', { name: 'GB' }).getAttribute('title')).toBe('GB');
+  expect(table.querySelectorAll('.xt-leaderboard-flag')).toHaveLength(2);
+  const linus = within(table).getByText('linus').closest('td')!;
+  expect(linus.querySelector('.xt-leaderboard-flag')).toBeNull();
   // The medals are decoration; assistive technology hears the rank alone.
   const medals = [...table.querySelectorAll('.xt-leaderboard-medal')];
   expect(medals.map((medal) => medal.getAttribute('aria-hidden'))).toEqual([
@@ -572,7 +579,7 @@ it('reads the public list again after an upload and after a rename', async () =>
   const before = leaderboard.table.mock.calls.length;
   leaderboard.table.mockResolvedValue({
     ...board,
-    rows: [{ rank: 1, nickname: 'ada', leverage_tenths: 500, is_you: true }],
+    rows: [{ rank: 1, nickname: 'ada', leverage_tenths: 500, country: null, is_you: true }],
   });
   act(() => source.emit(events.leaderboardChanged));
   await waitFor(() =>
@@ -594,7 +601,7 @@ it('reads the list once more when the native side says a change has left the cac
       .mockResolvedValueOnce({ ...board, refresh_after_seconds: 30 })
       .mockResolvedValue({
         ...board,
-        rows: [{ rank: 1, nickname: 'ada', leverage_tenths: 500, is_you: true }],
+        rows: [{ rank: 1, nickname: 'ada', leverage_tenths: 500, country: null, is_you: true }],
       });
     await mount(leaderboard);
     await screen.findByRole('table', { name: 'Public leaderboard' });

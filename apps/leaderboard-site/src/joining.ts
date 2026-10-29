@@ -54,12 +54,17 @@ export async function startJoin(
   return json(202, { pending_id: id });
 }
 
-/** Step 2. The body has been validated (code is 6 digits) and the limit counted. */
+/**
+ * Step 2. The body has been validated (code is 6 digits) and the limit counted.
+ * `country` is the request's country (see country.ts): saved on the member when
+ * known, and the stored one kept when it is null.
+ */
 export async function verifyJoin(
   { query, clock }: JoinContext,
   pendingId: string,
   code: string,
   nicknameOverride: Nickname | null,
+  country: string | null,
 ): Promise<Response> {
   const now = clock().toISOString();
   const codeHash = hashCode(code).toString('hex');
@@ -106,8 +111,9 @@ export async function verifyJoin(
   const { key, keyHashHex } = newKey();
   const signBackIn = async () => {
     const rows = await query(
-      `update members set key_hash = decode($1, 'hex') where email = $2 returning nickname`,
-      [keyHashHex, email],
+      `update members set key_hash = decode($1, 'hex'), country = coalesce($3, country)
+       where email = $2 returning nickname`,
+      [keyHashHex, email, country],
     );
     return rows[0] ? json(201, { key, nickname: rows[0].nickname, rejoined: true }) : null;
   };
@@ -115,11 +121,11 @@ export async function verifyJoin(
   const rejoined = await signBackIn();
   if (rejoined) return rejoined;
   const created = await query(
-    `insert into members (nickname, nickname_key, email, key_hash)
-     values ($1, $2, $3, decode($4, 'hex'))
+    `insert into members (nickname, nickname_key, email, key_hash, country)
+     values ($1, $2, $3, decode($4, 'hex'), $5)
      on conflict do nothing
      returning nickname`,
-    [nickname.nickname, nickname.nicknameKey, email, keyHashHex],
+    [nickname.nickname, nickname.nicknameKey, email, keyHashHex, country],
   );
   if (created[0]) return json(201, { key, nickname: created[0].nickname, rejoined: false });
   // This email may have joined in the meantime.

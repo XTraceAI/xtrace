@@ -1330,6 +1330,8 @@ fn the_public_list_is_read_while_joined_and_marks_the_member() {
             (4, "ada_2", 9, false),
         ]
     );
+    // This list names no country, so no row has one.
+    assert!(table.rows.iter().all(|row| row.country.is_none()));
     // An empty board is an empty list, not an error.
     rig.transport
         .reroute(|_| answer(200, json!({ "rows": [] })));
@@ -1341,6 +1343,64 @@ fn the_public_list_is_read_while_joined_and_marks_the_member() {
     // Nothing else was asked, and nothing changed.
     assert_eq!(rig.transport.seen().len(), 2);
     assert_eq!(rig.changes.load(Ordering::SeqCst), 0);
+}
+
+/// Each row carries the country the leaderboard gives. A missing, null or
+/// malformed country only means no flag: the row and the list still show.
+#[test]
+fn a_listed_country_is_kept_and_a_bad_or_missing_one_shows_no_flag() {
+    let rig = setup(
+        FakeHost::joined("ada", Some(1)),
+        FakeTransport::new(|_| {
+            answer(
+                200,
+                json!({ "rows": [
+                    { "rank": 1, "nickname": "grace", "leverage_tenths": 412, "country": "US" },
+                    { "rank": 2, "nickname": "ada", "leverage_tenths": 123, "country": "GB" },
+                    { "rank": 3, "nickname": "nobody", "leverage_tenths": 100 },
+                    { "rank": 4, "nickname": "nulled", "leverage_tenths": 90, "country": null },
+                    { "rank": 5, "nickname": "lower", "leverage_tenths": 80, "country": "us" },
+                    { "rank": 6, "nickname": "longer", "leverage_tenths": 70, "country": "USA" },
+                    { "rank": 7, "nickname": "short", "leverage_tenths": 60, "country": "U" },
+                    { "rank": 8, "nickname": "number", "leverage_tenths": 50, "country": 12 },
+                    { "rank": 9, "nickname": "object", "leverage_tenths": 40, "country": { "code": "US" } },
+                    { "rank": 10, "nickname": "markup", "leverage_tenths": 30, "country": "<b" },
+                    { "rank": 11, "nickname": "accent", "leverage_tenths": 20, "country": "ÉS" },
+                    { "rank": 12, "nickname": "nowhere", "leverage_tenths": 10, "country": "XX" },
+                ] }),
+            )
+        }),
+    );
+    let table = rig.service.table();
+    assert_eq!(table.state, LeaderboardTableState::Ok);
+    let countries: Vec<_> = table
+        .rows
+        .iter()
+        .map(|row| (row.nickname.as_str(), row.country.as_deref()))
+        .collect();
+    assert_eq!(
+        countries,
+        [
+            ("grace", Some("US")),
+            ("ada", Some("GB")),
+            ("nobody", None),
+            ("nulled", None),
+            ("lower", None),
+            ("longer", None),
+            ("short", None),
+            ("number", None),
+            ("object", None),
+            ("markup", None),
+            ("accent", None),
+            // XX means no country.
+            ("nowhere", None),
+        ]
+    );
+    assert!(table.rows[1].is_you);
+    // The page receives the country as a string or null.
+    let shown = serde_json::to_value(&table.rows[..3]).unwrap();
+    assert_eq!(shown[0]["country"], json!("US"));
+    assert_eq!(shown[2]["country"], Value::Null);
 }
 
 /// Before joining, and in a copy that may not send, nothing is asked.

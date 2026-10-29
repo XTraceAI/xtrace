@@ -28,7 +28,7 @@ after(async () => {
 const board = async () =>
   (
     (await readJson(await h.app.leaderboard.GET(request('GET', '/api/leaderboard')))) as {
-      rows: { rank: number; nickname: string; leverage_tenths: number }[];
+      rows: { rank: number; nickname: string; leverage_tenths: number; country: string | null }[];
     }
   ).rows;
 const page = async () => {
@@ -51,9 +51,13 @@ const openPlaces = (html: string) =>
   [...html.matchAll(/<tr data-empty aria-hidden="true"><td class="rank">([^<]*)<\/td>/g)].map(
     (m) => m[1],
   );
+/** The top line's labels and their text (the 1UP name sits in its own spans). */
 const hud = (html: string) =>
   Object.fromEntries(
-    [...html.matchAll(/<div><dt>([^<]*)<\/dt><dd>([^<]*)<\/dd><\/div>/g)].map((m) => [m[1], m[2]]),
+    [...html.matchAll(/<div><dt>([^<]*)<\/dt><dd>(.*?)<\/dd><\/div>/g)].map((m) => [
+      m[1],
+      m[2]!.replace(/<[^>]*>/g, ''),
+    ]),
   );
 const openLine = (html: string) => /<p class="open">([^<]*)<\/p>/.exec(html)?.[1];
 
@@ -63,7 +67,9 @@ describe('the 48-hour rule', () => {
     await score(h.app, key, 20);
 
     h.advance(48 * HOUR);
-    assert.deepEqual(await board(), [{ rank: 1, nickname: 'clocked', leverage_tenths: 20 }]);
+    assert.deepEqual(await board(), [
+      { rank: 1, nickname: 'clocked', leverage_tenths: 20, country: null },
+    ]);
     assert.deepEqual(await standing(key), { ...(await standing(key)), listed: true, rank: 1 });
     assert.deepEqual(pageNames((await page()).html), [['clocked', '2.0X']]);
 
@@ -82,7 +88,9 @@ describe('the 48-hour rule', () => {
 
     // A new score brings them back.
     await score(h.app, key, 21);
-    assert.deepEqual(await board(), [{ rank: 1, nickname: 'clocked', leverage_tenths: 21 }]);
+    assert.deepEqual(await board(), [
+      { rank: 1, nickname: 'clocked', leverage_tenths: 21, country: null },
+    ]);
   });
 
   test('members with no number are never listed, however fresh', async () => {
@@ -99,7 +107,9 @@ describe('the 48-hour rule', () => {
     h.advance(49 * HOUR);
     const fresh = await join(h, 'fresh');
     await score(h.app, fresh, 5);
-    assert.deepEqual(await board(), [{ rank: 1, nickname: 'fresh', leverage_tenths: 5 }]);
+    assert.deepEqual(await board(), [
+      { rank: 1, nickname: 'fresh', leverage_tenths: 5, country: null },
+    ]);
     assert.equal((await standing(fresh)).rank, 1);
   });
 });
@@ -122,13 +132,13 @@ describe('ranking', () => {
       await score(h.app, key, tenths);
     }
     const expected = [
-      { rank: 1, nickname: 'dave', leverage_tenths: 300 },
-      { rank: 2, nickname: 'alice', leverage_tenths: 120 },
-      { rank: 2, nickname: 'Bob', leverage_tenths: 120 },
-      { rank: 2, nickname: 'carl', leverage_tenths: 120 },
-      { rank: 5, nickname: '_under', leverage_tenths: 50 },
-      { rank: 5, nickname: 'Zed', leverage_tenths: 50 },
-      { rank: 7, nickname: 'Eve', leverage_tenths: 0 },
+      { rank: 1, nickname: 'dave', leverage_tenths: 300, country: null },
+      { rank: 2, nickname: 'alice', leverage_tenths: 120, country: null },
+      { rank: 2, nickname: 'Bob', leverage_tenths: 120, country: null },
+      { rank: 2, nickname: 'carl', leverage_tenths: 120, country: null },
+      { rank: 5, nickname: '_under', leverage_tenths: 50, country: null },
+      { rank: 5, nickname: 'Zed', leverage_tenths: 50, country: null },
+      { rank: 7, nickname: 'Eve', leverage_tenths: 0, country: null },
     ];
     assert.deepEqual(await board(), expected);
     for (const row of expected)

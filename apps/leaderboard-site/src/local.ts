@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { COUNTRY_HEADER } from './country.js';
 import { applySchema, type Query } from './db.js';
 import { fail } from './http.js';
 
@@ -99,9 +100,11 @@ function toRequest(incoming: IncomingMessage, origin: string): Request {
     if (Array.isArray(value)) for (const item of value) headers.append(name, item);
     else if (value !== undefined) headers.set(name, value);
   }
-  // Like Vercel's proxy, the server, not the client, says who is calling.
+  // Like Vercel's proxy, the server, not the client, says who is calling and
+  // where from. The local server knows no country, so none is sent.
   headers.delete('x-real-ip');
   headers.delete('x-forwarded-for');
+  headers.delete(COUNTRY_HEADER);
   headers.set('x-vercel-forwarded-for', incoming.socket.remoteAddress ?? 'unknown');
   const method = incoming.method ?? 'GET';
   const hasBody = method !== 'GET' && method !== 'HEAD';

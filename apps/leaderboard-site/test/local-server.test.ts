@@ -44,7 +44,7 @@ after(async () => {
 
 test('schema.sql can be applied again without changes', async () => {
   const { db, query } = await openLocalDatabase();
-  assert.equal(await applySchema(query, readSchema()), 5);
+  assert.equal(await applySchema(query, readSchema()), 7);
   const indexes = (await query(`select indexname from pg_indexes where schemaname = 'public'`)).map(
     (row) => String(row.indexname),
   );
@@ -64,7 +64,31 @@ test('schema.sql can be applied again without changes', async () => {
       'leverage_tenths',
       'score_updated_at',
       'created_at',
+      'country',
     ],
+  );
+  for (const country of ['us', 'USA', 'U', 'ÉS', '', 'XX'])
+    await assert.rejects(
+      query(
+        `insert into members (nickname, nickname_key, email, key_hash, country) values ('c','c','c',decode('03','hex'),$1)`,
+        [country],
+      ),
+      /check constraint/,
+      country,
+    );
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country) values ('d','d','d',decode('04','hex'),'NZ')`,
+  );
+  // Running it again keeps the column, its check and the stored country.
+  assert.equal(await applySchema(query, readSchema()), 7);
+  assert.deepEqual(await query(`select country from members where nickname = 'd'`), [
+    { country: 'NZ' },
+  ]);
+  await assert.rejects(
+    query(
+      `insert into members (nickname, nickname_key, email, key_hash, country) values ('e','e','e',decode('05','hex'),'nz')`,
+    ),
+    /check constraint/,
   );
   await assert.rejects(
     query(
@@ -75,6 +99,87 @@ test('schema.sql can be applied again without changes', async () => {
   await query(
     `insert into members (nickname, nickname_key, email, key_hash, leverage_tenths) values ('b','b','b',decode('02','hex'),1000000000)`,
   );
+  await db.close();
+});
+
+/** The check constraints on members that mention the country. */
+const countryChecks = async (query: Query) =>
+  (
+    await query(
+      `select conname, pg_get_constraintdef(oid) as definition from pg_constraint
+       where conrelid = 'members'::regclass and contype = 'c'
+         and pg_get_constraintdef(oid) like '%country%'`,
+    )
+  ).map((row) => String(row.conname));
+
+test('rerunning schema.sql on a table with rows keeps them and one country check', async () => {
+  const { db, query } = await openLocalDatabase();
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country, leverage_tenths)
+     values ('kept','kept','kept@example.com',decode('10','hex'),'SE', 42),
+            ('blank','blank','blank@example.com',decode('11','hex'),null, 7)`,
+  );
+  for (let run = 0; run < 3; run += 1) await applySchema(query, readSchema());
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  assert.deepEqual(
+    await query('select nickname, country, leverage_tenths from members order by nickname'),
+    [
+      { nickname: 'blank', country: null, leverage_tenths: 7 },
+      { nickname: 'kept', country: 'SE', leverage_tenths: 42 },
+    ],
+  );
+  // XX means no country, so the database refuses it as a stored value.
+  await assert.rejects(
+    query(`update members set country = 'XX' where nickname = 'kept'`),
+    /check constraint/,
+  );
+  await db.close();
+});
+
+test("schema.sql replaces the first version's country check rather than adding a second", async () => {
+  const { db, query } = await openLocalDatabase();
+  // The table as the first version of this column left it: an inline check, no XX rule.
+  await query('alter table members drop column country');
+  await query(
+    `alter table members add column country text
+       check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$')`,
+  );
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country)
+     values ('old','old','old@example.com',decode('12','hex'),'NL')`,
+  );
+  await applySchema(query, readSchema());
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  assert.deepEqual(await query('select country from members'), [{ country: 'NL' }]);
+  await assert.rejects(query(`update members set country = 'XX'`), /check constraint/);
+  await db.close();
+});
+
+test('a country check that cannot be added again leaves the previous one in place', async () => {
+  const { db, query } = await openLocalDatabase();
+  // The first version's inline check, which allowed XX, and a stored XX row.
+  await query('alter table members drop column country');
+  await query(
+    `alter table members add column country text
+       check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$')`,
+  );
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country)
+     values ('xx','xx','xx@example.com',decode('13','hex'),'XX')`,
+  );
+  // The new check refuses the stored XX, so the migration fails...
+  await assert.rejects(applySchema(query, readSchema()), /check constraint/);
+  // ...and the drop is undone with it: the old check is still there and still refuses.
+  assert.deepEqual(await countryChecks(query), ['members_country_check']);
+  await assert.rejects(
+    query(
+      `insert into members (nickname, nickname_key, email, key_hash, country)
+       values ('bad','bad','bad@example.com',decode('14','hex'),'zz!')`,
+    ),
+    /check constraint/,
+  );
+  assert.deepEqual(await query('select country from members'), [{ country: 'XX' }]);
   await db.close();
 });
 
@@ -89,9 +194,12 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
   const line = printed.at(-1) ?? '';
   const match = /^code for http@example\.com: ([0-9]{6})$/.exec(line);
   assert.ok(match, 'the local server prints the code');
+  // A client cannot claim a country: the local server drops the header, as no
+  // proxy here has looked the IP up.
+  const claimed = { 'x-vercel-ip-country': 'FR' };
   const verified = await fetch(`${origin}/api/join/verify`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...claimed, 'content-type': 'application/json' },
     body: JSON.stringify({ pending_id, code: match[1] }),
   });
   assert.equal(verified.status, 201);
@@ -101,7 +209,7 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
 
   const scored = await fetch(`${origin}/api/score`, {
     method: 'PUT',
-    headers: { ...auth, 'content-type': 'application/json' },
+    headers: { ...auth, ...claimed, 'content-type': 'application/json' },
     body: JSON.stringify({ leverage_tenths: 45 }),
   });
   assert.equal(scored.status, 204);
@@ -111,8 +219,9 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
     unknown
   >;
   assert.equal(mine.rank, 1);
+  assert.equal(mine.country, null);
   assert.deepEqual(await (await fetch(`${origin}/api/leaderboard`)).json(), {
-    rows: [{ rank: 1, nickname: 'Http_User', leverage_tenths: 45 }],
+    rows: [{ rank: 1, nickname: 'Http_User', leverage_tenths: 45, country: null }],
   });
   const page = await fetch(`${origin}/`);
   assert.equal(page.headers.get('cache-control'), 'public, s-maxage=60, stale-while-revalidate=60');

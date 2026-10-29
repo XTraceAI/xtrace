@@ -41,10 +41,10 @@ const member = (nickname: string): LeaderboardStatus => ({
 });
 let status = params.get('joined') === '1' ? member('ada') : notJoined;
 const others = [
-  { rank: 1, nickname: 'grace', leverage_tenths: 412 },
-  { rank: 3, nickname: 'linus', leverage_tenths: 90 },
-  { rank: 3, nickname: 'margaret', leverage_tenths: 90 },
-  { rank: 5, nickname: 'barbara', leverage_tenths: 41 },
+  { rank: 1, nickname: 'grace', leverage_tenths: 412, country: 'US' },
+  { rank: 3, nickname: 'linus', leverage_tenths: 90, country: 'FI' },
+  { rank: 3, nickname: 'margaret', leverage_tenths: 90, country: null },
+  { rank: 5, nickname: 'barbara', leverage_tenths: 41, country: 'DE' },
 ];
 /** The list as the native side answers it: the member's row marked by nickname. */
 const board = (): LeaderboardTable => {
@@ -64,7 +64,7 @@ const board = (): LeaderboardTable => {
     };
   if (params.get('board') === 'empty')
     return { state: 'ok', rows: [], reason: null, refresh_after_seconds: null };
-  const you = { rank: 2, nickname: status.nickname!, leverage_tenths: 123 };
+  const you = { rank: 2, nickname: status.nickname!, leverage_tenths: 123, country: 'GB' };
   const rows = [others[0], you, ...others.slice(1)].map((row) => ({
     ...row,
     is_you: row.nickname.toLowerCase() === status.nickname!.toLowerCase(),

@@ -31,3 +31,16 @@ create table if not exists rate_counters (
 -- The hourly cleanup deletes by these columns.
 create index if not exists rate_counters_window_start on rate_counters (window_start);
 create index if not exists pending_joins_expires_at on pending_joins (expires_at);
+
+-- Added 2026-10-29: the country Vercel reports for the member's IP address (never the IP itself).
+-- Null when it was never known. Kept when a later request's country is unknown.
+alter table members add column if not exists country text;
+-- The same rule as isCountryCode in src/country.ts: two uppercase ASCII letters, never XX.
+-- Dropped and added again on every run, so each run leaves exactly this one check (this
+-- name is also the one Postgres gave the first version's inline check, which it replaces).
+-- One statement, so it is all or nothing: if a stored row breaks the new check, the add
+-- fails and the old check stays in place.
+alter table members
+  drop constraint if exists members_country_check,
+  add constraint members_country_check
+    check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$' and country <> 'XX');
