@@ -752,7 +752,11 @@ function Row({
       <b>{row.total ?? 'unknown'}</b>
     </span>
   );
-  /** The whole day's lines: the same wherever the pointer is on it. */
+  /**
+   * The whole day's lines: the same wherever the pointer is on it. With
+   * agents the times you worked are left to the bands; without, they are the
+   * card.
+   */
   const daySummary = (
     <>
       {dayHead}
@@ -761,15 +765,16 @@ function Row({
           {row.total === null ? 'Could not tell which messages a person sent' : 'No messages'}
         </span>
       )}
-      {row.bars.map((bar, index) => (
-        <span key={index} className="xt-effort-tip-row">
-          <span>{bar.text}</span>
-          <em>{bar.tick ? 'one message' : ''}</em>
-        </span>
-      ))}
+      {!paired &&
+        row.bars.map((bar, index) => (
+          <span key={index} className="xt-effort-tip-row">
+            <span>{bar.text}</span>
+            <em>{bar.tick ? 'one message' : ''}</em>
+          </span>
+        ))}
       {paired && (
         <>
-          <span className="xt-effort-tip-divider" />
+          {row.bars.length === 0 && <span className="xt-effort-tip-divider" />}
           <span className="xt-effort-tip-row" data-agent="">
             <span>Agent time</span>
             <b data-testid="agent-day-total">{line ? line.total : 'unknown'}</b>

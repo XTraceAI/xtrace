@@ -393,12 +393,13 @@ it('human + agent: a taller quarter than the scale is drawn at the top', async (
 it('human + agent: the date’s box has the day’s lines; the day card names the day and the quarter under the pointer', async () => {
   await mountPaired(paired());
   const last = screen.getAllByTestId('human-day').at(-1)!;
-  // The date's box: the day's times, agent time, the busiest quarter and
-  // leverage, above its sessions.
+  // The date's box: agent time, the busiest quarter and leverage, above its
+  // sessions; the times you worked are left to the bands.
   hoverDate(last);
   const summary = within(await sessionsBox()).getByTestId('day-summary');
   expect(summary.querySelector('.xt-effort-tip-head')!.textContent).toBe('Sep 70 h 30 m');
-  expect(within(summary).getByText('12:00 AM–12:30 AM')).toBeTruthy();
+  expect(within(summary).queryByText('12:00 AM–12:30 AM')).toBeNull();
+  expect(within(summary).queryByText('one message')).toBeNull();
   expect(within(summary).getByText('Busiest 15 min')).toBeTruthy();
   expect(within(summary).getByText('12:30 AM · 3 agents')).toBeTruthy();
   expect(within(summary).getByTestId('agent-day-total').textContent).toBe('1 h 18 m');
