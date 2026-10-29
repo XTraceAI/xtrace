@@ -985,17 +985,37 @@ impl Daily {
     }
 }
 
-/// The smallest leverage the screen writes as more than 1×. The screen
-/// writes leverage to one decimal, rounding the exact value half up
-/// (`Intl.NumberFormat`, `maximumFractionDigits: 1`), so every value under
-/// 1.05 reads `1×` or less and 1.05 itself (as stored, a hair above 1.05)
-/// reads `1.1×`. Comparing the same stored `f64` with this one keeps the
-/// flag and the written number in step.
-pub const ABOVE_EVEN_FROM: f64 = 1.05;
+/// Even (1×), in tenths.
+const EVEN_TENTHS: u64 = 10;
+
+/// A leverage as the screen writes it, in whole tenths: the one rounding
+/// rule for leverage. The screen writes leverage to one decimal with
+/// `Intl.NumberFormat` (`maximumFractionDigits: 1`), which rounds the
+/// shortest decimal that reads back as the stored `f64` half up: every value
+/// under 1.05 reads `1×` or less, 1.05 reads `1.1×` and 0.15 reads `0.2×`.
+/// Rust writes the same shortest decimal (`Display` for `f64`), so rounding
+/// its digits here makes the flag below, the leaderboard's number and the
+/// written number agree. None for a negative or non-finite value, or one
+/// beyond `u64` tenths.
+pub fn written_tenths(value: f64) -> Option<u64> {
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    let shortest = value.to_string();
+    let (whole, fraction) = shortest.split_once('.').unwrap_or((&shortest, ""));
+    let mut digits = fraction.bytes().map(|digit| u64::from(digit - b'0'));
+    let tenth = digits.next().unwrap_or(0);
+    let round_up = u64::from(digits.next().is_some_and(|hundredth| hundredth >= 5));
+    whole
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(10)?
+        .checked_add(tenth + round_up)
+}
 
 /// Is a day's leverage, as written, at or below even (1×)?
 fn at_or_below_even(value: f64) -> bool {
-    value < ABOVE_EVEN_FROM
+    written_tenths(value).is_none_or(|tenths| tenths <= EVEN_TENTHS)
 }
 
 /// The average number of agents running at the top of the scale the
@@ -1788,6 +1808,40 @@ mod leverage_tests {
         ] {
             assert_eq!(at_or_below_even(value), flag, "{value}");
         }
+    }
+
+    /// The screen's `Intl.NumberFormat` rounding: the shortest decimal of the
+    /// stored value, half up. `leaderboard.test.ts` checks the screen writes
+    /// these same pairs.
+    #[test]
+    fn written_tenths_round_the_stored_value_half_up() {
+        for (value, tenths) in [
+            (0.0, 0),
+            (0.04, 0),
+            (0.049_999_999_999_999, 0),
+            (0.05, 1),
+            (0.15, 2),
+            (0.25, 3),
+            (0.95, 10),
+            (1.0, 10),
+            (1.049_999_999_999_999_8, 10),
+            (1.05, 11),
+            (1.25, 13),
+            (2.675, 27),
+            (12.34, 123),
+            (12.35, 124),
+            (9999.95, 100_000),
+            (1e-7, 0),
+            (f64::MIN_POSITIVE, 0),
+        ] {
+            assert_eq!(written_tenths(value), Some(tenths), "{value}");
+        }
+        for value in [-0.1, f64::NAN, f64::INFINITY, f64::MAX] {
+            assert_eq!(written_tenths(value), None, "{value}");
+        }
+        // Agent hours over your hours, as the tile divides them.
+        assert_eq!(written_tenths(15.0 / 100.0), Some(2));
+        assert_eq!(written_tenths(105.0 / 100.0), Some(11));
     }
 
     #[test]

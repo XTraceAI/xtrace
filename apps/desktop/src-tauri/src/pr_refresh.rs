@@ -1059,9 +1059,19 @@ pub struct AutoCheckWorker {
 
 impl AutoCheckWorker {
     pub fn start(interval: Duration, run: impl Fn() -> bool + Send + 'static) -> Self {
+        Self::start_named("pr-auto-check", interval, run)
+    }
+
+    /// The same worker on a thread named `name`, for another hourly job
+    /// (the leaderboard upload).
+    pub fn start_named(
+        name: &str,
+        interval: Duration,
+        run: impl Fn() -> bool + Send + 'static,
+    ) -> Self {
         let (wake, woken) = mpsc::channel::<()>();
         let spawned = std::thread::Builder::new()
-            .name("pr-auto-check".into())
+            .name(name.into())
             .spawn(move || {
                 loop {
                     match woken.recv_timeout(interval) {

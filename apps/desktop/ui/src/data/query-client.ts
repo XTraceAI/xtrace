@@ -98,6 +98,8 @@ export const queryKeys = {
   humanBreak: ['settings', 'human-break'],
   /** The telemetry state; every change answers with the state read back. */
   telemetry: ['settings', 'telemetry'],
+  /** The leaderboard status; every change answers with the status read back. */
+  leaderboard: ['leaderboard', 'status'],
   /** The prefix of every Dashboard range, for a committed typing-speed change. */
   dashboards: ['metrics', 'dashboard'],
   /** Under `metrics`, so committed-data events refresh it like the Dashboard. */

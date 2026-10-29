@@ -231,7 +231,7 @@ test('synthetic annotated release tag resolves once through a fixed repository U
     release.source,
   );
   assert.deepEqual(requests, [
-    `https://api.github.com/repos/XTraceAI/xtrace-desktop/git/tags/${annotationSHA}`,
+    `https://api.github.com/repos/XTraceAI/xtrace/git/tags/${annotationSHA}`,
   ]);
   for (const changed of [
     { ...ref, ref: `refs/tags/${release.tag}-unrelated` },

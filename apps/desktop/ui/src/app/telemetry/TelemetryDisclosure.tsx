@@ -10,8 +10,7 @@ import '../../styles/telemetry.css';
  * The published list of every event and property: only the browser preview's
  * href. The app opens its own version's page through the native command.
  */
-export const TELEMETRY_DOC_URL =
-  'https://github.com/XTraceAI/xtrace-desktop/blob/main/TELEMETRY.md';
+export const TELEMETRY_DOC_URL = 'https://github.com/XTraceAI/xtrace/blob/main/TELEMETRY.md';
 
 /** At least this share of the disclosure must be on screen to count as shown. */
 const VISIBLE_SHARE = 0.5;

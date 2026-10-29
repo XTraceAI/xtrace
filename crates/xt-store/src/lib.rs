@@ -107,6 +107,7 @@ pub mod human_input;
 pub mod identity_reader;
 pub mod ingest;
 pub mod injected;
+pub mod leaderboard;
 pub mod measurement;
 mod migrations;
 pub use migrations::LATEST_SCHEMA_VERSION;

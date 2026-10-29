@@ -204,8 +204,8 @@ it('does not read again when routes without a status reader remount', async () =
   const { source } = nativeSource(async () => updating);
   mount('/prs', source);
   await waitFor(() => expect(trigger().textContent).toBe('index · live'));
-  // Sessions reads no index status, so it is left and re-entered (Rulebook and
-  // Leaderboard are disabled "soon" rows the sidebar cannot open).
+  // Sessions reads no index status, so it is left and re-entered (Rulebook is
+  // a disabled "soon" row the sidebar cannot open).
   for (const name of ['Sessions', 'Pull requests', 'Sessions']) {
     fireEvent.click(screen.getByRole('button', { name }));
     await act(async () => {});

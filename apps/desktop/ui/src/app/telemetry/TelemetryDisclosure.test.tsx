@@ -264,7 +264,7 @@ it('shows the pop-up as one flat checklist that never claims an opt-in', async (
   expect(buttons.join(' ')).not.toMatch(/accept|agree|allow|enable|keep/i);
   const link = within(shown).getByRole('link', { name: 'Full list' });
   expect(link.getAttribute('href')).toBe(
-    'https://github.com/XTraceAI/xtrace-desktop/blob/main/TELEMETRY.md',
+    'https://github.com/XTraceAI/xtrace/blob/main/TELEMETRY.md',
   );
   fireEvent.click(link);
   expect(controls.openEventList).toHaveBeenCalledOnce();

@@ -1547,6 +1547,156 @@ fn bounded_codex_pages_validate_positions_exact_tool_blocks_and_cancellation() {
     assert!(read(&wrong, &cursor, None).is_err());
 }
 
+/// A Codex Desktop fork under a new home: the parent's rollout, padded by
+/// `padding_mb` megabytes of unused events before the fork point, and the
+/// fork's own rollout, whose history reference points into the parent.
+fn fork_home(parent: &str, fork: &str, padding_mb: usize) -> tempfile::TempDir {
+    use std::io::Write;
+    let temp = tempfile::TempDir::new().unwrap();
+    let folder = temp.path().join(".codex/sessions/2026/10/25");
+    fs::create_dir_all(&folder).unwrap();
+    let line = |ordinal: usize, kind: &str, payload: serde_json::Value| {
+        format!(
+            "{}\n",
+            json!({"ordinal":ordinal,"timestamp":"2026-10-25T12:00:00Z","type":kind,"payload":payload})
+        )
+    };
+    let message = |role: &str, text: &str| json!({"type":"message","role":role,"content":[{"type":if role == "user" {"input_text"} else {"output_text"},"text":text}]});
+    let tokens = |inputs: u64, outputs: u64| json!({"type":"token_count","info":{"total_token_usage":{"input_tokens":inputs,"output_tokens":outputs}}});
+    let mut rows = vec![
+        line(
+            0,
+            "session_meta",
+            json!({"id":parent,"timestamp":"2026-10-25T12:00:00Z","originator":"codex_cli",
+                   "cwd":"/synthetic/project","history_mode":"paginated"}),
+        ),
+        line(1, "response_item", message("user", "parent ask")),
+        line(2, "response_item", message("assistant", "parent reply")),
+        line(3, "event_msg", tokens(100, 20)),
+    ];
+    for _ in 0..padding_mb {
+        rows.push(line(
+            rows.len(),
+            "event_msg",
+            json!({"type":"synthetic_unused_event","padding":"p".repeat(1024 * 1024)}),
+        ));
+    }
+    let cutoff_ordinal = rows.len();
+    let cutoff_bytes: usize = rows.iter().map(String::len).sum();
+    // Work the parent did after the fork point is not the fork's.
+    rows.push(line(
+        cutoff_ordinal,
+        "response_item",
+        message("user", "parent after fork"),
+    ));
+    let mut file =
+        fs::File::create(folder.join(format!("rollout-2026-10-25T12-00-00-{parent}.jsonl")))
+            .unwrap();
+    rows.iter()
+        .for_each(|row| file.write_all(row.as_bytes()).unwrap());
+    let start = cutoff_ordinal;
+    let fork_rows = [
+        line(
+            start,
+            "session_meta",
+            json!({"id":fork,"timestamp":"2026-10-25T13:00:00Z","originator":"codex_cli",
+                   "cwd":"/synthetic/project","history_mode":"paginated",
+                   "forked_from_id":parent,"forked_from_ordinal_exclusive":start,
+                   "history_base":{"thread_id":parent,"end_ordinal_exclusive":start,
+                                   "end_byte_offset":cutoff_bytes}}),
+        ),
+        line(start + 1, "response_item", message("user", "fork ask")),
+        line(
+            start + 2,
+            "response_item",
+            message("assistant", "fork reply"),
+        ),
+        line(start + 3, "event_msg", tokens(130, 27)),
+    ];
+    fs::write(
+        folder.join(format!("rollout-2026-10-25T13-00-00-{fork}.jsonl")),
+        fork_rows.concat(),
+    )
+    .unwrap();
+    temp
+}
+
+/// A fork's page holds the fork's own records, with its own usage, even when
+/// the parent it references is past the whole read's source cap.
+#[test]
+fn a_codex_fork_pages_its_own_records_past_a_large_parent() {
+    use xt_ingest::native::session_source::{CodexPageSelection, load_codex_page};
+    let Ok(python) = resolve_python(None, None) else {
+        println!("SKIP a_codex_fork_pages_its_own_records_past_a_large_parent: no Python 3.10+");
+        return;
+    };
+    const PARENT: &str = "01a155eb-11f1-4022-8c3b-6c15104ac31d";
+    const FORK: &str = "01a15a16-8f7b-4872-844f-4c120b00caaf";
+    let producer = producer();
+    fn request(home: &Path) -> SessionSourceRequest<'_> {
+        SessionSourceRequest {
+            home,
+            host: Host::Codex,
+            native_session_id: FORK,
+            indexed: &[],
+            cancel: None,
+            limits: SourceLimits::default(),
+        }
+    }
+    let reader = DetailReader {
+        python: &python,
+        producer: &producer,
+        bounds: DetailBounds::default(),
+    };
+    let texts = |records: &[xt_ingest::canonical::ParsedRecord]| -> Vec<serde_json::Value> {
+        records
+            .iter()
+            .map(|record| serde_json::to_value(&record.canonical).unwrap())
+            .collect()
+    };
+    // A small parent: the whole read and the page agree record for record.
+    let small = fork_home(PARENT, FORK, 0);
+    let home = small.path().canonicalize().unwrap();
+    let SessionSourceOutcome::Loaded(whole) =
+        load_session_source_with(&request(&home), Some(&reader))
+    else {
+        panic!("the small fork loads whole");
+    };
+    let page = load_codex_page(&request(&home), &CodexPageSelection::First, Some(&reader))
+        .unwrap_or_else(|error| panic!("the small fork pages: {error:?}"));
+    assert_eq!(page.total, whole.records.len());
+    assert_eq!(page.session.records, whole.records);
+    let expected = texts(&whole.records);
+    let text = serde_json::to_string(&expected).unwrap();
+    assert!(text.contains("fork ask") && text.contains("fork reply"));
+    assert!(!text.contains("parent"), "no parent row is the fork's");
+    let usage = expected
+        .iter()
+        .find_map(|record| record["message"].get("usage"))
+        .expect("the fork's reply carries usage");
+    assert_eq!(
+        (
+            usage["input_tokens"].as_u64(),
+            usage["output_tokens"].as_u64()
+        ),
+        (Some(30), Some(7)),
+        "only the fork's own tokens, after the parent prefix's counters"
+    );
+    // A parent past the whole read's 24 MB cap: the whole read refuses, and
+    // the page still returns the same records.
+    let large = fork_home(PARENT, FORK, 26);
+    let home = large.path().canonicalize().unwrap();
+    assert_eq!(
+        load_session_source_with(&request(&home), Some(&reader)),
+        SessionSourceOutcome::Unavailable(SourceUnavailable::Reader(DetailFailure::Refused(
+            DetailRefusal::Limit(DetailLimit::SourceBytes)
+        )))
+    );
+    let page = load_codex_page(&request(&home), &CodexPageSelection::First, Some(&reader))
+        .unwrap_or_else(|error| panic!("the large fork pages: {error:?}"));
+    assert_eq!(texts(&page.session.records), expected);
+}
+
 #[test]
 fn generic_codex_pages_share_the_validated_legacy_reader() {
     use xt_ingest::native::session_source::{

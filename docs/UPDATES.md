@@ -1,8 +1,8 @@
 # Desktop updates
 
-For installation, see [setup](SETUP.md). The [latest release page](https://github.com/XTraceAI/xtrace-desktop/releases/latest)
+For installation, see [setup](SETUP.md). The [latest release page](https://github.com/XTraceAI/xtrace/releases/latest)
 identifies the current update release and its download assets. Newer testing
-candidates appear on [all releases](https://github.com/XTraceAI/xtrace-desktop/releases)
+candidates appear on [all releases](https://github.com/XTraceAI/xtrace/releases)
 and may not be offered by the latest-release link or automatic updates. If the automatic update
 fails, quit XTrace and replace it with the latest DMG copy in Applications. If
 the copy in Applications is still named **XTrace Desktop**, the new **XTrace** copy
@@ -68,9 +68,9 @@ template with an empty public key and endpoints.
 An updater-enabled build fails if configuration or `TAURI_SIGNING_PRIVATE_KEY`
 is missing. No signing keys are created by the app or these instructions.
 
-The repository `XTraceAI/xtrace-desktop` is now public, so its GitHub Releases
+The repository `XTraceAI/xtrace` is now public, so its GitHub Releases
 feed needs no authentication. The configured endpoint is
-`https://github.com/XTraceAI/xtrace-desktop/releases/latest/download/latest.json`.
+`https://github.com/XTraceAI/xtrace/releases/latest/download/latest.json`.
 The release page and its assets are the source of truth for publication status.
 `latest.json` must not offer an update before its real archive and
 signature assets are available. Never embed credentials in the app or URL.

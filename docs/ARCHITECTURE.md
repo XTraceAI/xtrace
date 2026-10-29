@@ -103,6 +103,7 @@ or compiling placeholder does not establish implemented behavior.
 | `xtask/`                  | Developer commands for shared fixture validation, database creation, and export.                   |
 | `apps/desktop/src-tauri/` | Native lifecycle, Tauri commands, window chrome, tray, updater, and telemetry integration.         |
 | `apps/desktop/ui/src/`    | React shell, UI components, screens, and the typed data-access boundary.                           |
+| `apps/leaderboard-site/`  | Opt-in public leaderboard website and JSON API (Vercel Functions, Postgres); not part of the app.  |
 
 All renderer code lives under the UI path above. Native lifecycle and window
 behavior belong to the Tauri application.

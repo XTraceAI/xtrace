@@ -102,12 +102,11 @@ test('reloads every route and preserves canonical PR query context', async ({ pa
   await expect(page.getByText(/Pull request filtering is not available yet/)).toBeVisible();
 });
 
-// The app keeps the kit's default Leaderboard row (and hides Rulebook the same
-// way): nothing ranks in this local build, so the row is disabled, drawn in
-// meta ink at 0.7 opacity with a "soon" badge and no hover fill, and never
-// navigates by pointer or keyboard, while a typed or bookmarked /leaderboard
-// still opens its named placeholder.
-test('keeps Leaderboard unavailable in the sidebar while its address still opens', async ({
+// Rulebook keeps the kit's disabled "soon" row: drawn in meta ink at 0.7
+// opacity with a "soon" badge and no hover fill, it never navigates by pointer
+// or keyboard, while a typed or bookmarked /rulebook still opens its page.
+// Leaderboard is an ordinary row that opens its page by pointer and keyboard.
+test('opens Leaderboard from the sidebar while Rulebook stays unavailable', async ({
   page,
 }, info) => {
   const errors: string[] = [];
@@ -115,7 +114,7 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
   page.on('console', (message) => {
     if (message.type() === 'error') errors.push('console error');
   });
-  const leaderboard = page.getByRole('button', { name: /Leaderboard/ });
+  const leaderboard = page.getByRole('button', { name: 'Leaderboard', exact: true });
   const rulebook = page.getByRole('button', { name: /Rulebook/ });
   const prs = page.getByRole('button', { name: 'Pull requests', exact: true });
   const treatment = () =>
@@ -142,10 +141,9 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
     await page.goto('/rulebook');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rulebook');
     await expect(page.locator('html')).toHaveAttribute('data-theme', scheme);
-    await expect(leaderboard).toBeDisabled();
-    await expect(leaderboard.locator('.xt-soon')).toHaveText('soon');
+    await expect(leaderboard).toBeEnabled();
+    await expect(leaderboard.locator('.xt-soon')).toHaveCount(0);
     await expect(leaderboard).not.toHaveAttribute('aria-current', 'page');
-    // Rulebook is hidden the same way, while its address still opens.
     await expect(rulebook).toBeDisabled();
     await expect(rulebook.locator('.xt-soon')).toHaveText('soon');
     await expect(rulebook).toHaveAttribute('aria-current', 'page');
@@ -153,17 +151,22 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
     expect(rest).toMatchObject({ opacity: '0.7', cursor: 'default' });
     expect(rest?.color).toBe(rest?.meta);
     await page.locator('.xt-sidebar').screenshot({
-      path: info.outputPath(`sidebar-leaderboard-soon-${scheme}.png`),
+      path: info.outputPath(`sidebar-leaderboard-${scheme}.png`),
     });
-    // Hovering draws no fill, and a pointer press changes nothing.
-    await leaderboard.hover({ force: true });
+    // Hovering the disabled row draws no fill, and a pointer press changes nothing.
+    await rulebook.hover({ force: true });
     expect(await treatment()).toMatchObject({ fill: rest?.fill, color: rest?.meta });
-    await leaderboard.click({ force: true });
+    await rulebook.click({ force: true });
     await expect(page).toHaveURL(/\/rulebook$/);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rulebook');
-    // Tab passes over both disabled rows, then through Usage's forecast note,
-    // its refresh and two account details before the Hub control.
+    // Tab passes over the disabled Rulebook row (WebKit's Tab also skips
+    // sidebar rows, as it does every plain button).
     await prs.focus();
+    await page.keyboard.press('Tab');
+    await expect(rulebook).not.toBeFocused();
+    // From Leaderboard, Tab goes through Usage's forecast note, its refresh
+    // and two account details before the Hub control.
+    await leaderboard.focus();
+    await expect(leaderboard).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'How the forecast works' })).toBeFocused();
     await page.keyboard.press('Tab');
@@ -174,17 +177,21 @@ test('keeps Leaderboard unavailable in the sidebar while its address still opens
     await expect(page.getByLabel('Codex account usage: Usage unavailable')).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'XTrace Hub' })).toBeFocused();
-    await expect(leaderboard).not.toBeFocused();
-    await page.keyboard.press('Shift+Tab');
-    await expect(leaderboard).not.toBeFocused();
     await expect(rulebook).not.toBeFocused();
     await expect(page).toHaveURL(/\/rulebook$/);
+    // The keyboard opens Leaderboard.
+    await leaderboard.focus();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/\/leaderboard$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Leaderboard');
+    await expect(leaderboard).toHaveAttribute('aria-current', 'page');
+    await page.locator('.xt-shell-main').screenshot({
+      path: info.outputPath(`leaderboard-preview-${scheme}.png`),
+    });
   }
-  await page.goto('/leaderboard');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Leaderboard');
-  await expect(page.getByText('This view is coming next.')).toBeVisible();
-  await expect(leaderboard).toBeDisabled();
-  await expect(leaderboard).toHaveAttribute('aria-current', 'page');
+  // The browser preview cannot join: it says so, with no form.
+  await expect(page.getByText(/This preview sends nothing/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Join' })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
