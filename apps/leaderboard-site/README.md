@@ -47,7 +47,7 @@ The root `pnpm check` runs both as well.
 pnpm --dir apps/leaderboard-site dev:local -- --port 8787
 ```
 
-This serves the same `api/` files at `http://127.0.0.1:8787`.
+This serves the same `api/` files, and the static files in `public/` (such as the page's font), at `http://127.0.0.1:8787`.
 It needs no network and no Vercel login.
 It never sends email. When someone joins, it prints `code for <email>: <code>` in its own window.
 Type that code into the app.
@@ -94,7 +94,8 @@ To point a test copy of the app at it, set `XTRACE_LEADERBOARD_URL=http://127.0.
 
    It prints `Schema applied: 5 statement(s).` Running it again is safe.
 
-6. Deploy. Open the deployment's address and check that the page says "No one is listed yet."
+6. Deploy. Open the deployment's address and check that the page shows eight "---" rows and
+   "1ST PLACE IS OPEN · JOIN FROM THE APP".
    The build log also shows TypeScript errors about `Request` from Vercel's own type check.
    They do not stop the build.
 7. In the project's **Domains** settings, add `leaderboard.xtrace.ai`, then add the DNS record Vercel shows you.

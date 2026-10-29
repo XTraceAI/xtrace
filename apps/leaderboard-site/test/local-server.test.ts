@@ -13,7 +13,7 @@ import {
 } from '../src/local.js';
 import { consoleMailer } from '../src/mail.js';
 import { installApp } from '../src/runtime.js';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 let server: Server;
 let origin: string;
@@ -118,7 +118,7 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
   assert.equal(page.headers.get('cache-control'), 'public, s-maxage=60, stale-while-revalidate=60');
   assert.match(
     await page.text(),
-    /<td class="name">Http_User<\/td>[\s\S]*?<span class="value">4\.5×<\/span>/,
+    /<span class="nick">Http_User<\/span>[\s\S]*?<td class="lev">4\.5X<\/td>/,
   );
 
   const big = await fetch(`${origin}/api/score`, {
@@ -182,6 +182,55 @@ test('the client IP is the socket address, whatever the client claims', async ()
   assert.ok(buckets.includes(`api:ip:${hmac('127.0.0.1')}`));
   for (const spoofed of ['192.0.2.40', '192.0.2.50', '192.0.2.60'])
     assert.ok(!buckets.includes(`api:ip:${hmac(spoofed)}`));
+});
+
+test('files in public/ are served like Vercel serves them, and nothing outside it', async () => {
+  const page = await (await fetch(`${origin}/`)).text();
+  const fontPath = /url\("([^"]*)"\)/.exec(page)?.[1];
+  assert.equal(fontPath, '/fonts/PressStart2P-Regular.ttf');
+  const font = await fetch(`${origin}${fontPath}`);
+  assert.equal(font.status, 200);
+  assert.equal(font.headers.get('content-type'), 'font/ttf');
+  const onDisk = readFileSync(new URL(`../public${fontPath}`, import.meta.url));
+  assert.deepEqual(Buffer.from(await font.arrayBuffer()), onDisk);
+  assert.equal(font.headers.get('content-length'), String(onDisk.length));
+
+  const head = await fetch(`${origin}${fontPath}`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-type'), 'font/ttf');
+  assert.equal(await head.text(), '');
+
+  const license = await fetch(`${origin}/fonts/PressStart2P-OFL.txt`);
+  assert.equal(license.status, 200);
+  assert.equal(license.headers.get('content-type'), 'text/plain; charset=utf-8');
+  assert.match(await license.text(), /SIL OPEN FONT LICENSE/);
+  const robots = await fetch(`${origin}/robots.txt`);
+  assert.equal(robots.status, 200);
+  assert.equal(robots.headers.get('content-type'), 'text/plain; charset=utf-8');
+
+  // Files of this site outside public/, reached with encoded `..` and slashes. The .txt
+  // fixture has a type the server serves, so only the inside-public/ check stops it.
+  const outside = '../test/fixtures/outside-public.txt';
+  assert.ok(existsSync(new URL(`../public/${outside}`, import.meta.url)));
+  for (const path of [
+    `/${outside.replaceAll('/', '%2f')}`,
+    `/fonts/..%2F${outside.replaceAll('/', '%2F')}`,
+    `/${outside.replaceAll('.', '%2e').replaceAll('/', '%2f')}`,
+    '/fonts/..%2f..%2ftest%2ffixtures%2foutside-public.txt',
+    '/fonts/..%2f..%2fpackage.json',
+    '/fonts/..%2F..%2Fsrc%2Fpage.ts',
+    '/%2e%2e/package.json',
+    '/fonts/%2e%2e%2f%2e%2e%2fschema.sql',
+    '/fonts/',
+    '/fonts',
+    '/fonts/missing.ttf',
+    '/fonts/bad%zz.ttf',
+  ]) {
+    const response = await fetch(`${origin}${path}`);
+    assert.equal(response.status, 404, path);
+    assert.deepEqual(await response.json(), { error: 'not_found' });
+  }
+  assert.equal((await fetch(`${origin}/robots.txt`, { method: 'POST', body: '' })).status, 404);
 });
 
 test('unknown paths are 404 and unsupported methods are 405', async () => {

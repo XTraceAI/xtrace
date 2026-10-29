@@ -1,0 +1,1 @@
+- Give the public leaderboard page a vintage arcade high-score look with the real XTrace logo, a self-hosted pixel font, and FREE and OPEN SOURCE links.

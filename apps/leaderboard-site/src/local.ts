@@ -1,14 +1,23 @@
 // Development and tests only (never imported by api/): a PGlite database and a
-// plain HTTP server that routes requests the way Vercel does for this folder.
+// plain HTTP server that routes requests the way Vercel does for this folder,
+// including the static files in public/.
 import { PGlite } from '@electric-sql/pglite';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { extname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { applySchema, type Query } from './db.js';
 import { fail } from './http.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const publicDir = resolve(root, 'public');
+
+/** The static file types this site serves from public/. Anything else is 404 locally. */
+const STATIC_TYPES: Record<string, string> = {
+  '.ttf': 'font/ttf',
+  '.txt': 'text/plain; charset=utf-8',
+};
 
 /** The fixed IP hash key for the local server (never used in production). */
 export const LOCAL_IP_HASH_SECRET = 'xtrace-leaderboard-local-development-only';
@@ -49,6 +58,41 @@ async function routeModule(pathname: string): Promise<Module | null> {
   return null;
 }
 
+/**
+ * A file under public/, as Vercel serves it from `outputDirectory`, or null.
+ * The decoded path must stay inside public/, so `..` and encoded slashes cannot
+ * reach other files.
+ */
+function staticFile(pathname: string, method: string): Response | null {
+  if (method !== 'GET' && method !== 'HEAD') return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  if (decoded.includes('\0')) return null;
+  const file = resolve(publicDir, `.${decoded}`);
+  if (!file.startsWith(publicDir + sep)) return null;
+  const type = STATIC_TYPES[extname(file)];
+  if (!type) return null;
+  let body: Uint8Array;
+  try {
+    if (!statSync(file).isFile()) return null;
+    body = new Uint8Array(readFileSync(file));
+  } catch {
+    return null;
+  }
+  return new Response(method === 'HEAD' ? null : body, {
+    status: 200,
+    headers: {
+      'content-type': type,
+      'content-length': String(body.byteLength),
+      'x-content-type-options': 'nosniff',
+    },
+  });
+}
+
 function toRequest(incoming: IncomingMessage, origin: string): Request {
   const headers = new Headers();
   for (const [name, value] of Object.entries(incoming.headers)) {
@@ -78,9 +122,9 @@ async function send(response: Response, outgoing: ServerResponse): Promise<void>
 
 async function handle(incoming: IncomingMessage, origin: string): Promise<Response> {
   const pathname = new URL(incoming.url ?? '/', origin).pathname;
-  const module = await routeModule(pathname);
-  if (!module) return fail(404, 'not_found');
   const method = incoming.method ?? 'GET';
+  const module = await routeModule(pathname);
+  if (!module) return staticFile(pathname, method) ?? fail(404, 'not_found');
   const handler = METHODS.includes(method) ? module[method] : undefined;
   if (typeof handler !== 'function') {
     const response = fail(405, 'method_not_allowed');
@@ -93,7 +137,7 @@ async function handle(incoming: IncomingMessage, origin: string): Promise<Respon
   return (await handler(toRequest(incoming, origin))) as Response;
 }
 
-/** Serves the api/ files on 127.0.0.1. Port 0 picks a free port. */
+/** Serves the api/ files and public/ on 127.0.0.1. Port 0 picks a free port. */
 export async function startLocalServer(port: number): Promise<{ server: Server; origin: string }> {
   const server = createServer((incoming, outgoing) => {
     const origin = `http://${incoming.headers.host ?? '127.0.0.1'}`;

@@ -1,7 +1,12 @@
 // The public HTML page. It shows exactly what GET /api/leaderboard returns.
-import { LISTED_WITHIN_HOURS, type ListedRow } from './listing.js';
+// It is drawn as an arcade high-score table with HTML, CSS and inline SVG only:
+// the page runs no scripts.
+import type { ListedRow } from './listing.js';
 
 export const PAGE_CACHE_CONTROL = 'public, s-maxage=60, stale-while-revalidate=60';
+
+/** The page's own font, served from public/fonts (unmodified Press Start 2P, OFL 1.1). */
+export const PAGE_FONT_PATH = '/fonts/PressStart2P-Regular.ttf';
 
 const ESCAPES: Record<string, string> = {
   '&': '&amp;',
@@ -15,239 +20,414 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (character) => ESCAPES[character] ?? character);
 }
 
-/** Tenths as `12.3×`: always one decimal, computed without floating point. */
+/**
+ * Tenths as `12.3X`: always one decimal, computed without floating point.
+ * A plain X, because the page's pixel font draws it like the digits.
+ */
 export function formatLeverage(tenths: number): string {
-  return `${Math.floor(tenths / 10)}.${tenths % 10}×`;
+  return `${Math.floor(tenths / 10)}.${tenths % 10}X`;
 }
 
-/** The medal drawn before the top three ranks; the number stays. */
-const MEDALS = ['🥇', '🥈', '🥉'];
+/** Shown where a number would be when there is none, in the same shape as formatLeverage. */
+const NO_LEVERAGE = '-.-X';
+
+/** A rank as an arcade ordinal: 1ST, 2ND, 3RD, 4TH, 11TH, 12TH, 13TH, 21ST, 111TH. */
+export function ordinal(rank: number): string {
+  const lastTwo = rank % 100;
+  const last = rank % 10;
+  const suffix =
+    lastTwo >= 11 && lastTwo <= 13
+      ? 'TH'
+      : last === 1
+        ? 'ST'
+        : last === 2
+          ? 'ND'
+          : last === 3
+            ? 'RD'
+            : 'TH';
+  return `${rank}${suffix}`;
+}
+
+/** The board always shows at least this many rows; missing ones are open places. */
+const BOARD_ROWS = 8;
+
+/** Below this many tenths (1.0X) a row is dimmed. */
+const DIM_BELOW_TENTHS = 10;
+
+/** The row's color: the top three ranks have their own, anyone below 1.0X is dimmed. */
+function tone(row: ListedRow): string {
+  if (row.leverage_tenths < DIM_BELOW_TENTHS) return 'dim';
+  if (row.rank === 1) return 'gold';
+  if (row.rank === 2) return 'orange';
+  if (row.rank === 3) return 'pink';
+  return 'cyan';
+}
+
+// The rocket drawn beside the top three ranks, one character per pixel:
+// X takes the row's color, W is white and R is the flame.
+const ROCKET = [
+  '...X...',
+  '..XXX..',
+  '..XWX..',
+  '..XXX..',
+  '.XXXXX.',
+  'XX.X.XX',
+  'X..X..X',
+  '..R.R..',
+  '...R...',
+];
+const ROCKET_FILLS: Record<string, string> = {
+  X: 'currentColor',
+  W: '#f2f2ff',
+  R: '#ff6a3d',
+};
+
+function rocketRects(): string {
+  const rects: string[] = [];
+  ROCKET.forEach((line, y) => {
+    let x = 0;
+    while (x < line.length) {
+      const pixel = line[x] ?? '.';
+      let end = x + 1;
+      while (line[end] === pixel) end += 1;
+      const fill = ROCKET_FILLS[pixel];
+      if (fill)
+        rects.push(`<rect x="${x}" y="${y}" width="${end - x}" height="1" fill="${fill}"/>`);
+      x = end;
+    }
+  });
+  return rects.join('');
+}
+
+const ROCKET_RECTS = rocketRects();
+
+function rocket(pixelSize: number): string {
+  return (
+    `<svg class="rocket" width="${7 * pixelSize}" height="${9 * pixelSize}" viewBox="0 0 7 9" ` +
+    `shape-rendering="crispEdges" aria-hidden="true" focusable="false">${ROCKET_RECTS}</svg>`
+  );
+}
+
+// The XTrace mark (the app's sidebar logo) as inline SVG.
+const LOGO =
+  '<svg width="22" height="22" viewBox="0 0 3 3" aria-hidden="true" focusable="false">' +
+  '<defs><linearGradient id="xg" x1="1" y1="0" x2="0" y2="1">' +
+  '<stop offset="0" stop-color="#7F8CFF"/><stop offset="1" stop-color="#A35CFF"/></linearGradient>' +
+  '<mask id="xm"><rect width="3" height="3" fill="#fff"/>' +
+  '<path d="M1 1V0A1 1 0 0 1 2 1Z M1 1H0A1 1 0 0 0 1 2Z M2 2V1A1 1 0 0 1 3 2Z M2 2H1A1 1 0 0 0 2 3Z" fill="#000"/>' +
+  '</mask></defs><rect width="3" height="3" rx="0.42" fill="url(#xg)" mask="url(#xm)"/></svg>';
+
+// The stepped hill along the bottom: column heights on an 8-step grid.
+const HILL_HEIGHTS = [
+  2, 2, 3, 3, 4, 5, 5, 6, 6, 5, 4, 4, 3, 3, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 3, 2, 2, 3, 4, 4, 3, 2,
+];
+
+function hillPath(): string {
+  const parts = [`M0 8`];
+  HILL_HEIGHTS.forEach((height, column) => {
+    parts.push(`V${8 - height}H${column + 1}`);
+  });
+  parts.push('V8Z');
+  return parts.join('');
+}
+
+const HILL =
+  `<svg class="hill" viewBox="0 0 ${HILL_HEIGHTS.length} 8" preserveAspectRatio="none" ` +
+  `shape-rendering="crispEdges" aria-hidden="true" focusable="false">` +
+  `<path fill="currentColor" d="${hillPath()}"/></svg>`;
 
 /**
- * How full a row's bar is: its number against the top number, in whole
- * percent, at least 2 so a small number still shows a sliver.
+ * Square pixel stars at fixed, random-looking places, as one box-shadow list
+ * in viewport units so they cover the whole screen at any size.
  */
-export function barPercent(tenths: number, topTenths: number): number {
-  if (topTenths <= 0) return 2;
-  return Math.max(2, Math.round((tenths * 100) / topTenths));
+function starShadows(count: number, seed: number, colors: string[]): string {
+  let state = seed;
+  const next = () => {
+    // Park-Miller: small enough to stay exact in floating point.
+    state = (state * 48271) % 2147483647;
+    return state / 2147483647;
+  };
+  const stars: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const x = (next() * 100).toFixed(1);
+    const y = (next() * 100).toFixed(1);
+    const color = colors[Math.floor(next() * colors.length)] ?? '#f2f2ff';
+    stars.push(`${x}vw ${y}vh 0 ${color}`);
+  }
+  return stars.join(', ');
 }
 
+const SMALL_STARS = starShadows(56, 7, ['#f2f2ff', '#f2f2ff', '#f2f2ff', '#4de8ff', '#a35cff']);
+const BIG_STARS = starShadows(14, 41, ['#f2f2ff', '#ffe14d', '#4de8ff', '#a35cff']);
+
 const STYLE = `
-:root {
-  color-scheme: light dark;
-  --bg: #fafafb;
-  --panel: #ffffff;
-  --line: #e7e7ec;
-  --fg: #17171c;
-  --muted: #62636d;
-  --faint: #8b8c96;
-  --accent: #6d5ce8;
-  --accent-soft: rgba(109, 92, 232, 0.10);
-  --gold: rgba(232, 176, 36, 0.14);
+@font-face {
+  font-family: "Press Start 2P";
+  src: url("${PAGE_FONT_PATH}") format("truetype");
+  font-display: swap;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e0e11;
-    --panel: #16161b;
-    --line: #26262e;
-    --fg: #ececf1;
-    --muted: #a0a1ab;
-    --faint: #6f707b;
-    --accent: #9384ff;
-    --accent-soft: rgba(147, 132, 255, 0.12);
-    --gold: rgba(245, 196, 81, 0.10);
-  }
+:root {
+  color-scheme: dark;
+  --bg: #07071a;
+  --fg: #f2f2ff;
+  --yellow: #ffe14d;
+  --orange: #ff9b3d;
+  --pink: #ff4dd2;
+  --cyan: #4de8ff;
+  --red: #ff4d4d;
+  --dim: #7a7aa8;
+  --empty: #4a4a78;
+  --hill: #1a1550;
+  --violet: #a35cff;
+  --deep: #3a1f7a;
+  --pixel: "Press Start 2P", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; background: var(--bg); }
 body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
+  font: 10px/1.6 var(--pixel);
+  text-transform: uppercase;
 }
 a { color: inherit; }
-.wrap { max-width: 46rem; margin: 0 auto; padding: 0 1rem; }
+a:focus-visible { outline: 2px dashed var(--yellow); outline-offset: 4px; }
+.sky, .sky::after {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 2px;
+  box-shadow: ${SMALL_STARS};
+  pointer-events: none;
+}
+.sky { z-index: 0; }
+/*
+ * Layers, back to front: stars, scanlines, hill, page content, then a soft vignette.
+ * The scanlines stay behind the content so they never cross a character; the
+ * vignette only darkens the screen's edges evenly.
+ */
+.sky::after { content: ""; width: 3px; height: 3px; box-shadow: ${BIG_STARS}; }
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, 0.28) 2px 3px);
+}
+.crt {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.55) 100%);
+}
+.wrap {
+  position: relative;
+  z-index: 3;
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
 .top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 1.25rem 0;
+  gap: 12px;
+  padding: 20px 0 24px;
 }
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  gap: 10px;
+  font-size: 12px;
   text-decoration: none;
 }
-.brand svg { display: block; }
-.brand .tag {
-  margin-left: 0.2rem;
-  padding: 0.1rem 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 500;
+.brand svg { display: block; flex: none; }
+/*
+ * Text sits on solid backdrops in the page color, reaching 8px past it, so no star
+ * shows between or right beside its pixels.
+ */
+.brand, .get, .hud > div, h1, .sub, table, .open, .foot {
+  background: var(--bg);
+  box-shadow: 0 0 0 8px var(--bg);
 }
+h1, .sub, .open, .foot { width: fit-content; max-width: 100%; margin-inline: auto; }
 .get {
-  padding: 0.4rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  font-size: 0.85rem;
-  font-weight: 550;
+  flex: none;
+  padding: 8px 10px;
+  border: 2px solid var(--fg);
+  box-shadow: 3px 3px 0 var(--violet), 0 0 0 8px var(--bg);
+  font-size: 9px;
   text-decoration: none;
+  white-space: nowrap;
 }
-.get:hover { border-color: var(--accent); }
-.hero { padding: 2.5rem 0 1.75rem; }
-.eyebrow {
-  margin: 0 0 0.75rem;
-  color: var(--accent);
-  font: 600 0.72rem/1 ui-monospace, "SF Mono", Menlo, monospace;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+.get:hover { border-color: var(--yellow); color: var(--yellow); }
+.hud {
+  display: grid;
+  /* The numbers never break, so their columns are at least as wide as they are. */
+  grid-template-columns: minmax(0, 3fr) minmax(max-content, 2fr) minmax(max-content, 2fr);
+  gap: 8px;
+  margin: 0 0 28px;
+  text-align: center;
 }
+.hud dt { color: var(--red); font-size: 9px; }
+.hud dd { margin: 6px 0 0; font-size: 11px; overflow-wrap: anywhere; }
+.hud > div + div dd { overflow-wrap: normal; white-space: nowrap; }
 h1 {
-  margin: 0 0 0.75rem;
-  font-size: clamp(2rem, 6vw, 2.75rem);
-  line-height: 1.05;
-  letter-spacing: -0.03em;
+  margin-top: 0;
+  margin-bottom: 16px;
+  padding: 2px 8px 8px 2px;
+  color: var(--yellow);
+  font-size: clamp(16px, 5.2vw, 30px);
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: center;
+  text-shadow: 3px 3px 0 var(--violet), 6px 6px 0 var(--deep);
 }
-.lede { max-width: 34rem; margin: 0; color: var(--muted); font-size: 1rem; }
-.stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-  max-width: 24rem;
-  margin: 1.75rem 0 0;
+.sub {
+  margin-top: 0;
+  margin-bottom: 30px;
+  padding: 0 4px;
+  color: var(--cyan);
+  font-size: clamp(8px, 2.4vw, 10px);
+  line-height: 1.9;
+  text-align: center;
 }
-.stats div {
-  padding: 0.8rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
-}
-.stats dt {
-  color: var(--faint);
-  font: 500 0.68rem/1 ui-monospace, "SF Mono", Menlo, monospace;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.stats dd {
-  margin: 0.45rem 0 0;
-  font-size: 1.5rem;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-.board {
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--panel);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
-table { width: 100%; border-collapse: collapse; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: clamp(9px, 2.8vw, 14px);
+}
 th {
-  padding: 0.75rem 1rem 0.6rem;
-  border-bottom: 1px solid var(--line);
-  color: var(--faint);
-  font: 500 0.68rem/1 ui-monospace, "SF Mono", Menlo, monospace;
-  letter-spacing: 0.1em;
+  padding: 0 6px 12px;
+  color: var(--red);
+  font-size: 0.8em;
+  font-weight: 400;
   text-align: left;
-  text-transform: uppercase;
   white-space: nowrap;
 }
-td { padding: 0.8rem 1rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
-tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: var(--accent-soft); }
-tr[data-rank="1"] td { background: var(--gold); }
-.rank {
-  width: 4.5rem;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+td { padding: 8px 6px; vertical-align: middle; white-space: nowrap; }
+th:first-child, td:first-child { padding-left: 0; }
+th:last-child, td:last-child { padding-right: 0; text-align: right; }
+.ship { width: 1px; padding-left: 2px; padding-right: 2px; text-align: center; }
+.rocket { display: block; margin: 0 auto; }
+td.name { width: 100%; max-width: 0; white-space: normal; }
+.line { display: flex; align-items: baseline; gap: 8px; }
+/* Every nickname is shown in full: a long one wraps and the dots shrink away. */
+.nick { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.dots { flex: 1 1 0; min-width: 0; border-bottom: 3px dotted currentColor; opacity: 0.35; }
+.gold { color: var(--yellow); }
+.orange { color: var(--orange); }
+.pink { color: var(--pink); }
+.cyan { color: var(--cyan); }
+.dim { color: var(--dim); }
+tr[data-empty] { color: var(--empty); }
+.open {
+  margin-top: 30px;
+  margin-bottom: 30px;
+  padding: 0 4px;
+  color: var(--yellow);
+  font-size: clamp(8px, 2.4vw, 11px);
+  line-height: 1.9;
+  text-align: center;
+  animation: blink 1s steps(1, end) infinite;
 }
-.medal { margin-right: 0.35rem; }
-.name { font-weight: 550; overflow-wrap: anywhere; }
-th:last-child { text-align: right; }
-.lev { width: 52%; }
-.levrow { display: flex; align-items: center; gap: 0.9rem; }
-.track {
-  flex: 1;
-  height: 0.5rem;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--accent-soft);
+/* The text blinks; its backdrop stays, so the stars behind it do not. */
+@keyframes blink { 50% { color: transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .open { animation: none; }
 }
-.fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); opacity: 0.85; }
-tr[data-rank="1"] .fill { background: linear-gradient(90deg, var(--accent), #e8b024); opacity: 1; }
-.value {
-  min-width: 4.5rem;
-  font-weight: 650;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+.foot { margin-top: 0; margin-bottom: 24px; padding: 0 4px; font-size: 10px; text-align: center; }
+.free { color: var(--yellow); }
+.src {
+  color: var(--cyan);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 5px;
 }
-.empty { margin: 0; padding: 2.5rem 1.25rem; text-align: center; color: var(--muted); }
-.empty strong { display: block; margin-bottom: 0.35rem; color: var(--fg); font-size: 1.05rem; }
-.foot {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1.25rem;
-  padding: 2rem 0 3rem;
-  color: var(--muted);
-  font-size: 0.85rem;
+.hill {
+  position: relative;
+  z-index: 2;
+  display: block;
+  flex: none;
+  width: 100%;
+  height: 56px;
+  color: var(--hill);
 }
-.foot h2 { margin: 0 0 0.3rem; color: var(--fg); font-size: 0.85rem; font-weight: 600; }
-.foot p { margin: 0; }
-@media (max-width: 40rem) {
-  .hero { padding-top: 1.5rem; }
-  .foot { grid-template-columns: 1fr; gap: 1rem; }
-  th, td { padding-left: 0.75rem; padding-right: 0.75rem; }
-  .rank { width: 3.75rem; }
-  .lev { width: 44%; }
-  .levrow { gap: 0.6rem; }
-  .value { min-width: 3.75rem; }
+@media (max-width: 380px) {
+  .brand { font-size: 10px; }
+  .get { padding: 6px 8px; font-size: 8px; }
+  .hud dt { font-size: 7px; }
+  .hud dd { font-size: 9px; }
+  td { padding: 7px 4px; }
+  th { padding: 0 4px 10px; }
+  .line { gap: 6px; }
 }
 `;
 
-const LOGO = `<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="9" height="9" rx="2" fill="#8b7cf6"/><rect x="12" y="1" width="9" height="9" rx="2" fill="#c4bbff"/><rect x="1" y="12" width="9" height="9" rx="2" fill="#c4bbff"/><rect x="12" y="12" width="9" height="9" rx="2" fill="#6d5ce8"/></svg>`;
+function memberRow(row: ListedRow): string {
+  const ship = row.rank <= 3 ? rocket(row.rank === 1 ? 3 : 2) : '';
+  return (
+    `<tr data-rank="${row.rank}" class="${tone(row)}"><td class="rank">${ordinal(row.rank)}</td>` +
+    `<td class="ship">${ship}</td>` +
+    `<td class="name"><div class="line"><span class="nick">${escapeHtml(row.nickname)}</span>` +
+    `<span class="dots" aria-hidden="true"></span></div></td>` +
+    `<td class="lev">${formatLeverage(row.leverage_tenths)}</td></tr>`
+  );
+}
+
+function emptyRow(position: number): string {
+  return (
+    `<tr data-empty aria-hidden="true"><td class="rank">${ordinal(position)}</td><td class="ship"></td>` +
+    `<td class="name"><div class="line"><span class="nick">---</span>` +
+    `<span class="dots"></span></div></td><td class="lev">${NO_LEVERAGE}</td></tr>`
+  );
+}
 
 function boardHtml(rows: ListedRow[]): string {
-  if (rows.length === 0)
-    return '<div class="board"><p class="empty"><strong>No one is listed yet.</strong>Be the first: open the XTrace app and choose Leaderboard.</p></div>';
-  const top = rows[0]?.leverage_tenths ?? 0;
+  const open: string[] = [];
+  for (let position = rows.length + 1; position <= BOARD_ROWS; position += 1)
+    open.push(emptyRow(position));
   return [
-    '<div class="board">',
     '<table>',
-    '<thead><tr><th scope="col">Rank</th><th scope="col">Nickname</th><th scope="col">Leverage, 7 days</th></tr></thead>',
+    '<caption class="sr">Agent leverage over the last 7 days, highest first</caption>',
+    '<thead><tr><th scope="col" class="rank">RANK</th><th scope="col" class="ship"></th>' +
+      '<th scope="col" class="name">NAME</th><th scope="col" class="lev">LEVER</th></tr></thead>',
     '<tbody>',
-    ...rows.map((row) => {
-      const medal = MEDALS[row.rank - 1];
-      const rank = medal
-        ? `<span class="medal" aria-hidden="true">${medal}</span>${row.rank}`
-        : `${row.rank}`;
-      return (
-        `<tr data-rank="${row.rank}"><td class="rank">${rank}</td>` +
-        `<td class="name">${escapeHtml(row.nickname)}</td>` +
-        `<td class="lev"><div class="levrow"><span class="track" aria-hidden="true">` +
-        `<span class="fill" style="width:${barPercent(row.leverage_tenths, top)}%"></span></span>` +
-        `<span class="value">${formatLeverage(row.leverage_tenths)}</span></div></td></tr>`
-      );
-    }),
+    ...rows.map(memberRow),
+    ...open,
     '</tbody>',
     '</table>',
-    '</div>',
   ].join('\n');
 }
 
+/** The blinking line under the board: the first open place, or how to join when the board is full. */
+function openLine(count: number): string {
+  return count < BOARD_ROWS
+    ? `${ordinal(count + 1)}&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE&nbsp;APP`
+    : 'JOIN FROM THE XTRACE&nbsp;APP';
+}
+
 export function renderPage(rows: ListedRow[]): string {
-  const top = rows[0];
+  const leader = rows[0];
+  const players = String(rows.length).padStart(2, '0');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -255,32 +435,34 @@ export function renderPage(rows: ListedRow[]): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XTrace Leaderboard</title>
 <meta name="description" content="Leverage over the last 7 days, shared by people who opted in from the XTrace app.">
+<meta name="theme-color" content="#07071a">
+<link rel="preload" href="${PAGE_FONT_PATH}" as="font" type="font/ttf" crossorigin>
 <style>${STYLE}</style>
 </head>
 <body>
+<div class="sky" aria-hidden="true"></div>
 <div class="wrap">
 <header class="top">
-<a class="brand" href="https://xtrace.ai">${LOGO}XTrace<span class="tag">Leaderboard</span></a>
-<a class="get" href="https://xtrace.ai">Get XTrace</a>
+<a class="brand" href="https://xtrace.ai">${LOGO}XTRACE</a>
+<a class="get" href="https://xtrace.ai">GET XTRACE</a>
 </header>
 <main>
-<section class="hero">
-<p class="eyebrow">Last 7 days · updates every minute</p>
-<h1>XTrace Leaderboard</h1>
-<p class="lede">Leverage over the last 7 days: agent hours divided by your own hours. Shared by people who opted in from the XTrace app.</p>
-<dl class="stats">
-<div><dt>Members</dt><dd>${rows.length}</dd></div>
-<div><dt>Top leverage</dt><dd>${top ? formatLeverage(top.leverage_tenths) : '—'}</dd></div>
+<dl class="hud">
+<div><dt>1UP</dt><dd>${leader ? escapeHtml(leader.nickname) : '---'}</dd></div>
+<div><dt>HI-LEVER</dt><dd>${leader ? formatLeverage(leader.leverage_tenths) : NO_LEVERAGE}</dd></div>
+<div><dt>PLAYERS</dt><dd>${players}</dd></div>
 </dl>
-</section>
+<h1>HIGH AGENT LEVERAGE</h1>
+<p class="sub">AGENT HOURS&nbsp;÷ YOUR HOURS&nbsp;· LAST&nbsp;7&nbsp;DAYS</p>
 ${boardHtml(rows)}
+<p class="open">${openLine(rows.length)}</p>
 </main>
 <footer class="foot">
-<div><h2>How to join</h2><p>Open the XTrace app, choose Leaderboard and pick a nickname.</p></div>
-<div><h2>What is public</h2><p>Only your nickname and number. Emails are never shown.</p></div>
-<div><h2>Who is listed</h2><p>Members whose app sent a number in the last ${LISTED_WITHIN_HOURS} hours.</p></div>
+<span class="free">FREE</span>&nbsp;· <a class="src" href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>
 </footer>
 </div>
+${HILL}
+<div class="crt" aria-hidden="true"></div>
 </body>
 </html>
 `;
@@ -294,7 +476,7 @@ export function pageResponse(rows: ListedRow[]): Response {
       'cache-control': PAGE_CACHE_CONTROL,
       'x-content-type-options': 'nosniff',
       'content-security-policy':
-        "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     },
   });
 }
