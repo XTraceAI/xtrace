@@ -31,7 +31,16 @@ pub fn sender_config(
     own_live_data: bool,
     identifier: &str,
 ) -> Option<posthog::PostHogConfig> {
-    build.filter(|_| own_live_data && identifier == INSTALLED_IDENTIFIER)
+    build.filter(|_| installed_own_data(own_live_data, identifier))
+}
+
+/// The one rule for whether this launch is the installed app on its own
+/// live data: the installed app's identifier, and `own_live_data` (see
+/// [`sender_config`]). Telemetry's sender and the leaderboard
+/// ([`crate::leaderboard::may_send`]) both read it, so a test copy of the
+/// database never sends for the real user.
+pub fn installed_own_data(own_live_data: bool, identifier: &str) -> bool {
+    own_live_data && identifier == INSTALLED_IDENTIFIER
 }
 
 /// Whether this launch uses the app's own data folder, by the rule startup
@@ -182,6 +191,15 @@ impl Telemetry {
     pub fn activity(&self) {
         if let Some(sender) = &self.sender {
             sender.activity();
+        }
+    }
+
+    /// The user joined the public leaderboard: `leaderboard_opted_in`, sent
+    /// only while telemetry may send, like every event. The leaderboard
+    /// itself never reads this service.
+    pub fn leaderboard_opted_in(&self) {
+        if let Some(sender) = &self.sender {
+            sender.event(events::TelemetryEvent::LeaderboardOptedIn);
         }
     }
 

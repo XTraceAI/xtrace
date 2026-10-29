@@ -5,6 +5,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import { Route, Routes, useLocation } from 'react-router';
 import { Shell } from './Shell';
 import { PlaceholderPage } from './PlaceholderPage';
+import { LeaderboardPage } from './leaderboard/LeaderboardPage';
 import { PrsPage } from './PrsPage';
 import { RulebookPage } from './rulebook/RulebookPage';
 import { ScoresPage, SkillScoresPage } from './scores/ScoresPage';
@@ -67,6 +68,8 @@ export function AppRoutes() {
                 <RulebookPage view="rule" />
               ) : page.path === '/settings' ? (
                 <SettingsPage />
+              ) : page.path === '/leaderboard' ? (
+                <LeaderboardPage />
               ) : page.path === '/first-launch' ? (
                 <WelcomePage />
               ) : (

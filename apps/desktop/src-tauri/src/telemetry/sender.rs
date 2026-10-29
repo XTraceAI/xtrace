@@ -115,6 +115,8 @@ struct Inner {
     in_flight: Option<Arc<Cancel>>,
     opened: bool,
     activity: bool,
+    /// Events a feature asked for, made on the delivery thread in order.
+    requested: Vec<TelemetryEvent>,
     stop: bool,
 }
 
@@ -177,6 +179,13 @@ impl Sender {
         self.shared.signal(|inner| inner.activity = true);
     }
 
+    /// A feature's own event happened (for example joining the
+    /// leaderboard). It is made on the delivery thread, through the same gate
+    /// as every other event.
+    pub fn event(&self, event: TelemetryEvent) {
+        self.shared.signal(|inner| inner.requested.push(event));
+    }
+
     /// The gate closed: drop queued and retrying work, cancel the request in
     /// flight.
     pub fn close(&self) {
@@ -227,13 +236,13 @@ impl Shared {
 
     fn run(&self) {
         loop {
-            let (opened, activity) = {
+            let (opened, activity, requested) = {
                 let mut inner = lock(&self.inner);
                 loop {
                     if inner.stop {
                         return;
                     }
-                    if inner.opened || inner.activity {
+                    if inner.opened || inner.activity || !inner.requested.is_empty() {
                         break;
                     }
                     let now = self.clock.now_ms();
@@ -251,6 +260,7 @@ impl Shared {
                 (
                     std::mem::take(&mut inner.opened),
                     std::mem::take(&mut inner.activity),
+                    std::mem::take(&mut inner.requested),
                 )
             };
             if opened {
@@ -258,6 +268,9 @@ impl Shared {
             }
             if activity {
                 self.on_activity();
+            }
+            for event in requested {
+                self.emit(event);
             }
             while self.deliver_once() {}
         }
@@ -928,6 +941,39 @@ pub(crate) mod tests {
                 .iter()
                 .all(|(_, status)| *status != DeliveryStatus::Pending)
         );
+    }
+
+    /// A feature's event is made on the thread, through the gate: sent when
+    /// telemetry may send, dropped without a trace when it is off.
+    #[test]
+    fn a_requested_event_is_sent_only_while_telemetry_may_send() {
+        for (consent, sent) in [(ON, true), (OFF, false)] {
+            let transport = MockTransport::answering(&[]);
+            let store = TestStore::new(Store::open_in_memory().unwrap());
+            let sender = Sender::start(
+                Arc::new(Gate::new(consent, false)),
+                config(),
+                transport.clone(),
+                store.clone(),
+                FakeClock::at(START),
+            );
+            sender.event(TelemetryEvent::LeaderboardOptedIn);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while sent && transport.requests() == 0 && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !sent {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            sender.shutdown();
+            let expected: Vec<String> = if sent {
+                vec!["leaderboard_opted_in".into()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(transport.events(), expected);
+            assert_eq!(store.ledger().len(), expected.len());
+        }
     }
 
     #[test]
