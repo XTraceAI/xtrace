@@ -39,16 +39,51 @@ export const YOU_LABEL = '(this is you)';
  * and numbers no real view uses keep them from passing for real data, and the
  * page hides them from assistive technology.
  */
-export const SAMPLE_ROWS: readonly LeaderboardRow[] = [
-  { rank: 1, nickname: 'sample-otter', leverage_tenths: 482, is_you: false },
-  { rank: 2, nickname: 'sample-fern', leverage_tenths: 317, is_you: false },
-  { rank: 3, nickname: 'sample-quartz', leverage_tenths: 274, is_you: false },
-  { rank: 4, nickname: 'sample-you', leverage_tenths: 199, is_you: true },
-  { rank: 5, nickname: 'sample-maple', leverage_tenths: 141, is_you: false },
-  { rank: 6, nickname: 'sample-kite', leverage_tenths: 96, is_you: false },
-  { rank: 7, nickname: 'sample-harbor', leverage_tenths: 63, is_you: false },
-  { rank: 8, nickname: 'sample-dune', leverage_tenths: 28, is_you: false },
+const SAMPLE_NAMES = [
+  'otter',
+  'fern',
+  'quartz',
+  'you',
+  'maple',
+  'kite',
+  'harbor',
+  'dune',
+  'cedar',
+  'lynx',
+  'ember',
+  'moss',
+  'heron',
+  'slate',
+  'birch',
+  'comet',
+  'reed',
+  'flint',
+  'aspen',
+  'wren',
+  'cobalt',
+  'tide',
+  'juniper',
+  'orbit',
+  'sable',
+  'thistle',
+  'pike',
+  'loam',
+  'gale',
+  'onyx',
+  'willow',
+  'ridge',
+  'plover',
+  'basalt',
+  'larch',
+  'meadow',
 ];
+/** Enough rows to run past the bottom of a tall window; the frame clips the rest. */
+export const SAMPLE_ROWS: readonly LeaderboardRow[] = SAMPLE_NAMES.map((name, index) => ({
+  rank: index + 1,
+  nickname: `sample-${name}`,
+  leverage_tenths: Math.round(482 * 0.9 ** index),
+  is_you: name === 'you',
+}));
 
 /** The code step's line, naming where the code went. */
 export const codeSentText = (email: string) =>

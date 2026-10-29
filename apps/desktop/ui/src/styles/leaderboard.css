@@ -40,20 +40,25 @@
   margin-top: 12px;
 }
 /* Before joining: the list the page unlocks, drawn blurred from made-up
-   rows, with the join card centered in front. Both share one grid cell, so
-   the area is as tall as the taller of the two. */
-.xt-leaderboard-locked {
-  display: grid;
-  max-width: 640px;
-  margin-top: 24px;
+   rows across the rest of the page, with the join card centered in front.
+   The card alone sizes the area, so a short window scrolls to the card and
+   never to the list. */
+.xt-leaderboard:has(> .xt-leaderboard-locked) {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
 }
-.xt-leaderboard-locked > * {
-  grid-area: 1 / 1;
-  min-width: 0;
+.xt-leaderboard-locked {
+  position: relative;
+  display: flex;
+  flex: 1;
+  margin-top: 24px;
 }
 /* Decoration only: no pointer, no selection, no focus (`inert`). The blur
    stays inside its own rounded frame. */
 .xt-leaderboard-backdrop {
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   border-radius: 12px;
   pointer-events: none;
@@ -93,6 +98,8 @@
   position: relative;
   z-index: 1;
   display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   justify-content: center;
   padding: 32px 16px;

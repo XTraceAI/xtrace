@@ -135,7 +135,7 @@ for (const scheme of ['light', 'dark'] as const) {
     const backdrop = page.getByTestId('leaderboard-sample');
     await expect(backdrop).toHaveAttribute('aria-hidden', 'true');
     await expect(backdrop).toHaveAttribute('inert', '');
-    await expect(backdrop.locator('tbody tr')).toHaveCount(8);
+    await expect(backdrop.locator('tbody tr')).toHaveCount(36);
     // Blurred, dimmed, and out of reach of the pointer and of selection.
     const drawn = await backdrop.evaluate((element) => {
       const frame = getComputedStyle(element);
@@ -153,9 +153,26 @@ for (const scheme of ['light', 'dark'] as const) {
     expect(drawn.pointer).toBe('none');
     expect(drawn.select).toBe('none');
     expect(drawn.animation).toBe('none');
-    // The card sits in front of the list, inside its area.
+    // The list fills the rest of the page, and the card sits centered in
+    // front of it.
     const area = (await backdrop.boundingBox())!;
     const front = (await card.boundingBox())!;
+    const outlet = await page.locator('.xt-shell-outlet').evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        right: box.right - parseFloat(style.paddingRight),
+        bottom: box.bottom - parseFloat(style.paddingBottom),
+        scrolls: element.scrollHeight > element.clientHeight,
+      };
+    });
+    expect(Math.abs(area.x + area.width - outlet.right)).toBeLessThanOrEqual(1);
+    expect(Math.abs(area.y + area.height - outlet.bottom)).toBeLessThanOrEqual(1);
+    expect(outlet.scrolls).toBe(false);
+    const centerX = front.x + front.width / 2 - (area.x + area.width / 2);
+    const centerY = front.y + front.height / 2 - (area.y + area.height / 2);
+    expect(Math.abs(centerX)).toBeLessThanOrEqual(1);
+    expect(Math.abs(centerY)).toBeLessThanOrEqual(1);
     expect(front.x).toBeGreaterThan(area.x);
     expect(front.x + front.width).toBeLessThan(area.x + area.width);
     expect(front.y).toBeGreaterThanOrEqual(area.y);
