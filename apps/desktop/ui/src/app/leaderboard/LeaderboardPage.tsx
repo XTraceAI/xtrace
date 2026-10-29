@@ -23,7 +23,6 @@ import {
   JOIN_TITLE,
   LEAVE_BACKUPS,
   SAMPLE_ROWS,
-  JOINED_SHARED_FACTS,
   SHARED_FACTS,
   rankMedal,
   SHARED_SUMMARY,
@@ -98,13 +97,13 @@ function Locked({ children }: { children: ReactNode }) {
   );
 }
 
-/** The rest of what joining shares, folded under the join card or the joined list. */
-function SharedDetails({ facts = SHARED_FACTS }: { facts?: readonly string[] }) {
+/** The rest of what joining shares, folded under the join card's one line. */
+function SharedDetails() {
   return (
     <details className="xt-leaderboard-shared">
       <summary>{SHARED_SUMMARY}</summary>
       <ul>
-        {facts.map((fact) => (
+        {SHARED_FACTS.map((fact) => (
           <li key={fact}>{fact}</li>
         ))}
       </ul>
@@ -128,9 +127,18 @@ function RankCell({ rank }: { rank: number }) {
 }
 
 /** Rank, nickname and 7-day leverage, with the member's own row marked. */
-function PublicTable({ rows, label }: { rows: readonly LeaderboardRow[]; label?: string }) {
+function PublicTable({
+  rows,
+  label,
+  note,
+}: {
+  rows: readonly LeaderboardRow[];
+  label?: string;
+  /** Said in a row of its own while there are no rows yet. */
+  note?: string;
+}) {
   return (
-    <table className="xt-leaderboard-table" aria-label={label}>
+    <table className="xt-leaderboard-table" aria-label={label} aria-busy={note ? true : undefined}>
       <thead>
         <tr>
           <th scope="col">Rank</th>
@@ -139,6 +147,13 @@ function PublicTable({ rows, label }: { rows: readonly LeaderboardRow[]; label?:
         </tr>
       </thead>
       <tbody>
+        {note && (
+          <tr>
+            <td colSpan={3} className="xt-leaderboard-table-note">
+              {note}
+            </td>
+          </tr>
+        )}
         {rows.map((row) => (
           <tr key={`${row.rank}-${row.nickname}`} data-you={row.is_you || undefined}>
             <RankCell rank={row.rank} />
@@ -202,7 +217,7 @@ function PublicBoard({ controls, pageUrl }: { controls: LeaderboardControls; pag
       {openFailed && <p role="alert">The leaderboard page could not be opened in your browser.</p>}
       {table.isError && <p role="alert">{TABLE_UNREADABLE}</p>}
       {data === undefined ? (
-        !table.isError && <p className="xt-settings-note">{TABLE_READING}</p>
+        !table.isError && <PublicTable rows={[]} label={TABLE_TITLE} note={TABLE_READING} />
       ) : data.state === 'error' ? (
         <p role="alert">{data.reason}</p>
       ) : data.state === 'unavailable' ? (
@@ -212,7 +227,10 @@ function PublicBoard({ controls, pageUrl }: { controls: LeaderboardControls; pag
       ) : (
         <PublicTable rows={data.rows} label={TABLE_TITLE} />
       )}
-      {data?.state === 'ok' && <p className="xt-settings-note">{TABLE_UPDATES}</p>}
+      {/* Shown while reading too, so the card keeps its shape when the rows arrive. */}
+      {(data === undefined ? !table.isError : data.state === 'ok') && (
+        <p className="xt-settings-note">{TABLE_UPDATES}</p>
+      )}
     </SectionCard>
   );
 }
@@ -277,16 +295,10 @@ function Leaderboard({
 }) {
   const { status, join, confirm, cancelCode, rename, leave } = useLeaderboard(controls, heading);
   const current = status.data;
+  // Nothing is drawn while the status is read, so the page appears once in
+  // its final shape instead of swapping a placeholder for it.
   if (!current)
-    return (
-      <SectionCard title="Public leaderboard">
-        {status.isError ? (
-          <p role="alert">The leaderboard status could not be read.</p>
-        ) : (
-          <p className="xt-settings-note">Reading…</p>
-        )}
-      </SectionCard>
-    );
+    return status.isError ? <p role="alert">The leaderboard status could not be read.</p> : null;
   if (!current.available)
     return (
       <Locked>
@@ -311,7 +323,6 @@ function Leaderboard({
         heading={heading}
       />
       <PublicBoard controls={controls} pageUrl={current.page_url} />
-      <SharedDetails facts={JOINED_SHARED_FACTS} />
     </>
   ) : (
     <Locked>

@@ -15,22 +15,13 @@ export const JOIN_TITLE = 'Join the leaderboard';
 
 /** The join card's disclosure: its label, then the rest of what joining shares. */
 export const SHARED_SUMMARY = 'What is shared';
-/** When the app sends the member's number. */
-export const SEND_TIMES =
-  'Your number is sent when the app starts, after it reads your history, and every hour.';
-/** What joining shares, said both before and after joining. */
-const SHARED_COMMON: readonly string[] = [
+export const SHARED_FACTS: readonly string[] = [
   'Public: your nickname and 7-day leverage.',
   'Private: your email, used only for sign-in codes.',
   'The same email on a new Mac signs you back in; only your latest Mac sends.',
   'The site also sees your IP address and app version.',
-];
-export const SHARED_FACTS: readonly string[] = [
-  ...SHARED_COMMON,
   'Nothing is sent or read until you join. The blurred list is an example.',
 ];
-/** After joining the list says when the app sends, instead of what joining reads. */
-export const JOINED_SHARED_FACTS: readonly string[] = [...SHARED_COMMON, SEND_TIMES];
 
 /** The joined page's public list: its title and what it says when it has no rows. */
 export const TABLE_TITLE = 'Public leaderboard';

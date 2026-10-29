@@ -178,6 +178,12 @@
 .xt-leaderboard-medal {
   margin-right: 4px;
 }
+/* The list's own row while it is read: as tall as a member's row. */
+.xt-leaderboard-table td.xt-leaderboard-table-note {
+  width: auto;
+  color: var(--meta);
+  text-align: left;
+}
 /* The member's own row. */
 .xt-leaderboard-table tr[data-you] td {
   background: var(--accent-tint);
@@ -251,7 +257,4 @@
 }
 .xt-leaderboard-standing > p {
   margin: 10px 0 0;
-}
-.xt-leaderboard > .xt-leaderboard-shared {
-  margin-top: 16px;
 }

@@ -18,7 +18,6 @@ import {
   LEAVE_BACKUPS,
   LEAVE_TEXT,
   SAMPLE_ROWS,
-  SEND_TIMES,
   SHARED_FACTS,
   TABLE_EMPTY,
   TABLE_READING,
@@ -502,6 +501,8 @@ it('shows the public list under the membership, with your row marked', async () 
   const leaderboard = controls(joined);
   await mount(leaderboard);
   const table = await screen.findByRole('table', { name: 'Public leaderboard' });
+  await within(table).findByText('grace');
+  expect(table.hasAttribute('aria-busy')).toBe(false);
   expect(screen.queryByTestId('leaderboard-sample')).toBeNull();
   expect(rowsOf(table)).toEqual([
     ['🥇1', 'grace', '41.2×'],
@@ -521,10 +522,8 @@ it('shows the public list under the membership, with your row marked', async () 
   expect(table.querySelectorAll('tr[data-you]')).toHaveLength(1);
   // The membership and its controls stay above it.
   expect(summary()['Rank']).toBe('#2');
-  // When the app sends moved under the list's "What is shared".
-  const shared = screen.getByText('What is shared').closest('details')!;
-  expect(within(shared).getByText(SEND_TIMES)).toBeTruthy();
-  expect(table.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // Joined, the page has no "What is shared" section.
+  expect(screen.queryByText('What is shared')).toBeNull();
   expect(
     screen.getByTestId('leaderboard-summary').compareDocumentPosition(table) &
       Node.DOCUMENT_POSITION_FOLLOWING,
@@ -656,6 +655,13 @@ it('never shows an answer from before leaving after joining again', async () => 
   fireEvent.change(await screen.findByLabelText('Code'), { target: { value: CODE } });
   fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
   await screen.findByText('You are on the leaderboard');
-  expect(await screen.findByText(TABLE_READING)).toBeTruthy();
+  // While the list is read, the card already has its final shape: the
+  // table's header, one row saying it is being read, and the line under it.
+  const reading = await screen.findByText(TABLE_READING);
+  const table = reading.closest('table')!;
+  expect(table.getAttribute('aria-label')).toBe('Public leaderboard');
+  expect(table.getAttribute('aria-busy')).toBe('true');
+  expect(within(table).getAllByRole('columnheader')).toHaveLength(3);
+  expect(screen.getByText(TABLE_UPDATES)).toBeTruthy();
   expect(screen.queryByText('Join the leaderboard to see the public list here.')).toBeNull();
 });
