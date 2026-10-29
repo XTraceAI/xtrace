@@ -51,7 +51,7 @@ export const fixture = Object.freeze({
   lockSha256: '13272548f7e16ed92b103e49576aa4a759fe842257f49cea74797312ddf97e69',
 });
 // The synthetic old app reports the published earlier version and sits in the
-// same XTrace.app folder name, as a 0.1.8 install does. The "version" case announces a
+// same XTrace.app folder name, as a 0.1.9 install does. The "version" case announces a
 // version the signed archive was not signed for.
 export const versions = Object.freeze({
   old: previousRelease.version,

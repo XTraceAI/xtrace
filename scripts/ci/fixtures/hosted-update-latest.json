@@ -1,10 +1,10 @@
 {
-  "version": "0.1.9",
-  "notes": "Session warnings with local context, Dismiss and Undo; exact links to original messages and tool results; optional confirmed Diagnose through Claude or Codex; bounded browsing for large Claude and Codex conversations. Includes the current conversation layout and paging fixes.",
+  "version": "0.2.0",
+  "notes": "XTrace 0.2.0 adds an opt-in leaderboard and a new session warning.\n\n- Leaderboard: pick a nickname and confirm with a code sent to your email to list your 7-day leverage on leaderboard.xtrace.ai. Nothing is sent until you join, other users never see your email, and Leave deletes your entry.\n- Admitted mistake: a new session warning when an agent's reply admits a mistake right after your message. The repeated-calls warning is removed.\n- Redesigned warning window: the conversation reads as a chat beside why it was flagged, and a diagnosis keeps running after you close the window.\n- Codex Desktop forks now show their conversation.\n- Effort: a day's summary moved into the box that opens on its date.\n- After this update, XTrace reads older Claude conversations once more to find admitted mistakes.\n- Links and updates now point to github.com/XTraceAI/xtrace.",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://github.com/XTraceAI/xtrace-desktop/releases/download/v0.1.9/XTrace-0.1.9-macos-arm64.app.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRY000TkV4UllHTzhleHhXT05RTnpFcHVmT1E0YVk0dzBqWWlIRmxkMWh0bGkxdU4yd1hTejIwRlRTNWFPa0dSOUNGM2djakd2UFBrWFpBU0g5aExCUHhkM2piUnZZUUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMTE5MzY0CWZpbGU6WFRyYWNlLTAuMS45LW1hY29zLWFybTY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuOQpXS1AvOU5FNXB2UnBUWDFpWTM3b0hDWkZNc2hQRTlTV21hTTRpbmZrd1FOQ2g2ZldBaUYwVGFUL2UzbWhNUXNxNWU4enRsS1NTb0h0aGVESFNGek1CQT09Cg=="
+      "url": "https://github.com/XTraceAI/xtrace/releases/download/v0.2.0/XTrace-0.2.0-macos-arm64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRY000TkV4UllHTyt6anFqdmZNaFdFZFJFd3BVNG1WVktkRCtnMHlGMVRxajFzWGhWUDBhbkd2Nk1tc0tGdXUwYVp1TFNVdlBYM0wxbE9GZ3ZGR3U0TjlXQ2pjd0JBWkE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjk4NDM2CWZpbGU6WFRyYWNlLTAuMi4wLW1hY29zLWFybTY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjIuMApjWE9nbzFwSEdjcjFpV2ZSOWhEbm1rU1Rqem80S0VIbkY5TEQxTWJEUzZpbjNkSkFHNDJWb25rZVdyUWlORlN3d2tyTVhvTGFTUzV2WjlDVGxvSllCdz09Cg=="
     }
   }
 }

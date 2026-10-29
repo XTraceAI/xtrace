@@ -116,7 +116,7 @@ const syntheticFeed = (change = {}) =>
         notes: 'Synthetic notes.',
         platforms: {
           'darwin-aarch64': {
-            url: `https://github.com/XTraceAI/xtrace-desktop/releases/download/${release.tag}/${release.archive}`,
+            url: `https://github.com/XTraceAI/xtrace/releases/download/${release.tag}/${release.archive}`,
             signature: 'c3ludGhldGlj',
           },
         },
@@ -162,7 +162,16 @@ test('production prerequisite accepts only the pinned bytes of the candidate fee
     {
       platforms: {
         'darwin-aarch64': {
-          url: `https://github.com/XTraceAI/xtrace-desktop/releases/download/${previousRelease.tag}/${previousRelease.archive}`,
+          url: `https://github.com/XTraceAI/xtrace/releases/download/${previousRelease.tag}/${previousRelease.archive}`,
+          signature: 'c3ludGhldGlj',
+        },
+      },
+    },
+    // The candidate archive under the repository's former name.
+    {
+      platforms: {
+        'darwin-aarch64': {
+          url: `https://github.com/XTraceAI/xtrace-desktop/releases/download/${release.tag}/${release.archive}`,
           signature: 'c3ludGhldGlj',
         },
       },
