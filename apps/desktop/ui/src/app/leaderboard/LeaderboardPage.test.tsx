@@ -13,6 +13,7 @@ import { clock } from '../../kit/clock';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
 import {
+  EMAIL_PRIVATE,
   JOIN_TEXT,
   LEAVE_BACKUPS,
   LEAVE_TEXT,
@@ -449,6 +450,7 @@ it('draws made-up rows blurred behind the join card, hidden and out of reach', a
   await mount(leaderboard);
   const card = await screen.findByRole('region', { name: 'Join the leaderboard' });
   expect(within(card).getByText(JOIN_TEXT)).toBeTruthy();
+  expect(within(card).getByText(EMAIL_PRIVATE)).toBeTruthy();
   // The background is decoration: hidden from assistive technology, inert,
   // and drawn from the sample rows only.
   const backdrop = sample();
@@ -501,9 +503,16 @@ it('shows the public list under the membership, with your row marked', async () 
   const table = await screen.findByRole('table', { name: 'Public leaderboard' });
   expect(screen.queryByTestId('leaderboard-sample')).toBeNull();
   expect(rowsOf(table)).toEqual([
-    ['1', 'grace', '41.2×'],
-    ['2', 'adaYou (this is you)', '12.3×'],
-    ['3', 'linus', '9×'],
+    ['🥇1', 'grace', '41.2×'],
+    ['🥈2', 'adaYou (this is you)', '12.3×'],
+    ['🥉3', 'linus', '9×'],
+  ]);
+  // The medals are decoration; assistive technology hears the rank alone.
+  const medals = [...table.querySelectorAll('.xt-leaderboard-medal')];
+  expect(medals.map((medal) => medal.getAttribute('aria-hidden'))).toEqual([
+    'true',
+    'true',
+    'true',
   ]);
   const you = within(table).getByText('(this is you)').closest('tr')!;
   expect(you.hasAttribute('data-you')).toBe(true);
@@ -563,7 +572,7 @@ it('reads the public list again after an upload and after a rename', async () =>
   });
   act(() => source.emit(events.leaderboardChanged));
   await waitFor(() =>
-    expect(rowsOf(screen.getByRole('table'))).toEqual([['1', 'adaYou (this is you)', '50×']]),
+    expect(rowsOf(screen.getByRole('table'))).toEqual([['🥇1', 'adaYou (this is you)', '50×']]),
   );
   expect(leaderboard.table.mock.calls.length).toBeGreaterThan(before);
   const afterUpload = leaderboard.table.mock.calls.length;
@@ -595,7 +604,7 @@ it('reads the list once more when the native side says a change has left the cac
       await vi.advanceTimersByTimeAsync(1_000);
     });
     await waitFor(() =>
-      expect(rowsOf(screen.getByRole('table'))).toEqual([['1', 'adaYou (this is you)', '50×']]),
+      expect(rowsOf(screen.getByRole('table'))).toEqual([['🥇1', 'adaYou (this is you)', '50×']]),
     );
     expect(leaderboard.table).toHaveBeenCalledTimes(2);
     // The second answer asks for nothing more.

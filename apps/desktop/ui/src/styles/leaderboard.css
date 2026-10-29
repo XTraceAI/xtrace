@@ -172,6 +172,10 @@
   width: 120px;
   text-align: right;
 }
+/* The top three ranks carry a medal before the number. */
+.xt-leaderboard-medal {
+  margin-right: 4px;
+}
 /* The member's own row. */
 .xt-leaderboard-table tr[data-you] td {
   background: var(--accent-tint);

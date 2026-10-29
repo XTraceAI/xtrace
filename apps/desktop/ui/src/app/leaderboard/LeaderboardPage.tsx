@@ -18,12 +18,14 @@ import { clock } from '../../kit/clock';
 import { Modal, ModalClose } from '../../kit/Modal';
 import { SectionCard } from '../../kit/SectionCard';
 import {
+  EMAIL_PRIVATE,
   JOIN_TEXT,
   JOIN_TITLE,
   LEAVE_BACKUPS,
   SAMPLE_ROWS,
   SEND_TIMES,
   SHARED_FACTS,
+  rankMedal,
   SHARED_SUMMARY,
   TABLE_EMPTY,
   TABLE_READING,
@@ -58,6 +60,7 @@ export function LeaderboardPage() {
         <Locked>
           <SectionCard title={JOIN_TITLE}>
             <p className="xt-settings-note">{JOIN_TEXT}</p>
+            <p className="xt-settings-note">{EMAIL_PRIVATE}</p>
             <p className="xt-settings-note">
               Joining needs the desktop app. This preview sends nothing.
             </p>
@@ -109,6 +112,21 @@ function SharedDetails() {
   );
 }
 
+/** The rank, with a medal before the top three; the medal is decoration. */
+function RankCell({ rank }: { rank: number }) {
+  const medal = rankMedal(rank);
+  return (
+    <td>
+      {medal && (
+        <span className="xt-leaderboard-medal" aria-hidden="true">
+          {medal}
+        </span>
+      )}
+      {rank}
+    </td>
+  );
+}
+
 /** Rank, nickname and 7-day leverage, with the member's own row marked. */
 function PublicTable({ rows, label }: { rows: readonly LeaderboardRow[]; label?: string }) {
   return (
@@ -123,7 +141,7 @@ function PublicTable({ rows, label }: { rows: readonly LeaderboardRow[]; label?:
       <tbody>
         {rows.map((row) => (
           <tr key={`${row.rank}-${row.nickname}`} data-you={row.is_you || undefined}>
-            <td>{row.rank}</td>
+            <RankCell rank={row.rank} />
             <td>
               {row.nickname}
               {row.is_you && (
@@ -362,6 +380,7 @@ function JoinForm({
   return (
     <SectionCard title={JOIN_TITLE}>
       <p className="xt-settings-note">{JOIN_TEXT}</p>
+      <p className="xt-settings-note">{EMAIL_PRIVATE}</p>
       {status.notice && (
         <p role="status" data-testid="leaderboard-notice">
           {status.notice}

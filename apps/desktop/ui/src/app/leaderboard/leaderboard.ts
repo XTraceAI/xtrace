@@ -5,7 +5,10 @@ import { leverageText } from '../metric-format';
 
 /** The one line the join card shows before anyone joins, word for word. */
 export const JOIN_TEXT =
-  "See where your 7-day leverage ranks. Pick a nickname; we email you a code to confirm it's you. Your email is never shown.";
+  "🏆 See where your 7-day leverage ranks. Pick a nickname, and we email you a code to confirm it's you.";
+/** Said next to the email field: who sees the email, and what it is for. */
+export const EMAIL_PRIVATE =
+  '🔒 Your email stays private: other users never see it. We only use it to send your code, which keeps out spam and fake entries.';
 
 /** The title of the card that unlocks the page. */
 export const JOIN_TITLE = 'Join the leaderboard';
@@ -14,7 +17,7 @@ export const JOIN_TITLE = 'Join the leaderboard';
 export const SHARED_SUMMARY = 'What is shared';
 export const SHARED_FACTS: readonly string[] = [
   'The public page, leaderboard.xtrace.ai, shows your nickname and your leverage for the last 7 days.',
-  'We keep your email so we can reach you. It is never shown.',
+  'Your email is never shown to anyone. We only use it to send sign-in codes, which keeps out spam and fake entries.',
   'Joining again with the same email, for example on a new Mac, signs you back in to your entry. Only the Mac you joined from most recently sends your number.',
   "Like any web request, the leaderboard also sees your IP address and this app's version.",
   'Until you join, the app sends and reads nothing. The blurred list behind this card is a made-up example.',
@@ -29,6 +32,8 @@ export const TABLE_UPDATES = 'The public list updates every minute or two.';
 export const TABLE_UNREADABLE = 'The public list could not be read.';
 /** Said while the list is being read. */
 export const TABLE_READING = 'Reading the public list…';
+/** The medal drawn before the top three ranks, for fun; the number stays. */
+export const rankMedal = (rank: number): string | null => ['🥇', '🥈', '🥉'][rank - 1] ?? null;
 /** Said to assistive technology after the member's own nickname. */
 export const YOU_LABEL = '(this is you)';
 

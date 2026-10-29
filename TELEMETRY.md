@@ -108,8 +108,9 @@ the app's **Leaderboard** page.
 - **When you join**, the app sends the nickname and the email you type. To
   check the email is yours, the leaderboard emails you a 6-digit code, which
   you enter in the app within 15 minutes. The leaderboard shows your nickname
-  and never shows your email; it keeps the email only so XTrace can reach you.
-  The app does not save the email. Joining again with the same email (for
+  and never shows your email to anyone; it uses the email only to send
+  sign-in codes, which keeps out spam and fake entries. The app does not save
+  the email. Joining again with the same email (for
   example on a new Mac) signs you back in to your existing entry. Only the Mac
   you joined from most recently sends your number; any other Mac is told it
   is no longer joined.
