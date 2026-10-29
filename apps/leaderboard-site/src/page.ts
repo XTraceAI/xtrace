@@ -273,13 +273,15 @@ h1, .sub, .open, .foot { width: fit-content; max-width: 100%; margin-inline: aut
 .get:hover { border-color: var(--yellow); color: var(--yellow); }
 .hud {
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr);
+  /* The numbers never break, so their columns are at least as wide as they are. */
+  grid-template-columns: minmax(0, 3fr) minmax(max-content, 2fr) minmax(max-content, 2fr);
   gap: 8px;
   margin: 0 0 28px;
   text-align: center;
 }
 .hud dt { color: var(--red); font-size: 9px; }
 .hud dd { margin: 6px 0 0; font-size: 11px; overflow-wrap: anywhere; }
+.hud > div + div dd { overflow-wrap: normal; white-space: nowrap; }
 h1 {
   margin-top: 0;
   margin-bottom: 16px;
@@ -419,8 +421,8 @@ function boardHtml(rows: ListedRow[]): string {
 /** The blinking line under the board: the first open place, or how to join when the board is full. */
 function openLine(count: number): string {
   return count < BOARD_ROWS
-    ? `${ordinal(count + 1)}&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP`
-    : 'JOIN FROM THE XTRACE APP';
+    ? `${ordinal(count + 1)}&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE&nbsp;APP`
+    : 'JOIN FROM THE XTRACE&nbsp;APP';
 }
 
 export function renderPage(rows: ListedRow[]): string {

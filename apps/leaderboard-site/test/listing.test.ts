@@ -75,7 +75,10 @@ describe('the 48-hour rule', () => {
     assert.equal(after.leverage_tenths, 20);
     assert.equal(after.score_updated_at, START.toISOString());
     assert.deepEqual(pageNames((await page()).html), []);
-    assert.equal(openLine((await page()).html), '1ST&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP');
+    assert.equal(
+      openLine((await page()).html),
+      '1ST&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE&nbsp;APP',
+    );
 
     // A new score brings them back.
     await score(h.app, key, 21);
@@ -201,6 +204,8 @@ describe('GET /', () => {
     assert.ok(!html.includes('ellipsis'));
     assert.match(html, /\.nick \{[^}]*overflow-wrap: anywhere;/);
     assert.match(html, /\.hud dd \{[^}]*overflow-wrap: anywhere;/);
+    // The top number and the player count never break inside the number.
+    assert.match(html, /\.hud > div \+ div dd \{[^}]*white-space: nowrap;/);
     assert.match(html, /\.dots \{[^}]*min-width: 0;/);
   });
 
@@ -280,7 +285,7 @@ describe('GET /', () => {
     assert.equal((html.match(/<span class="nick">---<\/span>/g) ?? []).length, 8);
     assert.equal((html.match(/<td class="lev">-\.-X<\/td>/g) ?? []).length, 8);
     assert.deepEqual(hud(html), { '1UP': '---', 'HI-LEVER': '-.-X', PLAYERS: '00' });
-    assert.equal(openLine(html), '1ST&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP');
+    assert.equal(openLine(html), '1ST&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE&nbsp;APP');
   });
 
   test('ordinals, colors, rockets for the top three ranks, dimming and counts', async () => {
@@ -301,7 +306,7 @@ describe('GET /', () => {
     ]);
     assert.deepEqual(openPlaces(html), ['7TH', '8TH']);
     assert.deepEqual(hud(html), { '1UP': 'First', 'HI-LEVER': '40.0X', PLAYERS: '06' });
-    assert.equal(openLine(html), '7TH&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP');
+    assert.equal(openLine(html), '7TH&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE&nbsp;APP');
   });
 
   test('every listed member is shown, past eight, with no open places', async () => {
@@ -316,7 +321,7 @@ describe('GET /', () => {
     );
     assert.deepEqual(openPlaces(html), []);
     assert.equal(hud(html).PLAYERS, '12');
-    assert.equal(openLine(html), 'JOIN FROM THE XTRACE APP');
+    assert.equal(openLine(html), 'JOIN FROM THE XTRACE&nbsp;APP');
   });
 
   test('a full board of exactly eight says how to join', async () => {
@@ -325,7 +330,7 @@ describe('GET /', () => {
     const { html } = await page();
     assert.equal(pageRows(html).length, 8);
     assert.deepEqual(openPlaces(html), []);
-    assert.equal(openLine(html), 'JOIN FROM THE XTRACE APP');
+    assert.equal(openLine(html), 'JOIN FROM THE XTRACE&nbsp;APP');
   });
 
   test('nicknames are HTML-escaped', async () => {
