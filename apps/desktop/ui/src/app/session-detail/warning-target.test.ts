@@ -30,8 +30,8 @@ const read = (records: SourceRecord[]): TranscriptRead => ({
   },
 });
 
-it('requires a unique user-role message when no block was saved', () => {
-  const point = { record_uuid: 'saved', block: null };
+it('requires a unique user-role message when the point is the person’s message', () => {
+  const point = { record_uuid: 'saved', block: null, sent_by: 'person' } as const;
   expect(resolveWarningJump(point, read([record('user')]))).toEqual({
     kind: 'target',
     target: { kind: 'record', recordId: 'saved' },
@@ -45,16 +45,42 @@ it('requires a unique user-role message when no block was saved', () => {
     reason: 'ambiguous',
   });
 });
+it('requires a unique assistant-role record when the point is the agent’s reply', () => {
+  const point = { record_uuid: 'saved', block: null, sent_by: 'agent' } as const;
+  expect(resolveWarningJump(point, read([record('assistant')]))).toEqual({
+    kind: 'target',
+    target: { kind: 'record', recordId: 'saved' },
+  });
+  const refused = resolveWarningJump(point, read([record('user')]));
+  expect(refused).toEqual({ kind: 'unavailable', reason: 'not_an_agent_reply' });
+  if (refused.kind === 'unavailable')
+    expect(warningUnavailableText(refused.reason)).toBe(
+      'The saved warning position does not point to an agent reply.',
+    );
+  expect(resolveWarningJump(point, read([record('assistant'), record('user')]))).toEqual({
+    kind: 'unavailable',
+    reason: 'ambiguous',
+  });
+});
+it('matches a block point by its kind, whoever the native answer says sent the record', () => {
+  for (const sent_by of ['person', 'agent'] as const)
+    expect(
+      resolveWarningJump(
+        { record_uuid: 'saved', block: 128, sent_by },
+        read([record('user', [result(128)])]),
+      ),
+    ).toEqual({ kind: 'target', target: { kind: 'block', blockId: 'saved:128' } });
+});
 it.each([0, 128])('keeps the exact result block index %i', (block) => {
   expect(
     resolveWarningJump(
-      { record_uuid: 'saved', block },
+      { record_uuid: 'saved', block, sent_by: 'person' },
       read([record('user', [{ ...text, index: block === 0 ? 1 : 0 }, result(block)])]),
     ),
   ).toEqual({ kind: 'target', target: { kind: 'block', blockId: `saved:${block}` } });
 });
 it('accepts an exact tool call but refuses another kind, absent block and repeated block index', () => {
-  const point = { record_uuid: 'saved', block: 0 };
+  const point = { record_uuid: 'saved', block: 0, sent_by: 'person' } as const;
   expect(
     resolveWarningJump(
       point,
@@ -71,17 +97,23 @@ it('accepts an exact tool call but refuses another kind, absent block and repeat
 it('refuses duplicate record IDs even when only one contains the selected block', () => {
   expect(
     resolveWarningJump(
-      { record_uuid: 'saved', block: 128 },
+      { record_uuid: 'saved', block: 128, sent_by: 'person' },
       read([record('user', [result(128)]), record('assistant')]),
     ),
   ).toEqual({ kind: 'unavailable', reason: 'ambiguous' });
 });
 it('compares the saved message ID exactly and never substitutes a nearby message', () => {
   expect(
-    resolveWarningJump({ record_uuid: ' saved ', block: null }, read([record('user')])),
+    resolveWarningJump(
+      { record_uuid: ' saved ', block: null, sent_by: 'person' },
+      read([record('user')]),
+    ),
   ).toEqual({ kind: 'unavailable', reason: 'not_in_transcript' });
   expect(
-    resolveWarningJump({ record_uuid: 'missing', block: null }, read([record('user')])),
+    resolveWarningJump(
+      { record_uuid: 'missing', block: null, sent_by: 'person' },
+      read([record('user')]),
+    ),
   ).toEqual({ kind: 'unavailable', reason: 'not_in_transcript' });
 });
 it.each<TranscriptRead>([
@@ -89,7 +121,10 @@ it.each<TranscriptRead>([
   { phase: 'failed' },
   { phase: 'read', status: { state: 'unavailable', reason: { reason: 'replaced' } } },
 ])('returns a closed refusal while the source cannot confirm a target: %j', (state) => {
-  const answer = resolveWarningJump({ record_uuid: 'saved', block: null }, state);
+  const answer = resolveWarningJump(
+    { record_uuid: 'saved', block: null, sent_by: 'person' },
+    state,
+  );
   expect(answer.kind).toBe('unavailable');
   if (answer.kind === 'unavailable')
     expect(warningUnavailableText(answer.reason)).not.toMatch(/activity period|earliest|Showing/);

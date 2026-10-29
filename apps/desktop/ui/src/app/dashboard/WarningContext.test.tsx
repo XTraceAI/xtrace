@@ -12,7 +12,7 @@ import { WarningContext } from './WarningContext';
 import { contextExcerpt, contextFixture } from './warning-context.synthetic';
 
 afterEach(cleanup);
-const point = { ...warning, points_at: { record_uuid: 'target', block: null } };
+const point = { ...warning, points_at: { record_uuid: 'target', block: null, sent_by: 'person' } };
 function pending() {
   let resolve!: (value: SessionExcerptStatus) => void;
   let reject!: (reason: Error) => void;
@@ -47,7 +47,7 @@ function mount(initial = supplied()) {
         {shown && (
           <WarningContext
             sessionId="session-a"
-            warning={{ ...point, points_at: { record_uuid: record, block } }}
+            warning={{ ...point, points_at: { record_uuid: record, block, sent_by: 'person' } }}
             timezone="UTC"
           />
         )}

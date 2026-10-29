@@ -296,6 +296,23 @@
   font-size: 10.5px;
   line-height: 1.5;
 }
+/* Between the person's message an admitted mistake answers and the reply's
+   neighbours, when records between them are left out. */
+.xt-warning-context-gap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--meta);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.xt-warning-context-gap::before,
+.xt-warning-context-gap::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--border);
+}
 .xt-warning-context-foot {
   display: flex;
   justify-content: flex-start;
@@ -790,6 +807,20 @@
   font-weight: 650;
   line-height: 1.3;
   letter-spacing: -0.01em;
+}
+/* The heading carries the reason in a tooltip: a dotted underline says there
+   is more, and it is a tab stop so focus opens it as hover does. */
+.xt-warning-modal-why h3.xt-warning-modal-heading {
+  justify-self: start;
+  text-decoration: underline dotted var(--meta);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  cursor: help;
+}
+.xt-warning-modal-heading:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .xt-warning-modal-reason {
   margin: 0;

@@ -62,7 +62,7 @@ pub const MAX_PROJECT_CHARS: usize = 64;
 /// Characters of a tool's name in a label, at most.
 pub const MAX_TOOL_LABEL_CHARS: usize = 64;
 
-/// The warning's kind, as the header names it: XTrace's own four checks
+/// The warning's kind, as the header names it: XTrace's own five checks
 /// (`xt_metrics::WarningKind`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarningKind {
@@ -70,6 +70,7 @@ pub enum WarningKind {
     Interruption,
     RepeatedPrompt,
     RepeatedFailure,
+    AdmittedMistake,
 }
 
 impl WarningKind {
@@ -79,6 +80,7 @@ impl WarningKind {
             Self::Interruption => "interruption",
             Self::RepeatedPrompt => "repeated_prompt",
             Self::RepeatedFailure => "repeated_failure",
+            Self::AdmittedMistake => "admitted_mistake",
         }
     }
 }
@@ -100,6 +102,11 @@ pub fn reason(kind: WarningKind, times: usize) -> String {
         }
         WarningKind::RepeatedFailure => {
             format!("the same tool call failed {} times", times.max(2))
+        }
+        WarningKind::AdmittedMistake => {
+            "the agent admitted a mistake near the start of its reply to the person's message, \
+             with words like \"you're right\", \"my mistake\" or \"sorry\""
+                .to_owned()
         }
     }
 }
@@ -591,6 +598,12 @@ mod tests {
             reason(WarningKind::RepeatedPrompt, 1),
             "the person sent the same message 2 times"
         );
+        // An admission's reason names no phrase the reply used: fixed text.
+        assert_eq!(
+            reason(WarningKind::AdmittedMistake, 2),
+            reason(WarningKind::AdmittedMistake, 9)
+        );
+        assert_eq!(WarningKind::AdmittedMistake.as_str(), "admitted_mistake");
     }
 
     #[test]

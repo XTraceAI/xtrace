@@ -365,6 +365,17 @@ enum PageOpen {
     ),
 }
 
+/// The earlier record a warning's excerpt keeps ahead of `record_uuid`: the
+/// person's message an admitted mistake answers
+/// ([`xt_metrics::SessionWarning::answered_message`]), when the excerpt is
+/// read around the record that warning points at. Otherwise none.
+fn warning_lead<'a>(warning: &'a xt_metrics::SessionWarning, record_uuid: &str) -> Option<&'a str> {
+    if warning.points_at().record_uuid != record_uuid {
+        return None;
+    }
+    warning.answered_message()
+}
+
 fn bounded_source_refusal(reason: &crate::dto::SessionSourceReason) -> bool {
     use crate::dto::{ReaderLimit, SessionSourceLimit, SessionSourceReason as S};
     matches!(
@@ -786,10 +797,14 @@ impl AppState {
     }
 
     /// `warning` names the warning shown (its ID, and the zone the view
-    /// reads warnings in): when it is one of the session's corrections now,
-    /// its target record is marked where its text says so
-    /// (`SessionExcerptStatus::with_correction_marks`). Unknown, missing or
-    /// any other kind: no marks.
+    /// reads warnings in), looked up once, before the read, in a current
+    /// saved answer ([`AppState::current_saved_warning`]). When it is one of
+    /// the session's corrections now, its target record is marked where its
+    /// text says so (`SessionExcerptStatus::with_correction_marks`). When it
+    /// is an admitted mistake pointing at `record_uuid`, the person's message
+    /// it names (its first record) is kept ahead of the reply even when other
+    /// records lie between them (`LeadKept`). Unknown, missing, out of date or
+    /// any other kind: no marks and no lead, and the excerpt reads as before.
     pub fn session_warning_context(
         &self,
         session_id: &str,
@@ -802,13 +817,19 @@ impl AppState {
         use crate::dto::{SessionExcerptReason, SessionExcerptStatus, SessionSourceReason};
         use xt_ingest::native::session_source::{
             ExcerptLimits, SessionSourceRequest, SourceLimits, excerpt_from_loaded,
-            load_session_excerpt_with,
+            load_session_excerpt_with_lead,
         };
         let unavailable =
             |source| SessionExcerptStatus::unavailable(SessionExcerptReason::Source { source });
         if cancel.is_cancelled() {
             return Ok(unavailable(SessionSourceReason::Cancelled));
         }
+        let shown = warning.and_then(|(warning_id, timezone)| {
+            self.current_saved_warning(session_id, warning_id, timezone)
+        });
+        let lead = shown
+            .as_ref()
+            .and_then(|warning| warning_lead(warning, record_uuid));
         let Some(home) = self.native_home() else {
             return Ok(unavailable(SessionSourceReason::NotIndexed));
         };
@@ -820,7 +841,7 @@ impl AppState {
                 return Ok(unavailable(SessionSourceReason::NotIndexed));
             }
             SessionExcerptStatus::from_read(
-                load_session_excerpt_with(
+                load_session_excerpt_with_lead(
                     &SessionSourceRequest {
                         home,
                         host,
@@ -830,6 +851,7 @@ impl AppState {
                         limits: SourceLimits::default(),
                     },
                     record_uuid,
+                    lead,
                     block,
                     None,
                     ExcerptLimits::default(),
@@ -840,12 +862,19 @@ impl AppState {
         } else {
             match self.loaded_source(session_id, cancel, readers)? {
                 Ok(loaded) => SessionExcerptStatus::from_read(
-                    excerpt_from_loaded(*loaded, record_uuid, block),
+                    excerpt_from_loaded(*loaded, record_uuid, lead, block),
                     block,
                 )
                 .map_err(StateError::SourceEncoding)?,
                 Err(reason) if host == xt_store::Host::Codex && bounded_source_refusal(&reason) => {
-                    self.bounded_warning_context(session_id, record_uuid, block, cancel, readers)?
+                    self.bounded_warning_context(
+                        session_id,
+                        record_uuid,
+                        lead,
+                        block,
+                        cancel,
+                        readers,
+                    )?
                 }
                 Err(reason) => unavailable(reason),
             }
@@ -863,27 +892,31 @@ impl AppState {
                 .unwrap_or_default()
         };
         // The warning's own stored phrase, so a mark never names other words
-        // than the warning does. Looked up only when a mark could be sent at
-        // all (the whole record is the person's and the matcher finds
-        // words), and only from a current saved answer: this caption never
-        // waits for a recount. Unread, out of date or another kind: nothing
-        // is marked and the view shows the warning's reason.
-        let phrase = match (status.correction_candidate(&persons), warning) {
-            (Some(_), Some((warning_id, timezone))) => {
-                self.current_correction_phrase(session_id, warning_id, timezone)
-            }
-            _ => None,
-        };
+        // than the warning does. Used only when a mark could be sent at all
+        // (the whole record is the person's and the matcher finds words), and
+        // only from a current saved answer: this caption never waits for a
+        // recount. Unread, out of date or another kind: nothing is marked and
+        // the view shows the warning's reason.
+        let phrase = status
+            .correction_candidate(&persons)
+            .and(shown.as_ref())
+            .filter(|warning| warning.kind == xt_metrics::WarningKind::Correction)
+            .and_then(|warning| warning.correction_phrase.clone());
         let status = status
             .with_persons(&persons)
             .with_correction_marks(phrase.as_deref(), &persons);
         Ok(settled_excerpt(status, cancel))
     }
 
+    /// The excerpt from a bounded Codex page: the target, its neighbours of
+    /// the same source, and `lead` when the page holds it before them
+    /// ([`xt_ingest::native::session_source::LeadKept`]); a lead outside the
+    /// page, named twice in it or of another source is left out.
     fn bounded_warning_context(
         &self,
         session_id: &str,
         record_uuid: &str,
+        lead: Option<&str>,
         block: Option<u32>,
         cancel: &xt_ingest::native::readers_cli::CancelToken,
         readers: &crate::native_index::DetailReaders,
@@ -892,7 +925,7 @@ impl AppState {
             SessionExcerptReason, SessionExcerptStatus, SessionPageSelection, SessionPageTargetKind,
         };
         use xt_ingest::native::session_source::{
-            ExcerptLimit, ExcerptUnavailable, LoadedExcerpt, PageUnavailable, SourceUnavailable,
+            ExcerptLimit, ExcerptUnavailable, PageUnavailable, SourceUnavailable, excerpt_from_page,
         };
         let selection = SessionPageSelection::Anchor {
             record_uuid: record_uuid.into(),
@@ -922,40 +955,7 @@ impl AppState {
                 }
                 PageUnavailable::InvalidCursor => ExcerptUnavailable::TargetMissing,
             }),
-            PageOpen::Read(Ok(page)) => {
-                match page
-                    .target
-                    .and_then(|ordinal| page.records.iter().position(|r| r.ordinal == ordinal))
-                {
-                    None => Err(ExcerptUnavailable::TargetMissing),
-                    Some(target) => {
-                        let source = page.records[target].source;
-                        let start = target.saturating_sub(1);
-                        let end = page.records.len().min(target + 2);
-                        let mut selected = Vec::new();
-                        let mut target_index = 0;
-                        for (index, record) in page
-                            .records
-                            .into_iter()
-                            .enumerate()
-                            .skip(start)
-                            .take(end - start)
-                        {
-                            if record.source == source {
-                                if index == target {
-                                    target_index = selected.len();
-                                }
-                                selected.push(record.record);
-                            }
-                        }
-                        Ok(LoadedExcerpt {
-                            generation: page.generation,
-                            records: selected,
-                            target: target_index,
-                        })
-                    }
-                }
-            }
+            PageOpen::Read(Ok(page)) => excerpt_from_page(page, record_uuid, lead),
         };
         SessionExcerptStatus::from_read(result, block).map_err(StateError::SourceEncoding)
     }
@@ -1439,17 +1439,17 @@ impl AppState {
         })
     }
 
-    /// The stored phrase of one of a session's correction warnings, by its
-    /// identity, from a current saved answer only
-    /// ([`xt_metrics::MetricsDb::current_saved_whole_session_warnings`]):
-    /// `None` when the saved answer is out of date, the warning is not there
-    /// or not a correction, or the read fails. Never recounts.
-    fn current_correction_phrase(
+    /// One of a session's warnings, by its identity, from a current saved
+    /// answer only ([`xt_metrics::MetricsDb::current_saved_whole_session_warnings`]):
+    /// `None` when the saved answer is out of date, the warning is not there,
+    /// or the read fails. Never recounts. A correction's stored phrase and an
+    /// admitted mistake's person's message are read from it.
+    fn current_saved_warning(
         &self,
         session_id: &str,
         warning_id: &str,
         timezone: &str,
-    ) -> Option<String> {
+    ) -> Option<xt_metrics::SessionWarning> {
         let named = [session_id.to_owned()];
         let ids = crate::session_warnings_dto::validate_ids(&named).ok()?;
         self.with_metric_inputs(|metrics, inputs| {
@@ -1465,8 +1465,6 @@ impl AppState {
                 .find(|warning| warning.id() == warning_id),
             _ => None,
         })
-        .filter(|warning| warning.kind == xt_metrics::WarningKind::Correction)
-        .and_then(|warning| warning.correction_phrase)
     }
 
     /// Dismisses one of a session's warnings: from now on no mark, count or
@@ -1994,6 +1992,33 @@ mod tests {
         readers_cli::CancelToken,
         session_source::{GenerationBasis, LoadedSession, SessionSourceOutcome},
     };
+
+    #[test]
+    fn only_an_admitted_mistake_read_around_its_own_reply_has_a_lead() {
+        let warning = |kind, anchor: &str, records: &[&str]| xt_metrics::SessionWarning {
+            kind,
+            session_id: "s".into(),
+            anchor: anchor.into(),
+            at_ms: 0,
+            record_uuids: records.iter().map(|id| (*id).to_owned()).collect(),
+            reason: String::new(),
+            compact_reason: None,
+            correction_phrase: None,
+            repeat: None,
+            size: None,
+        };
+        let admitted = warning(
+            xt_metrics::WarningKind::AdmittedMistake,
+            "reply",
+            &["message", "reply"],
+        );
+        assert_eq!(warning_lead(&admitted, "reply"), Some("message"));
+        // Read around another record than the one it points at.
+        assert_eq!(warning_lead(&admitted, "message"), None);
+        // Any other kind has none.
+        let correction = warning(xt_metrics::WarningKind::Correction, "reply", &["reply"]);
+        assert_eq!(warning_lead(&correction, "reply"), None);
+    }
 
     /// Manual acceptance only: the caller owns a controlled Claude process
     /// with no tools or session persistence. This test never starts/signals it.
@@ -3022,6 +3047,8 @@ mod tests {
                 only_tool_results: false,
                 person: None,
                 correction_marks: Vec::new(),
+                lead: false,
+                gap_after: false,
             }],
         };
         assert!(

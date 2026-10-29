@@ -296,6 +296,7 @@ function block(record: SourceRecord, source: SourceBlock, paired: Paired): Trans
         name: source.name,
         callId: source.call_id,
         input: source.input ? payload(source.input) : undefined,
+        ...(source.task_list ? { taskList: source.task_list } : {}),
         outcome: callOutcome(source.call_id, paired),
       };
     case 'tool_result':

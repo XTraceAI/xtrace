@@ -108,11 +108,41 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* The verdict, first in an answer, as a callout that reads at a glance.
+   Its kind (`real_problem`, decided natively) picks the sign and the
+   colour: a problem in the danger colours, no problem in the success
+   colours, not enough to tell in neutral greys. The sign's shape differs
+   too, so colour is never the only signal. */
 .xt-diagnosis-verdict {
-  color: var(--ink);
+  --verdict: var(--secondary);
+  --verdict-bar: var(--meta);
+  --verdict-tint: var(--cell);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  box-shadow: inset 3px 0 0 var(--verdict-bar);
+  background: var(--verdict-tint);
+  color: var(--verdict);
   font-size: 15px;
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 21px;
+}
+.xt-diagnosis-verdict[data-value='yes'] {
+  --verdict: var(--danger);
+  --verdict-bar: var(--danger);
+  --verdict-tint: var(--danger-tint);
+}
+.xt-diagnosis-verdict[data-value='no'] {
+  --verdict: var(--success);
+  --verdict-bar: var(--success);
+  --verdict-tint: var(--success-tint);
+}
+.xt-diagnosis-sign {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 2.5px;
 }
 .xt-diagnosis-parts {
   gap: 16px;
@@ -172,10 +202,6 @@
   white-space: pre-wrap;
 }
 
-.xt-diagnosis-verdict [data-value='yes'] {
-  border-color: var(--danger);
-  background: var(--danger-tint);
-}
 .xt-diagnosis-draft,
 .xt-diagnosis-line {
   margin: 0;

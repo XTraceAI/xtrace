@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useKept, type Diagnose, type Kept } from './useSessionDiagnosis';
 import { isRunFor } from '../data/diagnosis-runs';
+import type { DiagnosisRealProblem } from '../data/generated/DiagnosisRealProblem';
 import type { DiagnosisToolTried } from '../data/generated/DiagnosisToolTried';
 import type { SavedSkill } from '../data/generated/SavedSkill';
 import type { SessionDiagnosis } from '../data/generated/SessionDiagnosis';
 import type { SessionWarningItem } from '../data/generated/SessionWarningItem';
 import { SESSION_WARNINGS_TEXT } from '../data/generated/SessionWarningsText';
+import { Icon } from '../kit/icons';
+import { WarningSign } from './session-warnings';
 import '../styles/session-diagnosis.css';
 
 /**
@@ -423,7 +426,8 @@ function Answer({ answer, diagnose }: { answer: SessionDiagnosis; diagnose: Diag
         data-testid="diagnosis-real"
         data-value={answer.real_problem}
       >
-        {answer.real_problem_text}
+        <VerdictSign value={answer.real_problem} />
+        <span>{answer.real_problem_text}</span>
       </p>
       <Part label={WORDS.what_happened} testId="diagnosis-what">
         {answer.what_happened}
@@ -450,6 +454,24 @@ function Answer({ answer, diagnose }: { answer: SessionDiagnosis; diagnose: Diag
         )}
       </Part>
     </div>
+  );
+}
+
+/**
+ * The verdict's sign, drawn from its kind (`real_problem`): the warning sign
+ * for a problem, a tick in a circle for none, a question mark when the
+ * messages were not enough to tell. Each has its own shape, so colour is
+ * never the only signal; the words beside it name the verdict to a reader.
+ */
+function VerdictSign({ value }: { value: DiagnosisRealProblem }) {
+  return (
+    <span className="xt-diagnosis-sign" aria-hidden="true">
+      {value === 'yes' ? (
+        <WarningSign size={16} />
+      ) : (
+        <Icon name={value === 'no' ? 'checkCircle' : 'question'} size={16} />
+      )}
+    </span>
   );
 }
 

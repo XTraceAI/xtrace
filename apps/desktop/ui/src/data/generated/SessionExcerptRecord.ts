@@ -21,4 +21,15 @@ person: boolean | null,
  * correction in, over this record's text blocks as shown. Empty
  * everywhere else, and where the shown text has no match.
  */
-correction_marks: Array<TextMark>, };
+correction_marks: Array<TextMark>, 
+/**
+ * This record is the excerpt's lead: an earlier record of the target's
+ * own source kept ahead of its neighbours (for an admitted mistake, the
+ * person's message the agent answered). Only ever the first record.
+ */
+lead: boolean, 
+/**
+ * Records between this one and the next shown are left out (only ever
+ * set on a lead that is not directly before the next record).
+ */
+gap_after: boolean, };

@@ -72,6 +72,12 @@ export function contextExcerpt(
    * UI never works them out (`SessionExcerptRecord.correction_marks`).
    */
   marks: import('../../data/generated/TextMark').TextMark[] = [],
+  /**
+   * The record the native side keeps ahead of the target's neighbours (an
+   * admitted mistake's person's message), stated by the fixture as the
+   * native rule keeps it: once, earlier in the same source, not already shown.
+   */
+  lead: string | null = null,
 ): import('../../data/generated/SessionExcerptStatus').SessionExcerptStatus {
   const matches = status.records.flatMap((record, index) => (record.id === target ? [index] : []));
   if (matches.length !== 1)
@@ -87,11 +93,23 @@ export function contextExcerpt(
     return { state: 'unavailable', reason: { reason: 'incomplete' } };
   const range = ranges[0]!;
   const start = Math.max(range.start, position - 1);
+  const leads =
+    lead === null || lead === target
+      ? []
+      : status.records.flatMap((record, index) => (record.id === lead ? [index] : []));
+  const leadAt =
+    leads.length === 1 && leads[0]! >= range.start && leads[0]! < start ? leads[0]! : null;
+  const shown = [
+    ...(leadAt === null ? [] : [leadAt]),
+    ...Array.from({ length: Math.min(range.end, position + 2) - start }, (_, n) => start + n),
+  ];
   return {
     state: 'loaded',
     generation: status.generation,
-    records: status.records.slice(start, Math.min(range.end, position + 2)).map((source, index) => {
-      const target = start + index === position;
+    records: shown.map((at) => {
+      const source = status.records[at]!;
+      const target = at === position;
+      const isLead = at === leadAt;
       const blocks =
         target && block !== null
           ? source.blocks.filter((part) => part.index === block)
@@ -107,9 +125,10 @@ export function contextExcerpt(
         person:
           source.role !== 'user'
             ? null
-            : start + index >= status.record_ranges[0]!.start &&
-              start + index < status.record_ranges[0]!.end,
+            : at >= status.record_ranges[0]!.start && at < status.record_ranges[0]!.end,
         correction_marks: target ? marks : [],
+        lead: isLead,
+        gap_after: isLead && at + 1 < start,
       };
     }),
   };

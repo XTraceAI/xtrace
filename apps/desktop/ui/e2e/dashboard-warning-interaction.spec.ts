@@ -66,6 +66,26 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.getByTestId('day-card')).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  test(`an admitted mistake's dot shows its label alone, ${scheme}`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/e2e/dashboard-warning.html?admitted&path=/dashboard?range=7d');
+    await page.evaluate(() => document.fonts.ready);
+    await page.getByRole('radio', { name: 'human + agent', exact: true }).click();
+    const dot = effortDay(page, '2026-09-03').getByTestId('day-warning-dot');
+    await expect(dot).toHaveAttribute('data-kind', 'admitted_mistake');
+    const { x, y } = await centre(page, dot);
+    await page.mouse.move(x, y);
+    const line = page.getByTestId('day-warning-tip').getByTestId('day-warning-tip-line');
+    // The session and "Admitted mistake", and no grey line under it.
+    await expect(line).toHaveText(['Rename the config moduleAdmitted mistake']);
+    await expect(line.locator('.xt-warning-tip-reason')).toHaveCount(0);
+    if (shots) await page.screenshot({ path: `${shots}/effort-dot-admitted-${scheme}.png` });
+    expect(errors).toEqual([]);
+  });
 }
 
 for (const scheme of ['light', 'dark'] as const) {
@@ -151,6 +171,45 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(modal.getByRole('button', { name: 'Close' })).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(sep7.getByTestId('day-warning-dot').nth(1)).toBeFocused();
+    expect(errors).toEqual([]);
+  });
+
+  test(`the window's heading carries the reason in a tooltip, by hover and by Tab, ${scheme}`, async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await open(page, scheme);
+    await page.getByRole('radio', { name: 'human + agent', exact: true }).click();
+    const dot = effortDay(page, '2026-09-03').getByTestId('day-warning-dot');
+    const at = await centre(page, dot);
+    await page.mouse.click(at.x, at.y);
+    const modal = page.getByTestId('dashboard-warning-modal');
+    await expect(modal.getByRole('button', { name: 'Close' })).toBeFocused();
+    const reason = 'you wrote "wrong" after a reply (09:30)';
+    const heading = modal.getByTestId('warning-heading');
+    await expect(heading).toHaveText(SESSION_WARNINGS_TEXT.flagged_headings.correction);
+    // No line of its own: the heading is described by the reason instead.
+    await expect(modal.getByTestId('warning-reason')).toHaveCount(0);
+    await expect(heading).toHaveAccessibleDescription(reason);
+    // Its only copy in the window is hidden text: a 1px clipped box.
+    const hidden = (await modal.getByTestId('warning-reason-text').boundingBox())!;
+    expect(hidden.width * hidden.height).toBeLessThanOrEqual(1);
+    const tip = page.getByTestId('warning-reason-tip');
+    await expect(tip).toHaveCount(0);
+    await heading.hover();
+    await expect(tip).toHaveText(reason);
+    if (shots) await page.screenshot({ path: `${shots}/warning-heading-tip-${scheme}.png` });
+    await modal.getByRole('button', { name: 'Close' }).hover();
+    await expect(tip).toHaveCount(0);
+    // Reached by Tab from Close, without a mouse.
+    await modal.getByRole('button', { name: 'Close' }).focus();
+    for (let step = 0; step < 20; step += 1) {
+      if (await heading.evaluate((node) => node === document.activeElement)) break;
+      await page.keyboard.press('Tab');
+    }
+    await expect(heading).toBeFocused();
+    await expect(tip).toHaveText(reason);
     expect(errors).toEqual([]);
   });
 }

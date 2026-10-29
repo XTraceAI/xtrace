@@ -31,6 +31,21 @@ const params = new URLSearchParams(location.search);
 const path = params.get('path') ?? '/dashboard';
 const { after_dismissal: after, ...answers } = synthetic;
 const served = { ...structuredClone(fixture), ...structuredClone(answers) } as FixtureExport;
+// `?admitted`: the Sep 3 day's correction is served as an admitted mistake,
+// worded as the native side words one: its label and no short line under it.
+if (params.has('admitted'))
+  for (const entry of served.dashboard_warnings)
+    for (const day of entry.warnings.days)
+      for (const listed of day.warnings)
+        if (listed.warning.id === 'correction:o-h2')
+          Object.assign(listed.warning, {
+            id: 'admitted_mistake:o-a2',
+            kind: 'admitted_mistake',
+            label: 'Admitted mistake',
+            reason: 'the agent replied "you\'re right" after your message (09:30)',
+            compact_reason: null,
+            points_at: { record_uuid: 'o-a2', block: null, sent_by: 'agent' },
+          });
 const before = new FixtureDataSource(served);
 const later = new FixtureDataSource({
   ...served,

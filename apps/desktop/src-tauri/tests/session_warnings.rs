@@ -5,7 +5,8 @@ use serde_json::{Value, json};
 use std::path::Path;
 use xt_store::{CanonicalRecord, SessionMeta, SessionSource, Store, retention::RetentionMode};
 use xtrace_desktop::dto::{
-    DashboardWarnings, SessionWarningKind, SessionWarningsAnswer, SessionWarningsList,
+    DashboardWarnings, SessionWarningKind, SessionWarningSender, SessionWarningsAnswer,
+    SessionWarningsList,
 };
 use xtrace_desktop::session_warnings_dto::{session_warnings, validate_ids, window_warnings};
 
@@ -331,6 +332,21 @@ fn every_screen_reads_one_worded_answer_per_session() {
             ),
         ]
     );
+    // Every other kind keeps its short line under the label.
+    let compact: Vec<_> = warnings
+        .iter()
+        .map(|w| w.compact_reason.as_deref())
+        .collect();
+    assert_eq!(
+        compact,
+        vec![
+            Some("After an agent reply"),
+            Some("the same Bash call failed twice"),
+            Some("Declined Edit"),
+            Some("After an agent reply"),
+            Some("Same prompt sent twice"),
+        ]
+    );
     // Nothing a screen shows says "circling": that is M-20's own word.
     let json = serde_json::to_string(&list).unwrap();
     assert!(!json.to_lowercase().contains("circl"), "{json}");
@@ -348,9 +364,9 @@ fn every_screen_reads_one_worded_answer_per_session() {
     );
     assert_eq!(count_label.as_deref(), Some("5 warnings"));
     assert_eq!(*incomplete_checks, 0);
-    assert_eq!(checks_summary, "Checks · all 4 complete");
+    assert_eq!(checks_summary, "Checks · all 5 complete");
     assert_eq!(summary, "5 warnings to review.");
-    assert_eq!(checks.len(), 4);
+    assert_eq!(checks.len(), 5);
     assert!(!json.contains("repeated_calls") && !json.contains("Repeated call"));
     assert!(checks.iter().all(|check| check.complete));
 
@@ -370,10 +386,10 @@ fn every_screen_reads_one_worded_answer_per_session() {
     assert!(warnings.is_empty());
     assert_eq!(count_label, &None);
     assert_eq!(*incomplete_checks, 3);
-    assert_eq!(checks_summary, "Checks · 3 of 4 incomplete");
+    assert_eq!(checks_summary, "Checks · 3 of 5 incomplete");
     assert_eq!(
         summary,
-        "No warnings found, but 3 of 4 checks could not read everything, so something may still have gone wrong."
+        "No warnings found, but 3 of 5 checks could not read everything, so something may still have gone wrong."
     );
     let texts: Vec<_> = checks.iter().map(|c| c.text.as_str()).collect();
     assert_eq!(
@@ -384,6 +400,7 @@ fn every_screen_reads_one_worded_answer_per_session() {
             "Not fully checked: interruptions — 2 tool results do not say how they ended",
             "Not fully checked: repeated prompts — the words of 1 of your messages were not kept",
             "Not fully checked: repeated failures — 2 tool results do not say how they ended",
+            "Checked: admitted mistakes",
         ]
     );
 
@@ -650,7 +667,7 @@ fn a_session_with_no_timed_record_is_never_said_to_have_no_warnings() {
     };
     assert!(warnings.is_empty());
     assert_eq!(count_label, None);
-    assert_eq!(incomplete_checks, 4);
+    assert_eq!(incomplete_checks, 5);
     assert_eq!(
         summary,
         "Not checked: none of this session's 3 saved records says when it happened, so no warning can be found and none is shown."
@@ -999,6 +1016,12 @@ fn warning_targets_preserve_the_exact_record_and_result_block() {
         .unwrap();
     assert_eq!(failed.points_at.record_uuid, "two-results");
     assert_eq!(failed.points_at.block, Some(1));
+    let correction = warnings
+        .iter()
+        .find(|warning| warning.kind == SessionWarningKind::Correction)
+        .unwrap();
+    assert_eq!(correction.points_at.block, None);
+    assert_eq!(correction.points_at.sent_by, SessionWarningSender::Person);
 }
 
 fn live(root: &Path) -> xtrace_desktop::state::AppState {
@@ -1338,5 +1361,103 @@ fn commands_refuse_unknown_zones_and_invalid_report_windows_before_answering() {
         state.dismiss_session_warning("s-clean", "correction:w-h1"),
         Err(xtrace_desktop::state::StateError::UnknownWarning)
     ));
+    state.shutdown();
+}
+
+#[test]
+fn an_admitted_mistake_is_worded_once_and_dismissed_like_one_event() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("data")).unwrap();
+    let path = root.path().join("data/xtrace.db");
+    {
+        let mut store = Store::open(&path).unwrap();
+        let text = |uuid: &str, time: &str, words: &str| {
+            record(json!({"uuid":uuid,"type":"assistant","timestamp":time,
+                "message":{"role":"assistant","content":[{"type":"text","text":words}]}}))
+        };
+        // Metadata only: the warning reads the saved phrase names.
+        session(
+            &mut store,
+            "s-admitted",
+            "claude",
+            "Admission",
+            &[
+                says(
+                    "m-h1",
+                    "2026-09-07T10:00:00Z",
+                    "The parser drops the last line",
+                ),
+                text(
+                    "m-a1",
+                    "2026-09-07T10:01:00Z",
+                    "You're right, I misread the loop.",
+                ),
+            ],
+            false,
+        );
+    }
+    let state = live(root.path());
+    let read = || {
+        state
+            .session_warnings(&["s-admitted".into()], "UTC")
+            .unwrap()
+    };
+    let list = read();
+    let SessionWarningsAnswer::Read {
+        warnings, checks, ..
+    } = &list.sessions[0].answer
+    else {
+        panic!("read");
+    };
+    assert_eq!(warnings.len(), 1);
+    let warning = &warnings[0];
+    assert_eq!(warning.id, "admitted_mistake:m-a1");
+    assert_eq!(warning.label, "Admitted mistake");
+    assert_eq!(
+        warning.reason,
+        "the agent replied \"you're right\" after your message (10:01)"
+    );
+    // The label alone names it: no short line under it in the dot's hint
+    // or the session page's list.
+    assert_eq!(warning.compact_reason, None);
+    assert_eq!(
+        warning.name,
+        "Warning. Sep 7, Admitted mistake: the agent replied \"you're right\" after your message (10:01)"
+    );
+    assert_eq!(warning.record_uuids, vec!["m-h1", "m-a1"]);
+    assert_eq!(warning.points_at.record_uuid, "m-a1");
+    assert_eq!(warning.points_at.block, None);
+    // The reply's record, so the session page looks for the agent's record.
+    assert_eq!(warning.points_at.sent_by, SessionWarningSender::Agent);
+    assert_eq!(warning.returned, None);
+    assert_eq!(
+        checks.last().map(|c| (c.complete, c.text.as_str())),
+        Some((true, "Checked: admitted mistakes"))
+    );
+    // One event: dismissed with no size, and stays dismissed.
+    state
+        .dismiss_session_warning("s-admitted", "admitted_mistake:m-a1")
+        .unwrap();
+    let after = read();
+    let (active, dismissed, count, _) = shown(&after.sessions[0].answer);
+    assert!(active.is_empty());
+    assert_eq!(dismissed, vec!["admitted_mistake:m-a1"]);
+    assert_eq!(count, None);
+    let size: Option<i64> = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT size FROM dismissed_warnings WHERE warning_id='admitted_mistake:m-a1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(size, None);
+    state
+        .restore_session_warning("s-admitted", "admitted_mistake:m-a1")
+        .unwrap();
+    let undone = read();
+    let (active, dismissed, _, _) = shown(&undone.sessions[0].answer);
+    assert_eq!(active, vec!["admitted_mistake:m-a1"]);
+    assert!(dismissed.is_empty());
     state.shutdown();
 }

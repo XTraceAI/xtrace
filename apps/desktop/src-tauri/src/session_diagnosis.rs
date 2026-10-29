@@ -19,7 +19,7 @@ use xt_judge::diagnosis::{
     answer,
     input::{self, HostName, Message, Sender},
 };
-use xt_metrics::{WarningKind, WarningPoint};
+use xt_metrics::{WarningKind, WarningPoint, WarningSender};
 
 /// Characters of a tool call's input shown in `(ran <tool>: <input>)`.
 pub const MAX_CALL_INPUT_CHARS: usize = 200;
@@ -207,7 +207,8 @@ pub fn diagnose(
             });
         }
     };
-    let Some((messages, flagged)) = conversation(&records, &facts.records, &flag) else {
+    let sender = warning.kind.points_at_sender();
+    let Some((messages, flagged)) = conversation(&records, &facts.records, &flag, sender) else {
         return Ok(SessionDiagnosis::FlaggedMessageNotFound {
             text: dto::FLAGGED_NOT_FOUND.to_owned(),
         });
@@ -439,6 +440,7 @@ fn kind(kind: WarningKind) -> input::WarningKind {
         WarningKind::Interruption => input::WarningKind::Interruption,
         WarningKind::RepeatedPrompt => input::WarningKind::RepeatedPrompt,
         WarningKind::RepeatedFailure => input::WarningKind::RepeatedFailure,
+        WarningKind::AdmittedMistake => input::WarningKind::AdmittedMistake,
     }
 }
 
@@ -497,10 +499,16 @@ pub struct RecordFacts {
 /// The flagged record's conversation as messages, and the flagged one's
 /// position. `None` when its record or explicit tool call/result block cannot be
 /// selected exactly, or a flagged subagent record has no saved subagent ID.
+///
+/// `sender` is who sent the record a whole-record flag names
+/// (`xt_metrics::WarningKind::points_at_sender`): the person's record, or
+/// the agent's reply for an admitted mistake. A whole-record flag on a record
+/// from anyone else is refused. A block flag is matched by its block's kind.
 pub fn conversation(
     records: &[ParsedRecord],
     facts: &HashMap<String, RecordFacts>,
     flag: &WarningPoint,
+    sender: WarningSender,
 ) -> Option<(Vec<Message>, usize)> {
     let mut anchors = records
         .iter()
@@ -536,7 +544,11 @@ pub fn conversation(
         let is_flagged = source.id == flag.record_uuid && flagged.is_none();
         if is_flagged
             && flag.block.is_none()
-            && source.role != crate::transcript_dto::RecordRole::User
+            && source.role
+                != match sender {
+                    WarningSender::Person => crate::transcript_dto::RecordRole::User,
+                    WarningSender::Agent => crate::transcript_dto::RecordRole::Assistant,
+                }
         {
             return None;
         }
@@ -584,6 +596,7 @@ pub fn conversation(
                                 name,
                                 call_id,
                                 input,
+                                ..
                             } => {
                                 if let Some(id) = call_id {
                                     calls.insert(id.clone(), name.clone());

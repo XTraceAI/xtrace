@@ -13,6 +13,36 @@ it('renders the bounded native excerpt with one trigger', () => {
     ['after', false],
   ]);
 });
+it('passes on the native lead and its gap without working them out', () => {
+  // far-before(0), before(1), target(2): the lead is directly before them.
+  const adjacent = warningExcerpt({
+    phase: 'read',
+    status: contextExcerpt(contextFixture('target'), 'target', null, [], 'far-before'),
+  });
+  if (adjacent.kind !== 'excerpt') throw new Error('excerpt');
+  expect(adjacent.hasLead).toBe(true);
+  expect(adjacent.records.map(({ record, gapAfter }) => [record.id, gapAfter])).toEqual([
+    ['far-before', false],
+    ['before', false],
+    ['target', false],
+    ['after', false],
+  ]);
+  // A lead already beside the target is not repeated, and no lead is kept.
+  const beside = warningExcerpt({
+    phase: 'read',
+    status: contextExcerpt(contextFixture('target'), 'target', null, [], 'before'),
+  });
+  if (beside.kind !== 'excerpt') throw new Error('excerpt');
+  expect(beside.hasLead).toBe(false);
+  expect(beside.records).toHaveLength(3);
+  // With a step between, the native gap flag is shown as given.
+  const status = contextExcerpt(contextFixture('target'), 'target', null, [], 'far-before');
+  if (status.state !== 'loaded') throw new Error('loaded');
+  status.records[0]!.gap_after = true;
+  const gap = warningExcerpt({ phase: 'read', status });
+  if (gap.kind !== 'excerpt') throw new Error('excerpt');
+  expect(gap.records.map(({ gapAfter }) => gapAfter)).toEqual([true, false, false, false]);
+});
 it('does not infer call results or their tool names from an excerpt', () => {
   const status = contextFixture('target');
   status.records[2]!.blocks = [

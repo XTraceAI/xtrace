@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { warning, second } from './session-warnings.data';
+import { admitted, admittedOnPerson, warning, second } from './session-warnings.data';
 import type { SessionPageSelection } from '../src/data/generated/SessionPageSelection';
 
 const anchors = (page: import('@playwright/test').Page) =>
@@ -60,6 +60,40 @@ for (const host of ['claude', 'codex'] as const)
           path: info.outputPath(`${host}-${theme}-${paged ? 'paged' : 'full'}-result.png`),
           fullPage: true,
         });
+        // An admitted mistake points at the agent's reply, not the person's message.
+        await page.getByRole('button', { name: admitted.name }).click();
+        const reply = conversation.locator('[data-record-id="answer"]');
+        await expect(reply).toHaveAttribute('data-highlighted', 'true');
+        await expect(reply).toHaveAttribute('data-role', 'assistant');
+        await expect(reply).toBeInViewport();
+        await expect(card).toBeFocused();
+        await expect(
+          page.getByText('Showing the original warning message.', { exact: true }),
+        ).toBeVisible();
+        await expect(conversation.locator('[data-highlighted]')).toHaveCount(1);
+        const replies = await anchors(page);
+        expect(replies).toHaveLength(paged ? 3 : 0);
+        if (paged)
+          expect(replies[2]).toMatchObject({
+            kind: 'anchor',
+            expected: 'message',
+            record_uuid: 'answer',
+            block: null,
+          });
+        await page.screenshot({
+          path: info.outputPath(`${host}-${theme}-${paged ? 'paged' : 'full'}-reply.png`),
+          fullPage: true,
+        });
+        // The same kind saved on a person's message is refused, never shown as the reply.
+        await page.getByRole('button', { name: admittedOnPerson.name }).click();
+        await expect(
+          page
+            .getByText('The saved warning position does not point to an agent reply.', {
+              exact: false,
+            })
+            .first(),
+        ).toBeVisible();
+        await expect(conversation.locator('[data-highlighted]')).toHaveCount(0);
         await page.getByRole('button', { name: warning.name }).click();
         await expect(message).toHaveAttribute('data-highlighted', 'true');
         const count = (await anchors(page)).length;

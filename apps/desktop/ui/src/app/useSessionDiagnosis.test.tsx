@@ -21,7 +21,7 @@ const warning: SessionWarningItem = {
   compact_reason: 'Synthetic correction',
   name: 'Synthetic warning',
   record_uuids: ['record-a'],
-  points_at: { record_uuid: 'record-a', block: null },
+  points_at: { record_uuid: 'record-a', block: null, sent_by: 'person' },
   returned: null,
 };
 const warnings = [warning];

@@ -33,7 +33,7 @@ checks_summary: string,
  */
 dismissed: Array<SessionWarningItem>, 
 /**
- * The four checks, in a fixed order.
+ * The five checks, in a fixed order.
  */
 checks: Array<SessionWarningCheck>, 
 /**

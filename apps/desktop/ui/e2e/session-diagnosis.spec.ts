@@ -260,3 +260,55 @@ for (const scheme of ['light', 'dark'] as const) {
     expect((await calls(page)).runs).toHaveLength(1);
   });
 }
+
+// Each verdict reads at a glance: its own sign and its own colours, from the
+// native verdict kind, with the native words beside the sign.
+const verdicts = [
+  { key: 'problem_no_suggestion', kind: 'yes', ink: '--danger', tint: '--danger-tint' },
+  { key: 'nothing', kind: 'no', ink: '--success', tint: '--success-tint' },
+  { key: 'not_sure', kind: 'not_sure', ink: '--secondary', tint: '--cell' },
+] as const;
+for (const scheme of ['light', 'dark'] as const)
+  for (const { key, kind, ink, tint } of verdicts)
+    test(`the ${kind} verdict is a callout with its own sign and colours, ${scheme}`, async ({
+      page,
+    }, testInfo) => {
+      const row = await open(page, scheme);
+      await row.getByRole('button', { name: /^Diagnose this warning:/ }).click();
+      await row.getByRole('button', { name: words.confirm }).click();
+      await expect(row.getByTestId('diagnosis-running')).toBeVisible();
+      await answer(page, key);
+      const made = synthetic.diagnoses[key];
+      const verdict = row.getByTestId('diagnosis-real');
+      await expect(verdict).toHaveText(made.real_problem_text);
+      await expect(verdict).toHaveAttribute('data-value', kind);
+      const sign = verdict.locator('.xt-diagnosis-sign');
+      await expect(sign).toHaveAttribute('aria-hidden', 'true');
+      await expect(sign.locator('svg')).toBeVisible();
+      const drawn = await verdict.evaluate(
+        (node, tokens) => {
+          const probe = document.createElement('span');
+          node.append(probe);
+          probe.style.color = `var(${tokens.ink})`;
+          probe.style.backgroundColor = `var(${tokens.tint})`;
+          const want = getComputedStyle(probe);
+          const result = {
+            color: getComputedStyle(node).color,
+            sign: getComputedStyle(node.querySelector('svg')!).stroke,
+            background: getComputedStyle(node).backgroundColor,
+            wantColor: want.color,
+            wantBackground: want.backgroundColor,
+          };
+          probe.remove();
+          return result;
+        },
+        { ink, tint },
+      );
+      expect(drawn.color).toBe(drawn.wantColor);
+      expect(drawn.sign).toBe(drawn.wantColor);
+      expect(drawn.background).toBe(drawn.wantBackground);
+      if (process.env.WARNING_SHOTS)
+        await row.getByTestId('diagnosis-result').screenshot({
+          path: `${process.env.WARNING_SHOTS}/verdict-page-${kind}-${testInfo.project.name}-${scheme}.png`,
+        });
+    });

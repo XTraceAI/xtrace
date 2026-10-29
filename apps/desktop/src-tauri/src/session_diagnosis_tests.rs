@@ -6,7 +6,7 @@ use xt_judge::diagnosis::{
     agents::{Diagnosis, Model, RunFailure, Skip},
     input::Sender,
 };
-use xt_metrics::WarningKind;
+use xt_metrics::{WarningKind, WarningSender};
 
 fn sent_input() -> input::Built {
     let messages: Vec<input::Message> = (1..=20)
@@ -347,7 +347,13 @@ fn records_become_labelled_messages_with_calls_named_and_replies_joined() {
             "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}})),
         person(7, "still not working"),
     ];
-    let (messages, flagged) = conversation(&records, &facts(&[1, 5, 7]), &flag(7)).unwrap();
+    let (messages, flagged) = conversation(
+        &records,
+        &facts(&[1, 5, 7]),
+        &flag(7),
+        WarningSender::Person,
+    )
+    .unwrap();
     let shown: Vec<(Sender, &str)> = messages
         .iter()
         .map(|m| (m.sender.clone(), m.text.as_str()))
@@ -384,7 +390,7 @@ fn records_become_labelled_messages_with_calls_named_and_replies_joined() {
     // Thinking is never sent.
     assert!(!messages.iter().any(|m| m.text.contains("secret plan")));
     // A record the source does not hold flags nothing.
-    assert!(conversation(&records, &facts(&[]), &flag(99)).is_none());
+    assert!(conversation(&records, &facts(&[]), &flag(99), WarningSender::Person).is_none());
 }
 
 #[test]
@@ -407,7 +413,8 @@ fn a_flagged_tool_result_block_is_the_flagged_message() {
         record_uuid: uuid(2),
         block: Some(1),
     };
-    let (messages, flagged) = conversation(&records, &HashMap::new(), &flag).unwrap();
+    let (messages, flagged) =
+        conversation(&records, &HashMap::new(), &flag, WarningSender::Person).unwrap();
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0].text, "(ran Read: /p/x.rs)\n(ran Edit: /p/y.rs)");
     assert_eq!(flagged, 2);
@@ -424,7 +431,8 @@ fn a_flagged_tool_result_block_is_the_flagged_message() {
             &WarningPoint {
                 block: Some(2),
                 ..flag.clone()
-            }
+            },
+            WarningSender::Person
         )
         .is_none()
     );
@@ -435,6 +443,7 @@ fn a_flagged_tool_result_block_is_the_flagged_message() {
             block: None,
             ..flag
         },
+        WarningSender::Person,
     )
     .unwrap();
     assert_eq!(whole_record, 1);
@@ -464,18 +473,78 @@ fn an_explicit_block_refuses_text_and_tools_in_the_wrong_role() {
                     &WarningPoint {
                         record_uuid: uuid(2),
                         block: Some(1),
-                    }
+                    },
+                    WarningSender::Person
                 )
                 .is_none(),
                 "{role} {records:?}"
             );
             assert_eq!(
-                conversation(&records, &HashMap::new(), &flag(2)).is_some(),
+                conversation(&records, &HashMap::new(), &flag(2), WarningSender::Person).is_some(),
                 role == "user",
                 "whole-record warnings require the user role"
             );
         }
     }
+}
+
+#[test]
+fn an_admitted_mistake_flags_the_agents_reply_after_the_persons_message() {
+    let records = vec![
+        person(1, "the parser drops the last line"),
+        agent(
+            2,
+            "m1",
+            json!([{"type": "text", "text": "You're right, I misread the loop."}]),
+        ),
+        person(3, "thanks, try again"),
+    ];
+    let people = facts(&[1, 3]);
+    let sender = WarningKind::AdmittedMistake.points_at_sender();
+    assert_eq!(sender, WarningSender::Agent);
+    let (messages, flagged) = conversation(&records, &people, &flag(2), sender).unwrap();
+    assert_eq!(flagged, 1);
+    assert_eq!(
+        messages
+            .iter()
+            .map(|m| (m.sender.clone(), m.text.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (Sender::Person, "the parser drops the last line"),
+            (Sender::Agent, "You're right, I misread the loop."),
+            (Sender::Person, "thanks, try again"),
+        ]
+    );
+    let built = input::build(
+        &input::Header {
+            kind: input::WarningKind::AdmittedMistake,
+            reason: input::reason(input::WarningKind::AdmittedMistake, 2),
+            host: input::HostName::ClaudeCode,
+            project: "synthetic".into(),
+        },
+        &messages,
+        flagged,
+    )
+    .unwrap();
+    assert!(built.text.contains("flagged_message: 2\n"));
+    assert!(built.text.contains(
+        "[1] person:\n  the parser drops the last line\n\
+         [2] agent (flagged):\n  You're right, I misread the loop.\n\
+         [3] person:\n  thanks, try again\n"
+    ));
+    assert_eq!(built.sent.flagged, 2);
+    // Every other kind names a person's record, so the same assistant record
+    // is still refused for them, and an admitted mistake never flags the
+    // person's message.
+    for kind in WarningKind::ALL {
+        if kind != WarningKind::AdmittedMistake {
+            assert!(
+                conversation(&records, &people, &flag(2), kind.points_at_sender()).is_none(),
+                "{kind:?}"
+            );
+        }
+    }
+    assert!(conversation(&records, &people, &flag(1), sender).is_none());
 }
 
 #[test]
@@ -492,7 +561,8 @@ fn duplicate_flagged_record_ids_are_refused() {
                 &WarningPoint {
                     record_uuid: uuid(2),
                     block,
-                }
+                },
+                WarningSender::Person
             )
             .is_none()
         );
@@ -525,13 +595,13 @@ fn only_the_flagged_records_own_conversation_is_used() {
             },
         );
     }
-    let (main, flagged) = conversation(&records, &facts, &flag(4)).unwrap();
+    let (main, flagged) = conversation(&records, &facts, &flag(4), WarningSender::Person).unwrap();
     assert_eq!(
         main.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(),
         ["main one", "main two"]
     );
     assert_eq!(flagged, 1);
-    let (sub, _) = conversation(&records, &facts, &flag(3)).unwrap();
+    let (sub, _) = conversation(&records, &facts, &flag(3), WarningSender::Person).unwrap();
     assert_eq!(
         sub.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(),
         ["sub b"]
@@ -548,7 +618,7 @@ fn the_flagged_record_is_the_one_the_warning_points_at() {
             at_ms: 0,
             record_uuids: records.iter().map(|n| uuid(*n)).collect(),
             reason: "you wrote \"no\" after a reply (10:00)".into(),
-            compact_reason: "After an agent reply".into(),
+            compact_reason: Some("After an agent reply".into()),
             correction_phrase: None,
             repeat,
             size: None,
@@ -584,13 +654,41 @@ fn the_flagged_record_is_the_one_the_warning_points_at() {
         Some(both.clone()),
     );
     assert_eq!(repeated.points_at(), both);
-    let (messages, flagged) =
-        conversation(&records, &HashMap::new(), &repeated.points_at()).unwrap();
+    let (messages, flagged) = conversation(
+        &records,
+        &HashMap::new(),
+        &repeated.points_at(),
+        WarningSender::Person,
+    )
+    .unwrap();
     assert!(messages[flagged].text.ends_with("second"));
     // The header's reason is the fixed sentence, never the stored one that
     // quotes the person.
     let header_reason = input::reason(input::WarningKind::Correction, 1);
     assert!(!header_reason.contains("10:00"));
+}
+
+#[test]
+fn an_encrypted_message_reaches_diagnose_as_its_placeholder() {
+    // Codex's agents send each other Fernet tokens: the conversation sent to
+    // Diagnose names one, as the screens do, instead of its ciphertext.
+    let secret = format!("gAAAAA{}", "Zq9-Rw7_Kp".repeat(80));
+    let records = vec![agent(
+        1,
+        "m1",
+        json!([{"type": "tool_use", "id": "a", "name": "send_message",
+            "input": {"target": "/root", "message": secret}}]),
+    )];
+    let flag = WarningPoint {
+        record_uuid: uuid(1),
+        block: None,
+    };
+    let (messages, _) =
+        conversation(&records, &HashMap::new(), &flag, WarningSender::Agent).unwrap();
+    assert_eq!(
+        messages[0].text,
+        "(ran send_message: {\"message\":\"encrypted (806 characters, not readable)\",\"target\":\"/root\"})"
+    );
 }
 
 #[test]
@@ -605,6 +703,10 @@ fn a_call_input_is_one_short_line() {
     assert_eq!(long.chars().count(), MAX_CALL_INPUT_CHARS);
     assert!(long.ends_with('…'));
     assert_eq!(call_line("Bash", None), "(ran Bash)");
+    // A task list reaches Diagnose as its compact JSON, like any other input:
+    // the checklist is the screen's drawing of it, and the model reads JSON.
+    let plan = json!({"items": [{"content": "a", "status": "in_progress"}]});
+    assert_eq!(short_input(&json(plan.clone())), plan.to_string());
 }
 
 #[test]
@@ -630,6 +732,7 @@ fn a_late_flagged_tool_call_survives_long_assistant_prose_and_input_bounds() {
             record_uuid: uuid(2),
             block: Some(26),
         },
+        WarningSender::Person,
     )
     .unwrap();
     let built = input::build(
@@ -675,11 +778,11 @@ fn unknown_subagent_identity_refuses_context_instead_of_mixing_two_subagents() {
         }
         for n in [2, 3] {
             assert!(
-                conversation(&records, &saved, &flag(n)).is_none(),
+                conversation(&records, &saved, &flag(n), WarningSender::Person).is_none(),
                 "unknown saved subagent ID {missing:?} must stop before choosing messages"
             );
         }
-        let (main, _) = conversation(&records, &saved, &flag(1)).unwrap();
+        let (main, _) = conversation(&records, &saved, &flag(1), WarningSender::Person).unwrap();
         assert_eq!(main.len(), 1);
         assert_eq!(main[0].text, "main conversation");
         assert_eq!(main[0].sender, Sender::Person);
@@ -1577,7 +1680,8 @@ fn bounded_diagnosis_context_keeps_a_late_flag_and_only_its_subagent_messages() 
         facts.records[&uuid(51)].agent_id.as_deref(),
         Some("agent-b")
     );
-    let (messages, flagged) = conversation(&records, &facts.records, &point).unwrap();
+    let (messages, flagged) =
+        conversation(&records, &facts.records, &point, WarningSender::Person).unwrap();
     assert!(messages[flagged].text.starts_with("(ran write_stdin:"));
     assert!(
         !messages
@@ -1602,6 +1706,53 @@ fn bounded_diagnosis_context_keeps_a_late_flag_and_only_its_subagent_messages() 
     );
     state.shutdown();
     drop(root);
+}
+
+#[test]
+fn native_diagnosis_of_an_admitted_mistake_sends_the_flagged_reply() {
+    let lines = vec![
+        json!({"uuid":uuid(1),"type":"user","timestamp":at(1),"message":{"role":"user","content":[{"type":"text","text":"the parser drops the last line"}]}}),
+        json!({"uuid":uuid(2),"type":"assistant","timestamp":at(2),"message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"You're right, I misread the loop."}]}}),
+    ];
+    let (root, state, sid, home) = native_diagnosis_scene(&lines);
+    let warning_id = format!("admitted_mistake:{}", uuid(2));
+    let (warning, _) = state
+        .session_warning(&sid, &warning_id, "UTC")
+        .unwrap()
+        .expect("the indexed admission is a warning");
+    assert_eq!(warning.points_at(), flag(2));
+    let environment = synthetic_agent(root.path(), &home, false);
+    let runs = Arc::new(DiagnosisRuns::default());
+    let request = Request {
+        session_id: &sid,
+        warning_id: &warning_id,
+        timezone: "UTC",
+        read_id: "admitted-run",
+    };
+    let found = diagnose(
+        &state,
+        reserve(&runs, &request).unwrap().unwrap(),
+        &crate::native_index::DetailReaders::disabled(),
+        &environment,
+        &request,
+    )
+    .unwrap();
+    let SessionDiagnosis::Diagnosed { messages, .. } = found else {
+        panic!("{found:?}")
+    };
+    assert_eq!(messages.len(), 2);
+    assert!(!messages[0].flagged);
+    assert!(messages[0].text.contains("the parser drops the last line"));
+    assert!(messages[1].flagged);
+    assert!(
+        messages[1]
+            .text
+            .contains("You're right, I misread the loop.")
+    );
+    let prompt = std::fs::read_to_string(home.join("sent-prompt.txt")).unwrap();
+    assert!(prompt.contains("warning_kind: admitted_mistake"));
+    assert!(prompt.contains("[2] agent (flagged):"));
+    state.shutdown();
 }
 
 #[test]
@@ -1697,7 +1848,8 @@ fn a_whole_record_warning_whose_source_changed_to_assistant_stops_before_the_too
 #[test]
 fn role_checks_keep_automatic_user_interruptions_and_explicit_assistant_calls() {
     let records = vec![person(1, "[Request interrupted by user]")];
-    let (messages, flagged) = conversation(&records, &HashMap::new(), &flag(1)).unwrap();
+    let (messages, flagged) =
+        conversation(&records, &HashMap::new(), &flag(1), WarningSender::Person).unwrap();
     assert_eq!(flagged, 0);
     assert_eq!(messages[0].sender, Sender::Automatic);
     let records = vec![agent(
@@ -1712,13 +1864,15 @@ fn role_checks_keep_automatic_user_interruptions_and_explicit_assistant_calls() 
             record_uuid: uuid(2),
             block: Some(0),
         },
+        WarningSender::Person,
     )
     .unwrap();
     assert_eq!(flagged, 0);
     assert_eq!(messages[0].sender, Sender::Agent);
     assert!(messages[0].text.starts_with("(ran Read:"));
     let records = vec![result(3, "read", "synthetic result", false)];
-    let (messages, flagged) = conversation(&records, &HashMap::new(), &flag(3)).unwrap();
+    let (messages, flagged) =
+        conversation(&records, &HashMap::new(), &flag(3), WarningSender::Person).unwrap();
     assert_eq!(flagged, 0);
     assert_eq!(messages[0].sender, Sender::ToolResult { tool: None });
 }

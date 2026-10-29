@@ -4,7 +4,7 @@
     "version": "0.1.9",
     "data_dir": "fixture://F1",
     "fixture": "F1",
-    "schema_version": 29,
+    "schema_version": 31,
     "listening": false,
     "had_indexed_history_at_startup": true
   },
@@ -1562,7 +1562,7 @@
           "warnings": [],
           "count_label": null,
           "summary": "No warnings. Every check read everything it needed.",
-          "checks_summary": "Checks · all 4 complete",
+          "checks_summary": "Checks · all 5 complete",
           "dismissed": [],
           "checks": [
             {
@@ -1584,6 +1584,11 @@
               "kind": "repeated_failure",
               "complete": true,
               "text": "Checked: repeated failures"
+            },
+            {
+              "kind": "admitted_mistake",
+              "complete": true,
+              "text": "Checked: admitted mistakes"
             }
           ],
           "incomplete_checks": 0

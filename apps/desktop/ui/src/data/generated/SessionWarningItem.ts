@@ -32,9 +32,11 @@ day: string,
  */
 reason: string, 
 /**
- * A short native summary for the issue navigator; full reason stays available.
+ * A short native line under the label where room is short (a dot's
+ * hint, the session page's list of warnings); the full reason stays
+ * available. `null` when the label alone says it: an admitted mistake.
  */
-compact_reason: string, 
+compact_reason: string | null, 
 /**
  * What a mark for this warning alone is named: "Warning. Sep 4,
  * Correction: …", its day, label and reason.

@@ -425,7 +425,7 @@ for (const replace of [false, true])
         warning: {
           ...selected.warning,
           id: 'replacement',
-          points_at: { record_uuid: 'replacement', block: null },
+          points_at: { record_uuid: 'replacement', block: null, sent_by: 'person' as const },
         },
       });
     else fireEvent.click(close());
@@ -444,7 +444,10 @@ it('refuses partial source sets instead of guessing the triggering message', asy
 });
 it('shows the exact target tool output expanded, with no unrelated block', async () => {
   const test = setup();
-  const warning = { ...selected.warning, points_at: { record_uuid: 'tool-result', block: 99 } };
+  const warning = {
+    ...selected.warning,
+    points_at: { record_uuid: 'tool-result', block: 99, sent_by: 'person' as const },
+  };
   test.warnings.mockResolvedValue({
     timezone: selected.timezone,
     sessions: [{ session_id: selected.sessionId, answer: { ...read, warnings: [warning] } }],
@@ -482,7 +485,7 @@ it('guards another warning in the same session and requests only its excerpt', a
   const another = {
     ...selected.warning,
     id: 'another',
-    points_at: { record_uuid: 'another', block: null },
+    points_at: { record_uuid: 'another', block: null, sent_by: 'person' as const },
   };
   test.warnings.mockResolvedValue({
     timezone: selected.timezone,
@@ -639,6 +642,38 @@ const quoted = (
     marks,
   );
 
+/** The heading over why a warning was flagged, and the reason it is described by. */
+function flagged() {
+  const heading = screen.getByTestId('warning-heading');
+  const described = document.getElementById(heading.getAttribute('aria-describedby') ?? '');
+  return { heading, reason: described?.textContent };
+}
+
+// The reason is a tooltip on the heading, not a line of its own: hovering
+// or focusing the heading (a tab stop) shows it, and the heading is
+// described by it for a screen reader.
+it('puts the reason in a tooltip on the heading, opened by keyboard focus', async () => {
+  const test = setup();
+  test.transcript.mockResolvedValue(quoted([]));
+  test.mount();
+  await screen.findByTestId('warning-heading');
+  const { heading, reason } = flagged();
+  expect(heading.tagName).toBe('H3');
+  expect(heading.textContent).toBe(SESSION_WARNINGS_TEXT.flagged_headings.correction);
+  expect(heading.tabIndex).toBe(0);
+  expect(reason).toBe(selected.warning.reason);
+  // No visible reason line: the only copy in the window is the hidden description.
+  expect(screen.queryByTestId('warning-reason')).toBeNull();
+  expect(screen.getByTestId('warning-reason-text').className).toBe('sr-only');
+  expect(screen.queryByTestId('warning-reason-tip')).toBeNull();
+  heading.focus();
+  fireEvent.focus(heading);
+  expect((await screen.findByTestId('warning-reason-tip')).textContent).toBe(
+    selected.warning.reason,
+  );
+  // Hover is checked in a real browser (dashboard-warning-interaction.spec.ts).
+});
+
 // A correction's reason is its whole message with the native marks shown;
 // the conversation and the reason share one read.
 it('shows a correction as "you wrote" and its whole message with the native marks', async () => {
@@ -655,6 +690,8 @@ it('shows a correction as "you wrote" and its whole message with the native mark
     'not',
   ]);
   expect(reason.textContent).not.toContain(selected.warning.reason);
+  // The heading still carries the reason, as for every kind.
+  expect(flagged().reason).toBe(selected.warning.reason);
   expect(test.transcript).toHaveBeenCalledOnce();
   expect((test.transcript.mock.calls[0] as unknown[])[4]).toEqual({
     id: selected.warning.id,
@@ -664,7 +701,7 @@ it('shows a correction as "you wrote" and its whole message with the native mark
 });
 
 for (const state of ['loading', 'failed', 'unmarked', 'unavailable'] as const)
-  it(`shows the correction's own reason while the message is ${state}`, async () => {
+  it(`gives the correction only its heading's reason while the message is ${state}`, async () => {
     const test = setup();
     if (state === 'loading') test.transcript.mockImplementation(() => new Promise(() => {}));
     else if (state === 'failed') test.transcript.mockRejectedValue(new Error('unreadable'));
@@ -675,15 +712,15 @@ for (const state of ['loading', 'failed', 'unmarked', 'unavailable'] as const)
         reason: { reason: 'target_missing' },
       });
     test.mount();
-    await screen.findByTestId('warning-reason');
+    await screen.findByTestId('warning-heading');
     await waitFor(() => expect(test.transcript).toHaveBeenCalled());
     if (state !== 'loading')
       await waitFor(() =>
         expect(screen.queryByText('Loading the original conversation…')).toBeNull(),
       );
-    const reason = screen.getByTestId('warning-reason');
-    expect(reason.textContent).toBe(selected.warning.reason);
-    expect(reason.querySelector('mark')).toBeNull();
+    expect(flagged().reason).toBe(selected.warning.reason);
+    expect(screen.queryByTestId('warning-reason')).toBeNull();
+    expect(dialog().querySelector('mark')).toBeNull();
     expect(dialog().textContent).not.toContain('take a closer look');
   });
 
@@ -694,7 +731,7 @@ it('asks for every warning by its own ID and shows its reason when nothing is ma
   const other = read.warnings.find((one) => one.kind !== 'correction')!;
   test.transcript.mockResolvedValue(quoted([]));
   test.mount();
-  await screen.findByTestId('warning-reason');
+  await screen.findByTestId('warning-heading');
   test.select({ ...selected, warning: other });
   await waitFor(() => expect(screen.getByTestId('warning-item').dataset.warningId).toBe(other.id));
   await waitFor(() => expect(test.transcript).toHaveBeenCalledTimes(2));
@@ -702,8 +739,54 @@ it('asks for every warning by its own ID and shows its reason when nothing is ma
     id: other.id,
     timezone: selected.timezone,
   });
-  expect(screen.getByTestId('warning-reason').textContent).toBe(other.reason);
-  expect(screen.getByTestId('warning-reason').querySelector('mark')).toBeNull();
+  expect(flagged().heading.textContent).toBe(SESSION_WARNINGS_TEXT.flagged_headings[other.kind]);
+  expect(flagged().reason).toBe(other.reason);
+  expect(screen.queryByTestId('warning-reason')).toBeNull();
+});
+
+it('names an admitted mistake with its own heading and tag, its native reason on the heading', async () => {
+  const test = setup();
+  // Supplied synthetic DTO: the native side words the reason and tag.
+  const admitted = {
+    ...selected.warning,
+    id: 'admitted_mistake:synthetic-reply',
+    kind: 'admitted_mistake' as const,
+    label: 'Admitted mistake',
+    reason: 'Supplied admission reason (10:05)',
+    compact_reason: null,
+    record_uuids: [selected.warning.points_at.record_uuid, 'synthetic-reply'],
+    points_at: { record_uuid: 'synthetic-reply', block: null, sent_by: 'agent' as const },
+  };
+  const withAdmission = structuredClone(list);
+  const answer = withAdmission.sessions.find((one) => one.session_id === 's-warned')!.answer;
+  if (answer.state === 'read') answer.warnings.push(admitted);
+  test.warnings.mockImplementation(async () => structuredClone(withAdmission));
+  test.transcript.mockResolvedValue(
+    contextExcerpt(contextFixture('synthetic-reply'), 'synthetic-reply'),
+  );
+  test.mount();
+  await screen.findByTestId('warning-heading');
+  test.select({ ...selected, warning: admitted });
+  await waitFor(() =>
+    expect(screen.getByTestId('warning-item').dataset.warningId).toBe(admitted.id),
+  );
+  expect(
+    within(dialog()).getByRole('heading', {
+      name: SESSION_WARNINGS_TEXT.flagged_headings.admitted_mistake,
+    }),
+  ).toBeTruthy();
+  expect(SESSION_WARNINGS_TEXT.flagged_headings.admitted_mistake).toBe(
+    'The agent admitted a mistake.',
+  );
+  expect(SESSION_WARNINGS_TEXT.message_tags.admitted_mistake).toBe('Admitted mistake');
+  await waitFor(() =>
+    expect(screen.getByTestId('warning-context-flag').textContent).toBe('Admitted mistake'),
+  );
+  // Its reason is the heading's tooltip, not a line under it.
+  expect(flagged().reason).toBe(admitted.reason);
+  expect(screen.queryByTestId('warning-reason')).toBeNull();
+  fireEvent.focus(flagged().heading);
+  expect((await screen.findByTestId('warning-reason-tip')).textContent).toBe(admitted.reason);
 });
 
 /** A full press on the window's backdrop, as a pointer makes it. */

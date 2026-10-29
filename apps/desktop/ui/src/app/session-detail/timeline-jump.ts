@@ -1,4 +1,6 @@
 import type { SessionWarningPoint } from '../../data/generated/SessionWarningPoint';
+import type { SessionWarningSender } from '../../data/generated/SessionWarningSender';
+import type { RecordRole } from '../../data/generated/RecordRole';
 import type { RevealTarget } from './transcript-reveal';
 /**
  * Whether a stretch's first tool call can be shown, and exactly where.
@@ -108,10 +110,28 @@ export type WarningJump =
   | { readonly kind: 'target'; readonly target: RevealTarget }
   | {
       readonly kind: 'unavailable';
-      readonly reason: JumpUnavailable | 'not_a_user_message' | 'not_a_tool_block';
+      readonly reason:
+        JumpUnavailable | 'not_a_user_message' | 'not_an_agent_reply' | 'not_a_tool_block';
     };
 
-/** A saved warning position names one exact message or original tool block. */
+/**
+ * The record role a whole-record point must have, by who the native answer
+ * says sent it (`SessionWarningPoint.sent_by`), and the refusal when the
+ * record has another role.
+ */
+const SENDER: Record<
+  SessionWarningSender,
+  { readonly role: RecordRole; readonly refusal: 'not_a_user_message' | 'not_an_agent_reply' }
+> = {
+  person: { role: 'user', refusal: 'not_a_user_message' },
+  agent: { role: 'assistant', refusal: 'not_an_agent_reply' },
+};
+
+/**
+ * A saved warning position names one exact message or original tool block.
+ * A whole-record point must be a record from the sender the native answer
+ * names: the person's message, or the agent's reply for an admitted mistake.
+ */
 export function resolveWarningJump(point: SessionWarningPoint, read: TranscriptRead): WarningJump {
   if (read.phase === 'loading') return { kind: 'unavailable', reason: 'transcript_loading' };
   if (read.phase === 'failed' || read.status.state !== 'loaded')
@@ -119,10 +139,12 @@ export function resolveWarningJump(point: SessionWarningPoint, read: TranscriptR
   const records = read.status.records.filter((record) => record.id === point.record_uuid);
   if (records.length !== 1)
     return { kind: 'unavailable', reason: records.length ? 'ambiguous' : 'not_in_transcript' };
-  if (point.block === null)
-    return records[0]!.role === 'user'
+  if (point.block === null) {
+    const sender = SENDER[point.sent_by];
+    return records[0]!.role === sender.role
       ? { kind: 'target', target: { kind: 'record', recordId: point.record_uuid } }
-      : { kind: 'unavailable', reason: 'not_a_user_message' };
+      : { kind: 'unavailable', reason: sender.refusal };
+  }
   const blocks = records[0]!.blocks.filter((block) => block.index === point.block);
   if (blocks.length !== 1)
     return { kind: 'unavailable', reason: blocks.length ? 'ambiguous' : 'not_in_transcript' };
@@ -146,6 +168,8 @@ export function warningUnavailableText(
       return 'More than one message or block has this saved position, so the exact warning target cannot be selected.';
     case 'not_a_user_message':
       return 'The saved warning position does not point to a user message.';
+    case 'not_an_agent_reply':
+      return 'The saved warning position does not point to an agent reply.';
     case 'not_a_tool_block':
     case 'not_a_tool_call':
       return 'The saved warning position is not a tool call or tool result.';

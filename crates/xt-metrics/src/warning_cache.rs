@@ -16,7 +16,9 @@ use xt_store::saved_session_warnings::SavedSessionWarning;
 /// 4: the repeated-calls rule was removed. Every answer saved at 3 or earlier
 /// is out of date, so none that still holds a repeated-calls warning is shown;
 /// each is recounted under the four remaining rules.
-pub const SESSION_WARNINGS_CACHE_VERSION: i64 = 4;
+/// 5: the admitted-mistake rule was added, with its own check. Every answer
+/// saved at 4 or earlier lacks it, and is recounted.
+pub const SESSION_WARNINGS_CACHE_VERSION: i64 = 5;
 
 pub(crate) const SAVED_QUERY: &str = "SELECT session_id,i.revision,c.revision,c.rule_version,c.payload_json FROM sessions s LEFT JOIN session_warning_inputs i USING(session_id) LEFT JOIN saved_session_warnings c USING(session_id) WHERE s.kind='user'";
 pub(crate) const DIRTY_QUERY: &str = "SELECT session_id,i.revision FROM session_warning_inputs i JOIN sessions s USING(session_id) LEFT JOIN saved_session_warnings c USING(session_id) WHERE s.kind='user' AND (c.revision IS NOT i.revision OR c.rule_version IS NOT ?1)";

@@ -1,0 +1,1 @@
+- Tool cards show a readable tool name (for example "Update plan" instead of mcp__ccd_turn__update_plan), and a plan update's task list shows as a checklist instead of raw JSON.

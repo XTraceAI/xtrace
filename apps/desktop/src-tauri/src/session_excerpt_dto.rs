@@ -37,6 +37,13 @@ pub struct SessionExcerptRecord {
     /// correction in, over this record's text blocks as shown. Empty
     /// everywhere else, and where the shown text has no match.
     pub correction_marks: Vec<TextMark>,
+    /// This record is the excerpt's lead: an earlier record of the target's
+    /// own source kept ahead of its neighbours (for an admitted mistake, the
+    /// person's message the agent answered). Only ever the first record.
+    pub lead: bool,
+    /// Records between this one and the next shown are left out (only ever
+    /// set on a lead that is not directly before the next record).
+    pub gap_after: bool,
 }
 
 /// A stretch of one text block's text. `start` and `end` count UTF-16 code
@@ -183,6 +190,9 @@ impl SessionExcerptStatus {
         }
         self
     }
+    /// The excerpt as it crosses to the UI. One that would be too large
+    /// with its lead record is sent without it, as it is read without one;
+    /// only one too large without a lead is refused.
     pub fn from_read(
         result: Result<LoadedExcerpt, ExcerptUnavailable>,
         block: Option<u32>,
@@ -217,6 +227,7 @@ impl SessionExcerptStatus {
                         .iter()
                         .all(|block| matches!(block, SourceBlock::ToolResult { .. }));
                 let target = index == loaded.target;
+                let lead = index == 0 && loaded.lead.is_some();
                 let original = record.blocks.len();
                 if target && let Some(index) = block {
                     record.blocks.retain(|block| block.index() == index);
@@ -230,6 +241,8 @@ impl SessionExcerptStatus {
                     only_tool_results,
                     person: None,
                     correction_marks: Vec::new(),
+                    lead,
+                    gap_after: lead && loaded.lead.is_some_and(|kept| kept.gap),
                 })
             })
             .collect::<Result<Vec<_>, &'static str>>()?;
@@ -240,6 +253,9 @@ impl SessionExcerptStatus {
         // Count encoded bytes without constructing an unbounded JSON string.
         let mut counter = OutputCounter { bytes: 0 };
         if serde_json::to_writer(&mut counter, &status).is_err() {
+            if loaded.lead.is_some() {
+                return Self::from_read(Ok(loaded.without_lead()), block);
+            }
             return Ok(Self::unavailable(SessionExcerptReason::Limit {
                 limit: SessionExcerptLimit::OutputBytes,
             }));
@@ -316,6 +332,7 @@ mod tests {
                 generation: GenerationBasis::Unrecorded,
                 records: vec![record],
                 target: 0,
+                lead: None,
             }),
             block,
         )
@@ -369,6 +386,7 @@ mod tests {
                 generation: GenerationBasis::Unrecorded,
                 records: vec![neighbour, target],
                 target: 1,
+                lead: None,
             }),
             None,
         )
@@ -515,6 +533,95 @@ mod tests {
         let record = record(json!([{"type":"text","text":"x".repeat(MAX_EXCERPT_OUTPUT_BYTES)}]));
         assert_eq!(
             status(record, None),
+            SessionExcerptStatus::Unavailable {
+                reason: SessionExcerptReason::Limit {
+                    limit: SessionExcerptLimit::OutputBytes
+                }
+            }
+        );
+    }
+    fn named(id: &str, text: &str) -> xt_ingest::canonical::ParsedRecord {
+        let line = json!({"uuid":id,"type":"user","sessionId":"synthetic",
+            "timestamp":"2026-10-25T12:00:00Z",
+            "message":{"role":"user","content":[{"type":"text","text":text}]}})
+        .to_string();
+        let Parsed::Record(record) = parse_with_context(&line, &SourceContext::default()).unwrap()
+        else {
+            panic!("record");
+        };
+        *record
+    }
+    fn with_lead(lead_text: &str, gap: bool) -> Result<LoadedExcerpt, ExcerptUnavailable> {
+        Ok(LoadedExcerpt {
+            generation: GenerationBasis::Unrecorded,
+            records: vec![
+                named("lead", lead_text),
+                named("before", "b"),
+                named("target", "t"),
+            ],
+            target: 2,
+            lead: Some(xt_ingest::native::session_source::LeadKept { gap }),
+        })
+    }
+    #[test]
+    fn the_lead_is_marked_first_with_its_gap() {
+        for gap in [true, false] {
+            let SessionExcerptStatus::Loaded { records, .. } =
+                SessionExcerptStatus::from_read(with_lead("person", gap), None).unwrap()
+            else {
+                panic!("loaded");
+            };
+            let flags: Vec<_> = records
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.record.id.as_str(),
+                        entry.lead,
+                        entry.gap_after,
+                        entry.target,
+                    )
+                })
+                .collect();
+            assert_eq!(
+                flags,
+                [
+                    ("lead", true, gap, false),
+                    ("before", false, false, false),
+                    ("target", false, false, true),
+                ]
+            );
+        }
+    }
+    #[test]
+    fn a_lead_that_would_pass_the_output_limit_is_dropped_not_refused() {
+        let status = SessionExcerptStatus::from_read(
+            with_lead(&"x".repeat(MAX_EXCERPT_OUTPUT_BYTES), true),
+            None,
+        )
+        .unwrap();
+        let SessionExcerptStatus::Loaded { records, .. } = status else {
+            panic!("loaded");
+        };
+        assert_eq!(
+            records
+                .iter()
+                .map(|entry| (
+                    entry.record.id.as_str(),
+                    entry.lead,
+                    entry.gap_after,
+                    entry.target
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("before", false, false, false),
+                ("target", false, false, true)
+            ]
+        );
+        // Too large without a lead too: refused as before.
+        let mut big = with_lead("person", true).unwrap();
+        big.records[2] = named("target", &"x".repeat(MAX_EXCERPT_OUTPUT_BYTES));
+        assert_eq!(
+            SessionExcerptStatus::from_read(Ok(big), None).unwrap(),
             SessionExcerptStatus::Unavailable {
                 reason: SessionExcerptReason::Limit {
                     limit: SessionExcerptLimit::OutputBytes

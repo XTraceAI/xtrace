@@ -17,8 +17,8 @@
 //! (`kind:anchor`), which a growing session keeps, and stores the warning's
 //! size then ([`SessionWarning::size`]): a dismissed repeated prompt sent
 //! once more, or a repeated failure that fails again, has grown past it, so it
-//! shows again everywhere and its page says so (`returned`). A correction or
-//! an interruption is one event and stays dismissed.
+//! shows again everywhere and its page says so (`returned`). A correction,
+//! an interruption or an admitted mistake is one event and stays dismissed.
 //!
 //! A dismissal stored for a kind that no longer exists (`repeated_calls:…`,
 //! from before that rule was removed) names no warning any answer has, so it
@@ -28,7 +28,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use ts_rs::TS;
 use xt_metrics::{
-    CheckState, Dismissal, Missing, SessionWarning, WarningKind, WholeSessionWarnings,
+    CheckState, Dismissal, Missing, SessionWarning, WarningKind, WarningSender,
+    WholeSessionWarnings,
 };
 
 /// Sessions one request names at most: a Sessions page (51), or the session
@@ -86,6 +87,15 @@ pub struct WarningsText {
     pub conversation_heading: &'static str,
     /// Who sent a message M-02 counts as a person's, in that conversation.
     pub you: &'static str,
+    /// Under that conversation: which messages it shows.
+    pub context_caption: &'static str,
+    /// The same when it also shows an earlier message ahead of them (the
+    /// excerpt's lead, `SessionExcerptRecord.lead`): for an admitted mistake,
+    /// the person's message the agent answered.
+    pub context_caption_with_lead: &'static str,
+    /// Between that earlier message and the next one shown, when messages
+    /// between them are left out (`SessionExcerptRecord.gap_after`).
+    pub context_gap: &'static str,
     /// Over the reason in that window.
     pub flagged_label: &'static str,
     /// A short heading over the reason, by the warning's kind.
@@ -106,6 +116,7 @@ pub struct KindWords {
     pub interruption: &'static str,
     pub repeated_prompt: &'static str,
     pub repeated_failure: &'static str,
+    pub admitted_mistake: &'static str,
 }
 
 pub const TEXT: WarningsText = WarningsText {
@@ -129,12 +140,16 @@ pub const TEXT: WarningsText = WarningsText {
     modal_heading: "Session warning",
     conversation_heading: "Conversation",
     you: "You",
+    context_caption: "Showing the triggering message and up to one message on either side from the same source.",
+    context_caption_with_lead: "Showing the message the agent answered, then the triggering message and up to one message on either side from the same source.",
+    context_gap: "Earlier steps not shown",
     flagged_label: "Why this was flagged",
     flagged_headings: KindWords {
         correction: "You corrected the agent.",
         interruption: "You stopped the agent.",
         repeated_prompt: "The same request, sent again.",
         repeated_failure: "Another attempt. The same failure.",
+        admitted_mistake: "The agent admitted a mistake.",
     },
     you_wrote: "you wrote",
     message_tags: KindWords {
@@ -142,6 +157,7 @@ pub const TEXT: WarningsText = WarningsText {
         interruption: "Interruption",
         repeated_prompt: "Repeated prompt",
         repeated_failure: "Repeated failure",
+        admitted_mistake: "Admitted mistake",
     },
 };
 
@@ -160,7 +176,7 @@ pub fn export_text(directory: &std::path::Path) -> std::io::Result<()> {
     )
 }
 
-/// The four checks.
+/// The five checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionWarningKind {
@@ -168,6 +184,7 @@ pub enum SessionWarningKind {
     Interruption,
     RepeatedPrompt,
     RepeatedFailure,
+    AdmittedMistake,
 }
 
 impl From<WarningKind> for SessionWarningKind {
@@ -177,6 +194,7 @@ impl From<WarningKind> for SessionWarningKind {
             WarningKind::Interruption => Self::Interruption,
             WarningKind::RepeatedPrompt => Self::RepeatedPrompt,
             WarningKind::RepeatedFailure => Self::RepeatedFailure,
+            WarningKind::AdmittedMistake => Self::AdmittedMistake,
         }
     }
 }
@@ -188,6 +206,7 @@ fn kind_label(kind: WarningKind) -> &'static str {
         WarningKind::Interruption => "Interruption",
         WarningKind::RepeatedPrompt => "Repeated prompt",
         WarningKind::RepeatedFailure => "Repeated failure",
+        WarningKind::AdmittedMistake => "Admitted mistake",
     }
 }
 
@@ -198,6 +217,7 @@ fn check_label(kind: WarningKind) -> &'static str {
         WarningKind::Interruption => "interruptions",
         WarningKind::RepeatedPrompt => "repeated prompts",
         WarningKind::RepeatedFailure => "repeated failures",
+        WarningKind::AdmittedMistake => "admitted mistakes",
     }
 }
 
@@ -221,8 +241,10 @@ pub struct SessionWarningItem {
     /// Why, in one sentence, with clock times in the requested zone. Quotes
     /// at most the few words a correction matched.
     pub reason: String,
-    /// A short native summary for the issue navigator; full reason stays available.
-    pub compact_reason: String,
+    /// A short native line under the label where room is short (a dot's
+    /// hint, the session page's list of warnings); the full reason stays
+    /// available. `null` when the label alone says it: an admitted mistake.
+    pub compact_reason: Option<String>,
     /// What a mark for this warning alone is named: "Warning. Sep 4,
     /// Correction: …", its day, label and reason.
     pub name: String,
@@ -242,6 +264,29 @@ pub struct SessionWarningItem {
 pub struct SessionWarningPoint {
     pub record_uuid: String,
     pub block: Option<u32>,
+    /// Who sent the record when `block` is `null` and the point is the whole
+    /// record: the person's message, or the agent's reply (an admitted
+    /// mistake). A screen shows the point only on a record from that sender.
+    /// Not read when `block` is set: a tool block is matched by its kind.
+    /// Decided by `xt_metrics::WarningKind::points_at_sender`.
+    pub sent_by: SessionWarningSender,
+}
+
+/// Who sent a saved record a warning points at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionWarningSender {
+    Person,
+    Agent,
+}
+
+impl From<WarningSender> for SessionWarningSender {
+    fn from(sender: WarningSender) -> Self {
+        match sender {
+            WarningSender::Person => Self::Person,
+            WarningSender::Agent => Self::Agent,
+        }
+    }
 }
 
 impl SessionWarningItem {
@@ -270,6 +315,7 @@ impl SessionWarningItem {
             points_at: SessionWarningPoint {
                 record_uuid: point.record_uuid,
                 block: point.block,
+                sent_by: warning.kind.points_at_sender().into(),
             },
             returned,
         }
@@ -295,7 +341,9 @@ fn returned_text(warning: &SessionWarning, dismissal: &Dismissal) -> Option<Stri
         WarningKind::RepeatedFailure => format!(
             "Shown again: you dismissed it at {then} failures; the call has now failed {now} times."
         ),
-        WarningKind::Correction | WarningKind::Interruption => return None,
+        WarningKind::Correction | WarningKind::Interruption | WarningKind::AdmittedMistake => {
+            return None;
+        }
     })
 }
 
@@ -334,7 +382,7 @@ pub enum SessionWarningsAnswer {
         /// The warnings found now that the user dismissed, earliest first:
         /// listed apart on the session's page, each with an undo.
         dismissed: Vec<SessionWarningItem>,
-        /// The four checks, in a fixed order.
+        /// The five checks, in a fixed order.
         checks: Vec<SessionWarningCheck>,
         /// How many checks could not read everything.
         #[ts(type = "number")]
@@ -487,6 +535,10 @@ fn missing_text(missing: &Missing) -> String {
         Missing::FailedCallKey { calls, .. } => format!(
             "{} could not be compared with the others",
             plural(*calls, "failed call", "failed calls")
+        ),
+        Missing::ReplyNotChecked { replies } => format!(
+            "{} to your messages could not be checked",
+            plural(*replies, "agent reply", "agent replies")
         ),
     }
 }
@@ -662,7 +714,7 @@ pub struct SessionWarningDismissal {
 }
 
 /// A dismissal or undo names one session as a warnings request does and one
-/// warning identity, `kind:anchor` with one of the four kinds and an anchor.
+/// warning identity, `kind:anchor` with one of the five kinds and an anchor.
 /// Refused before storage is touched otherwise.
 pub fn validate_dismissal(session_id: &str, warning_id: &str) -> Result<(), StateError> {
     validate_ids(&[session_id.to_owned()]).map_err(|_| StateError::InvalidWarningDismissal)?;
