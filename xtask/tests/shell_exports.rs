@@ -164,7 +164,11 @@ fn a_fixture_without_pull_requests_exports_empty_pull_request_sections() {
             String::from_utf8_lossy(&output.stderr)
         );
         let export: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(export["app_info"]["schema_version"], 29, "{id}");
+        assert_eq!(
+            export["app_info"]["schema_version"],
+            xt_store::LATEST_SCHEMA_VERSION,
+            "{id}"
+        );
         assert_eq!(export["session_warnings"]["timezone"], "UTC", "{id}");
         let warned = export["session_warnings"]["sessions"].as_array().unwrap();
         for page in export["sessions"].as_array().unwrap() {
