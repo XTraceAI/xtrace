@@ -1279,3 +1279,210 @@ fn use_a_different_email_cannot_be_undone_by_a_join_in_progress() {
     assert_eq!(cancelling.join().unwrap().code_sent, None);
     assert_eq!(rig.service.status().code_sent, None);
 }
+
+/// The public list as the leaderboard answers it: ada (the member) second,
+/// under another case than the one saved.
+fn listing(_: &Request) -> Result<Answer, Unreachable> {
+    answer(
+        200,
+        json!({ "rows": [
+            { "rank": 1, "nickname": "grace", "leverage_tenths": 412 },
+            { "rank": 2, "nickname": "ADA", "leverage_tenths": 123 },
+            { "rank": 2, "nickname": "linus", "leverage_tenths": 123 },
+            { "rank": 4, "nickname": "ada_2", "leverage_tenths": 9 },
+        ] }),
+    )
+}
+
+/// While joined, the list is read without the key and the member's row is
+/// marked by the saved nickname, ignoring case and only on an exact name.
+#[test]
+fn the_public_list_is_read_while_joined_and_marks_the_member() {
+    let rig = setup(
+        FakeHost::joined("ada", Some(1)),
+        FakeTransport::new(listing),
+    );
+    let table = rig.service.table();
+    assert_eq!(rig.transport.lines(), ["Get /api/leaderboard"]);
+    assert_eq!(rig.transport.seen()[0].key, None);
+    assert_eq!(rig.transport.seen()[0].body, None);
+    assert_eq!(table.state, LeaderboardTableState::Ok);
+    assert_eq!(table.reason, None);
+    let rows: Vec<_> = table
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.rank,
+                row.nickname.as_str(),
+                row.leverage_tenths,
+                row.is_you,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (1, "grace", 412, false),
+            (2, "ADA", 123, true),
+            (2, "linus", 123, false),
+            (4, "ada_2", 9, false),
+        ]
+    );
+    // An empty board is an empty list, not an error.
+    rig.transport
+        .reroute(|_| answer(200, json!({ "rows": [] })));
+    let empty = rig.service.table();
+    assert_eq!(
+        (empty.state, empty.rows.len()),
+        (LeaderboardTableState::Ok, 0)
+    );
+    // Nothing else was asked, and nothing changed.
+    assert_eq!(rig.transport.seen().len(), 2);
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 0);
+}
+
+/// Before joining, and in a copy that may not send, nothing is asked.
+#[test]
+fn the_public_list_is_not_asked_for_before_joining_or_in_a_copy_that_may_not_send() {
+    let rig = setup(FakeHost::new(Some(1)), FakeTransport::new(listing));
+    let table = rig.service.table();
+    assert_eq!(table.state, LeaderboardTableState::Unavailable);
+    assert_eq!(table.reason.as_deref(), Some(TABLE_NOT_JOINED));
+    assert!(table.rows.is_empty());
+    assert!(rig.transport.seen().is_empty());
+    for reason in [BLOCKED_COPY, NO_CLIENT] {
+        let blocked = LeaderboardService::new(
+            DEFAULT_URL,
+            Err(reason.to_owned()),
+            FakeHost::joined("ada", Some(1)),
+            Arc::new(|| NOW),
+            Arc::new(|| {}),
+            Arc::new(|| panic!("nothing changed")),
+        );
+        let table = blocked.table();
+        assert_eq!(table.state, LeaderboardTableState::Unavailable);
+        assert_eq!(table.reason.as_deref(), Some(reason));
+        assert!(table.rows.is_empty());
+    }
+    // The saved membership could not be read: nothing is asked either.
+    let rig = setup(
+        FakeHost::joined("ada", Some(1)),
+        FakeTransport::new(listing),
+    );
+    rig.host.unreadable.store(true, Ordering::SeqCst);
+    let table = rig.service.table();
+    assert_eq!(table.state, LeaderboardTableState::Error);
+    assert_eq!(
+        table.reason.as_deref(),
+        Some("The leaderboard membership saved in this app could not be read or changed.")
+    );
+    assert!(rig.transport.seen().is_empty());
+}
+
+/// An answer the page could not show is refused whole: a bad row, a list
+/// out of order, a body past the size limit, or no list at all.
+#[test]
+fn a_malformed_or_oversized_public_list_is_refused() {
+    let unreadable = "The leaderboard answered in a way XTrace could not read.";
+    let row = |rank: Value, nickname: Value, tenths: Value| json!({ "rows": [{ "rank": rank, "nickname": nickname, "leverage_tenths": tenths }] });
+    let long = "a".repeat(MAX_LISTED_NICKNAME + 1);
+    let bodies = [
+        json!({}),
+        json!({ "rows": null }),
+        json!([]),
+        row(json!(0), json!("ada"), json!(1)),
+        row(json!(-1), json!("ada"), json!(1)),
+        row(json!(1), json!(""), json!(1)),
+        row(json!(1), json!(" ada"), json!(1)),
+        row(json!(1), json!("a\u{7}da"), json!(1)),
+        row(json!(1), json!(long), json!(1)),
+        row(json!(1), json!(7), json!(1)),
+        row(json!(1), json!("ada"), json!(null)),
+        row(json!(1), json!("ada"), json!(-3)),
+        row(json!(1), json!("ada"), json!(1.5)),
+        json!({ "rows": [
+            { "rank": 2, "nickname": "ada", "leverage_tenths": 5 },
+            { "rank": 1, "nickname": "bob", "leverage_tenths": 9 },
+        ] }),
+    ];
+    for body in bodies {
+        let shown = body.to_string();
+        let rig = setup(
+            FakeHost::joined("ada", Some(1)),
+            FakeTransport::new(move |_| answer(200, body.clone())),
+        );
+        let table = rig.service.table();
+        assert_eq!(table.state, LeaderboardTableState::Error, "{shown}");
+        assert_eq!(table.reason.as_deref(), Some(unreadable), "{shown}");
+        assert!(table.rows.is_empty(), "{shown}");
+    }
+    // Past the limit, even when it would parse.
+    let mut rows = Vec::new();
+    let mut size = 0;
+    while size <= MAX_ANSWER {
+        let row = json!({ "rank": 1, "nickname": format!("member_{}", rows.len()), "leverage_tenths": 1 });
+        size += row.to_string().len() + 1;
+        rows.push(row);
+    }
+    let big = json!({ "rows": rows });
+    assert!(serde_json::to_vec(&big).unwrap().len() > MAX_ANSWER);
+    let rig = setup(
+        FakeHost::joined("ada", Some(1)),
+        FakeTransport::new(move |_| answer(200, big.clone())),
+    );
+    let table = rig.service.table();
+    assert_eq!(table.state, LeaderboardTableState::Error);
+    assert_eq!(table.reason.as_deref(), Some(unreadable));
+    // Not answered as text.
+    let rig = setup(
+        FakeHost::joined("ada", Some(1)),
+        FakeTransport::new(|_| {
+            Ok(Answer {
+                status: 200,
+                body: b"<html>".to_vec(),
+            })
+        }),
+    );
+    assert_eq!(rig.service.table().reason.as_deref(), Some(unreadable));
+}
+
+/// A server error, no answer, or a busy leaderboard is an error state in
+/// plain words; the saved membership is kept.
+#[test]
+fn a_public_list_the_leaderboard_could_not_give_says_why() {
+    let cases: [(Route, &str); 4] = [
+        (
+            Box::new(|_| error(500, "internal")),
+            "The leaderboard answered with an error (500). Try again later.",
+        ),
+        (
+            Box::new(|_| Err(Unreachable)),
+            "Could not reach the leaderboard. Check your internet connection and try again.",
+        ),
+        (
+            Box::new(|_| {
+                answer(
+                    429,
+                    json!({ "error": "rate_limited", "retry_after_seconds": 30 }),
+                )
+            }),
+            "The leaderboard is busy right now. Try again in about 1 minute.",
+        ),
+        (
+            Box::new(|_| answer(404, Value::Null)),
+            "The leaderboard answered with an error (404). Try again later.",
+        ),
+    ];
+    for (route, words) in cases {
+        let rig = setup(
+            FakeHost::joined("ada", Some(1)),
+            FakeTransport::new(move |request| route(request)),
+        );
+        let table = rig.service.table();
+        assert_eq!(table.state, LeaderboardTableState::Error, "{words}");
+        assert_eq!(table.reason.as_deref(), Some(words));
+        assert!(table.rows.is_empty());
+        assert!(rig.host.saved().is_some());
+    }
+}

@@ -9,6 +9,9 @@
 //!   every hour while it runs ([`UPLOAD_INTERVAL`]); a failed upload is tried again at the next hour,
 //!   with no pop-up. Renaming sends the new nickname; Leave asks the
 //!   leaderboard to delete everything it has.
+//! * **What is read.** While joined, the page's status asks the leaderboard
+//!   for the member's rank, and the page reads the public list
+//!   ([`LeaderboardService::table`]). Nothing is read before joining.
 //! * **What is saved.** The key the leaderboard answers a join with, the
 //!   nickname and the last number sent, in the app's own database
 //!   (`xt_store::leaderboard`). The email is never saved. Neither the key nor
@@ -414,6 +417,42 @@ struct Renamed {
     nickname: String,
 }
 
+/// The public list: listed members only, in the leaderboard's order.
+#[derive(Deserialize)]
+struct Listing {
+    rows: Vec<Listed>,
+}
+
+/// One listed member, as the leaderboard answers it.
+#[derive(Deserialize)]
+struct Listed {
+    rank: u32,
+    nickname: String,
+    leverage_tenths: u32,
+}
+
+/// The longest nickname a listed row may carry. The leaderboard allows 20
+/// characters; anything far longer is not a nickname.
+const MAX_LISTED_NICKNAME: usize = 64;
+
+impl Listing {
+    /// Whether every row is one the page can show: ranks from 1 that never
+    /// go down, and a nickname that is short, trimmed and has no control
+    /// characters. One bad row refuses the whole answer.
+    fn readable(&self) -> bool {
+        let mut previous = 1;
+        self.rows.iter().all(|row| {
+            let ok = row.rank >= previous
+                && !row.nickname.is_empty()
+                && row.nickname.trim() == row.nickname
+                && row.nickname.chars().count() <= MAX_LISTED_NICKNAME
+                && !row.nickname.chars().any(char::is_control);
+            previous = row.rank;
+            ok
+        })
+    }
+}
+
 /// The API calls of the contract, over a transport.
 struct Api<'a>(&'a dyn Transport);
 
@@ -532,6 +571,28 @@ impl Api<'_> {
             200,
         )?;
         Self::parse(&body)
+    }
+
+    /// The public list. It needs no key, so none is sent.
+    fn listing(&self) -> Result<Listing, Refusal> {
+        let body = self.call(
+            Request {
+                method: Method::Get,
+                path: "/api/leaderboard",
+                key: None,
+                body: None,
+            },
+            200,
+        )?;
+        // The HTTP transport stops reading past this; any other is held to it too.
+        if body.len() > MAX_ANSWER {
+            return Err(Refusal::Unreadable);
+        }
+        let listing: Listing = Self::parse(&body)?;
+        if !listing.readable() {
+            return Err(Refusal::Unreadable);
+        }
+        Ok(listing)
     }
 
     fn delete(&self, key: &str) -> Result<(), Refusal> {
@@ -669,6 +730,55 @@ pub struct LeaderboardCodeSent {
     pub choose_nickname: bool,
 }
 
+/// One row of the public list, as the Leaderboard page shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct LeaderboardRow {
+    /// Equal numbers share a rank, as on the public page.
+    pub rank: u32,
+    pub nickname: String,
+    /// The 7-day leverage in tenths (123 is written `12.3×`).
+    pub leverage_tenths: u32,
+    /// This row is this Mac's membership: its nickname is the saved one,
+    /// ignoring case (the leaderboard keeps nicknames unique that way).
+    pub is_you: bool,
+}
+
+/// Whether the public list could be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaderboardTableState {
+    /// Read; `rows` is the list, possibly empty.
+    Ok,
+    /// Not asked: this Mac is not joined, or this copy sends nothing.
+    Unavailable,
+    /// Asked, but no list came back that the app could read.
+    Error,
+}
+
+/// The public list the Leaderboard page shows while joined. The page shows
+/// these fields and never works any of them out again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct LeaderboardTable {
+    pub state: LeaderboardTableState,
+    /// Empty unless `state` is `ok`.
+    pub rows: Vec<LeaderboardRow>,
+    /// Why there is no list, in plain words, when there is none.
+    pub reason: Option<String>,
+}
+
+impl LeaderboardTable {
+    fn without_rows(state: LeaderboardTableState, reason: String) -> Self {
+        Self {
+            state,
+            rows: Vec::new(),
+            reason: Some(reason),
+        }
+    }
+}
+
+/// Why the public list was not asked for: this Mac is not joined.
+pub const TABLE_NOT_JOINED: &str = "Join the leaderboard to see the public list here.";
+
 /// A join waiting for its code: the leaderboard's id for it and what was
 /// typed. Kept in memory only; a restart starts over.
 #[derive(Clone)]
@@ -797,6 +907,55 @@ impl LeaderboardService {
                 Some(membership),
                 Some(LeaderboardStanding::Unknown),
                 Some(read_refusal_message(&refusal)),
+            ),
+        }
+    }
+
+    /// The public list, read from the leaderboard only while joined and only
+    /// in a copy that may send ([`may_send`]); otherwise nothing is asked.
+    /// The member's own row is marked by the saved nickname. The list is the
+    /// leaderboard's (it caches it for a minute), so a rename can take that
+    /// long to show in it.
+    pub fn table(&self) -> LeaderboardTable {
+        let api = match self.api() {
+            Ok(api) => api,
+            Err(reason) => {
+                return LeaderboardTable::without_rows(LeaderboardTableState::Unavailable, reason);
+            }
+        };
+        let membership = match self.host.membership() {
+            Ok(Some(membership)) => membership,
+            Ok(None) => {
+                return LeaderboardTable::without_rows(
+                    LeaderboardTableState::Unavailable,
+                    TABLE_NOT_JOINED.into(),
+                );
+            }
+            Err(error) => {
+                return LeaderboardTable::without_rows(
+                    LeaderboardTableState::Error,
+                    saved_state_failed(error),
+                );
+            }
+        };
+        match api.listing() {
+            Ok(listing) => LeaderboardTable {
+                state: LeaderboardTableState::Ok,
+                rows: listing
+                    .rows
+                    .into_iter()
+                    .map(|row| LeaderboardRow {
+                        is_you: row.nickname.eq_ignore_ascii_case(&membership.nickname),
+                        rank: row.rank,
+                        nickname: row.nickname,
+                        leverage_tenths: row.leverage_tenths,
+                    })
+                    .collect(),
+                reason: None,
+            },
+            Err(refusal) => LeaderboardTable::without_rows(
+                LeaderboardTableState::Error,
+                read_refusal_message(&refusal),
             ),
         }
     }

@@ -1263,6 +1263,13 @@ async fn leaderboard_status(
     on_leaderboard(app, |service| Ok(service.status())).await
 }
 
+/// The public list, read from the leaderboard only while joined and in a
+/// copy that may send; the member's own row is marked.
+#[tauri::command]
+async fn leaderboard_table(app: tauri::AppHandle) -> Result<leaderboard::LeaderboardTable, String> {
+    on_leaderboard(app, |service| Ok(service.table())).await
+}
+
 /// The first step of joining: asks the leaderboard to email a code for the
 /// nickname and email as typed. The leaderboard checks them, and a refusal
 /// is returned in plain words, with the field it is about.
@@ -2001,6 +2008,7 @@ pub fn run() {
             telemetry_disclosure_shown,
             open_telemetry_doc,
             leaderboard_status,
+            leaderboard_table,
             leaderboard_join,
             leaderboard_confirm,
             leaderboard_cancel_code,

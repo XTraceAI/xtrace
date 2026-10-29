@@ -39,3 +39,149 @@
   gap: 8px;
   margin-top: 12px;
 }
+/* Before joining: the list the page unlocks, drawn blurred from made-up
+   rows, with the join card centered in front. Both share one grid cell, so
+   the area is as tall as the taller of the two. */
+.xt-leaderboard-locked {
+  display: grid;
+  max-width: 640px;
+  margin-top: 24px;
+}
+.xt-leaderboard-locked > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+/* Decoration only: no pointer, no selection, no focus (`inert`). The blur
+   stays inside its own rounded frame. */
+.xt-leaderboard-backdrop {
+  overflow: hidden;
+  border-radius: 12px;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* Drawn like a joined page's card: header, then the list on its panel. */
+.xt-leaderboard-sample {
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--canvas);
+  opacity: 0.75;
+  filter: blur(6px);
+}
+.xt-leaderboard-sample-title {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 16px;
+  color: var(--ink);
+  font:
+    600 11px 'Geist Mono',
+    Menlo,
+    monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.xt-leaderboard-sample-panel {
+  margin: 0 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+/* Above the list: its opacity and blur paint it in a layer of its own. */
+.xt-leaderboard-gate {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+}
+.xt-placeholder .xt-leaderboard-gate .xt-section-card {
+  width: min(100%, 460px);
+  margin-top: 0;
+  box-shadow: var(--menu);
+}
+/* The rest of what joining shares, folded under the card's one line. */
+.xt-leaderboard-shared {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.xt-leaderboard-shared summary {
+  width: fit-content;
+  color: var(--meta);
+  cursor: pointer;
+}
+.xt-leaderboard-shared summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.xt-leaderboard-shared ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--secondary);
+}
+.xt-leaderboard-shared li + li {
+  margin-top: 4px;
+}
+/* The public list: rank, nickname, 7-day leverage. */
+.xt-leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.xt-leaderboard-table th {
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--meta);
+  font:
+    400 9.5px 'Geist Mono',
+    Menlo,
+    monospace;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.xt-leaderboard-table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.xt-leaderboard-table tr:last-child td {
+  border-bottom: 0;
+}
+.xt-leaderboard-table th:first-child,
+.xt-leaderboard-table td:first-child {
+  width: 56px;
+  color: var(--meta);
+}
+.xt-leaderboard-table th:last-child,
+.xt-leaderboard-table td:last-child {
+  width: 120px;
+  text-align: right;
+}
+/* The member's own row. */
+.xt-leaderboard-table tr[data-you] td {
+  background: var(--accent-tint);
+  font-weight: 700;
+}
+.xt-leaderboard-you {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+/* In the joined card the table runs to the card's edges. */
+.xt-leaderboard .xt-section-panel > .xt-leaderboard-table {
+  margin: -12px -14px -10px;
+  width: calc(100% + 28px);
+}

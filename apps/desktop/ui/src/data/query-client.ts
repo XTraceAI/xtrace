@@ -95,6 +95,8 @@ export const queryKeys = {
   telemetry: ['settings', 'telemetry'],
   /** The leaderboard status; every change answers with the status read back. */
   leaderboard: ['leaderboard', 'status'],
+  /** The public list; read again with the status, after every change and upload. */
+  leaderboardTable: ['leaderboard', 'table'],
   /** The prefix of every Dashboard range, for a committed typing-speed change. */
   dashboards: ['metrics', 'dashboard'],
   /** Under `metrics`, so committed-data events refresh it like the Dashboard. */

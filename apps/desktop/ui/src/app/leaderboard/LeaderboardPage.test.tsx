@@ -7,11 +7,20 @@ import type { LeaderboardControls } from '../../data/DataSource';
 import { FixtureDataSource } from '../../data/FixtureDataSource';
 import type { FixtureExport } from '../../data/generated/FixtureExport';
 import type { LeaderboardStatus } from '../../data/generated/LeaderboardStatus';
+import type { LeaderboardTable } from '../../data/generated/LeaderboardTable';
 import { events } from '../../data/ipc-names';
 import { clock } from '../../kit/clock';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { AppRoutes } from '../AppRoutes';
-import { JOIN_TEXT, LEAVE_BACKUPS, LEAVE_TEXT } from './leaderboard';
+import {
+  JOIN_TEXT,
+  LEAVE_BACKUPS,
+  LEAVE_TEXT,
+  SAMPLE_ROWS,
+  SHARED_FACTS,
+  TABLE_EMPTY,
+  TABLE_UNREADABLE,
+} from './leaderboard';
 
 const exported = fixture as FixtureExport;
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
@@ -43,12 +52,24 @@ const joined: LeaderboardStatus = {
   standing: { state: 'ranked', rank: 2 },
 };
 
+/** The public list a synthetic leaderboard answers while joined. */
+const board: LeaderboardTable = {
+  state: 'ok',
+  rows: [
+    { rank: 1, nickname: 'grace', leverage_tenths: 412, is_you: false },
+    { rank: 2, nickname: 'ada', leverage_tenths: 123, is_you: true },
+    { rank: 3, nickname: 'linus', leverage_tenths: 90, is_you: false },
+  ],
+  reason: null,
+};
+
 /** A synthetic leaderboard: the status lives here, never on a server. */
 function controls(initial: LeaderboardStatus) {
   let status = initial;
   const answer = async () => status;
   return {
     read: vi.fn<LeaderboardControls['read']>(answer),
+    table: vi.fn<LeaderboardControls['table']>(async () => board),
     join: vi.fn<LeaderboardControls['join']>(async (nickname, email) => {
       status = { ...notJoined, code_sent: { nickname, email, choose_nickname: false } };
       return status;
@@ -411,4 +432,134 @@ it('sends a new code with the nickname being chosen', async () => {
   fireEvent.change(await screen.findByLabelText('Nickname'), { target: { value: 'ada_3' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send a new code' }));
   await waitFor(() => expect(leaderboard.join).toHaveBeenCalledWith('ada_3', 'ada@example.com'));
+});
+
+/** The blurred list behind the join card, and its rows' texts. */
+const sample = () => screen.getByTestId('leaderboard-sample');
+const rowsOf = (table: HTMLElement) =>
+  [...table.querySelectorAll('tbody tr')].map((row) =>
+    [...row.querySelectorAll('td')].map((cell) => cell.textContent),
+  );
+
+it('draws made-up rows blurred behind the join card, hidden and out of reach', async () => {
+  const leaderboard = controls(notJoined);
+  await mount(leaderboard);
+  const card = await screen.findByRole('region', { name: 'Join the leaderboard' });
+  expect(within(card).getByText(JOIN_TEXT)).toBeTruthy();
+  // The background is decoration: hidden from assistive technology, inert,
+  // and drawn from the sample rows only.
+  const backdrop = sample();
+  expect(backdrop.getAttribute('aria-hidden')).toBe('true');
+  expect(backdrop.hasAttribute('inert')).toBe(true);
+  expect(backdrop.contains(card)).toBe(false);
+  expect(rowsOf(backdrop).map((cells) => cells[1])).toEqual(
+    SAMPLE_ROWS.map((row) => (row.is_you ? `${row.nickname}You (this is you)` : row.nickname)),
+  );
+  expect(SAMPLE_ROWS.every((row) => row.nickname.startsWith('sample-'))).toBe(true);
+  expect(backdrop.querySelector('button, input, a, [tabindex]')).toBeNull();
+  // No table reaches assistive technology, and nothing was read.
+  expect(screen.queryAllByRole('table')).toHaveLength(0);
+  expect(screen.queryByText('sample-otter', { ignore: '[aria-hidden="true"] *' })).toBeNull();
+  expect(leaderboard.table).not.toHaveBeenCalled();
+  // The rest of what joining shares is folded under the card, by keyboard too.
+  const summaryLine = within(card).getByText('What is shared');
+  const details = summaryLine.closest('details')!;
+  expect(summaryLine.tagName).toBe('SUMMARY');
+  expect(details.open).toBe(false);
+  expect([...details.querySelectorAll('li')].map((item) => item.textContent)).toEqual(SHARED_FACTS);
+  fireEvent.click(summaryLine);
+  expect(details.open).toBe(true);
+  // The code step stays behind the same blurred list.
+  fireEvent.change(screen.getByLabelText('Nickname'), { target: { value: 'ada' } });
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ada@example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+  expect(await screen.findByLabelText('Code')).toBeTruthy();
+  expect(sample().contains(screen.getByLabelText('Code'))).toBe(false);
+  expect(rowsOf(sample())).toHaveLength(SAMPLE_ROWS.length);
+  expect(leaderboard.table).not.toHaveBeenCalled();
+});
+
+it('keeps the copy that may not send locked behind the blurred list', async () => {
+  const leaderboard = controls({
+    ...notJoined,
+    available: false,
+    unavailable_reason: 'This copy of XTrace does not send to the leaderboard.',
+  });
+  await mount(leaderboard);
+  await screen.findByTestId('leaderboard-unavailable');
+  expect(sample().getAttribute('aria-hidden')).toBe('true');
+  expect(screen.getByText('What is shared')).toBeTruthy();
+  expect(leaderboard.table).not.toHaveBeenCalled();
+});
+
+it('shows the public list under the membership, with your row marked', async () => {
+  const leaderboard = controls(joined);
+  await mount(leaderboard);
+  const table = await screen.findByRole('table', { name: 'Public leaderboard' });
+  expect(screen.queryByTestId('leaderboard-sample')).toBeNull();
+  expect(rowsOf(table)).toEqual([
+    ['1', 'grace', '41.2×'],
+    ['2', 'adaYou (this is you)', '12.3×'],
+    ['3', 'linus', '9×'],
+  ]);
+  const you = within(table).getByText('(this is you)').closest('tr')!;
+  expect(you.hasAttribute('data-you')).toBe(true);
+  expect(within(you).getByText('You').getAttribute('aria-hidden')).toBe('true');
+  expect(table.querySelectorAll('tr[data-you]')).toHaveLength(1);
+  // The membership and its controls stay above it.
+  expect(summary()['Rank']).toBe('#2 on the public page');
+  expect(
+    screen.getByTestId('leaderboard-summary').compareDocumentPosition(table) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+it('says when no one is listed, and keeps the controls when the list cannot be read', async () => {
+  const leaderboard = controls(joined);
+  leaderboard.table.mockResolvedValueOnce({ state: 'ok', rows: [], reason: null });
+  await mount(leaderboard);
+  expect(await screen.findByText(TABLE_EMPTY)).toBeTruthy();
+  expect(screen.queryByRole('table')).toBeNull();
+  cleanup();
+  const failing = controls(joined);
+  failing.table.mockResolvedValue({
+    state: 'error',
+    rows: [],
+    reason: 'Could not reach the leaderboard. Check your internet connection and try again.',
+  });
+  await mount(failing);
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    'Could not reach the leaderboard. Check your internet connection and try again.',
+  );
+  expect(screen.getByRole('button', { name: 'Change nickname' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Leave leaderboard' })).toBeTruthy();
+  expect(summary()['Nickname']).toBe('ada');
+  cleanup();
+  const broken = controls(joined);
+  broken.table.mockRejectedValue('the leaderboard request did not complete');
+  await mount(broken);
+  expect((await screen.findByRole('alert')).textContent).toBe(TABLE_UNREADABLE);
+  expect(screen.getByRole('button', { name: 'Change nickname' })).toBeTruthy();
+});
+
+it('reads the public list again after an upload and after a rename', async () => {
+  const leaderboard = controls(joined);
+  const source = new FixtureDataSource(exported);
+  await mount(leaderboard, source);
+  await screen.findByRole('table', { name: 'Public leaderboard' });
+  const before = leaderboard.table.mock.calls.length;
+  leaderboard.table.mockResolvedValue({
+    ...board,
+    rows: [{ rank: 1, nickname: 'ada', leverage_tenths: 500, is_you: true }],
+  });
+  act(() => source.emit(events.leaderboardChanged));
+  await waitFor(() =>
+    expect(rowsOf(screen.getByRole('table'))).toEqual([['1', 'adaYou (this is you)', '50×']]),
+  );
+  expect(leaderboard.table.mock.calls.length).toBeGreaterThan(before);
+  const afterUpload = leaderboard.table.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Change nickname' }));
+  fireEvent.change(screen.getByLabelText('New nickname'), { target: { value: 'Ada_2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save nickname' }));
+  await waitFor(() => expect(leaderboard.table.mock.calls.length).toBeGreaterThan(afterUpload));
 });

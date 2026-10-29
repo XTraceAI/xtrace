@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { useData } from '../../data/DataProvider';
 import type { LeaderboardControls } from '../../data/DataSource';
+import type { LeaderboardRow } from '../../data/generated/LeaderboardRow';
 import type { LeaderboardStatus } from '../../data/generated/LeaderboardStatus';
 import { queryKeys } from '../../data/query-client';
 import { Button } from '../../kit/Button';
@@ -10,8 +11,17 @@ import { Modal, ModalClose } from '../../kit/Modal';
 import { SectionCard } from '../../kit/SectionCard';
 import {
   JOIN_TEXT,
+  JOIN_TITLE,
   LEAVE_BACKUPS,
+  SAMPLE_ROWS,
   SEND_TIMES,
+  SHARED_FACTS,
+  SHARED_SUMMARY,
+  TABLE_EMPTY,
+  TABLE_READING,
+  TABLE_TITLE,
+  TABLE_UNREADABLE,
+  YOU_LABEL,
   codeSentText,
   LEAVE_QUESTION,
   LEAVE_TEXT,
@@ -36,14 +46,119 @@ export function LeaderboardPage() {
       {source.leaderboard ? (
         <Leaderboard controls={source.leaderboard} heading={heading} />
       ) : (
-        <SectionCard title="Public leaderboard">
-          <p className="xt-settings-note">{JOIN_TEXT}</p>
-          <p className="xt-settings-note">
-            Joining needs the desktop app. This preview sends nothing.
-          </p>
-        </SectionCard>
+        <Locked>
+          <SectionCard title={JOIN_TITLE}>
+            <p className="xt-settings-note">{JOIN_TEXT}</p>
+            <p className="xt-settings-note">
+              Joining needs the desktop app. This preview sends nothing.
+            </p>
+            <SharedDetails />
+          </SectionCard>
+        </Locked>
       )}
     </section>
+  );
+}
+
+/**
+ * The page before joining: the list it unlocks drawn blurred behind the card,
+ * from made-up rows. The drawing is decoration only: hidden from assistive
+ * technology, out of the tab order, and not clickable or selectable.
+ */
+function Locked({ children }: { children: ReactNode }) {
+  return (
+    <div className="xt-leaderboard-locked">
+      <div
+        className="xt-leaderboard-backdrop"
+        aria-hidden="true"
+        inert
+        data-testid="leaderboard-sample"
+      >
+        <div className="xt-leaderboard-sample">
+          <div className="xt-leaderboard-sample-title">{TABLE_TITLE}</div>
+          <div className="xt-leaderboard-sample-panel">
+            <PublicTable rows={SAMPLE_ROWS} />
+          </div>
+        </div>
+      </div>
+      <div className="xt-leaderboard-gate">{children}</div>
+    </div>
+  );
+}
+
+/** The rest of what joining shares, folded under the join card's one line. */
+function SharedDetails() {
+  return (
+    <details className="xt-leaderboard-shared">
+      <summary>{SHARED_SUMMARY}</summary>
+      <ul>
+        {SHARED_FACTS.map((fact) => (
+          <li key={fact}>{fact}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/** Rank, nickname and 7-day leverage, with the member's own row marked. */
+function PublicTable({ rows, label }: { rows: readonly LeaderboardRow[]; label?: string }) {
+  return (
+    <table className="xt-leaderboard-table" aria-label={label}>
+      <thead>
+        <tr>
+          <th scope="col">Rank</th>
+          <th scope="col">Nickname</th>
+          <th scope="col">Leverage, 7 days</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={`${row.rank}-${row.nickname}`} data-you={row.is_you || undefined}>
+            <td>{row.rank}</td>
+            <td>
+              {row.nickname}
+              {row.is_you && (
+                <>
+                  <span className="xt-leaderboard-you" aria-hidden="true">
+                    You
+                  </span>
+                  <span className="sr-only"> {YOU_LABEL}</span>
+                </>
+              )}
+            </td>
+            <td>{leaderboardNumber(row.leverage_tenths)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * The public list while joined, in its own card so a failed read never hides
+ * the membership controls above it. It is read again with the status.
+ */
+function PublicBoard({ controls }: { controls: LeaderboardControls }) {
+  const table = useQuery({
+    queryKey: queryKeys.leaderboardTable,
+    queryFn: () => controls.table(),
+  });
+  const data = table.data;
+  return (
+    <SectionCard title={TABLE_TITLE}>
+      {table.isError && <p role="alert">{TABLE_UNREADABLE}</p>}
+      {data === undefined ? (
+        !table.isError && <p className="xt-settings-note">{TABLE_READING}</p>
+      ) : data.state === 'error' ? (
+        <p role="alert">{data.reason}</p>
+      ) : data.state === 'unavailable' ? (
+        <p className="xt-settings-note">{data.reason}</p>
+      ) : data.rows.length === 0 ? (
+        <p className="xt-settings-note">{TABLE_EMPTY}</p>
+      ) : (
+        <PublicTable rows={data.rows} label={TABLE_TITLE} />
+      )}
+    </SectionCard>
   );
 }
 
@@ -57,13 +172,19 @@ function useLeaderboard(
 ) {
   const client = useQueryClient();
   const status = useQuery({ queryKey: queryKeys.leaderboard, queryFn: () => controls.read() });
+  // The public list is read again with every status the app reads back.
+  const rereadTable = () => void client.invalidateQueries({ queryKey: queryKeys.leaderboardTable });
   const saved = (next: LeaderboardStatus, focusHeading: boolean) => {
     client.setQueryData(queryKeys.leaderboard, next);
+    rereadTable();
     // After the new state renders. The code step and the form focus their
     // own first field instead.
     if (focusHeading) requestAnimationFrame(() => heading.current?.focus());
   };
-  const reread = () => void client.invalidateQueries({ queryKey: queryKeys.leaderboard });
+  const reread = () => {
+    void client.invalidateQueries({ queryKey: queryKeys.leaderboard });
+    rereadTable();
+  };
   const change = <T,>(run: (input: T) => Promise<LeaderboardStatus>, focusHeading = true) => ({
     mutationFn: run,
     onSuccess: (next: LeaderboardStatus) => saved(next, focusHeading),
@@ -107,26 +228,34 @@ function Leaderboard({
     );
   if (!current.available)
     return (
-      <SectionCard title="Public leaderboard">
-        <p className="xt-settings-note">{JOIN_TEXT}</p>
-        <p className="xt-settings-note" data-testid="leaderboard-unavailable">
-          {current.unavailable_reason}
-        </p>
-      </SectionCard>
+      <Locked>
+        <SectionCard title={JOIN_TITLE}>
+          <p className="xt-settings-note">{JOIN_TEXT}</p>
+          <p className="xt-settings-note" data-testid="leaderboard-unavailable">
+            {current.unavailable_reason}
+          </p>
+          <SharedDetails />
+        </SectionCard>
+      </Locked>
     );
   return current.joined ? (
-    <Membership
-      status={current}
-      // Only the code's own answer carries the welcome; later status reads
-      // leave it on the page.
-      welcome={confirm.data?.welcome ?? null}
-      controls={controls}
-      rename={rename}
-      leave={leave}
-      heading={heading}
-    />
+    <>
+      <Membership
+        status={current}
+        // Only the code's own answer carries the welcome; later status reads
+        // leave it on the page.
+        welcome={confirm.data?.welcome ?? null}
+        controls={controls}
+        rename={rename}
+        leave={leave}
+        heading={heading}
+      />
+      <PublicBoard controls={controls} />
+    </>
   ) : (
-    <NotJoined status={current} join={join} confirm={confirm} cancelCode={cancelCode} />
+    <Locked>
+      <NotJoined status={current} join={join} confirm={confirm} cancelCode={cancelCode} />
+    </Locked>
   );
 }
 
@@ -205,7 +334,7 @@ function JoinForm({
     if (!join.isPending) onJoin();
   };
   return (
-    <SectionCard title="Join the public leaderboard">
+    <SectionCard title={JOIN_TITLE}>
       <p className="xt-settings-note">{JOIN_TEXT}</p>
       {status.notice && (
         <p role="status" data-testid="leaderboard-notice">
@@ -248,6 +377,7 @@ function JoinForm({
           {failed}
         </p>
       )}
+      <SharedDetails />
     </SectionCard>
   );
 }
