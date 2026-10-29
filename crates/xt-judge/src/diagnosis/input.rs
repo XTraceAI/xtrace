@@ -62,13 +62,12 @@ pub const MAX_PROJECT_CHARS: usize = 64;
 /// Characters of a tool's name in a label, at most.
 pub const MAX_TOOL_LABEL_CHARS: usize = 64;
 
-/// The warning's kind, as the header names it: XTrace's own five checks
+/// The warning's kind, as the header names it: XTrace's own four checks
 /// (`xt_metrics::WarningKind`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarningKind {
     Correction,
     Interruption,
-    RepeatedCalls,
     RepeatedPrompt,
     RepeatedFailure,
 }
@@ -78,7 +77,6 @@ impl WarningKind {
         match self {
             Self::Correction => "correction",
             Self::Interruption => "interruption",
-            Self::RepeatedCalls => "repeated_calls",
             Self::RepeatedPrompt => "repeated_prompt",
             Self::RepeatedFailure => "repeated_failure",
         }
@@ -96,9 +94,6 @@ pub fn reason(kind: WarningKind, times: usize) -> String {
         }
         WarningKind::Interruption => {
             "the person stopped the agent, or declined a tool the agent wanted to run".to_owned()
-        }
-        WarningKind::RepeatedCalls => {
-            "the agent made many repeated tool calls in a short stretch".to_owned()
         }
         WarningKind::RepeatedPrompt => {
             format!("the person sent the same message {} times", times.max(2))

@@ -634,8 +634,8 @@ fn a_late_flagged_tool_call_survives_long_assistant_prose_and_input_bounds() {
     .unwrap();
     let built = input::build(
         &input::Header {
-            kind: input::WarningKind::RepeatedCalls,
-            reason: "repeated calls".into(),
+            kind: input::WarningKind::RepeatedFailure,
+            reason: "the same tool call failed 2 times".into(),
             host: input::HostName::Codex,
             project: "synthetic".into(),
         },
@@ -1587,8 +1587,8 @@ fn bounded_diagnosis_context_keeps_a_late_flag_and_only_its_subagent_messages() 
     );
     let built = input::build(
         &input::Header {
-            kind: input::WarningKind::RepeatedCalls,
-            reason: "repeated calls".into(),
+            kind: input::WarningKind::RepeatedFailure,
+            reason: "the same tool call failed 2 times".into(),
             host: HostName::ClaudeCode,
             project: "synthetic".into(),
         },

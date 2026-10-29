@@ -57,11 +57,7 @@ fn metric_reads_request_repairs_even_when_the_outer_read_fails() {
             let saved = metrics.saved_whole_session_warnings(&["synthetic"], &inputs.zone)?;
             assert_eq!(
                 saved,
-                metrics.whole_session_warnings(
-                    &["synthetic"],
-                    xt_metrics::RepeatThresholds::default(),
-                    &inputs.zone
-                )?
+                metrics.whole_session_warnings(&["synthetic"], &inputs.zone)?
             );
             assert_eq!(metrics.session_warning_repairs(), ["synthetic"]);
             if fail {

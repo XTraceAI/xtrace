@@ -14,7 +14,7 @@ export type SessionWarningItem = {
  */
 id: string, kind: SessionWarningKind, 
 /**
- * The kind in words: "Correction", "Repeated calls", …
+ * The kind in words: "Correction", "Repeated prompt", …
  */
 label: string, 
 /**

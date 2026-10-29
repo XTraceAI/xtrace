@@ -75,7 +75,7 @@ fn seed(db: &mut TempDb, id: &str, host: &str, rows: &[CanonicalRecord], keep_co
 fn warnings(db: &TempDb, id: &str) -> SessionWarnings {
     MetricsDb::open(db.path())
         .unwrap()
-        .session_warnings(window(), RepeatThresholds::default(), &TimeZone::UTC)
+        .session_warnings(window(), &TimeZone::UTC)
         .unwrap()
         .into_iter()
         .find(|s| s.session_id == id)
@@ -144,7 +144,8 @@ fn conversation() -> Vec<CanonicalRecord> {
         reply("a7", &at(6, 30)),
         says("h4", &at(7, 0), "I still need an export button"),
         // Six task-list updates in four active minutes: M-20 calls this
-        // stretch circling; they are expected repeats, so M-21 does not.
+        // stretch circling, as it does the six reads above; neither is a
+        // warning.
         calls(
             "a8",
             &at(7, 30),
@@ -190,11 +191,6 @@ fn every_rule_fires_from_kept_content() {
                 "you wrote \"still not\" after a reply (12:01)"
             ),
             (
-                WarningKind::RepeatedCalls,
-                uuids(&["h3", "a6", "a7"]),
-                "5 repeated calls in 4 active minutes, most often the same Read call (6 times) (from 12:02)"
-            ),
-            (
                 WarningKind::RepeatedPrompt,
                 uuids(&["h1", "h3"]),
                 "same prompt sent twice (12:00, 12:02)"
@@ -207,8 +203,8 @@ fn every_rule_fires_from_kept_content() {
     assert_eq!((found.person_messages, found.person_messages_read), (4, 4));
     assert_eq!((found.tool_results, found.tool_results_known), (3, 3));
 
-    // M-20, the Dashboard's number, still compares every call: the
-    // task-list stretch M-21 leaves alone is circling there.
+    // M-20, the Dashboard's number, still finds both circling stretches;
+    // no warning is made from either.
     let SessionRepeats::Measured { stretches, .. } = MetricsDb::open(db.path())
         .unwrap()
         .session_repeats(window(), SESSION, RepeatThresholds::default())
@@ -240,7 +236,7 @@ fn outcomes_are_read_without_kept_content_and_a_preview_is_read() {
         .unwrap();
     let found = warnings(&db, SESSION);
     let kinds: Vec<_> = found.warnings.iter().map(|w| w.kind).collect();
-    // Outcomes, interruptions and circling are metadata; the correction
+    // Outcomes and interruptions are metadata; the correction
     // reads the preview; the other prompts' words were not kept.
     assert_eq!(
         kinds,
@@ -248,12 +244,10 @@ fn outcomes_are_read_without_kept_content_and_a_preview_is_read() {
             WarningKind::RepeatedFailure,
             WarningKind::Interruption,
             WarningKind::Correction,
-            WarningKind::RepeatedCalls
         ]
     );
     assert_eq!(found.checks.repeated_failure, CheckState::Complete);
     assert_eq!(found.checks.interruption, CheckState::Complete);
-    assert_eq!(found.checks.repeated_calls, CheckState::Complete);
     assert_eq!(
         found.checks.correction,
         CheckState::Incomplete {
@@ -752,7 +746,7 @@ fn a_cut_preview_never_reads_as_the_whole_message() {
 fn whole(db: &TempDb, ids: &[&str]) -> std::collections::BTreeMap<String, WholeSessionWarnings> {
     MetricsDb::open(db.path())
         .unwrap()
-        .whole_session_warnings(ids, RepeatThresholds::default(), &TimeZone::UTC)
+        .whole_session_warnings(ids, &TimeZone::UTC)
         .unwrap()
 }
 
@@ -810,7 +804,7 @@ fn a_whole_session_read_is_the_window_read_over_the_session_s_own_history() {
     assert!(
         MetricsDb::open(db.path())
             .unwrap()
-            .session_warnings(window(), RepeatThresholds::default(), &TimeZone::UTC)
+            .session_warnings(window(), &TimeZone::UTC)
             .unwrap()
             .iter()
             .all(|s| s.session_id != "older")
@@ -850,7 +844,7 @@ fn a_session_with_no_timed_record_is_said_to_be_untimed() {
 }
 
 #[test]
-fn starting_and_messaging_agents_are_not_repeated_calls() {
+fn a_circling_stretch_of_agent_calls_is_never_a_warning() {
     let mut db = TempDb::empty().unwrap();
     let task = json!({"description": "review", "prompt": "review the diff"});
     let message = json!({"to": "reviewer", "message": "status?"});
@@ -881,7 +875,10 @@ fn starting_and_messaging_agents_are_not_repeated_calls() {
     let answers = whole(&db, &[SESSION]);
     let found = read(&answers[SESSION]);
     assert!(found.warnings.is_empty(), "{:?}", found.warnings);
-    assert_eq!(found.checks.repeated_calls, CheckState::Complete);
+    assert_eq!(
+        found.checks.get(WarningKind::RepeatedFailure),
+        &CheckState::Complete
+    );
     // M-20, the Dashboard's number, still counts them.
     let SessionRepeats::Measured { stretches, .. } = MetricsDb::open(db.path())
         .unwrap()
@@ -1005,7 +1002,7 @@ fn a_window_lists_only_its_own_warnings_of_whole_session_answers() {
     seed(&mut db, SESSION, "claude", &rows, true);
     let metrics = MetricsDb::open(db.path()).unwrap();
     let inside = metrics
-        .warnings_in_window(window(), RepeatThresholds::default(), &TimeZone::UTC)
+        .warnings_in_window(window(), &TimeZone::UTC)
         .unwrap();
     let whole = whole(&db, &[SESSION]);
     let all = &read(&whole[SESSION]).warnings;
@@ -1039,9 +1036,7 @@ fn a_batch_and_a_window_read_give_each_session_the_answer_it_gets_alone() {
         true,
     );
     // Sessions on the same surface whose records all state one instant,
-    // inside the conversation's window: there the surface's clock is judged
-    // unhealthy, so the conversation's repeated calls cannot be measured,
-    // in a batch exactly as alone.
+    // inside the conversation's window, answered in a batch exactly as alone.
     for index in 0..4 {
         let rows: Vec<_> = (0..6)
             .map(|n| says(&format!("d{index}-{n}"), &at(0, 30), "the same instant"))
@@ -1083,15 +1078,6 @@ fn a_batch_and_a_window_read_give_each_session_the_answer_it_gets_alone() {
     }
     ids.sort();
     let alone = |id: &str| whole(&db, &[id]).remove(id).unwrap();
-    // The surface's health did decide something here.
-    assert!(
-        matches!(
-            read(&alone(SESSION)).checks.repeated_calls,
-            CheckState::Incomplete { .. }
-        ),
-        "{:?}",
-        read(&alone(SESSION)).checks.repeated_calls
-    );
     // A batch of the most a request may name, with the long-lived session.
     let mut named: Vec<&str> = ids.iter().map(String::as_str).rev().take(199).collect();
     named.push("long");
@@ -1101,12 +1087,12 @@ fn a_batch_and_a_window_read_give_each_session_the_answer_it_gets_alone() {
     for id in &named {
         assert_eq!(batch[*id], alone(id), "{id}");
     }
-    // A window over everyone: one load for 206 sessions, each answer the
+    // A window over everyone: one snapshot for 206 sessions, each answer the
     // session's own, only the warnings inside kept.
     let wide = Window::new(ms("2026-08-01T00:00:00Z"), ms("2026-09-08T00:00:00Z")).unwrap();
     let inside = MetricsDb::open(db.path())
         .unwrap()
-        .warnings_in_window(wide, RepeatThresholds::default(), &TimeZone::UTC)
+        .warnings_in_window(wide, &TimeZone::UTC)
         .unwrap();
     let mut expected = Vec::new();
     for id in &ids {
@@ -1209,18 +1195,14 @@ fn saved_answers_round_trip_every_rule_state_point_size_and_requested_zone() {
         for name in ["UTC", "America/Los_Angeles", "Asia/Tokyo"] {
             let zone = TimeZone::get(name).unwrap();
             let ids = [SESSION, "untimed", "empty", "quiet", "missing"];
-            let computed = metrics
-                .whole_session_warnings(&ids, RepeatThresholds::default(), &zone)
-                .unwrap();
+            let computed = metrics.whole_session_warnings(&ids, &zone).unwrap();
             let saved = metrics.saved_whole_session_warnings(&ids, &zone).unwrap();
             assert_eq!(saved, computed, "{start} {name}");
             let start = ms(start);
             let window = Window::new(start - 1000, start + 2 * 86_400_000).unwrap();
             assert_eq!(
                 metrics.saved_warnings_in_window(window, &zone).unwrap(),
-                metrics
-                    .warnings_in_window(window, RepeatThresholds::default(), &zone)
-                    .unwrap()
+                metrics.warnings_in_window(window, &zone).unwrap()
             );
             assert!(!metrics.session_warning_refresh_needed());
         }
@@ -1256,7 +1238,6 @@ fn saved_answers_round_trip_every_rule_state_point_size_and_requested_zone() {
                 "stopped_call",
                 "repeated_prompt",
                 "repeated_failure",
-                "repeated_calls"
             ])
         );
     }
@@ -1331,7 +1312,10 @@ fn stale_missing_corrupt_and_new_version_answers_compute_then_repair() {
 }
 
 #[test]
-fn another_sessions_timestamp_health_invalidates_the_saved_answer() {
+fn another_sessions_timestamp_health_no_longer_changes_the_answer() {
+    // Only the removed repeated-calls rule read the surface's clock health;
+    // the four rules read the session alone, so the answer stays the same
+    // and the refreshed saved answer is that same answer.
     let mut db = TempDb::empty().unwrap();
     seed(&mut db, SESSION, "claude", &conversation(), true);
     warm_saved(&mut db, false);
@@ -1352,7 +1336,7 @@ fn another_sessions_timestamp_health_invalidates_the_saved_answer() {
         seed(&mut db, &format!("health-{index}"), "claude", &rows, true);
     }
     let oracle = whole(&db, &[SESSION]);
-    assert_ne!(before, oracle);
+    assert_eq!(before, oracle);
     warm_saved(&mut db, false);
     assert_eq!(
         MetricsDb::open(db.path())
@@ -1571,7 +1555,7 @@ fn content_purge_clears_saved_correction_span_and_rejects_its_late_candidate() {
 }
 
 #[test]
-fn repeated_call_evidence_uses_the_filtered_representative_and_refreshes_old_cache() {
+fn polling_a_running_job_is_never_a_warning_and_an_old_cache_is_refreshed() {
     let mut db = TempDb::empty().unwrap();
     let mut rows = vec![says("human-start", &at(0, 0), "start the updater tests")];
     for n in 1..=12 {
@@ -1602,20 +1586,14 @@ fn repeated_call_evidence_uses_the_filtered_representative_and_refreshes_old_cac
     rows.push(reply("finish", &at(6, 0)));
     seed(&mut db, SESSION, "claude", &rows, true);
     let computed = whole(&db, &[SESSION]);
-    let warning = read(&computed[SESSION])
-        .warnings
-        .iter()
-        .find(|w| w.kind == WarningKind::RepeatedCalls)
-        .unwrap();
-    assert_eq!(warning.id(), "repeated_calls:human-start");
-    assert_eq!(warning.at_ms, ms(&at(0, 0)));
-    assert_eq!(
-        warning.points_at(),
-        xt_metrics::WarningPoint {
-            record_uuid: "actual-repeated-call".into(),
-            block: Some(0)
-        }
+    // Six polls of one running job and twenty task-list updates: once a
+    // repeated-calls warning, now no warning at all.
+    assert!(
+        read(&computed[SESSION]).warnings.is_empty(),
+        "{:?}",
+        read(&computed[SESSION]).warnings
     );
+    // M-20 itself still measures the stretch.
     let all = MetricsDb::open(db.path())
         .unwrap()
         .session_repeats(window(), SESSION, RepeatThresholds::default())

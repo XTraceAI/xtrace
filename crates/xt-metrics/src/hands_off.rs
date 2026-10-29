@@ -164,9 +164,8 @@ pub(crate) fn health(
     health_over(host, surface, sessions.values().map(Vec::as_slice))
 }
 
-/// [`health`] over each session's events as given: what a load of a narrower
-/// window would have judged, when each slice is [`within`] that window.
-pub(crate) fn health_over<'a>(
+/// [`health`] over each session's events as given.
+fn health_over<'a>(
     host: &str,
     surface: &Option<String>,
     sessions: impl IntoIterator<Item = &'a [Event]>,
@@ -189,74 +188,6 @@ pub(crate) fn health_over<'a>(
     verdict(host, surface, qualifying, degenerate)
 }
 
-/// A surface's sessions prepared for [`health_over`] over many windows: each
-/// session's timestamp-health records, with how many of them start a new
-/// instant up to each one. [`HealthIndex::over`] answers exactly what
-/// [`health_over`] answers for every session [`within`] that window, in time
-/// logarithmic in each session's length instead of linear.
-pub(crate) struct HealthIndex<'a> {
-    sessions: Vec<SessionHealth<'a>>,
-}
-
-struct SessionHealth<'a> {
-    /// The session's health records, in order.
-    records: Vec<&'a Event>,
-    /// `changes[i]`: how many of `records[1..=i]` sit at a different instant
-    /// from the record before them.
-    changes: Vec<u32>,
-}
-
-impl<'a> HealthIndex<'a> {
-    pub(crate) fn new(sessions: impl IntoIterator<Item = &'a [Event]>) -> Self {
-        Self {
-            sessions: sessions
-                .into_iter()
-                .map(|events| {
-                    let records: Vec<&Event> = events.iter().filter(|e| e.health_record).collect();
-                    let mut changes = Vec::with_capacity(records.len());
-                    let mut changed = 0_u32;
-                    for (index, record) in records.iter().enumerate() {
-                        if index > 0 && records[index - 1].instant != record.instant {
-                            changed += 1;
-                        }
-                        changes.push(changed);
-                    }
-                    SessionHealth { records, changes }
-                })
-                .collect(),
-        }
-    }
-
-    /// [`health_over`] of every indexed session narrowed to `window`.
-    pub(crate) fn over(
-        &self,
-        host: &str,
-        surface: &Option<String>,
-        window: Window,
-    ) -> Option<ExcludedSurface> {
-        let start = InstantKey::from_millisecond(window.start_ms());
-        let end = InstantKey::from_millisecond(window.end_ms());
-        let mut qualifying = 0_u64;
-        let mut degenerate = 0_u64;
-        for session in &self.sessions {
-            let low = session.records.partition_point(|e| e.instant < start);
-            let high = session
-                .records
-                .partition_point(|e| e.instant < end)
-                .max(low);
-            let count = high - low;
-            if count >= 5 {
-                qualifying += 1;
-                let distinct = 1 + (session.changes[high - 1] - session.changes[low]) as usize;
-                if distinct <= count / 3 {
-                    degenerate += 1;
-                }
-            }
-        }
-        verdict(host, surface, qualifying, degenerate)
-    }
-}
-
 fn verdict(
     host: &str,
     surface: &Option<String>,
@@ -271,17 +202,6 @@ fn verdict(
             degenerate_sessions: degenerate,
         }
     })
-}
-
-/// The part of one session's loaded events inside `window`, by the same
-/// half-open exact-instant membership [`load`] applies. A load of a wider
-/// window, narrowed here, holds exactly what a load of `window` would.
-pub(crate) fn within(events: &[Event], window: Window) -> &[Event] {
-    let start = InstantKey::from_millisecond(window.start_ms());
-    let end = InstantKey::from_millisecond(window.end_ms());
-    let low = events.partition_point(|event| event.instant < start);
-    let high = events.partition_point(|event| event.instant < end);
-    &events[low..high.max(low)]
 }
 
 impl MetricsDb {
@@ -450,68 +370,4 @@ pub(crate) fn collect(events: &[Event]) -> Result<Option<Vec<Stretch<'_>>>> {
     let mut collected = Vec::new();
     let measured = stretches(events, |stretch| collected.push(stretch))?;
     Ok(measured.then_some(collected))
-}
-
-#[cfg(test)]
-mod health_index_tests {
-    use super::*;
-
-    fn event(second: i64, health_record: bool) -> Event {
-        Event {
-            instant: InstantKey::from_millisecond(second * 1_000),
-            uuid: format!("e{second}"),
-            ts: String::new(),
-            ms: second * 1_000,
-            human: None,
-            tools: None,
-            health_record,
-            automated: false,
-        }
-    }
-
-    /// Every window over a mix of healthy and one-instant sessions: the index
-    /// says exactly what judging each narrowed slice says.
-    #[test]
-    fn the_index_judges_every_window_as_the_narrowed_sessions_do() {
-        let sessions: Vec<Vec<Event>> = vec![
-            // Healthy: every record at its own second.
-            (0..12).map(|s| event(s, true)).collect(),
-            // One instant, then a few more: degenerate in a narrow window.
-            [3, 3, 3, 3, 3, 3, 3, 9, 10]
-                .into_iter()
-                .map(|s| event(s, true))
-                .collect(),
-            [5, 5, 5, 5, 5, 5, 6, 6]
-                .into_iter()
-                .map(|s| event(s, true))
-                .collect(),
-            // Records that are not health records are not counted.
-            (0..10).map(|s| event(s / 4, s % 3 != 0)).collect(),
-            [7, 7, 7, 7, 7, 7]
-                .into_iter()
-                .map(|s| event(s, true))
-                .collect(),
-        ];
-        let index = HealthIndex::new(sessions.iter().map(Vec::as_slice));
-        let surface = Some("cli".to_owned());
-        let mut excluded = 0;
-        for start in -1..13 {
-            for end in start + 1..14 {
-                let window = Window::new(start * 1_000, end * 1_000).unwrap();
-                let narrowed = health_over(
-                    "claude",
-                    &surface,
-                    sessions.iter().map(|events| within(events, window)),
-                );
-                excluded += usize::from(narrowed.is_some());
-                assert_eq!(
-                    index.over("claude", &surface, window),
-                    narrowed,
-                    "{start}..{end}"
-                );
-            }
-        }
-        // Both verdicts occur, so the comparison is not vacuous.
-        assert!(excluded > 0 && excluded < 105, "{excluded}");
-    }
 }

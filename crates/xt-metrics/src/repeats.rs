@@ -229,18 +229,6 @@ impl StoredCall {
 /// One session's stored calls, by record UUID, in block order.
 pub(crate) type StoredCalls = BTreeMap<String, Vec<StoredCall>>;
 
-/// Which calls one repeat measurement compares. M-20, the Dashboard's
-/// number, compares every call. M-21's circling warning compares every call
-/// except the expected repeats [`crate::session_warnings::expected_repeat`]
-/// names. Everything else (the stretches, the fold, the grouping and the
-/// thresholds) is M-20's own and unchanged: this is one formula over two
-/// stated sets of calls, not a second formula.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CallScope {
-    Every,
-    WithoutExpectedRepeats,
-}
-
 /// A group under construction. `first` is the position of its earliest call in
 /// the stretch: the record's index in the stretch's own order, then the block
 /// index inside that record.
@@ -256,7 +244,6 @@ struct Group {
 fn density(
     stretch: &hands_off::Stretch<'_>,
     blocks: &BTreeMap<String, Vec<StoredCall>>,
-    scope: CallScope,
 ) -> std::result::Result<RepeatDensity, UnknownRepeats> {
     let mut groups = BTreeMap::<(u32, String), Group>::new();
     for (order, (uuid, stated)) in stretch.records().enumerate() {
@@ -274,13 +261,6 @@ fn density(
             return Err(UnknownRepeats::MissingBlocks);
         }
         for call in calls {
-            // Left out before its key is read: a call the scope does not
-            // compare cannot make the stretch's count unknown either.
-            if scope == CallScope::WithoutExpectedRepeats
-                && crate::session_warnings::expected_repeat(&call.name)
-            {
-                continue;
-            }
             let key = call.comparable_key()?;
             groups
                 .entry(key.clone())
@@ -350,19 +330,16 @@ impl MetricsDb {
                 sessions.and_then(|s| s.get(session_id)).map(Vec::as_slice),
                 session_id,
                 thresholds,
-                CallScope::Every,
                 &mut None,
             )
         })
     }
 
     /// M-20 for one session from events already loaded for the window: the
-    /// body [`MetricsDb::session_repeats`] runs after its own load, also run
-    /// by a caller that measures many sessions from one load. `excluded` is
-    /// M-09's health verdict for the session's surface over that window and
+    /// body [`MetricsDb::session_repeats`] runs after its own load. `excluded`
+    /// is M-09's health verdict for the session's surface over that window and
     /// `events` the session's own in-window events, both exactly as the load
-    /// produced them. `scope` says which calls are compared; M-20 itself
-    /// always compares [`CallScope::Every`]. `stored` holds the session's
+    /// produced them. Every call is compared. `stored` holds the session's
     /// stored calls once any reader of this session has read them.
     pub(crate) fn loaded_repeats(
         &self,
@@ -370,7 +347,6 @@ impl MetricsDb {
         events: Option<&[hands_off::Event]>,
         session_id: &str,
         thresholds: RepeatThresholds,
-        scope: CallScope,
         stored: &mut Option<StoredCalls>,
     ) -> Result<SessionRepeats> {
         if let Some(excluded) = excluded {
@@ -403,7 +379,7 @@ impl MetricsDb {
                 let (end_uuid, end) = stretch.end();
                 // M-05's fold, over this stretch's own records.
                 let active_duration_ms = spans::fold(&stretch.timeline(), |_, _| {})?;
-                let repeats = density(stretch, blocks, scope)
+                let repeats = density(stretch, blocks)
                     .unwrap_or_else(|reason| RepeatDensity::Unknown { reason });
                 let circling = match &repeats {
                     RepeatDensity::Unknown { .. } => None,

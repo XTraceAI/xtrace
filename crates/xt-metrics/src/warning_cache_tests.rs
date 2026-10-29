@@ -149,7 +149,7 @@ fn old_v2_answer_at_current_revision_cannot_hide_parent_conflict() {
     assert_eq!(refresh.rows.len(), 1);
     assert_eq!(
         (refresh.rows[0].revision, refresh.rows[0].rule_version),
-        (revision, 3)
+        (revision, SESSION_WARNINGS_CACHE_VERSION)
     );
     db.store_mut()
         .publish_session_warnings(&refresh.rows)
@@ -199,7 +199,7 @@ fn current_saved_reads_and_unchanged_refresh_never_load_history() {
     assert!(!metrics.session_warning_refresh_needed());
     assert!(
         metrics
-            .whole_session_warnings(&["s"], RepeatThresholds::new(1, 1).unwrap(), &TimeZone::UTC)
+            .whole_session_warnings(&["s"], &TimeZone::UTC)
             .is_err()
     );
     // A window still reads lightweight timed membership. It must not enter
@@ -262,7 +262,7 @@ fn partial_publication_refreshes_only_rejected_sessions_next() {
             .saved_whole_session_warnings(&["s", "other"], &TimeZone::UTC)
             .unwrap(),
         metrics
-            .whole_session_warnings(&["s", "other"], RepeatThresholds::default(), &TimeZone::UTC)
+            .whole_session_warnings(&["s", "other"], &TimeZone::UTC)
             .unwrap()
     );
     Connection::open(db.path())
@@ -317,7 +317,7 @@ fn reads_and_dismissals_share_snapshot_across_replacement() {
             .saved_whole_session_warnings(&["s"], &TimeZone::UTC)
             .unwrap(),
         metrics
-            .whole_session_warnings(&["s"], RepeatThresholds::default(), &TimeZone::UTC)
+            .whole_session_warnings(&["s"], &TimeZone::UTC)
             .unwrap()
     );
 }
@@ -361,5 +361,106 @@ fn saved_tables_and_columns_are_part_of_open_contract() {
             .execute_batch(damage)
             .unwrap();
         assert!(MetricsDb::open(db.path()).is_err(), "{damage}");
+    }
+}
+
+/// An answer saved before the repeated-calls rule was removed, holding one
+/// such warning and its check, exactly as rule version 3 wrote them.
+fn with_old_repeated_calls(payload_json: &str, version: i64) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(payload_json).unwrap();
+    value["version"] = version.into();
+    let answer = &mut value["answer"]["warnings"];
+    answer["checks"]["repeated_calls"] = serde_json::json!({"state": "complete"});
+    answer["warnings"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "kind": "repeated_calls",
+            "session_id": "s",
+            "anchor": "h1",
+            "at_ms": 1_788_220_800_000_i64,
+            "record_uuids": ["h1", "a1"],
+            "reason": {
+                "reason": "repeated_calls",
+                "repeats": 5,
+                "active_duration_ms": 300_000,
+                "worst": null,
+                "start_ms": 1_788_220_800_000_i64
+            },
+            "repeat": null,
+            "size": 5
+        }));
+    serde_json::to_string(&value).unwrap()
+}
+
+#[test]
+fn a_saved_answer_holding_an_old_repeated_calls_warning_is_recounted_never_shown() {
+    let mut db = seeded();
+    warm(&mut db);
+    let metrics = MetricsDb::open(db.path()).unwrap();
+    let direct = metrics
+        .whole_session_warnings(&["s"], &TimeZone::UTC)
+        .unwrap();
+    let connection = Connection::open(db.path()).unwrap();
+    let saved: String = connection
+        .query_row(
+            "SELECT payload_json FROM saved_session_warnings WHERE session_id='s'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // Saved by the old rules (version 3), and, should one ever carry the
+    // current version, the same content: neither is shown, neither fails.
+    for version in [3, SESSION_WARNINGS_CACHE_VERSION] {
+        connection
+            .execute(
+                "UPDATE saved_session_warnings SET payload_json=?1, rule_version=?2",
+                rusqlite::params![with_old_repeated_calls(&saved, version), version],
+            )
+            .unwrap();
+        let reader = MetricsDb::open(db.path()).unwrap();
+        assert_eq!(
+            reader
+                .saved_whole_session_warnings(&["s"], &TimeZone::UTC)
+                .unwrap(),
+            direct,
+            "{version}"
+        );
+        assert!(matches!(
+            reader
+                .current_saved_whole_session_warnings(&["s"], &TimeZone::UTC)
+                .unwrap()["s"],
+            WholeSessionWarnings::Missing
+        ));
+        assert!(reader.session_warning_refresh_needed(), "{version}");
+        let start = 1_788_220_800_000;
+        let window = Window::new(start - 86_400_000, start + 86_400_000 * 30).unwrap();
+        let shown = reader
+            .saved_warnings_in_window(window, &TimeZone::UTC)
+            .unwrap();
+        assert!(
+            shown
+                .iter()
+                .flat_map(|session| &session.warnings)
+                .all(|warning| warning.kind.as_str() != "repeated_calls")
+        );
+        // The refresh writes a four-rule answer that is then current.
+        let refresh = reader
+            .prepare_session_warning_refresh(&reader.session_warning_repairs())
+            .unwrap()
+            .unwrap();
+        assert_eq!(refresh.rows.len(), 1);
+        assert!(!refresh.rows[0].payload_json.contains("repeated_calls"));
+        db.store_mut()
+            .publish_session_warnings(&refresh.rows)
+            .unwrap();
+        assert!(metrics.session_warning_cache_is_current().unwrap());
+        assert_eq!(
+            MetricsDb::open(db.path())
+                .unwrap()
+                .current_saved_whole_session_warnings(&["s"], &TimeZone::UTC)
+                .unwrap(),
+            direct
+        );
     }
 }
