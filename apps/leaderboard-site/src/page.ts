@@ -3,6 +3,7 @@
 // the page runs no scripts.
 import { countryFlag, isCountryCode } from './country.js';
 import type { ListedRow } from './listing.js';
+import { MARK_COLORS, MARK_CORNER, markCutsPath } from './mark.js';
 
 export const PAGE_CACHE_CONTROL = 'public, s-maxage=60, stale-while-revalidate=60';
 
@@ -129,16 +130,14 @@ function rocket(pixelSize: number): string {
   );
 }
 
-// The XTrace mark (the app's sidebar logo), drawn on a 3×3 grid. The header
-// logo and public/favicon.svg both draw exactly this; a test keeps them equal.
-export const LOGO_MARK =
+// The XTrace mark in the header, drawn smoothly from src/mark.ts (the tab icons
+// are the same mark as pixel art, from scripts/icons.ts).
+const LOGO =
+  '<svg width="22" height="22" viewBox="0 0 3 3" aria-hidden="true" focusable="false">' +
   '<defs><linearGradient id="xg" x1="1" y1="0" x2="0" y2="1">' +
-  '<stop offset="0" stop-color="#7F8CFF"/><stop offset="1" stop-color="#A35CFF"/></linearGradient>' +
-  '<mask id="xm"><rect width="3" height="3" fill="#fff"/>' +
-  '<path d="M1 1V0A1 1 0 0 1 2 1Z M1 1H0A1 1 0 0 0 1 2Z M2 2V1A1 1 0 0 1 3 2Z M2 2H1A1 1 0 0 0 2 3Z" fill="#000"/>' +
-  '</mask></defs><rect width="3" height="3" rx="0.42" fill="url(#xg)" mask="url(#xm)"/>';
-
-const LOGO = `<svg width="22" height="22" viewBox="0 0 3 3" aria-hidden="true" focusable="false">${LOGO_MARK}</svg>`;
+  `<stop offset="0" stop-color="${MARK_COLORS[0]}"/><stop offset="1" stop-color="${MARK_COLORS[1]}"/></linearGradient>` +
+  `<mask id="xm"><rect width="3" height="3" fill="#fff"/><path d="${markCutsPath()}" fill="#000"/></mask></defs>` +
+  `<rect width="3" height="3" rx="${MARK_CORNER}" fill="url(#xg)" mask="url(#xm)"/></svg>`;
 
 /** The tab and home-screen icons in public/, as the page's head links them. */
 export const PAGE_ICONS = [

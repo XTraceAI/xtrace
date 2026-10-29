@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { escapeHtml, formatLeverage, LOGO_MARK, ordinal, PAGE_FONT_PATH } from '../src/page.js';
+import { inflateSync } from 'node:zlib';
+import { ICON_FILES } from '../scripts/icons.js';
+import { markCutsPath } from '../src/mark.js';
+import { escapeHtml, formatLeverage, ordinal, PAGE_FONT_PATH, renderPage } from '../src/page.js';
 import {
   HOUR,
   harness,
@@ -395,10 +398,41 @@ describe('GET /', () => {
   });
 });
 
-test('the tab icon draws exactly the header logo', () => {
-  const favicon = readFileSync(new URL('../public/favicon.svg', import.meta.url), 'utf8');
-  assert.equal(
-    favicon,
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 3">${LOGO_MARK}</svg>\n`,
-  );
+/** A PNG's size and its decompressed pixel rows, so the check does not depend on zlib's output. */
+function pngPixels(png: Buffer): { width: number; height: number; rows: Buffer } {
+  const data: Buffer[] = [];
+  let width = 0;
+  let height = 0;
+  for (let at = 8; at < png.length;) {
+    const length = png.readUInt32BE(at);
+    const type = png.toString('ascii', at + 4, at + 8);
+    const body = png.subarray(at + 8, at + 8 + length);
+    if (type === 'IHDR') [width, height] = [body.readUInt32BE(0), body.readUInt32BE(4)];
+    if (type === 'IDAT') data.push(body);
+    at += 12 + length;
+  }
+  return { width, height, rows: inflateSync(Buffer.concat(data)) };
+}
+
+test('the icons in public/ are the pixel-art mark scripts/icons.ts draws', () => {
+  for (const [name, draw] of Object.entries(ICON_FILES)) {
+    const onDisk = readFileSync(new URL(`../public/${name}`, import.meta.url));
+    const drawn = draw();
+    if (name.endsWith('.svg')) assert.equal(onDisk.toString('utf8'), drawn, name);
+    else assert.deepEqual(pngPixels(onDisk), pngPixels(drawn as Buffer), name);
+  }
+  for (const [name, size] of [
+    ['favicon-32.png', 32],
+    ['apple-touch-icon.png', 180],
+  ] as const) {
+    const { width, height } = pngPixels(
+      readFileSync(new URL(`../public/${name}`, import.meta.url)),
+    );
+    assert.deepEqual([width, height], [size, size], name);
+  }
+});
+
+test('the header logo is drawn from the same mark', () => {
+  const html = renderPage([]);
+  assert.ok(html.includes(`<path d="${markCutsPath()}" fill="#000"/>`));
 });

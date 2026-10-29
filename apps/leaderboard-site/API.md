@@ -304,6 +304,8 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
   It runs no scripts and loads only its own files from `public/`: the font,
   `/fonts/PressStart2P-Regular.ttf`, and the XTrace mark as its tab and home-screen icons
   (`/favicon.svg`, `/favicon-32.png`, `/apple-touch-icon.png`, added 2026-10-29 with `img-src 'self'`).
+  The icons are the mark as 8-bit pixel art, drawn by `scripts/icons.ts` from `src/mark.ts` (the header
+  logo's shape); rerun it after changing the mark, and a test checks `public/` matches.
 - The local development server answers an unknown path with 404 `not_found` and an unsupported method
   with 405 `method_not_allowed`. On Vercel those two answers come from Vercel itself.
   Like Vercel, it serves the `.png`, `.svg`, `.ttf` and `.txt` files in `public/` for `GET` and `HEAD`; a path that
