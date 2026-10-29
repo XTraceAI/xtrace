@@ -18,6 +18,7 @@ import {
   LEAVE_BACKUPS,
   LEAVE_TEXT,
   SAMPLE_ROWS,
+  SEND_TIMES,
   SHARED_FACTS,
   TABLE_EMPTY,
   TABLE_READING,
@@ -200,7 +201,7 @@ it('shows the nickname, the number as the Dashboard writes it, the rank and when
   expect(summary()).toEqual({
     Nickname: 'ada',
     'Leverage, 7 days': '12.3×',
-    Rank: '#2 on the public page',
+    Rank: '#2',
     'Last sent': clock(SENT_AT, { date: 'day' }),
   });
   fireEvent.click(screen.getByRole('button', { name: 'Open leaderboard.xtrace.ai' }));
@@ -519,7 +520,11 @@ it('shows the public list under the membership, with your row marked', async () 
   expect(within(you).getByText('You').getAttribute('aria-hidden')).toBe('true');
   expect(table.querySelectorAll('tr[data-you]')).toHaveLength(1);
   // The membership and its controls stay above it.
-  expect(summary()['Rank']).toBe('#2 on the public page');
+  expect(summary()['Rank']).toBe('#2');
+  // When the app sends moved under the list's "What is shared".
+  const shared = screen.getByText('What is shared').closest('details')!;
+  expect(within(shared).getByText(SEND_TIMES)).toBeTruthy();
+  expect(table.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(
     screen.getByTestId('leaderboard-summary').compareDocumentPosition(table) &
       Node.DOCUMENT_POSITION_FOLLOWING,

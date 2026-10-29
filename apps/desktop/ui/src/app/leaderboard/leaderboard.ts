@@ -15,13 +15,22 @@ export const JOIN_TITLE = 'Join the leaderboard';
 
 /** The join card's disclosure: its label, then the rest of what joining shares. */
 export const SHARED_SUMMARY = 'What is shared';
-export const SHARED_FACTS: readonly string[] = [
+/** When the app sends the member's number. */
+export const SEND_TIMES =
+  'The app sends your number when it starts, when it first finishes reading your history, and every hour while it runs.';
+/** What joining shares, said both before and after joining. */
+const SHARED_COMMON: readonly string[] = [
   'The public page, leaderboard.xtrace.ai, shows your nickname and your leverage for the last 7 days.',
   'Your email is never shown to anyone. We only use it to send sign-in codes, which keeps out spam and fake entries.',
   'Joining again with the same email, for example on a new Mac, signs you back in to your entry. Only the Mac you joined from most recently sends your number.',
   "Like any web request, the leaderboard also sees your IP address and this app's version.",
+];
+export const SHARED_FACTS: readonly string[] = [
+  ...SHARED_COMMON,
   'Until you join, the app sends and reads nothing. The blurred list behind this card is a made-up example.',
 ];
+/** After joining the list says when the app sends, instead of what joining reads. */
+export const JOINED_SHARED_FACTS: readonly string[] = [...SHARED_COMMON, SEND_TIMES];
 
 /** The joined page's public list: its title and what it says when it has no rows. */
 export const TABLE_TITLE = 'Public leaderboard';
@@ -95,9 +104,6 @@ export const codeSentText = (email: string) =>
   `We sent a 6-digit code to ${email}. Enter it below. It expires in 15 minutes.`;
 
 /** When the number is sent, in the order the app sends it. */
-export const SEND_TIMES =
-  'The app sends your number when it starts, when it first finishes reading your history, and every hour while it runs.';
-
 /** The confirmation Leave asks for. */
 export const LEAVE_QUESTION = 'Leave the leaderboard?';
 export const LEAVE_TEXT =
@@ -118,7 +124,7 @@ export const leaderboardNumber = (tenths: number | null): string =>
 export function standingText(standing: LeaderboardStanding): string {
   switch (standing.state) {
     case 'ranked':
-      return `#${standing.rank} on the public page`;
+      return `#${standing.rank}`;
     case 'not_listed':
       return standing.reason;
     case 'unknown':

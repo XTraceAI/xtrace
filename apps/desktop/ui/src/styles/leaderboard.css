@@ -202,3 +202,56 @@
 .xt-leaderboard .xt-section-panel > .xt-leaderboard-table tr:last-child td {
   border-bottom: 1px solid var(--divider);
 }
+/* Joined: the member's standing in one strip, then the list at full width. */
+.xt-placeholder.xt-leaderboard .xt-section-card {
+  max-width: none;
+}
+.xt-leaderboard-standing {
+  margin-top: 24px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.xt-leaderboard-standing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+.xt-leaderboard-standing-medal {
+  font-size: 22px;
+  line-height: 1;
+}
+.xt-leaderboard-standing-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+}
+.xt-leaderboard-standing-facts dt {
+  color: var(--meta);
+  font:
+    400 9.5px 'Geist Mono',
+    Menlo,
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.xt-leaderboard-standing-facts dd {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.xt-leaderboard-standing .xt-leaderboard-actions {
+  margin: 0 0 0 auto;
+}
+.xt-leaderboard-standing > p {
+  margin: 10px 0 0;
+}
+.xt-leaderboard > .xt-leaderboard-shared {
+  margin-top: 16px;
+}

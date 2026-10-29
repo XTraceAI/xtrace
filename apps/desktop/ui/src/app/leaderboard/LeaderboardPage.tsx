@@ -23,7 +23,7 @@ import {
   JOIN_TITLE,
   LEAVE_BACKUPS,
   SAMPLE_ROWS,
-  SEND_TIMES,
+  JOINED_SHARED_FACTS,
   SHARED_FACTS,
   rankMedal,
   SHARED_SUMMARY,
@@ -98,13 +98,13 @@ function Locked({ children }: { children: ReactNode }) {
   );
 }
 
-/** The rest of what joining shares, folded under the join card's one line. */
-function SharedDetails() {
+/** The rest of what joining shares, folded under the join card or the joined list. */
+function SharedDetails({ facts = SHARED_FACTS }: { facts?: readonly string[] }) {
   return (
     <details className="xt-leaderboard-shared">
       <summary>{SHARED_SUMMARY}</summary>
       <ul>
-        {SHARED_FACTS.map((fact) => (
+        {facts.map((fact) => (
           <li key={fact}>{fact}</li>
         ))}
       </ul>
@@ -163,9 +163,11 @@ function PublicTable({ rows, label }: { rows: readonly LeaderboardRow[]; label?:
 
 /**
  * The public list while joined, in its own card so a failed read never hides
- * the membership controls above it. It is read again with the status.
+ * the membership controls above it, with the public page's link in its
+ * header. It is read again with the status.
  */
-function PublicBoard({ controls }: { controls: LeaderboardControls }) {
+function PublicBoard({ controls, pageUrl }: { controls: LeaderboardControls; pageUrl: string }) {
+  const [openFailed, setOpenFailed] = useState(false);
   const table = useQuery({
     queryKey: queryKeys.leaderboardTable,
     queryFn: () => controls.table(),
@@ -182,7 +184,22 @@ function PublicBoard({ controls }: { controls: LeaderboardControls }) {
     return () => clearTimeout(timer);
   }, [refreshAfter, dataUpdatedAt, refetch]);
   return (
-    <SectionCard title={TABLE_TITLE}>
+    <SectionCard
+      title={TABLE_TITLE}
+      right={
+        <Button
+          variant="outline"
+          height={28}
+          onClick={() => {
+            setOpenFailed(false);
+            controls.openPage().catch(() => setOpenFailed(true));
+          }}
+        >
+          Open {new URL(pageUrl).host}
+        </Button>
+      }
+    >
+      {openFailed && <p role="alert">The leaderboard page could not be opened in your browser.</p>}
       {table.isError && <p role="alert">{TABLE_UNREADABLE}</p>}
       {data === undefined ? (
         !table.isError && <p className="xt-settings-note">{TABLE_READING}</p>
@@ -289,12 +306,12 @@ function Leaderboard({
         // Only the code's own answer carries the welcome; later status reads
         // leave it on the page.
         welcome={confirm.data?.welcome ?? null}
-        controls={controls}
         rename={rename}
         leave={leave}
         heading={heading}
       />
-      <PublicBoard controls={controls} />
+      <PublicBoard controls={controls} pageUrl={current.page_url} />
+      <SharedDetails facts={JOINED_SHARED_FACTS} />
     </>
   ) : (
     <Locked>
@@ -544,82 +561,87 @@ function CodeStep({
   );
 }
 
+/**
+ * The member's standing in one strip above the list: medal, rank, nickname,
+ * number and when it was sent, with the changes beside them.
+ */
 function Membership({
   status,
   welcome,
-  controls,
   rename,
   leave,
   heading,
 }: {
   status: LeaderboardStatus;
   welcome: string | null;
-  controls: LeaderboardControls;
   rename: Changes['rename'];
   leave: Changes['leave'];
   heading: RefObject<HTMLHeadingElement | null>;
 }) {
   const [renaming, setRenaming] = useState(false);
-  const [openFailed, setOpenFailed] = useState(false);
-  const host = new URL(status.page_url).host;
+  const titleId = useId();
+  const medal = status.standing?.state === 'ranked' ? rankMedal(status.standing.rank) : null;
   return (
-    <SectionCard
-      title="You are on the leaderboard"
-      right={
-        <Button
-          variant="outline"
-          height={28}
-          onClick={() => {
-            setOpenFailed(false);
-            controls.openPage().catch(() => setOpenFailed(true));
-          }}
-        >
-          Open {host}
-        </Button>
-      }
-    >
-      <dl className="xt-database-summary" data-testid="leaderboard-summary">
-        <dt>Nickname</dt>
-        <dd>{status.nickname}</dd>
-        <dt>Leverage, 7 days</dt>
-        <dd>{status.last_sent ? leaderboardNumber(status.last_sent.leverage_tenths) : '—'}</dd>
-        <dt>Rank</dt>
-        <dd>{status.standing ? standingText(status.standing) : '—'}</dd>
-        <dt>Last sent</dt>
-        <dd>
-          {status.last_sent ? clock(status.last_sent.at_ms, { date: 'day' }) : 'Not sent yet'}
-        </dd>
-      </dl>
-      {welcome && (
-        <p role="status" data-testid="leaderboard-welcome">
-          {welcome}
-        </p>
-      )}
-      <p className="xt-settings-note">{SEND_TIMES}</p>
-      {status.error && <p role="alert">{status.error}</p>}
-      {openFailed && <p role="alert">The leaderboard page could not be opened in your browser.</p>}
-      {renaming ? (
+    <section className="xt-leaderboard-standing" aria-labelledby={titleId}>
+      <h2 id={titleId} className="sr-only">
+        You are on the leaderboard
+      </h2>
+      <div className="xt-leaderboard-standing-row">
+        {medal && (
+          <span className="xt-leaderboard-standing-medal" aria-hidden="true">
+            {medal}
+          </span>
+        )}
+        <dl className="xt-leaderboard-standing-facts" data-testid="leaderboard-summary">
+          <div>
+            <dt>Rank</dt>
+            <dd>{status.standing ? standingText(status.standing) : '—'}</dd>
+          </div>
+          <div>
+            <dt>Nickname</dt>
+            <dd>{status.nickname}</dd>
+          </div>
+          <div>
+            <dt>Leverage, 7 days</dt>
+            <dd>{status.last_sent ? leaderboardNumber(status.last_sent.leverage_tenths) : '—'}</dd>
+          </div>
+          <div>
+            <dt>Last sent</dt>
+            <dd>
+              {status.last_sent ? clock(status.last_sent.at_ms, { date: 'day' }) : 'Not sent yet'}
+            </dd>
+          </div>
+        </dl>
+        {!renaming && (
+          <div className="xt-leaderboard-actions">
+            <Button
+              variant="outline"
+              height={28}
+              onClick={() => {
+                rename.reset();
+                setRenaming(true);
+              }}
+            >
+              Change nickname
+            </Button>
+            <LeaveButton leave={leave} heading={heading} />
+          </div>
+        )}
+      </div>
+      {renaming && (
         <RenameForm
           current={status.nickname ?? ''}
           rename={rename}
           onDone={() => setRenaming(false)}
         />
-      ) : (
-        <div className="xt-leaderboard-actions">
-          <Button
-            variant="outline"
-            height={28}
-            onClick={() => {
-              rename.reset();
-              setRenaming(true);
-            }}
-          >
-            Change nickname
-          </Button>
-          <LeaveButton leave={leave} heading={heading} />
-        </div>
       )}
-    </SectionCard>
+      {welcome && (
+        <p role="status" data-testid="leaderboard-welcome">
+          {welcome}
+        </p>
+      )}
+      {status.error && <p role="alert">{status.error}</p>}
+    </section>
   );
 }
 

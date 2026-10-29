@@ -65,7 +65,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(summary).toContainText('12.3×');
     const heading = page.getByRole('heading', { level: 1 });
     await expect(heading).toBeFocused();
-    await expect(summary).toContainText('#2 on the public page');
+    await expect(summary).toContainText('#2');
     // The real list replaces the blurred one, with the member's row marked.
     const table = page.getByRole('table', { name: 'Public leaderboard' });
     await expect(table.getByRole('row')).toHaveCount(6);
