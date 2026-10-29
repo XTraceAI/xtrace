@@ -33,6 +33,7 @@ import {
   TABLE_UPDATES,
   YOU_LABEL,
   codeSentText,
+  countryFlag,
   LEAVE_QUESTION,
   LEAVE_TEXT,
   leaderboardNumber,
@@ -126,7 +127,18 @@ function RankCell({ rank }: { rank: number }) {
   );
 }
 
-/** Rank, nickname and 7-day leverage, with the member's own row marked. */
+/** The member's flag before their nickname, named by its code; nothing without a country. */
+function CountryFlag({ country }: { country: string | null }) {
+  const flag = countryFlag(country);
+  if (flag === null || country === null) return null;
+  return (
+    <span className="xt-leaderboard-flag" role="img" aria-label={country} title={country}>
+      {flag}
+    </span>
+  );
+}
+
+/** Rank, flag and nickname, and 7-day leverage, with the member's own row marked. */
 function PublicTable({
   rows,
   label,
@@ -158,6 +170,7 @@ function PublicTable({
           <tr key={`${row.rank}-${row.nickname}`} data-you={row.is_you || undefined}>
             <RankCell rank={row.rank} />
             <td>
+              <CountryFlag country={row.country} />
               {row.nickname}
               {row.is_you && (
                 <>

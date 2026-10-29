@@ -69,7 +69,11 @@ for (const scheme of ['light', 'dark'] as const) {
     // The real list replaces the blurred one, with the member's row marked.
     const table = page.getByRole('table', { name: 'Public leaderboard' });
     await expect(table.getByRole('row')).toHaveCount(6);
-    await expect(table.locator('tr[data-you]')).toHaveText(/^🥈2ada\s*You \(this is you\)12\.3×$/);
+    await expect(table.locator('tr[data-you]')).toHaveText(
+      /^🥈2🇬🇧ada\s*You \(this is you\)12\.3×$/,
+    );
+    // Each member's flag sits before their nickname, named by its country code.
+    await expect(table.locator('tr[data-you]').getByRole('img', { name: 'GB' })).toHaveText('🇬🇧');
     await expect(page.getByTestId('leaderboard-sample')).toHaveCount(0);
     await page.locator('.xt-shell-main').screenshot({
       path: info.outputPath(`leaderboard-joined-${scheme}.png`),

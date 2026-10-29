@@ -189,6 +189,10 @@
   background: var(--accent-tint);
   font-weight: 700;
 }
+/* The member's country flag, just before the nickname. */
+.xt-leaderboard-flag {
+  margin-right: 6px;
+}
 .xt-leaderboard-you {
   margin-left: 8px;
   padding: 1px 6px;

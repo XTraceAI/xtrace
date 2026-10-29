@@ -1,6 +1,7 @@
 // The public HTML page. It shows exactly what GET /api/leaderboard returns.
 // It is drawn as an arcade high-score table with HTML, CSS and inline SVG only:
 // the page runs no scripts.
+import { countryFlag } from './country.js';
 import type { ListedRow } from './listing.js';
 
 export const PAGE_CACHE_CONTROL = 'public, s-maxage=60, stale-while-revalidate=60';
@@ -26,6 +27,17 @@ export function escapeHtml(text: string): string {
  */
 export function formatLeverage(tenths: number): string {
   return `${Math.floor(tenths / 10)}.${tenths % 10}X`;
+}
+
+/**
+ * The member's flag before their nickname, labelled with the country code for
+ * screen readers and on hover. Nothing at all (so no gap) when there is no country.
+ */
+export function flagHtml(country: string | null): string {
+  const flag = country === null ? '' : countryFlag(country);
+  if (!flag || country === null) return '';
+  const code = escapeHtml(country);
+  return `<span class="flag" role="img" aria-label="${code}" title="${code}">${flag}</span>`;
 }
 
 /** Shown where a number would be when there is none, in the same shape as formatLeverage. */
@@ -332,6 +344,14 @@ td.name { width: 100%; max-width: 0; white-space: normal; }
 .line { display: flex; align-items: baseline; gap: 8px; }
 /* Every nickname is shown in full: a long one wraps and the dots shrink away. */
 .nick { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.flag {
+  flex: none;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-style: normal;
+  line-height: 1;
+  text-transform: none;
+}
+.hud .flag { margin-right: 6px; }
 .dots { flex: 1 1 0; min-width: 0; border-bottom: 3px dotted currentColor; opacity: 0.35; }
 .gold { color: var(--yellow); }
 .orange { color: var(--orange); }
@@ -387,7 +407,8 @@ function memberRow(row: ListedRow): string {
   return (
     `<tr data-rank="${row.rank}" class="${tone(row)}"><td class="rank">${ordinal(row.rank)}</td>` +
     `<td class="ship">${ship}</td>` +
-    `<td class="name"><div class="line"><span class="nick">${escapeHtml(row.nickname)}</span>` +
+    `<td class="name"><div class="line">${flagHtml(row.country)}` +
+    `<span class="nick">${escapeHtml(row.nickname)}</span>` +
     `<span class="dots" aria-hidden="true"></span></div></td>` +
     `<td class="lev">${formatLeverage(row.leverage_tenths)}</td></tr>`
   );
@@ -448,7 +469,7 @@ export function renderPage(rows: ListedRow[]): string {
 </header>
 <main>
 <dl class="hud">
-<div><dt>1UP</dt><dd>${leader ? escapeHtml(leader.nickname) : '---'}</dd></div>
+<div><dt>1UP</dt><dd>${leader ? flagHtml(leader.country) + escapeHtml(leader.nickname) : '---'}</dd></div>
 <div><dt>HI-LEVER</dt><dd>${leader ? formatLeverage(leader.leverage_tenths) : NO_LEVERAGE}</dd></div>
 <div><dt>PLAYERS</dt><dd>${players}</dd></div>
 </dl>

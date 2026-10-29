@@ -405,6 +405,7 @@ describe('GET /api/me', () => {
       listed: false,
       rank: null,
       score_updated_at: null,
+      country: null,
     });
   });
 
@@ -418,6 +419,7 @@ describe('GET /api/me', () => {
       listed: true,
       rank: 1,
       score_updated_at: '2026-10-27T08:09:10.123Z',
+      country: null,
     });
   });
 
@@ -431,6 +433,7 @@ describe('GET /api/me', () => {
       listed: false,
       rank: null,
       score_updated_at: START.toISOString(),
+      country: null,
     });
   });
 });

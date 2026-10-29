@@ -306,3 +306,52 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
   with 405 `method_not_allowed`. On Vercel those two answers come from Vercel itself.
   Like Vercel, it serves the `.ttf` and `.txt` files in `public/` for `GET` and `HEAD`; a path that
   leaves `public/` (for example with an encoded `..`) is 404.
+
+---
+
+# v3 changes (2026-10-29): each member's country
+
+Tristan asked for a country flag next to each nickname, set automatically (there is no chooser).
+Everything above still holds unless replaced here.
+
+## Where the country comes from
+
+- The only source is the `x-vercel-ip-country` request header, which Vercel adds from the caller's IP address.
+  One function (`requestCountry` in `src/country.ts`) reads it, and every endpoint uses that function.
+- The value counts only when it is exactly two uppercase ASCII letters (`/^[A-Z]{2}$/`) and is not `XX`. Anything
+  else (no header, `XX`, lowercase, longer or shorter) is _unknown_.
+- It is saved on the member when a join is verified (a new member, or a member signing back in), and on every
+  successful `PUT /api/score`. When it is unknown, the stored country is kept as it is. A refused request
+  (4xx) does not change it.
+- The IP address is still never stored; only the two-letter country is.
+- The local development server drops any client-sent `x-vercel-ip-country` (as it does `x-real-ip` and
+  `x-forwarded-for`), so a local client cannot claim a country; its members have none. Tests set the header on
+  the `Request` directly.
+
+## Response changes
+
+- `GET /api/leaderboard` rows become `{"rank": integer, "nickname": string, "leverage_tenths": integer, "country": string | null}`.
+- `GET /api/me` adds `"country": string | null` (also when the member is not listed).
+  `country` is two uppercase letters, or null when it has never been known.
+
+## Public page changes
+
+- A flag is shown just before each nickname on the board, and before the leader's name in the **1UP** box. It is the
+  country code written as two Unicode regional-indicator letters (`US` → 🇺🇸), in a
+  `<span class="flag" role="img" aria-label="US" title="US">`. A member with no country has no flag and no gap.
+- The page still runs no scripts and has the same Content-Security-Policy; nicknames are still escaped, shown in
+  full and fit from 320 px up.
+
+## Schema addition
+
+```sql
+alter table members add column if not exists country text
+  check (octet_length(country) = 2 and country ~ '^[A-Z]{2}$');
+```
+
+Safe to run again: a second run leaves the column, its check and the stored countries unchanged.
+
+## Deploy note
+
+Run `pnpm db:migrate` against the production database (README step 5) **before** deploying this code: the new
+queries read and write `members.country` and fail until the column exists.

@@ -9,9 +9,15 @@
 //!   every hour while it runs ([`UPLOAD_INTERVAL`]); a failed upload is tried again at the next hour,
 //!   with no pop-up. Renaming sends the new nickname; Leave asks the
 //!   leaderboard to delete everything it has.
+//! * **What is public.** The nickname, the 7-day leverage number and the
+//!   member's country. The app never sends a country: the leaderboard takes
+//!   it from the IP address its requests come from (Vercel's
+//!   `x-vercel-ip-country`), at joining and with each number, and keeps only
+//!   the two-letter code. The email and the IP address are not shown.
 //! * **What is read.** While joined, the page's status asks the leaderboard
 //!   for the member's rank, and the page reads the public list
-//!   ([`LeaderboardService::table`]). Nothing is read before joining.
+//!   ([`LeaderboardService::table`]), with each member's country.
+//!   Nothing is read before joining.
 //! * **What is saved.** The key the leaderboard answers a join with, the
 //!   nickname and the last number sent, in the app's own database
 //!   (`xt_store::leaderboard`). The email is never saved. Neither the key nor
@@ -466,6 +472,22 @@ struct Listed {
     rank: u32,
     nickname: String,
     leverage_tenths: u32,
+    /// Missing, null or not a country code: no flag, and the row still shows.
+    #[serde(default, deserialize_with = "listed_country")]
+    country: Option<String>,
+}
+
+/// A listed member's country as the page may show it: exactly two
+/// uppercase ASCII letters, else none. Any JSON value is accepted, so a bad
+/// country only hides the flag and never refuses the list.
+fn listed_country<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .filter(|code| code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase()))
+        .map(str::to_owned))
 }
 
 impl Listing {
@@ -774,6 +796,9 @@ pub struct LeaderboardRow {
     pub nickname: String,
     /// The 7-day leverage in tenths (123 is written `12.3×`).
     pub leverage_tenths: u32,
+    /// The member's country as two uppercase letters (`US`), from the
+    /// leaderboard; none when it is not known. The page shows its flag.
+    pub country: Option<String>,
     /// This row is this Mac's membership: its nickname is the saved one,
     /// ignoring case (the leaderboard keeps nicknames unique that way).
     pub is_you: bool,
@@ -1012,6 +1037,7 @@ impl LeaderboardService {
                         rank: row.rank,
                         nickname: row.nickname,
                         leverage_tenths: row.leverage_tenths,
+                        country: row.country,
                     })
                     .collect(),
                 reason: None,

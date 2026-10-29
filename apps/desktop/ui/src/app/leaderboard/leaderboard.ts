@@ -16,7 +16,7 @@ export const JOIN_TITLE = 'Join the leaderboard';
 /** The join card's disclosure: its label, then the rest of what joining shares. */
 export const SHARED_SUMMARY = 'What is shared';
 export const SHARED_FACTS: readonly string[] = [
-  'Public: your nickname and 7-day leverage.',
+  'Public: your nickname, 7-day leverage and country (from your IP address).',
   'Private: your email, used only for sign-in codes.',
   'The same email on a new Mac signs you back in; only your latest Mac sends.',
   'The site also sees your IP address and app version.',
@@ -34,6 +34,15 @@ export const TABLE_UNREADABLE = 'The public list could not be read.';
 export const TABLE_READING = 'Reading the public list…';
 /** The medal drawn before the top three ranks, for fun; the number stays. */
 export const rankMedal = (rank: number): string | null => ['🥇', '🥈', '🥉'][rank - 1] ?? null;
+/**
+ * A two-letter country code as its flag (`US` → 🇺🇸): the two Unicode
+ * regional-indicator letters for it. Null when there is no country or the
+ * code is not two uppercase ASCII letters, so no flag is drawn.
+ */
+export function countryFlag(country: string | null): string | null {
+  if (country === null || !/^[A-Z]{2}$/.test(country)) return null;
+  return String.fromCodePoint(...[...country].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
+}
 /** Said to assistive technology after the member's own nickname. */
 export const YOU_LABEL = '(this is you)';
 
@@ -87,6 +96,7 @@ export const SAMPLE_ROWS: readonly LeaderboardRow[] = SAMPLE_NAMES.map((name, in
   rank: index + 1,
   nickname: `sample-${name}`,
   leverage_tenths: Math.round(482 * 0.9 ** index),
+  country: null,
   is_you: name === 'you',
 }));
 

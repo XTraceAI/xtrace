@@ -2,6 +2,7 @@
 // Order inside a handler: the per-IP API limit, the body (its content type
 // first), the key, then the endpoint's own limit. GET /api/leaderboard and the
 // page are not limited.
+import { requestCountry } from './country.js';
 import { isUniqueViolation, type Clock, type Query } from './db.js';
 import { fail, json, noContent, readJsonObject } from './http.js';
 import { CODE_FORMAT, startJoin, verifyJoin } from './joining.js';
@@ -133,7 +134,7 @@ export function createApp({
     if (nicknameGiven && !nickname) return fail(400, 'invalid_nickname');
     const wait = await limit(LIMITS.verifyPerIp, ip);
     if (wait !== null) return rateLimited(wait);
-    return verifyJoin(joinContext, pendingId, code, nickname);
+    return verifyJoin(joinContext, pendingId, code, nickname, requestCountry(request));
   });
 
   const score = limitedByIp(async (request) => {
@@ -146,10 +147,12 @@ export function createApp({
     if (!id) return fail(401, 'unknown_key');
     const wait = await limit(LIMITS.scorePerMember, id);
     if (wait !== null) return rateLimited(wait);
+    // An unknown country keeps the stored one.
     const rows = await query(
-      `update members set leverage_tenths = $1, score_updated_at = $2::timestamptz
+      `update members set leverage_tenths = $1, score_updated_at = $2::timestamptz,
+         country = coalesce($4, country)
        where id = $3::bigint returning id`,
-      [leverage, clock().toISOString(), id],
+      [leverage, clock().toISOString(), id, requestCountry(request)],
     );
     return rows.length === 0 ? fail(401, 'unknown_key') : noContent();
   });

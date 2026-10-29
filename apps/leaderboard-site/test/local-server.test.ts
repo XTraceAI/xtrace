@@ -44,7 +44,7 @@ after(async () => {
 
 test('schema.sql can be applied again without changes', async () => {
   const { db, query } = await openLocalDatabase();
-  assert.equal(await applySchema(query, readSchema()), 5);
+  assert.equal(await applySchema(query, readSchema()), 6);
   const indexes = (await query(`select indexname from pg_indexes where schemaname = 'public'`)).map(
     (row) => String(row.indexname),
   );
@@ -64,7 +64,31 @@ test('schema.sql can be applied again without changes', async () => {
       'leverage_tenths',
       'score_updated_at',
       'created_at',
+      'country',
     ],
+  );
+  for (const country of ['us', 'USA', 'U', 'ÉS', ''])
+    await assert.rejects(
+      query(
+        `insert into members (nickname, nickname_key, email, key_hash, country) values ('c','c','c',decode('03','hex'),$1)`,
+        [country],
+      ),
+      /check constraint/,
+      country,
+    );
+  await query(
+    `insert into members (nickname, nickname_key, email, key_hash, country) values ('d','d','d',decode('04','hex'),'NZ')`,
+  );
+  // Running it again keeps the column, its check and the stored country.
+  assert.equal(await applySchema(query, readSchema()), 6);
+  assert.deepEqual(await query(`select country from members where nickname = 'd'`), [
+    { country: 'NZ' },
+  ]);
+  await assert.rejects(
+    query(
+      `insert into members (nickname, nickname_key, email, key_hash, country) values ('e','e','e',decode('05','hex'),'nz')`,
+    ),
+    /check constraint/,
   );
   await assert.rejects(
     query(
@@ -89,9 +113,12 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
   const line = printed.at(-1) ?? '';
   const match = /^code for http@example\.com: ([0-9]{6})$/.exec(line);
   assert.ok(match, 'the local server prints the code');
+  // A client cannot claim a country: the local server drops the header, as no
+  // proxy here has looked the IP up.
+  const claimed = { 'x-vercel-ip-country': 'FR' };
   const verified = await fetch(`${origin}/api/join/verify`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...claimed, 'content-type': 'application/json' },
     body: JSON.stringify({ pending_id, code: match[1] }),
   });
   assert.equal(verified.status, 201);
@@ -101,7 +128,7 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
 
   const scored = await fetch(`${origin}/api/score`, {
     method: 'PUT',
-    headers: { ...auth, 'content-type': 'application/json' },
+    headers: { ...auth, ...claimed, 'content-type': 'application/json' },
     body: JSON.stringify({ leverage_tenths: 45 }),
   });
   assert.equal(scored.status, 204);
@@ -111,8 +138,9 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
     unknown
   >;
   assert.equal(mine.rank, 1);
+  assert.equal(mine.country, null);
   assert.deepEqual(await (await fetch(`${origin}/api/leaderboard`)).json(), {
-    rows: [{ rank: 1, nickname: 'Http_User', leverage_tenths: 45 }],
+    rows: [{ rank: 1, nickname: 'Http_User', leverage_tenths: 45, country: null }],
   });
   const page = await fetch(`${origin}/`);
   assert.equal(page.headers.get('cache-control'), 'public, s-maxage=60, stale-while-revalidate=60');
