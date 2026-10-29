@@ -73,6 +73,7 @@ export const commands = {
   telemetryDisclosureShown: 'telemetry_disclosure_shown',
   openTelemetryDoc: 'open_telemetry_doc',
   leaderboardStatus: 'leaderboard_status',
+  leaderboardTable: 'leaderboard_table',
   leaderboardJoin: 'leaderboard_join',
   leaderboardConfirm: 'leaderboard_confirm',
   leaderboardCancelCode: 'leaderboard_cancel_code',

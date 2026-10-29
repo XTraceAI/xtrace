@@ -212,8 +212,9 @@ lists every event and property.
 XTrace is a public beta. Some numbers can be incomplete when part of your
 history is missing. Rulebook is marked as coming soon in the sidebar. On the
 Leaderboard page you can choose to join the public leaderboard at
-leaderboard.xtrace.ai; [TELEMETRY.md](TELEMETRY.md#leaderboard) says what that
-sends. See the [beta testing limits](docs/UPDATES.md#beta-testing-limits).
+leaderboard.xtrace.ai. Once you have joined, the page also shows the public
+list with your row marked; [TELEMETRY.md](TELEMETRY.md#leaderboard) says what
+joining sends and reads. See the [beta testing limits](docs/UPDATES.md#beta-testing-limits).
 
 ## Build from source
 

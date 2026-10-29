@@ -25,6 +25,7 @@ import type {
 import type { AppInfo } from './generated/AppInfo';
 import type { DbCounts } from './generated/DbCounts';
 import type { LeaderboardStatus } from './generated/LeaderboardStatus';
+import type { LeaderboardTable } from './generated/LeaderboardTable';
 import type { NativeIndexStatus } from './generated/NativeIndexStatus';
 import type { SessionSourceStatus } from './generated/SessionSourceStatus';
 import type { PrList } from './generated/PrList';
@@ -210,6 +211,7 @@ export class TauriDataSource implements DataSource {
   };
   readonly leaderboard = {
     read: () => invoke<LeaderboardStatus>(commands.leaderboardStatus),
+    table: () => invoke<LeaderboardTable>(commands.leaderboardTable),
     join: (nickname: string, email: string) =>
       invoke<LeaderboardStatus>(commands.leaderboardJoin, { nickname, email }),
     confirm: (code: string, nickname?: string) =>

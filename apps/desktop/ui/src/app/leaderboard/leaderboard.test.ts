@@ -33,7 +33,7 @@ it('writes the number the app sent exactly as the Dashboard writes the leverage'
 });
 
 it('states each standing in words', () => {
-  expect(standingText({ state: 'ranked', rank: 4 })).toBe('#4 on the public page');
+  expect(standingText({ state: 'ranked', rank: 4 })).toBe('#4');
   expect(
     standingText({
       state: 'not_listed',

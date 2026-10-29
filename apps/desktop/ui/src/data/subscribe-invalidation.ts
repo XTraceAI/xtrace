@@ -30,8 +30,10 @@ export const eventPrefixes: Record<DataEvent, readonly string[]> = {
   // the watch ran out. Only account usage changed.
   [events.claudeSignInEnded]: queryKeys.accountUsage,
   // A background leaderboard upload ran: the number, its time or an error
-  // changed, or the leaderboard no longer had the membership.
-  [events.leaderboardChanged]: queryKeys.leaderboard,
+  // changed, or the leaderboard no longer had the membership. The whole
+  // `leaderboard` key: the status (`queryKeys.leaderboard`) and the public
+  // list (`queryKeys.leaderboardTable`) are read again together.
+  [events.leaderboardChanged]: ['leaderboard'],
 };
 
 /**

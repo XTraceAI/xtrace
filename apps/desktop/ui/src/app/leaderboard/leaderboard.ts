@@ -1,19 +1,100 @@
 import type { LeaderboardField } from '../../data/generated/LeaderboardField';
+import type { LeaderboardRow } from '../../data/generated/LeaderboardRow';
 import type { LeaderboardStanding } from '../../data/generated/LeaderboardStanding';
 import { leverageText } from '../metric-format';
 
-/** What the page says before anyone joins, word for word. */
+/** The one line the join card shows before anyone joins, word for word. */
 export const JOIN_TEXT =
-  "Join the public XTrace leaderboard. It shows your nickname and your leverage for the last 7 days at leaderboard.xtrace.ai. We email you a 6-digit code to check the email is yours, and keep the email so we can reach you; it is never shown. Joining again with the same email, for example on a new Mac, signs you back in to your entry; only the Mac you joined from most recently sends your number. Like any web request, the leaderboard also sees your IP address and this app's version.";
+  "🏆 See where your 7-day leverage ranks. Pick a nickname, and we email you a code to confirm it's you.";
+/** Said next to the email field: who sees the email, and what it is for. */
+export const EMAIL_PRIVATE =
+  '🔒 Your email stays private: other users never see it. We only use it to send your code, which keeps out spam and fake entries.';
+
+/** The title of the card that unlocks the page. */
+export const JOIN_TITLE = 'Join the leaderboard';
+
+/** The join card's disclosure: its label, then the rest of what joining shares. */
+export const SHARED_SUMMARY = 'What is shared';
+export const SHARED_FACTS: readonly string[] = [
+  'Public: your nickname and 7-day leverage.',
+  'Private: your email, used only for sign-in codes.',
+  'The same email on a new Mac signs you back in; only your latest Mac sends.',
+  'The site also sees your IP address and app version.',
+  'Nothing is sent or read until you join. The blurred list is an example.',
+];
+
+/** The joined page's public list: its title and what it says when it has no rows. */
+export const TABLE_TITLE = 'Public leaderboard';
+export const TABLE_EMPTY = 'No one is listed yet.';
+/** Said under the list: the leaderboard serves it from a short-lived cache. */
+export const TABLE_UPDATES = 'The public list updates every minute or two.';
+/** Said when the app could not answer at all (the native call itself failed). */
+export const TABLE_UNREADABLE = 'The public list could not be read.';
+/** Said while the list is being read. */
+export const TABLE_READING = 'Reading the public list…';
+/** The medal drawn before the top three ranks, for fun; the number stays. */
+export const rankMedal = (rank: number): string | null => ['🥇', '🥈', '🥉'][rank - 1] ?? null;
+/** Said to assistive technology after the member's own nickname. */
+export const YOU_LABEL = '(this is you)';
+
+/**
+ * Made-up rows drawn blurred behind the join card, so the locked page looks
+ * like the list it unlocks. Decoration only, not a product decision: the app
+ * reads nothing from the leaderboard before joining. The `sample-` nicknames
+ * and numbers no real view uses keep them from passing for real data, and the
+ * page hides them from assistive technology.
+ */
+const SAMPLE_NAMES = [
+  'otter',
+  'fern',
+  'quartz',
+  'you',
+  'maple',
+  'kite',
+  'harbor',
+  'dune',
+  'cedar',
+  'lynx',
+  'ember',
+  'moss',
+  'heron',
+  'slate',
+  'birch',
+  'comet',
+  'reed',
+  'flint',
+  'aspen',
+  'wren',
+  'cobalt',
+  'tide',
+  'juniper',
+  'orbit',
+  'sable',
+  'thistle',
+  'pike',
+  'loam',
+  'gale',
+  'onyx',
+  'willow',
+  'ridge',
+  'plover',
+  'basalt',
+  'larch',
+  'meadow',
+];
+/** Enough rows to run past the bottom of a tall window; the frame clips the rest. */
+export const SAMPLE_ROWS: readonly LeaderboardRow[] = SAMPLE_NAMES.map((name, index) => ({
+  rank: index + 1,
+  nickname: `sample-${name}`,
+  leverage_tenths: Math.round(482 * 0.9 ** index),
+  is_you: name === 'you',
+}));
 
 /** The code step's line, naming where the code went. */
 export const codeSentText = (email: string) =>
   `We sent a 6-digit code to ${email}. Enter it below. It expires in 15 minutes.`;
 
 /** When the number is sent, in the order the app sends it. */
-export const SEND_TIMES =
-  'The app sends your number when it starts, when it first finishes reading your history, and every hour while it runs.';
-
 /** The confirmation Leave asks for. */
 export const LEAVE_QUESTION = 'Leave the leaderboard?';
 export const LEAVE_TEXT =
@@ -34,7 +115,7 @@ export const leaderboardNumber = (tenths: number | null): string =>
 export function standingText(standing: LeaderboardStanding): string {
   switch (standing.state) {
     case 'ranked':
-      return `#${standing.rank} on the public page`;
+      return `#${standing.rank}`;
     case 'not_listed':
       return standing.reason;
     case 'unknown':

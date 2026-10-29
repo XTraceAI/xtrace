@@ -108,8 +108,9 @@ the app's **Leaderboard** page.
 - **When you join**, the app sends the nickname and the email you type. To
   check the email is yours, the leaderboard emails you a 6-digit code, which
   you enter in the app within 15 minutes. The leaderboard shows your nickname
-  and never shows your email; it keeps the email only so XTrace can reach you.
-  The app does not save the email. Joining again with the same email (for
+  and never shows your email to anyone; it uses the email only to send
+  sign-in codes, which keeps out spam and fake entries. The app does not save
+  the email. Joining again with the same email (for
   example on a new Mac) signs you back in to your existing entry. Only the Mac
   you joined from most recently sends your number; any other Mac is told it
   is no longer joined.
@@ -120,6 +121,18 @@ the app's **Leaderboard** page.
   hour while it runs. No sessions, projects, prompts
   or other data from your history are sent. Like any web request, each one
   also lets the leaderboard see your IP address and the app's version.
+- **While you are joined**, the Leaderboard page also asks the leaderboard
+  for your rank and reads its public list (the nicknames and numbers anyone
+  can see at leaderboard.xtrace.ai), which the page shows with your row
+  marked. The rank request sends your key; the list request sends no key and
+  no data of yours. Like any web request, both let the leaderboard see your
+  IP address and the app's version. The page reads the list when it opens,
+  again after you join or change your nickname, after each hourly send while
+  the page is open, and once more about two minutes after your last join,
+  nickname change or number sent, when the leaderboard's copy of the list
+  (refreshed every minute or two) surely shows it. Before you join, nothing
+  is read: the blurred list behind the join card is a made-up example drawn
+  by the app.
 - **Change nickname** sends the new nickname.
 - **Leave leaderboard** deletes your nickname, email and number from the
   leaderboard. The database host's backups can keep a copy for a limited time

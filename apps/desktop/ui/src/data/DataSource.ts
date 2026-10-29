@@ -45,6 +45,7 @@ import type { AccountUsage } from './generated/AccountUsage';
 import type { LiveSessionSnapshot } from './generated/LiveSessionSnapshot';
 import type { TelemetryState } from './generated/TelemetryState';
 import type { LeaderboardStatus } from './generated/LeaderboardStatus';
+import type { LeaderboardTable } from './generated/LeaderboardTable';
 
 export type Unsubscribe = () => void;
 /** Development builds only: release information without update installation. */
@@ -177,6 +178,11 @@ export interface TelemetryControls {
 export interface LeaderboardControls {
   /** Asks the leaderboard for the rank when joined. */
   read(): Promise<LeaderboardStatus>;
+  /**
+   * The public list, with the member's own row marked. The native side asks
+   * the leaderboard only while joined, in a copy that may send.
+   */
+  table(): Promise<LeaderboardTable>;
   /** The first step: the leaderboard emails a 6-digit code (`code_sent`). */
   join(nickname: string, email: string): Promise<LeaderboardStatus>;
   /**
