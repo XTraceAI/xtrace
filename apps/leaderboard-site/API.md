@@ -290,6 +290,9 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
 - `/api/*` responses send `Cache-Control: no-store`, except `GET /api/leaderboard`, which sends the page's
   `public, s-maxage=60, stale-while-revalidate=60`.
 - `HEAD /` returns the same status and headers as `GET /`, with no body.
-- The page sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'`.
+- The page sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'`.
+  It runs no scripts and loads only its own font, `/fonts/PressStart2P-Regular.ttf` from `public/`.
 - The local development server answers an unknown path with 404 `not_found` and an unsupported method
   with 405 `method_not_allowed`. On Vercel those two answers come from Vercel itself.
+  Like Vercel, it serves the `.ttf` and `.txt` files in `public/` for `GET` and `HEAD`; a path that
+  leaves `public/` (for example with an encoded `..`) is 404.

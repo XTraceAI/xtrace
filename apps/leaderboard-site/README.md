@@ -47,7 +47,7 @@ The root `pnpm check` runs both as well.
 pnpm --dir apps/leaderboard-site dev:local -- --port 8787
 ```
 
-This serves the same `api/` files at `http://127.0.0.1:8787`.
+This serves the same `api/` files, and the static files in `public/` (such as the page's font), at `http://127.0.0.1:8787`.
 It needs no network and no Vercel login.
 It never sends email. When someone joins, it prints `code for <email>: <code>` in its own window.
 Type that code into the app.
