@@ -20,13 +20,16 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (character) => ESCAPES[character] ?? character);
 }
 
-/** Tenths as `12.3×`: always one decimal, computed without floating point. */
+/**
+ * Tenths as `12.3X`: always one decimal, computed without floating point.
+ * A plain X, because the page's pixel font draws it like the digits.
+ */
 export function formatLeverage(tenths: number): string {
-  return `${Math.floor(tenths / 10)}.${tenths % 10}×`;
+  return `${Math.floor(tenths / 10)}.${tenths % 10}X`;
 }
 
 /** Shown where a number would be when there is none, in the same shape as formatLeverage. */
-const NO_LEVERAGE = '-.-×';
+const NO_LEVERAGE = '-.-X';
 
 /** A rank as an arcade ordinal: 1ST, 2ND, 3RD, 4TH, 11TH, 12TH, 13TH, 21ST, 111TH. */
 export function ordinal(rank: number): string {
@@ -48,10 +51,10 @@ export function ordinal(rank: number): string {
 /** The board always shows at least this many rows; missing ones are open places. */
 const BOARD_ROWS = 8;
 
-/** Below this many tenths (1.0×) a row is dimmed. */
+/** Below this many tenths (1.0X) a row is dimmed. */
 const DIM_BELOW_TENTHS = 10;
 
-/** The row's color: the top three ranks have their own, anyone below 1.0× is dimmed. */
+/** The row's color: the top three ranks have their own, anyone below 1.0X is dimmed. */
 function tone(row: ListedRow): string {
   if (row.leverage_tenths < DIM_BELOW_TENTHS) return 'dim';
   if (row.rank === 1) return 'gold';
@@ -204,19 +207,30 @@ a:focus-visible { outline: 2px dashed var(--yellow); outline-offset: 4px; }
   pointer-events: none;
 }
 .sky { z-index: 0; }
+/*
+ * Layers, back to front: stars, scanlines, hill, page content, then a soft vignette.
+ * The scanlines stay behind the content so they never cross a character; the
+ * vignette only darkens the screen's edges evenly.
+ */
 .sky::after { content: ""; width: 3px; height: 3px; box-shadow: ${BIG_STARS}; }
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, 0.28) 2px 3px);
+}
 .crt {
   position: fixed;
   inset: 0;
-  z-index: 3;
+  z-index: 4;
   pointer-events: none;
-  background:
-    repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, 0.28) 2px 3px),
-    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.7) 100%);
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.55) 100%);
 }
 .wrap {
   position: relative;
-  z-index: 1;
+  z-index: 3;
   flex: 1 0 auto;
   width: 100%;
   max-width: 640px;
@@ -238,11 +252,20 @@ a:focus-visible { outline: 2px dashed var(--yellow); outline-offset: 4px; }
   text-decoration: none;
 }
 .brand svg { display: block; flex: none; }
+/*
+ * Text sits on solid backdrops in the page color, reaching 8px past it, so no star
+ * shows between or right beside its pixels.
+ */
+.brand, .get, .hud > div, h1, .sub, table, .open, .foot {
+  background: var(--bg);
+  box-shadow: 0 0 0 8px var(--bg);
+}
+h1, .sub, .open, .foot { width: fit-content; max-width: 100%; margin-inline: auto; }
 .get {
   flex: none;
   padding: 8px 10px;
   border: 2px solid var(--fg);
-  box-shadow: 3px 3px 0 var(--violet);
+  box-shadow: 3px 3px 0 var(--violet), 0 0 0 8px var(--bg);
   font-size: 9px;
   text-decoration: none;
   white-space: nowrap;
@@ -250,21 +273,17 @@ a:focus-visible { outline: 2px dashed var(--yellow); outline-offset: 4px; }
 .get:hover { border-color: var(--yellow); color: var(--yellow); }
 .hud {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr);
   gap: 8px;
   margin: 0 0 28px;
   text-align: center;
 }
 .hud dt { color: var(--red); font-size: 9px; }
-.hud dd {
-  margin: 6px 0 0;
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.hud dd { margin: 6px 0 0; font-size: 11px; overflow-wrap: anywhere; }
 h1 {
-  margin: 0 0 16px;
+  margin-top: 0;
+  margin-bottom: 16px;
+  padding: 2px 8px 8px 2px;
   color: var(--yellow);
   font-size: clamp(16px, 5.2vw, 30px);
   font-weight: 400;
@@ -273,7 +292,9 @@ h1 {
   text-shadow: 3px 3px 0 var(--violet), 6px 6px 0 var(--deep);
 }
 .sub {
-  margin: 0 0 30px;
+  margin-top: 0;
+  margin-bottom: 30px;
+  padding: 0 4px;
   color: var(--cyan);
   font-size: clamp(8px, 2.4vw, 10px);
   line-height: 1.9;
@@ -305,10 +326,11 @@ th:first-child, td:first-child { padding-left: 0; }
 th:last-child, td:last-child { padding-right: 0; text-align: right; }
 .ship { width: 1px; padding-left: 2px; padding-right: 2px; text-align: center; }
 .rocket { display: block; margin: 0 auto; }
-.name { width: 100%; max-width: 0; }
+td.name { width: 100%; max-width: 0; white-space: normal; }
 .line { display: flex; align-items: baseline; gap: 8px; }
-.nick { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.dots { flex: 1 1 0; min-width: 8px; border-bottom: 3px dotted currentColor; opacity: 0.35; }
+/* Every nickname is shown in full: a long one wraps and the dots shrink away. */
+.nick { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.dots { flex: 1 1 0; min-width: 0; border-bottom: 3px dotted currentColor; opacity: 0.35; }
 .gold { color: var(--yellow); }
 .orange { color: var(--orange); }
 .pink { color: var(--pink); }
@@ -316,18 +338,21 @@ th:last-child, td:last-child { padding-right: 0; text-align: right; }
 .dim { color: var(--dim); }
 tr[data-empty] { color: var(--empty); }
 .open {
-  margin: 30px 0;
+  margin-top: 30px;
+  margin-bottom: 30px;
+  padding: 0 4px;
   color: var(--yellow);
   font-size: clamp(8px, 2.4vw, 11px);
   line-height: 1.9;
   text-align: center;
   animation: blink 1s steps(1, end) infinite;
 }
-@keyframes blink { 50% { opacity: 0; } }
+/* The text blinks; its backdrop stays, so the stars behind it do not. */
+@keyframes blink { 50% { color: transparent; } }
 @media (prefers-reduced-motion: reduce) {
   .open { animation: none; }
 }
-.foot { margin: 0 0 24px; font-size: 10px; text-align: center; }
+.foot { margin-top: 0; margin-bottom: 24px; padding: 0 4px; font-size: 10px; text-align: center; }
 .free { color: var(--yellow); }
 .src {
   color: var(--cyan);
@@ -337,7 +362,7 @@ tr[data-empty] { color: var(--empty); }
 }
 .hill {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: block;
   flex: none;
   width: 100%;
@@ -394,7 +419,7 @@ function boardHtml(rows: ListedRow[]): string {
 /** The blinking line under the board: the first open place, or how to join when the board is full. */
 function openLine(count: number): string {
   return count < BOARD_ROWS
-    ? `${ordinal(count + 1)} PLACE IS OPEN · JOIN FROM THE APP`
+    ? `${ordinal(count + 1)}&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP`
     : 'JOIN FROM THE XTRACE APP';
 }
 
@@ -426,12 +451,12 @@ export function renderPage(rows: ListedRow[]): string {
 <div><dt>PLAYERS</dt><dd>${players}</dd></div>
 </dl>
 <h1>HIGH AGENT LEVERAGE</h1>
-<p class="sub">AGENT HOURS ÷ YOUR HOURS · LAST 7 DAYS</p>
+<p class="sub">AGENT HOURS&nbsp;÷ YOUR HOURS&nbsp;· LAST&nbsp;7&nbsp;DAYS</p>
 ${boardHtml(rows)}
 <p class="open">${openLine(rows.length)}</p>
 </main>
 <footer class="foot">
-<span class="free">FREE</span> · <a class="src" href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>
+<span class="free">FREE</span>&nbsp;· <a class="src" href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>
 </footer>
 </div>
 ${HILL}

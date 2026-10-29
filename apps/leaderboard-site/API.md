@@ -69,11 +69,21 @@ Deletes the member's row (nickname, email, score) completely.
 
 ### GET /
 
-Public HTML page. Title "XTrace Leaderboard". One line under the title:
-"Leverage over the last 7 days: agent hours divided by your own hours. Shared by people who opted in from the XTrace app."
-A table with exactly two columns: **Nickname**, **Leverage (7 days)**. Leverage written `12.3×` (tenths ÷ 10, always one
-decimal). Rows in the order above. Empty state: "No one is listed yet." Nicknames HTML-escaped. Works at phone width,
-light and dark. Cache header `public, s-maxage=60, stale-while-revalidate=60`.
+Public HTML page, drawn as an arcade high-score table. It is always dark and runs no scripts.
+Browser title "XTrace Leaderboard"; the heading on the page is "HIGH AGENT LEVERAGE", with the line
+"AGENT HOURS ÷ YOUR HOURS · LAST 7 DAYS" under it.
+
+- A top line shows **1UP** (the first listed nickname), **HI-LEVER** (its number) and **PLAYERS** (how many are
+  listed, at least two digits).
+- A table with the columns **RANK**, a decorative rocket column (no header text) for ranks 1 to 3, **NAME** and
+  **LEVER**. Ranks are ordinals (`1ST`, `2ND`, `11TH`, `21ST`). Leverage is written `12.3X` (tenths ÷ 10, always one
+  decimal). Every listed member is shown, in the order above. Rows below `1.0X` are dimmed.
+- When fewer than 8 members are listed, the table is filled up to 8 rows with open places (`---` and `-.-X`), and a
+  blinking line names the first open one, for example "4TH PLACE IS OPEN · JOIN FROM THE APP". With 8 or more it says
+  "JOIN FROM THE XTRACE APP".
+- Empty state: 1UP `---`, HI-LEVER `-.-X`, PLAYERS `00`, eight open places and "1ST PLACE IS OPEN · JOIN FROM THE APP".
+- Nicknames are HTML-escaped and shown in full (a long one wraps). Works from 320 px phone width up.
+  Cache header `public, s-maxage=60, stale-while-revalidate=60`.
 
 ## Database (Postgres; Neon in production, set by Vercel Marketplace as `DATABASE_URL`)
 

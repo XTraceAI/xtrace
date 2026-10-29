@@ -65,7 +65,7 @@ describe('the 48-hour rule', () => {
     h.advance(48 * HOUR);
     assert.deepEqual(await board(), [{ rank: 1, nickname: 'clocked', leverage_tenths: 20 }]);
     assert.deepEqual(await standing(key), { ...(await standing(key)), listed: true, rank: 1 });
-    assert.deepEqual(pageNames((await page()).html), [['clocked', '2.0×']]);
+    assert.deepEqual(pageNames((await page()).html), [['clocked', '2.0X']]);
 
     h.advance(1);
     assert.deepEqual(await board(), []);
@@ -75,7 +75,7 @@ describe('the 48-hour rule', () => {
     assert.equal(after.leverage_tenths, 20);
     assert.equal(after.score_updated_at, START.toISOString());
     assert.deepEqual(pageNames((await page()).html), []);
-    assert.equal(openLine((await page()).html), '1ST PLACE IS OPEN · JOIN FROM THE APP');
+    assert.equal(openLine((await page()).html), '1ST&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP');
 
     // A new score brings them back.
     await score(h.app, key, 21);
@@ -181,14 +181,27 @@ describe('GET /', () => {
     assert.match(html, /<title>XTrace Leaderboard<\/title>/);
     assert.match(html, /<meta name="description" content="[^"]+">/);
     assert.match(html, /<h1>HIGH AGENT LEVERAGE<\/h1>/);
-    assert.ok(html.includes('<p class="sub">AGENT HOURS ÷ YOUR HOURS · LAST 7 DAYS</p>'));
+    assert.ok(
+      html.includes(
+        '<p class="sub">AGENT HOURS&nbsp;÷ YOUR HOURS&nbsp;· LAST&nbsp;7&nbsp;DAYS</p>',
+      ),
+    );
     const headers = [...html.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((m) => m[1]);
     assert.deepEqual(headers, ['RANK', '', 'NAME', 'LEVER']);
-    assert.deepEqual(pageNames(html), [['Ada', '12.3×']]);
+    assert.deepEqual(pageNames(html), [['Ada', '12.3X']]);
     assert.match(html, /name="viewport" content="width=device-width, initial-scale=1"/);
     assert.match(html, /color-scheme: dark;/);
     assert.ok(!html.includes('prefers-color-scheme'), 'always dark');
     assert.ok(html.includes('href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>'));
+    assert.ok(html.includes('<span class="free">FREE</span>&nbsp;· <a'));
+  });
+
+  test('nicknames are never cut off: they wrap instead', async () => {
+    const { html } = await page();
+    assert.ok(!html.includes('ellipsis'));
+    assert.match(html, /\.nick \{[^}]*overflow-wrap: anywhere;/);
+    assert.match(html, /\.hud dd \{[^}]*overflow-wrap: anywhere;/);
+    assert.match(html, /\.dots \{[^}]*min-width: 0;/);
   });
 
   test('no scripts and nothing loaded from other sites', async () => {
@@ -256,7 +269,7 @@ describe('GET /', () => {
 
   test('the largest allowed number fits on the page', async () => {
     await score(h.app, await join(h, 'a_twenty_char_name_1'), 1000000000);
-    assert.deepEqual(pageNames((await page()).html), [['a_twenty_char_name_1', '100000000.0×']]);
+    assert.deepEqual(pageNames((await page()).html), [['a_twenty_char_name_1', '100000000.0X']]);
   });
 
   test('empty state: eight open places and the first one named', async () => {
@@ -265,9 +278,9 @@ describe('GET /', () => {
     assert.ok(!html.includes('data-rank='));
     assert.deepEqual(openPlaces(html), ['1ST', '2ND', '3RD', '4TH', '5TH', '6TH', '7TH', '8TH']);
     assert.equal((html.match(/<span class="nick">---<\/span>/g) ?? []).length, 8);
-    assert.equal((html.match(/<td class="lev">-\.-×<\/td>/g) ?? []).length, 8);
-    assert.deepEqual(hud(html), { '1UP': '---', 'HI-LEVER': '-.-×', PLAYERS: '00' });
-    assert.equal(openLine(html), '1ST PLACE IS OPEN · JOIN FROM THE APP');
+    assert.equal((html.match(/<td class="lev">-\.-X<\/td>/g) ?? []).length, 8);
+    assert.deepEqual(hud(html), { '1UP': '---', 'HI-LEVER': '-.-X', PLAYERS: '00' });
+    assert.equal(openLine(html), '1ST&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP');
   });
 
   test('ordinals, colors, rockets for the top three ranks, dimming and counts', async () => {
@@ -279,16 +292,16 @@ describe('GET /', () => {
     await score(h.app, await join(h, 'Sixth'), 9);
     const { html } = await page();
     assert.deepEqual(pageRows(html), [
-      { tone: 'gold', label: '1ST', rocket: '21', nick: 'First', lev: '40.0×' },
-      { tone: 'orange', label: '2ND', rocket: '14', nick: 'Second', lev: '20.0×' },
-      { tone: 'pink', label: '3RD', rocket: '14', nick: 'TiedA', lev: '10.0×' },
-      { tone: 'pink', label: '3RD', rocket: '14', nick: 'TiedB', lev: '10.0×' },
-      { tone: 'cyan', label: '5TH', rocket: '', nick: 'Fifth', lev: '1.0×' },
-      { tone: 'dim', label: '6TH', rocket: '', nick: 'Sixth', lev: '0.9×' },
+      { tone: 'gold', label: '1ST', rocket: '21', nick: 'First', lev: '40.0X' },
+      { tone: 'orange', label: '2ND', rocket: '14', nick: 'Second', lev: '20.0X' },
+      { tone: 'pink', label: '3RD', rocket: '14', nick: 'TiedA', lev: '10.0X' },
+      { tone: 'pink', label: '3RD', rocket: '14', nick: 'TiedB', lev: '10.0X' },
+      { tone: 'cyan', label: '5TH', rocket: '', nick: 'Fifth', lev: '1.0X' },
+      { tone: 'dim', label: '6TH', rocket: '', nick: 'Sixth', lev: '0.9X' },
     ]);
     assert.deepEqual(openPlaces(html), ['7TH', '8TH']);
-    assert.deepEqual(hud(html), { '1UP': 'First', 'HI-LEVER': '40.0×', PLAYERS: '06' });
-    assert.equal(openLine(html), '7TH PLACE IS OPEN · JOIN FROM THE APP');
+    assert.deepEqual(hud(html), { '1UP': 'First', 'HI-LEVER': '40.0X', PLAYERS: '06' });
+    assert.equal(openLine(html), '7TH&nbsp;PLACE IS OPEN&nbsp;· JOIN FROM THE APP');
   });
 
   test('every listed member is shown, past eight, with no open places', async () => {
@@ -356,13 +369,13 @@ describe('GET /', () => {
   });
 
   test('leverage is always written with one decimal', () => {
-    assert.equal(formatLeverage(0), '0.0×');
-    assert.equal(formatLeverage(7), '0.7×');
-    assert.equal(formatLeverage(10), '1.0×');
-    assert.equal(formatLeverage(123), '12.3×');
-    assert.equal(formatLeverage(100000), '10000.0×');
-    assert.equal(formatLeverage(1234567890), '123456789.0×');
-    assert.equal(formatLeverage(1000000000), '100000000.0×');
+    assert.equal(formatLeverage(0), '0.0X');
+    assert.equal(formatLeverage(7), '0.7X');
+    assert.equal(formatLeverage(10), '1.0X');
+    assert.equal(formatLeverage(123), '12.3X');
+    assert.equal(formatLeverage(100000), '10000.0X');
+    assert.equal(formatLeverage(1234567890), '123456789.0X');
+    assert.equal(formatLeverage(1000000000), '100000000.0X');
     assert.equal(escapeHtml(`a&b<c>d"e'f`), 'a&amp;b&lt;c&gt;d&quot;e&#39;f');
   });
 });

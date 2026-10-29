@@ -118,7 +118,7 @@ test('join, verify, score, me, leaderboard and page over HTTP', async () => {
   assert.equal(page.headers.get('cache-control'), 'public, s-maxage=60, stale-while-revalidate=60');
   assert.match(
     await page.text(),
-    /<span class="nick">Http_User<\/span>[\s\S]*?<td class="lev">4\.5×<\/td>/,
+    /<span class="nick">Http_User<\/span>[\s\S]*?<td class="lev">4\.5X<\/td>/,
   );
 
   const big = await fetch(`${origin}/api/score`, {
@@ -208,17 +208,15 @@ test('files in public/ are served like Vercel serves them, and nothing outside i
   assert.equal(robots.status, 200);
   assert.equal(robots.headers.get('content-type'), 'text/plain; charset=utf-8');
 
-  // Real .txt and .ttf files outside public/, reached with encoded `..` and slashes.
-  const outside = [
-    '../../desktop/ui/public/fonts/Manrope-OFL.txt',
-    '../../desktop/ui/public/fonts/geist-mono-400.ttf',
-  ];
-  for (const relative of outside)
-    assert.ok(existsSync(new URL(`../public/${relative}`, import.meta.url)));
+  // Files of this site outside public/, reached with encoded `..` and slashes. The .txt
+  // fixture has a type the server serves, so only the inside-public/ check stops it.
+  const outside = '../test/fixtures/outside-public.txt';
+  assert.ok(existsSync(new URL(`../public/${outside}`, import.meta.url)));
   for (const path of [
-    `/${outside[0]!.replaceAll('/', '%2f')}`,
-    `/fonts/..%2F${outside[1]!.replaceAll('/', '%2F')}`,
-    `/${outside[0]!.replaceAll('.', '%2e').replaceAll('/', '%2f')}`,
+    `/${outside.replaceAll('/', '%2f')}`,
+    `/fonts/..%2F${outside.replaceAll('/', '%2F')}`,
+    `/${outside.replaceAll('.', '%2e').replaceAll('/', '%2f')}`,
+    '/fonts/..%2f..%2ftest%2ffixtures%2foutside-public.txt',
     '/fonts/..%2f..%2fpackage.json',
     '/fonts/..%2F..%2Fsrc%2Fpage.ts',
     '/%2e%2e/package.json',
