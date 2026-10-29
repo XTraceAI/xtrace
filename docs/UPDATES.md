@@ -193,7 +193,11 @@ folder. `scripts/ci/fixtures/hosted-update-latest.json` holds the exact candidat
 name version 0.2.0, and point only at the public v0.2.0 archive under
 `XTraceAI/xtrace`. The published 0.1.9 feed still names the archive under the
 former repository name `XTraceAI/xtrace-desktop`; the harness downloads the 0.1.9
-starting archive from `XTraceAI/xtrace`, which serves the same release.
+starting archive from `XTraceAI/xtrace`, which serves the same release. The
+shipped 0.1.9 app itself checks the former address
+`XTraceAI/xtrace-desktop/releases/latest/download/latest.json`, which reaches the
+new feed only through GitHub's rename redirect; the `update` mode exercises that
+redirect because it runs the unmodified 0.1.9 app.
 `fixture.lockSha256` in `scripts/ci/hosted-updater-failures.mjs` is the actual
 harness checkout's `Cargo.lock`, which a unit test also compares with the pin.
 The SDK helper is built from this harness checkout, separately from the fixed

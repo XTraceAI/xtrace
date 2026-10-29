@@ -363,7 +363,7 @@ export async function prepareUpdateInstall(
     browserDownloadTested: false,
     securityPromptsAutomaticallyApproved: false,
   };
-  // Only the exact reviewed hash above can reach extraction. Its 101-member
+  // Only the exact reviewed hash above can reach extraction. Its 102-member
   // regular-file/directory map was checked before this pin was committed.
   await checked('old-extract', '/usr/bin/tar', ['-xzf', archive, '-C', owned], 60_000);
   const extracted = join(owned, basename(earlierBundle));
