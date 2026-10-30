@@ -3,6 +3,7 @@
 // the page runs no scripts.
 import { countryFlag, isCountryCode } from './country.js';
 import type { ListedRow } from './listing.js';
+import { MARK_COLORS, MARK_CORNER, markCutsPath } from './mark.js';
 
 export const PAGE_CACHE_CONTROL = 'public, s-maxage=60, stale-while-revalidate=60';
 
@@ -129,14 +130,29 @@ function rocket(pixelSize: number): string {
   );
 }
 
-// The XTrace mark (the app's sidebar logo) as inline SVG.
+// The XTrace mark in the header, drawn smoothly from src/mark.ts (the tab icons
+// are the same mark as pixel art, from scripts/icons.ts).
 const LOGO =
   '<svg width="22" height="22" viewBox="0 0 3 3" aria-hidden="true" focusable="false">' +
   '<defs><linearGradient id="xg" x1="1" y1="0" x2="0" y2="1">' +
-  '<stop offset="0" stop-color="#7F8CFF"/><stop offset="1" stop-color="#A35CFF"/></linearGradient>' +
-  '<mask id="xm"><rect width="3" height="3" fill="#fff"/>' +
-  '<path d="M1 1V0A1 1 0 0 1 2 1Z M1 1H0A1 1 0 0 0 1 2Z M2 2V1A1 1 0 0 1 3 2Z M2 2H1A1 1 0 0 0 2 3Z" fill="#000"/>' +
-  '</mask></defs><rect width="3" height="3" rx="0.42" fill="url(#xg)" mask="url(#xm)"/></svg>';
+  `<stop offset="0" stop-color="${MARK_COLORS[0]}"/><stop offset="1" stop-color="${MARK_COLORS[1]}"/></linearGradient>` +
+  `<mask id="xm"><rect width="3" height="3" fill="#fff"/><path d="${markCutsPath()}" fill="#000"/></mask></defs>` +
+  `<rect width="3" height="3" rx="${MARK_CORNER}" fill="url(#xg)" mask="url(#xm)"/></svg>`;
+
+/** The tab and home-screen icons in public/, as the page's head links them. */
+export const PAGE_ICONS = [
+  { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+  { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' },
+  { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
+] as const;
+
+const ICON_LINKS = PAGE_ICONS.map(
+  (icon) =>
+    `<link rel="${icon.rel}" href="${icon.href}"` +
+    ('type' in icon ? ` type="${icon.type}"` : '') +
+    ('sizes' in icon ? ` sizes="${icon.sizes}"` : '') +
+    '>',
+).join('\n');
 
 // The stepped hill along the bottom: column heights on an 8-step grid.
 const HILL_HEIGHTS = [
@@ -181,6 +197,9 @@ function starShadows(count: number, seed: number, colors: string[]): string {
 const SMALL_STARS = starShadows(56, 7, ['#f2f2ff', '#f2f2ff', '#f2f2ff', '#4de8ff', '#a35cff']);
 const BIG_STARS = starShadows(14, 41, ['#f2f2ff', '#ffe14d', '#4de8ff', '#a35cff']);
 
+/** Page colours named once; scripts/icons.ts draws the home-screen icon's background in `bg`. */
+export const PAGE_COLORS = { bg: '#07071a', yellow: '#ffe14d', violet: '#a35cff' } as const;
+
 const STYLE = `
 @font-face {
   font-family: "Press Start 2P";
@@ -189,9 +208,9 @@ const STYLE = `
 }
 :root {
   color-scheme: dark;
-  --bg: #07071a;
+  --bg: ${PAGE_COLORS.bg};
   --fg: #f2f2ff;
-  --yellow: #ffe14d;
+  --yellow: ${PAGE_COLORS.yellow};
   --orange: #ff9b3d;
   --pink: #ff4dd2;
   --cyan: #4de8ff;
@@ -199,7 +218,7 @@ const STYLE = `
   --dim: #7a7aa8;
   --empty: #4a4a78;
   --hill: #1a1550;
-  --violet: #a35cff;
+  --violet: ${PAGE_COLORS.violet};
   --deep: #3a1f7a;
   --pixel: "Press Start 2P", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -386,8 +405,9 @@ tr[data-empty] { color: var(--empty); }
 }
 .foot { margin-top: 0; margin-bottom: 24px; padding: 0 4px; font-size: 10px; text-align: center; }
 .free { color: var(--yellow); }
+.src { color: var(--cyan); }
+.free,
 .src {
-  color: var(--cyan);
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 5px;
@@ -465,7 +485,8 @@ export function renderPage(rows: ListedRow[]): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XTrace Leaderboard</title>
 <meta name="description" content="Leverage over the last 7 days, shared by people who opted in from the XTrace app.">
-<meta name="theme-color" content="#07071a">
+<meta name="theme-color" content="${PAGE_COLORS.bg}">
+${ICON_LINKS}
 <link rel="preload" href="${PAGE_FONT_PATH}" as="font" type="font/ttf" crossorigin>
 <style>${STYLE}</style>
 </head>
@@ -488,7 +509,7 @@ ${boardHtml(rows)}
 <p class="open">${openLine(rows.length)}</p>
 </main>
 <footer class="foot">
-<span class="free">FREE</span>&nbsp;· <a class="src" href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>
+<a class="free" href="https://github.com/XTraceAI/xtrace/releases/latest">FREE</a>&nbsp;· <a class="src" href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>
 </footer>
 </div>
 ${HILL}
@@ -506,7 +527,7 @@ export function pageResponse(rows: ListedRow[]): Response {
       'cache-control': PAGE_CACHE_CONTROL,
       'x-content-type-options': 'nosniff',
       'content-security-policy':
-        "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     },
   });
 }

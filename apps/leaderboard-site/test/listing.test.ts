@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { escapeHtml, formatLeverage, ordinal, PAGE_FONT_PATH } from '../src/page.js';
+import { crc32, inflateSync } from 'node:zlib';
+import { ICON_FILES } from '../scripts/icons.js';
+import { markCutsPath } from '../src/mark.js';
+import { escapeHtml, formatLeverage, ordinal, PAGE_FONT_PATH, renderPage } from '../src/page.js';
 import {
   HOUR,
   harness,
@@ -206,7 +209,12 @@ describe('GET /', () => {
     assert.match(html, /color-scheme: dark;/);
     assert.ok(!html.includes('prefers-color-scheme'), 'always dark');
     assert.ok(html.includes('href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>'));
-    assert.ok(html.includes('<span class="free">FREE</span>&nbsp;· <a'));
+    // FREE opens the download page (the latest release), as the README's Download for Mac does.
+    assert.ok(
+      html.includes(
+        '<a class="free" href="https://github.com/XTraceAI/xtrace/releases/latest">FREE</a>&nbsp;· <a',
+      ),
+    );
   });
 
   test('nicknames are never cut off: they wrap instead', async () => {
@@ -225,19 +233,20 @@ describe('GET /', () => {
     assert.ok(!/<script/i.test(html));
     assert.ok(!/\son[a-z]+=/i.test(html), 'no inline event handlers');
     assert.ok(!/\ssrc=/i.test(html), 'no src attributes');
-    // The only thing the page loads is its own font.
+    // The only things the page loads are its own icons and font.
     assert.deepEqual(
       [...html.matchAll(/url\("([^"]*)"\)/g)].map((m) => m[1]),
       [PAGE_FONT_PATH],
     );
     assert.deepEqual(
       [...html.matchAll(/<link [^>]*href="([^"]*)"/g)].map((m) => m[1]),
-      [PAGE_FONT_PATH],
+      ['/favicon.svg', '/favicon-32.png', '/apple-touch-icon.png', PAGE_FONT_PATH],
     );
     // Links people can follow are fine; nothing else points at another site.
     const elsewhere = [...html.matchAll(/https?:\/\/[^"\s)]+/g)].map((m) => m[0]);
     assert.deepEqual([...new Set(elsewhere)].sort(), [
       'https://github.com/XTraceAI/xtrace',
+      'https://github.com/XTraceAI/xtrace/releases/latest',
       'https://xtrace.ai',
     ]);
   });
@@ -269,7 +278,7 @@ describe('GET /', () => {
     const { response } = await page();
     assert.equal(
       response.headers.get('content-security-policy'),
-      "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
   });
 
@@ -393,4 +402,49 @@ describe('GET /', () => {
     assert.equal(formatLeverage(1000000000), '100000000.0X');
     assert.equal(escapeHtml(`a&b<c>d"e'f`), 'a&amp;b&lt;c&gt;d&quot;e&#39;f');
   });
+});
+
+/**
+ * A PNG's chunks with the image data decompressed, so the check does not depend
+ * on zlib's output. Every chunk's checksum must be right.
+ */
+function pngPixels(png: Buffer): { chunks: string[]; width: number; height: number; rows: Buffer } {
+  const chunks: string[] = [];
+  const data: Buffer[] = [];
+  for (let at = 8; at < png.length;) {
+    const length = png.readUInt32BE(at);
+    const typed = png.subarray(at + 4, at + 8 + length);
+    assert.equal(png.readUInt32BE(at + 8 + length), crc32(typed), 'chunk checksum');
+    const type = typed.toString('ascii', 0, 4);
+    if (type === 'IDAT') data.push(typed.subarray(4));
+    else chunks.push(`${type}:${typed.subarray(4).toString('hex')}`);
+    at += 12 + length;
+  }
+  const header = chunks.find((c) => c.startsWith('IHDR:'))!;
+  const width = Number.parseInt(header.slice(5, 13), 16);
+  const height = Number.parseInt(header.slice(13, 21), 16);
+  return { chunks, width, height, rows: inflateSync(Buffer.concat(data)) };
+}
+
+test('the icons in public/ are the pixel-art mark scripts/icons.ts draws', () => {
+  for (const [name, draw] of Object.entries(ICON_FILES)) {
+    const onDisk = readFileSync(new URL(`../public/${name}`, import.meta.url));
+    const drawn = draw();
+    if (name.endsWith('.svg')) assert.equal(onDisk.toString('utf8'), drawn, name);
+    else assert.deepEqual(pngPixels(onDisk), pngPixels(drawn as Buffer), name);
+  }
+  for (const [name, size] of [
+    ['favicon-32.png', 32],
+    ['apple-touch-icon.png', 180],
+  ] as const) {
+    const { width, height } = pngPixels(
+      readFileSync(new URL(`../public/${name}`, import.meta.url)),
+    );
+    assert.deepEqual([width, height], [size, size], name);
+  }
+});
+
+test('the header logo is drawn from the same mark', () => {
+  const html = renderPage([]);
+  assert.ok(html.includes(`<path d="${markCutsPath()}" fill="#000"/>`));
 });

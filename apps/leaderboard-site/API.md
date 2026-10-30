@@ -300,11 +300,16 @@ belongs to a member (send a known-taken nickname with someone's email: 202 = mem
 - `/api/*` responses send `Cache-Control: no-store`, except `GET /api/leaderboard`, which sends the page's
   `public, s-maxage=60, stale-while-revalidate=60`.
 - `HEAD /` returns the same status and headers as `GET /`, with no body.
-- The page sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'`.
-  It runs no scripts and loads only its own font, `/fonts/PressStart2P-Regular.ttf` from `public/`.
+- The page sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'`.
+  It runs no scripts and loads only its own files from `public/`: the font,
+  `/fonts/PressStart2P-Regular.ttf`, and the XTrace mark as its tab and home-screen icons
+  (`/favicon.svg`, `/favicon-32.png`, `/apple-touch-icon.png`, added 2026-10-29 with `img-src 'self'`).
+  The icons are the mark as chunky 8-bit pixel art (8 pixels across, in its own two colours; the
+  home-screen icon sits on the page's navy), drawn by `scripts/icons.ts` from `src/mark.ts` (the header
+  logo's shape); rerun it after changing the mark, and a test checks `public/` matches.
 - The local development server answers an unknown path with 404 `not_found` and an unsupported method
   with 405 `method_not_allowed`. On Vercel those two answers come from Vercel itself.
-  Like Vercel, it serves the `.ttf` and `.txt` files in `public/` for `GET` and `HEAD`; a path that
+  Like Vercel, it serves the `.png`, `.svg`, `.ttf` and `.txt` files in `public/` for `GET` and `HEAD`; a path that
   leaves `public/` (for example with an encoded `..`) is 404.
 
 ---
