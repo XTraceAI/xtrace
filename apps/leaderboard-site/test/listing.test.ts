@@ -209,7 +209,12 @@ describe('GET /', () => {
     assert.match(html, /color-scheme: dark;/);
     assert.ok(!html.includes('prefers-color-scheme'), 'always dark');
     assert.ok(html.includes('href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>'));
-    assert.ok(html.includes('<span class="free">FREE</span>&nbsp;· <a'));
+    // FREE opens the download page (the latest release), as the README's Download for Mac does.
+    assert.ok(
+      html.includes(
+        '<a class="free" href="https://github.com/XTraceAI/xtrace/releases/latest">FREE</a>&nbsp;· <a',
+      ),
+    );
   });
 
   test('nicknames are never cut off: they wrap instead', async () => {
@@ -241,6 +246,7 @@ describe('GET /', () => {
     const elsewhere = [...html.matchAll(/https?:\/\/[^"\s)]+/g)].map((m) => m[0]);
     assert.deepEqual([...new Set(elsewhere)].sort(), [
       'https://github.com/XTraceAI/xtrace',
+      'https://github.com/XTraceAI/xtrace/releases/latest',
       'https://xtrace.ai',
     ]);
   });

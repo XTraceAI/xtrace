@@ -405,8 +405,9 @@ tr[data-empty] { color: var(--empty); }
 }
 .foot { margin-top: 0; margin-bottom: 24px; padding: 0 4px; font-size: 10px; text-align: center; }
 .free { color: var(--yellow); }
+.src { color: var(--cyan); }
+.free,
 .src {
-  color: var(--cyan);
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 5px;
@@ -508,7 +509,7 @@ ${boardHtml(rows)}
 <p class="open">${openLine(rows.length)}</p>
 </main>
 <footer class="foot">
-<span class="free">FREE</span>&nbsp;· <a class="src" href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>
+<a class="free" href="https://github.com/XTraceAI/xtrace/releases/latest">FREE</a>&nbsp;· <a class="src" href="https://github.com/XTraceAI/xtrace">OPEN SOURCE</a>
 </footer>
 </div>
 ${HILL}
