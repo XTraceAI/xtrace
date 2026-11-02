@@ -363,9 +363,35 @@ it('says when data coverage is being read or could not be read', async () => {
   await act(async () => fail(new Error('Synthetic report failure')));
   await waitFor(() =>
     expect(within(card('Data coverage')).getByRole('alert').textContent).toBe(
-      'Data coverage could not be loaded.',
+      'Data coverage could not be loaded. Retry',
     ),
   );
+});
+
+it('replaces shown coverage with the error and Retry when a refetch fails', async () => {
+  const { data, listeners } = source();
+  const seven = exported.dashboards.find((report) => report.window.days === 7)!;
+  let failing = false;
+  const dashboard = vi.fn(async () => {
+    if (failing) throw new Error('Synthetic report failure');
+    return structuredClone(seven);
+  });
+  await mount({ ...data, dashboard });
+  await screen.findByTestId('usage-coverage');
+  expect(within(card('Data coverage')).getByText(/^last 7 days · Sep 1/)).toBeTruthy();
+  // A data event re-reads the report while Settings is open, and that read fails.
+  failing = true;
+  await waitFor(() => expect(listeners.get(events.contentPurged)).toBeDefined());
+  act(() => listeners.get(events.contentPurged)!());
+  const alert = await within(card('Data coverage')).findByRole('alert', {}, { timeout: 3000 });
+  // The old coverage, and the dates it was read for, are not left up as if current.
+  expect(alert.textContent).toBe('Data coverage could not be loaded. Retry');
+  expect(screen.queryByTestId('usage-coverage')).toBeNull();
+  expect(within(card('Data coverage')).queryByText(/Sep 1/)).toBeNull();
+  failing = false;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+  await screen.findByTestId('usage-coverage');
+  expect(within(card('Data coverage')).queryByRole('alert')).toBeNull();
 });
 
 it('refreshes content views when the committed-purge event arrives', async () => {

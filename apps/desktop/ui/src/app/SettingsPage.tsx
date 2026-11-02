@@ -534,15 +534,27 @@ function DataCoverageCard() {
   return (
     <SectionCard
       title="Data coverage"
-      meta={report.data ? `${days} · ${windowLabel(report.data.window)}` : days}
+      meta={report.isSuccess ? `${days} · ${windowLabel(report.data.window)}` : days}
       right={<DefinitionInfo ruleId="M-18" name="Data coverage" />}
     >
-      {report.data ? (
-        <DataCoverage report={report.data} />
-      ) : report.isError ? (
-        <p role="alert">Data coverage could not be loaded.</p>
-      ) : (
+      {/* As on the Dashboard: a failed read, even a refetch over shown data,
+          replaces the coverage rather than leaving it up unmarked. */}
+      {report.isPending ? (
         <p role="status">Reading data coverage…</p>
+      ) : report.isError ? (
+        <p role="alert">
+          Data coverage could not be loaded.{' '}
+          <Button
+            variant="outline"
+            height={28}
+            disabled={report.isFetching}
+            onClick={() => void report.refetch()}
+          >
+            Retry
+          </Button>
+        </p>
+      ) : (
+        <DataCoverage report={report.data} />
       )}
     </SectionCard>
   );
