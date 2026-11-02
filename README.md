@@ -20,7 +20,7 @@ in the sidebar.
 [Setup guide](docs/SETUP.md) ·
 [Report a bug](https://github.com/XTraceAI/xtrace/issues)
 
-<img src="docs/images/readme/dashboard-dark.png" alt="XTrace Dashboard with the human + agent view of each day's hours and leverage, populated Claude and Codex usage, a Codex forecast, and session compaction counts and markers" width="100%">
+<img src="docs/images/readme/dashboard-dark.png" alt="XTrace Dashboard with the human + agent view of each day's hours and leverage, red session warning dots, populated Claude and Codex usage, a Codex forecast, and session compaction counts and markers" width="100%">
 
 **See it in 44 seconds**
 
@@ -133,7 +133,12 @@ a mistake ("you're right", "my mistake"). These are simple rules, not a model's
 judgment, so some warnings will be false alarms.
 
 Warnings show as red dots on the Dashboard's session rows and human + agent days,
-and as a count on the Sessions page. Open one to see the conversation around it
+and as a count on the Sessions page. Hover a dot to see what was flagged; on a
+day, it also names the session:
+
+![A hovered red warning dot on a human + agent day, showing the session name, Correction, and After an agent reply](docs/images/readme/warning-hover-dark.png)
+
+Open a warning to see the conversation around it
 and why it was flagged. **Dismiss** hides a warning everywhere, and **Undo**
 brings it back. A dismissed repeated prompt or repeated failure comes back if it
 happens again. **Diagnose** asks Claude Code (or Codex) to explain what happened and can
