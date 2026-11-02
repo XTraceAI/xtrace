@@ -51,12 +51,14 @@ export const fixture = Object.freeze({
   lockSha256: '52c85ca6ae49c8d0325712e3875bea992950343da3464f53071abb21559cfff4',
 });
 // The synthetic old app reports the published earlier version and sits in the
-// same XTrace.app folder name, as a 0.1.9 install does. The "version" case announces a
-// version the signed archive was not signed for.
+// same XTrace.app folder name, as a 0.2.0 install does. The "version" case announces a
+// version the signed archive was not signed for. That version must be newer
+// than the old one, or the SDK reports no update and never reaches the
+// signature check.
 export const versions = Object.freeze({
   old: previousRelease.version,
   target: release.version,
-  mismatch: '0.1.10',
+  mismatch: '0.2.10',
 });
 const oldBundleName = basename(previousRelease.bundle);
 export const limits = Object.freeze({ workMs: 16 * 60_000, cleanupMs: 2 * 60_000 });
