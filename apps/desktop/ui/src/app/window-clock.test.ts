@@ -85,6 +85,10 @@ describe('windowClockKeys', () => {
     expect(
       windowClockKeys({ path: '/sessions', sessionId: undefined, inventory: false, range: '7d' }),
     ).toEqual([queryKeys.dashboard(7), queryKeys.tokensByHost(7), queryKeys.sessions(7)]);
+    // Settings' Data coverage card shows the selected range's report.
+    expect(
+      windowClockKeys({ path: '/settings', sessionId: undefined, inventory: false, range: '14d' }),
+    ).toEqual([queryKeys.dashboard(14)]);
     expect(
       windowClockKeys({
         path: '/sessions/:sessionId',
@@ -100,7 +104,6 @@ describe('windowClockKeys', () => {
     // The inventory and every other route are never read by the clock.
     for (const route of [
       { path: '/prs', inventory: true },
-      { path: '/settings', inventory: false },
       { path: '/rulebook', inventory: false },
       { path: undefined, inventory: false },
     ])

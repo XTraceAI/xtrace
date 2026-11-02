@@ -41,8 +41,9 @@ export type WindowClockRoute = {
  * ever read again by the clock, and only while a mounted screen observes them.
  *
  * Deliberately left out: the PRs inventory and a pinned pull request's
- * fixed-window sessions, the transcript (not a query), the Today timer, the
- * index status and Settings. The Sessions list re-reads only the pages the
+ * fixed-window sessions, the transcript (not a query), the Today timer and the
+ * index status. Settings re-reads only the report its Data coverage card shows.
+ * The Sessions list re-reads only the pages the
  * user has loaded, alongside its summary and period read. Every other route
  * is left out too, so the period read catches up when a windowed route is entered.
  */
@@ -58,6 +59,8 @@ export function windowClockKeys({
       return [queryKeys.dashboard(days), queryKeys.tokensByHost(days)];
     case '/sessions':
       return [queryKeys.dashboard(days), queryKeys.tokensByHost(days), queryKeys.sessions(days)];
+    case '/settings':
+      return [queryKeys.dashboard(days)];
     case '/prs':
       // Either confidence mode: only the one the page observes is active.
       return inventory
