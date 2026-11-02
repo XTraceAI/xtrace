@@ -154,6 +154,10 @@ test('keyboard focus opens tile definitions and reaches the all-sessions link', 
   await expect(tip).not.toContainText('M-09');
   await page.keyboard.press('Escape');
   const link = page.getByRole('link', { name: 'All sessions & filters' });
+  // Drawn as underlined link text, not a button.
+  expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toBe(
+    'underline',
+  );
   await link.focus();
   await expect(link).toBeFocused();
   await link.press('Enter');
