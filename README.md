@@ -20,7 +20,7 @@ in the sidebar.
 [Setup guide](docs/SETUP.md) ·
 [Report a bug](https://github.com/XTraceAI/xtrace/issues)
 
-<img src="docs/images/readme/dashboard-dark.png" alt="XTrace Dashboard with API-equivalent spend, estimated human time, populated Claude and Codex usage, a Codex forecast, and session compaction counts and markers" width="100%">
+<img src="docs/images/readme/dashboard-dark.png" alt="XTrace Dashboard with the human + agent view of each day's hours and leverage, red session warning dots, populated Claude and Codex usage, a Codex forecast, and session compaction counts and markers" width="100%">
 
 **See it in 44 seconds**
 
@@ -44,7 +44,10 @@ see what changed in your time, spend and activity:
 - **Will my usage last until the reset?** See account limits, whether you are
   ahead of or behind even use, and a forecast at your current pace.
 - **What happened during a session?** Inspect activity spans, prompts and recorded
-  context compactions on a timeline.
+  context compactions on a timeline, then read the whole conversation.
+- **Where did a session go wrong?** See a warning where you corrected or
+  interrupted the agent, repeated a prompt, a call kept failing, or the agent
+  admitted a mistake.
 
 Use the daily charts and previous-period comparisons to investigate changes after
 adopting a tool or workflow. Compare similar work and consider what you shipped
@@ -54,29 +57,37 @@ and the review it needed: more agent hours alone do not prove a productivity gai
 
 ### Time, spend and parallel work
 
-Compare estimated human time and agent activity together in the **human + agent**
-view, or switch to agent hours, human hours or API-equivalent cost for the last
-7, 14 or 30 days. The overview shows leverage (agent hours divided by estimated
-human hours), concurrency and hands-off time, with previous-period comparisons.
-Definitions explain how each number is counted and what is missing. Values the
-app could not measure show as a dash, not zero.
+The Dashboard's Effort card opens on the **human + agent** view: one row per day,
+with shaded bands for when you were working, a line for how many agents ran in
+each 15 minutes, and that day's hours and leverage. A day at or below 1× shows in
+red. Hover a date for the day's summary and its sessions, and click a session to
+open it. Switch to agent hours, human hours or API-equivalent cost for the last
+7, 14 or 30 days. Hover the favorite model to see each model's share of output.
+
+The overview shows leverage (agent hours divided by estimated human hours),
+concurrency and hands-off time, with previous-period comparisons. Definitions
+explain how each number is counted and what is missing. Values the app could not
+measure show as a dash, not zero.
 
 ### Scores: find what to improve
 
 Use scoring skills to review your project instructions, comments, repeated code,
-documentation and agent setup. Open a skill to grade a project and read its score,
-findings and suggested fixes. The screenshot shows the built-in CLAUDE.md Doctor
-alongside four example added skills.
+documentation and agent setup. Open a skill to grade a project, then click a score
+to see how it was given: the summary, the points for each rubric criterion, and
+every finding with its explanation and suggested fix. Gradings you start while
+another one runs wait in line and start by themselves. The screenshot shows the
+built-in CLAUDE.md Doctor alongside four example added skills.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/scores-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/scores-light.png">
-  <img alt="Scores showing sample findings across 14 fictional projects and five example scoring skills, with an Add a skill card" src="docs/images/readme/scores-dark.png" width="900">
+  <img alt="Scores showing sample findings across 14 fictional projects and five example scoring skills, with an Add a grading skill card" src="docs/images/readme/scores-dark.png" width="900">
 </picture>
 
 _Sample scores and findings across 14 fictional projects, not measured grading results._
 
-Add your own installed skills or discover skills through a public GitHub link.
+Use **Add a grading skill** to add your own installed skills or discover skills
+through a public GitHub link.
 A skill needs a scoring rubric; **Make a rubric** can create one for a suitable
 review skill before you add it. Skills that need to modify a project or access
 the network may not be suitable. See [adding skills and rubrics](docs/GRADING-RUBRIC.md).
@@ -92,7 +103,8 @@ Claude and Codex usage stays in the sidebar when your local tools can report it.
 Green and orange indicators show usage behind or ahead of an even pace. Expand a
 provider to see remaining usage, daily readings and a linear forecast based on
 average use since the weekly window began. The forecast assumes that pace
-continues; it is an estimate, not a guaranteed run-out time.
+continues; it is an estimate, not a guaranteed run-out time. If Claude Code is
+signed out, its row says so; click it to open Terminal and sign in again.
 
 ### Session activity and compactions
 
@@ -106,11 +118,33 @@ readings stay distinct from a confirmed zero.
 ![Session activity with multiple spans, compaction counts, and a hovered automatic compaction showing its recorded time](docs/images/readme/session-compactions-dark.png)
 
 The Sessions page brings your indexed Claude Code, Codex and Cursor sessions into
-one list. Find a session by ID, repo or branch, filter by tool, and open its local
-transcript. Codex and Cursor need the bundled readers and Python 3.10 or newer;
-missing readers and unsupported formats show an unavailable state. Cursor SQLite
-transcripts are not supported. A sub-session whose parent session can't be
-confirmed is left out of the list.
+one list. Find a session by ID, repo or branch, filter by tool, and open it to read
+the whole conversation, with tool activity you can expand. Codex and Cursor need
+the bundled readers and Python 3.10 or newer; missing readers and unsupported
+formats show an unavailable state. Cursor SQLite transcripts are not supported. A
+sub-session whose parent session can't be confirmed is left out of the list.
+
+### Session warnings
+
+XTrace checks each session's whole history for signs it went wrong: you corrected
+the agent after a reply, interrupted it or declined a tool call, sent the same
+prompt twice, the same call failed more than once, or the agent's reply admitted
+a mistake ("you're right", "my mistake"). These are simple rules, not a model's
+judgment, so some warnings will be false alarms.
+
+Warnings show as red dots on the Dashboard's session rows and human + agent days,
+and as a count on the Sessions page. Hover a dot to see what was flagged; on a
+day, it also names the session:
+
+![A hovered red warning dot on a human + agent day, showing the session name, Correction, and After an agent reply](docs/images/readme/warning-hover-dark.png)
+
+Open a warning to see the conversation around it
+and why it was flagged. **Dismiss** hides a warning everywhere, and **Undo**
+brings it back. A dismissed repeated prompt or repeated failure comes back if it
+happens again. **Diagnose** asks Claude Code (or Codex) to explain what happened and can
+suggest a skill or an instruction line; it sends messages only after you confirm
+(see [Your data](#your-data)). A session's page lists its warnings and says which
+checks could not read everything.
 
 ### Pull requests and quick access
 
@@ -120,7 +154,8 @@ counts in full toward each of them. Pull request details come from GitHub's
 command-line tool (`gh`) when it is installed and signed in. XTrace never posts
 to GitHub.
 
-The menu bar keeps today's activity one click away. Settings includes light, dark
+The menu bar keeps today's activity one click away. **Back** and **Forward** beside
+each page's title (⌘[ and ⌘]) return to pages you opened. Settings includes light, dark
 or system appearance, the human-time break threshold, index status,
 storage controls and the telemetry switch.
 
@@ -172,7 +207,7 @@ See the [setup guide](docs/SETUP.md) for first launch and troubleshooting.
   **Delete stored content** clears saved text and warning decisions, even when no
   other saved text remains. Later imports, including older messages, can create
   new previews and warning decisions.
-- **Diagnose sends selected messages.** Only after you confirm **Send and
+- **Diagnose sends selected messages.** Only after you confirm **Send &
   diagnose**, selected messages around a warning go to Claude Code's hosted model,
   or Codex's if Claude Code is unavailable before receiving the messages. Cursor
   is not tried automatically. XTrace keeps the result in the window's cache and
@@ -182,13 +217,15 @@ See the [setup guide](docs/SETUP.md) for first launch and troubleshooting.
   project and skill; that content can be sent to Claude on your account. Making a
   rubric similarly uses the selected skill's content. Grading keeps the project
   read-only and blocks network access for sandboxed commands; that does not make
-  Claude's model requests offline. The run's transcript is not saved by Claude
+  Claude's model requests offline. Grading and rubric runs also cannot read
+  well-known secret folders such as SSH keys, cloud credentials, keychains and
+  browser profiles. The run's transcript is not saved by Claude
   Code; XTrace keeps the resulting scores, summaries, findings and reports. See
   [grading and rubric details](docs/GRADING-RUBRIC.md).
 - **Other network use.** XTrace uses the network for anonymous usage telemetry
   (see [Telemetry](#telemetry)), account usage readings, GitHub pull request checks,
-  app updates, and public GitHub look-ups and downloads you start with **Add from
-  a link**. Keeping a skill stores it locally and links it into normal Claude Code
+  app updates, public GitHub look-ups and downloads you start with **Add from
+  a link**, and the public leaderboard if you join it. Keeping a skill stores it locally and links it into normal Claude Code
   sessions when its name is free there. Claude usage checks run your local Claude
   Code about every ten minutes, which adds small entries to Claude Code's own
   settings and history.
