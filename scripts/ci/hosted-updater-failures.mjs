@@ -48,7 +48,7 @@ export const fixture = Object.freeze({
   signatureSha256: release.signatureSha256,
   members: release.inventoryEntries,
   root: basename(release.bundle),
-  lockSha256: '6b8f09e647e2560f335ef55bba4b0c9f7c5641bda9d8bb06376eb817273d18f5',
+  lockSha256: '52c85ca6ae49c8d0325712e3875bea992950343da3464f53071abb21559cfff4',
 });
 // The synthetic old app reports the published earlier version and sits in the
 // same XTrace.app folder name, as a 0.1.9 install does. The "version" case announces a
