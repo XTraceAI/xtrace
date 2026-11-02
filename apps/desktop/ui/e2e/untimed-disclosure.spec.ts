@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import fixture from '../fixtures/F1.json' with { type: 'json' };
 import type { FixtureExport } from '../src/data/generated/FixtureExport';
 
@@ -36,54 +36,55 @@ for (const [width, height] of [
   [1120, 720],
 ] as const)
   for (const scheme of ['light'] as const)
-    for (const path of ['/dashboard', '/sessions'] as const)
-      test(`untimed disclosure reads and opens by keyboard on ${path} at ${width}x${height} ${scheme}`, async ({
+    for (const path of ['/settings', '/sessions'] as const)
+      test(`untimed disclosure reads on ${path} at ${width}x${height} ${scheme}`, async ({
         page,
       }, info) => {
         await serve(page, disclosed);
         await page.setViewportSize({ width, height });
         await page.emulateMedia({ colorScheme: scheme });
         await page.goto(path);
-        const dashboard = path === '/dashboard';
-        // On the Dashboard the limit is part of Coverage, in the Sessions card's
-        // header: the control reads one word and its name carries the count; on
-        // Sessions it is the heading's warning triangle, whose name carries it.
-        // Neither is a banner, and neither states a share of anything.
-        const notice = dashboard
-          ? page.getByRole('region', { name: 'Sessions', exact: true }).locator('header')
-          : page.locator('.xt-sessions-heading');
-        await expect(notice).toBeVisible();
         await page.evaluate(() => document.fonts.ready);
-        const summary = dashboard
-          ? notice.getByRole('button', { name: /^Coverage/ })
-          : notice.getByTestId('sessions-issues');
-        if (dashboard) {
-          await expect(summary).toHaveText('Coverage');
-          await expect(summary).toHaveAccessibleName(/^Coverage: (.+, )?2,318 untimed records$/);
+        const settings = path === '/settings';
+        // On Settings the limit is a section of Data coverage, shown in full;
+        // on Sessions it is the heading's warning triangle, whose name carries
+        // the count and which opens the explanation over the page. Neither is
+        // a banner, and neither states a share of anything.
+        let body: Locator;
+        if (settings) {
+          const coverage = page.getByRole('region', { name: 'Data coverage', exact: true });
+          body = coverage.getByTestId('coverage-untimed');
+          await expect(body).toBeVisible();
+          await expect(body.getByRole('heading', { name: 'Untimed history' })).toBeVisible();
+          await expect(body.getByTestId('untimed-summary')).toHaveText(
+            '2,318 records · outside dated measurements',
+          );
+          await expect(body).not.toContainText('%');
+          // Measured as part of the card it is drawn in.
+          body = coverage.locator('.xt-section-panel');
         } else {
+          const notice = page.locator('.xt-sessions-heading');
+          await expect(notice).toBeVisible();
+          const summary = notice.getByTestId('sessions-issues');
           await expect(summary).toHaveAccessibleName('History limits: 2,318 untimed records');
           await expect(page.getByRole('region', { name: 'Untimed indexed history' })).toHaveCount(
             0,
           );
+          await expect(notice).not.toContainText('%');
+          const line = await summary.evaluate((element) => element.getBoundingClientRect().height);
+          expect(line).toBeLessThanOrEqual(40);
+          // The explanation and breakdown are closed by default and open from
+          // the keyboard alone.
+          body = page.getByRole('dialog', { name: 'Untimed history' });
+          await expect(body.getByText(NOTICE)).toBeHidden();
+          await summary.focus();
+          await expect(summary).toBeFocused();
+          await page.keyboard.press('Enter');
         }
-        await expect(notice).not.toContainText('%');
-        const line = await summary.evaluate((element) => element.getBoundingClientRect().height);
-        expect(line).toBeLessThanOrEqual(40);
-
-        // The explanation and breakdown are closed by default and open from the
-        // keyboard alone.
-        const body = page.getByRole('dialog', { name: dashboard ? 'Coverage' : 'Untimed history' });
         const rows = body.getByRole('list', {
           name: 'Untimed indexed history by host and surface',
         });
-        await expect(rows).toBeHidden();
-        await expect(body.getByText(NOTICE)).toBeHidden();
-        await summary.focus();
-        await expect(summary).toBeFocused();
-        await page.keyboard.press('Enter');
         await expect(body.getByText(NOTICE)).toBeVisible();
-        if (dashboard)
-          await expect(body).toContainText('2,318 records · outside dated measurements');
         const count = body.getByTestId('untimed-count');
         await expect(count).toHaveText(
           '2,318 records in all indexed history, independent of the selected dates and of any filter on the table.',
@@ -123,7 +124,9 @@ for (const [width, height] of [
         expect(measured.background).not.toMatch(/rgba\(0, 0, 0, 0\)/);
         expect(new Set(measured.colors).size).toBeGreaterThan(1);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
-        await page.keyboard.press('Escape');
-        await expect(body).toHaveCount(0);
-        await expect(summary).toBeFocused();
+        if (!settings) {
+          await page.keyboard.press('Escape');
+          await expect(body).toHaveCount(0);
+          await expect(page.getByTestId('sessions-issues')).toBeFocused();
+        }
       });

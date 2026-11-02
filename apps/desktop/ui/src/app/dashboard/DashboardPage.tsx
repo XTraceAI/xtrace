@@ -15,7 +15,7 @@ import { sessionParams } from '../session-search';
 import { ActivityLanes, laneDefinition, laneSubtitle } from './ActivityLanes';
 import { DashCard } from './DashCard';
 import { DashboardDetailsProvider } from './DashboardDetailsProvider';
-import { CoverageDetail, UsageMeasurements, useDetail } from './DashboardDetails';
+import { UsageMeasurements, useDetail } from './DashboardDetails';
 import { DefinitionInfo } from './DefinitionInfo';
 import { EffortByType, EffortMethod, EffortMetricToggle } from './EffortByType';
 import { OverviewCard } from './OverviewCard';
@@ -104,8 +104,9 @@ export function DashboardPage() {
  * report's agent/human hours and rule fires are not drawn here. Nothing here
  * is a page to scroll: every further row, day, table and explanation opens
  * over the page from the card it belongs to — tokens and cost from the ⓘ
- * beside Effort's title, coverage and untimed history from Sessions — or on the full
- * Sessions view. The index's state is the sidebar's and Settings'.
+ * beside Effort's title — or on the full Sessions view. Data coverage and
+ * untimed history are on Settings; the index's state is the sidebar's and
+ * Settings'.
  */
 function DashboardReport({
   report,
@@ -218,10 +219,17 @@ function DashboardReport({
         metaFull={subtitle.full}
         right={
           <span className="xt-dash-card-actions">
-            <CoverageDetail report={report} />
             <DefinitionInfo ruleId="M-05" name="Sessions" context={laneDefinition(report)} />
-            <Link className="xt-dash-link" to={`/sessions?${sessionParams.range}=${range}`}>
-              View sessions
+            {/* A link drawn as the kit's outlined button. Explicit tab stop, as
+                the kit's buttons are: WebKit tabs past a link without it. */}
+            <Link
+              className="xt-button"
+              data-variant="outline"
+              style={{ height: 28 }}
+              tabIndex={0}
+              to={`/sessions?${sessionParams.range}=${range}`}
+            >
+              All sessions &amp; filters <span aria-hidden="true">→</span>
             </Link>
           </span>
         }

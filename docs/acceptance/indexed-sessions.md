@@ -61,8 +61,8 @@ only to an address that already carries one, which keeps a plain `/sessions`
 link clean.
 
 Dashboard session links encode the full ID as one route segment and carry the
-validated host and range into the detail page's Back link. The "View sessions"
-link opens the list at the selected range. Shared helpers use `URLSearchParams`,
+validated host and range into the detail page's Back link. The "All sessions &
+filters" link opens the list at the selected range. Shared helpers use `URLSearchParams`,
 so punctuation in an ID cannot split or truncate its carried search value.
 
 ## Per-session measurements

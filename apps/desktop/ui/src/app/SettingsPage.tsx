@@ -16,11 +16,17 @@ import { Modal, ModalClose } from '../kit/Modal';
 import { SectionCard } from '../kit/SectionCard';
 import { Toggle } from '../kit/Toggle';
 import { useTheme, type ThemePreference } from '../theme/ThemeProvider';
+import { DataCoverage } from './dashboard/DashboardDetails';
+import { DefinitionInfo } from './dashboard/DefinitionInfo';
+import { rangeDays, windowLabel } from './dashboard/present';
+import { useDashboardReport, useSelectedRange } from './dashboard/range';
 import { hostScanText } from './index-host-state';
 import { codexHistoryGapsText, freshnessText, phaseText } from './native-index-text';
 import { TelemetrySettings } from './telemetry/TelemetrySettings';
 import { useAppInfo, useDbCounts, useNativeIndexStatus } from './useAppInfo';
 import '../styles/settings.css';
+// Data coverage is drawn with the Dashboard's measurement styles.
+import '../styles/dashboard.css';
 
 export function SettingsPage() {
   const { source } = useData();
@@ -59,6 +65,7 @@ export function SettingsPage() {
           <NativeIndex />
         </SectionCard>
       )}
+      {source.kind !== 'preview' && <DataCoverageCard />}
       <TelemetrySettings controls={source.telemetry} />
       <SectionCard title="Not in this build">
         <p className="xt-settings-note">
@@ -511,6 +518,32 @@ function LocalDatabase() {
         </dd>
       </dl>
       {counts.isError && <p role="alert">Database counts could not be loaded.</p>}
+    </SectionCard>
+  );
+}
+
+/**
+ * What the Dashboard's numbers could measure over its selected range, in full:
+ * the same report the Dashboard reads, so nothing here is worked out again.
+ * Settings has no range control of its own, so the card names the range.
+ */
+function DataCoverageCard() {
+  const range = useSelectedRange();
+  const report = useDashboardReport(range);
+  const days = `last ${rangeDays[range]} days`;
+  return (
+    <SectionCard
+      title="Data coverage"
+      meta={report.data ? `${days} · ${windowLabel(report.data.window)}` : days}
+      right={<DefinitionInfo ruleId="M-18" name="Data coverage" />}
+    >
+      {report.data ? (
+        <DataCoverage report={report.data} />
+      ) : report.isError ? (
+        <p role="alert">Data coverage could not be loaded.</p>
+      ) : (
+        <p role="status">Reading data coverage…</p>
+      )}
     </SectionCard>
   );
 }

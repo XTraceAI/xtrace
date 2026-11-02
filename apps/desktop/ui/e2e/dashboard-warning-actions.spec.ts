@@ -473,16 +473,18 @@ for (const theme of ['light', 'dark'] as const)
     await expect(target).toBeFocused();
     expect((await calls(page)).stops).toEqual([]);
     // Another window on the Dashboard keeps its own rule.
-    const trigger = page.locator('.xt-dashboard').getByRole('button', { name: /^Coverage/ });
+    const trigger = page
+      .locator('.xt-dashboard')
+      .getByRole('button', { name: 'Effort definition', exact: true });
     await trigger.focus();
     await page.keyboard.press('Enter');
-    const coverage = page.getByRole('dialog', { name: 'Coverage' });
-    await expect(coverage).toBeVisible();
+    const method = page.getByRole('dialog', { name: 'How effort is counted · daily values' });
+    await expect(method).toBeVisible();
     await page.mouse.click(4, 4);
     await page.waitForTimeout(200);
-    await expect(coverage).toBeVisible();
+    await expect(method).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(coverage).toHaveCount(0);
+    await expect(method).toHaveCount(0);
   });
 
 // The warning window shows the same verdict callout as a session page: each

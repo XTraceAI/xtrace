@@ -210,23 +210,33 @@ function expectHiddenPanels() {
 }
 /**
  * The control that opens a supplementary measurement from the card it belongs
- * to: tokens and cost are sections of the dialog behind Effort's ⓘ, coverage (with untimed
- * history) opens from the Sessions header.
+ * to: tokens and cost are sections of the dialog behind Effort's ⓘ.
  */
-const detailTrigger = (title: string) =>
-  title === 'Coverage'
-    ? within(card('Sessions')).getByRole('button', { name: /^Coverage/ })
-    : within(card('Effort')).getByRole('button', { name: 'Effort definition' });
+const detailTrigger = () =>
+  within(card('Effort')).getByRole('button', { name: 'Effort definition' });
 const usageSection: Record<string, string> = {
   'Tokens per day': 'usage-tokens',
   'API-equivalent cost': 'usage-cost',
 };
-/** Opens one measurement and returns it: the Coverage dialog, or its titled section of Effort's ⓘ dialog. */
+/** Opens one measurement and returns its titled section of Effort's ⓘ dialog. */
 async function detail(title: string) {
-  fireEvent.click(detailTrigger(title));
-  if (title === 'Coverage') return screen.findByRole('dialog', { name: title });
+  fireEvent.click(detailTrigger());
   const method = await screen.findByRole('dialog', { name: METHOD });
   return within(method).getByTestId(usageSection[title]!);
+}
+/**
+ * Data coverage, which is on Settings rather than the Dashboard: reached from
+ * the sidebar as a viewer reaches it, and returned once the report is read.
+ */
+async function openCoverage() {
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  await screen.findByTestId('usage-coverage');
+  return card('Data coverage');
+}
+/** Back to the Dashboard from Settings, once its report is drawn. */
+async function leaveCoverage() {
+  fireEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
+  await loaded();
 }
 /** Closes the open dialog the way a keyboard does, and waits until it is gone. */
 async function closeDialog(detail: HTMLElement) {
@@ -297,12 +307,12 @@ it('renders the generated F1 report with honest unknowns and the shared sidebar 
   expect(costDialog.textContent).toContain('catalog synthetic-v1 · as of 2026-09-17');
   expect(cost.getByText(/Global public token API-equivalent/)).toBeTruthy();
   await closeDialog(costDialog);
+  // Data coverage is on Settings, not in the Sessions card's header.
+  expect(within(card('Sessions')).queryByRole('button', { name: /coverage/i })).toBeNull();
   // Coverage: 100 percentage points display as 100%. Nothing checks the session
   // inventory yet, so its unknown state is not shown anywhere in Coverage.
-  expect(detailTrigger('Coverage').textContent).toBe('Coverage');
-  expect(detailTrigger('Coverage').getAttribute('aria-label')).toBeNull();
-  const coverage = await detail('Coverage');
-  expect(coverage.textContent).toContain('tokens measured for 1/1 session');
+  const coverage = await openCoverage();
+  expect(coverage.textContent).toContain('last 7 days · Sep 1');
   expect(coverage.textContent).not.toMatch(/inventory/i);
   expect(within(coverage).getByTestId('usage-coverage').textContent).toContain(
     '100% of sessions (1 of 1',
@@ -311,17 +321,18 @@ it('renders the generated F1 report with honest unknowns and the shared sidebar 
   expect(within(coverage).getByText('No session capture coverage rows available.')).toBeTruthy();
   expect(coverage.textContent).not.toContain('No capture receipts');
   expect(within(coverage).getByText(/Receipts are historical/)).toBeTruthy();
-  await closeDialog(coverage);
+  await leaveCoverage();
   // The index's state is the sidebar's and Settings', not a Dashboard line.
   expect(screen.queryByTestId('dashboard-index')).toBeNull();
   expect(screen.queryByText(/Native index/)).toBeNull();
   // Account limits remain separate from the Dashboard's recorded tokens.
   expect(screen.getByRole('region', { name: 'Account usage' })).toBeTruthy();
   // Sessions measures over the selected window, so the link into it carries
-  // the range the Dashboard was showing.
-  expect(screen.getByRole('link', { name: 'View sessions' }).getAttribute('href')).toBe(
-    '/sessions?range=7d',
-  );
+  // the range the Dashboard was showing. It is drawn as the kit's outlined button.
+  const all = within(card('Sessions')).getByRole('link', { name: 'All sessions & filters' });
+  expect(all.getAttribute('href')).toBe('/sessions?range=7d');
+  expect(all.classList.contains('xt-button')).toBe(true);
+  expect(all.dataset.variant).toBe('outline');
 });
 
 it('shows F2 concurrency and overlapping lanes on the fixed recent axis', async () => {
@@ -442,7 +453,7 @@ it('keeps F7 unmeasured tokens, cost, coverage and favorite model explicit', asy
   );
   await closeDialog(costDialog);
   // Measured 0 percentage points is a real 0%, with the gap named.
-  const coverage = await detail('Coverage');
+  const coverage = await openCoverage();
   expect(within(coverage).getByTestId('usage-coverage').textContent).toContain(
     '0% of sessions (0 of 1 session) · no recorded usage',
   );
@@ -450,7 +461,7 @@ it('keeps F7 unmeasured tokens, cost, coverage and favorite model explicit', asy
     within(coverage).getByRole('list', { name: 'Token measurement by surface' }),
   );
   expect(surfaces.getByText('Cursor · cli')).toBeTruthy();
-  await closeDialog(coverage);
+  await leaveCoverage();
   // Cursor is not a quota: an unmeasured host total shows a dash.
   expect(screen.getByRole('region', { name: 'Account usage' })).toBeTruthy();
 });
@@ -536,12 +547,6 @@ it('keeps a partial API-equivalent subtotal out of the total slot and names unpr
     ),
   );
   await loaded();
-  // A complete inventory with no untimed history still flags, unopened, token
-  // measurement that misses sessions with its gap and the failed 14-day gate.
-  expect(detailTrigger('Coverage').textContent).toBe('Coverage');
-  expect(detailTrigger('Coverage').getAttribute('aria-label')).toBe(
-    'Coverage: tokens measured for 2/3 sessions (incomplete token counters), trailing 14 days below the 90% gate',
-  );
   // No subtotal where a total belongs; the detail names it as partial.
   const costDialog = await detail('API-equivalent cost');
   expect(within(costDialog).getByTestId('cost-total').textContent).not.toContain('$');
@@ -554,11 +559,13 @@ it('keeps a partial API-equivalent subtotal out of the total slot and names unpr
     '1 Codex response at OpenAI’s default tier (no tier recorded)',
   );
   await closeDialog(costDialog);
-  const coverage = await detail('Coverage');
+  // Token measurement that misses sessions names its gap, and the failed
+  // 14-day gate says so.
+  const coverage = await openCoverage();
   expect(within(coverage).getByTestId('usage-coverage').textContent).toContain(
     '66.7% of sessions (2 of 3 sessions) · incomplete token counters',
   );
-  await closeDialog(coverage);
+  expect(within(coverage).getByTestId('usage-gate').textContent).toContain('66.7%');
 });
 
 it('leaves an unknown inventory out of Coverage but names a known incomplete one', async () => {
@@ -581,11 +588,10 @@ it('leaves an unknown inventory out of Coverage but names a known incomplete one
     ),
   );
   await loaded();
-  let coverage = await detail('Coverage');
+  let coverage = await openCoverage();
   const rows = within(coverage).getByRole('list', { name: 'Session capture by surface' });
   expect(rows.textContent).toContain('native start time missing');
   expect(coverage.textContent).not.toMatch(/inventory/i);
-  await closeDialog(coverage);
   cleanup();
   mount(
     nativeSource(() =>
@@ -595,12 +601,8 @@ it('leaves an unknown inventory out of Coverage but names a known incomplete one
     ),
   );
   await loaded();
-  expect(detailTrigger('Coverage').getAttribute('aria-label')).toMatch(
-    /^Coverage: Inventory incomplete/,
-  );
-  coverage = await detail('Coverage');
+  coverage = await openCoverage();
   expect(within(coverage).getByText('Inventory incomplete')).toBeTruthy();
-  await closeDialog(coverage);
 });
 
 it('shows a complete total, measured zeros and hands-off exclusions', async () => {
@@ -638,10 +640,7 @@ it('shows a complete total, measured zeros and hands-off exclusions', async () =
   expect(tileValue('Hands-off median')).toContain(
     'Unmeasured: No hands-off stretches after exclusions',
   );
-  // A complete inventory, every session's tokens measured, no failed gate and no untimed
-  // history: nothing to flag in the control's name.
-  expect(detailTrigger('Coverage').getAttribute('aria-label')).toBeNull();
-  const coverage = await detail('Coverage');
+  const coverage = await openCoverage();
   expect(
     within(
       within(coverage).getByRole('list', { name: 'Surfaces excluded from hands-off' }),
@@ -649,7 +648,7 @@ it('shows a complete total, measured zeros and hands-off exclusions', async () =
   ).toBeTruthy();
   const pill = within(coverage).getByText('Inventory complete');
   expect(pill.closest('[data-tone]')!.getAttribute('data-tone')).toBe('success');
-  await closeDialog(coverage);
+  await leaveCoverage();
   // Measured zero, unmeasured and no-usage days are distinguishable per series.
   const tokensDialog = await detail('Tokens per day');
   const output = within(within(tokensDialog).getByRole('group', { name: 'Output tokens per day' }));
@@ -1355,18 +1354,17 @@ it('follows the design composition and keeps supplementary measurements in colla
   expect(screen.queryByRole('dialog')).toBeNull();
   // Nothing on the page expands in place: no disclosure sits in the page flow.
   expect(document.querySelectorAll('.xt-dashboard details')).toHaveLength(0);
-  for (const title of ['Tokens per day', 'API-equivalent cost', 'Coverage']) {
+  for (const title of ['Tokens per day', 'API-equivalent cost']) {
     const section = await detail(title);
-    const level = title === 'Coverage' ? 2 : 3;
-    expect(within(section).getByRole('heading', { level, name: title })).toBeTruthy();
+    expect(within(section).getByRole('heading', { level: 3, name: title })).toBeTruthy();
     expect(section.textContent!.length).toBeGreaterThan(title.length);
     // Each keeps its definition beside its title.
     expect(within(section).getByRole('button', { name: `${title} definition` })).toBeTruthy();
     await closeDialog(section);
-    expect(detailTrigger(title)).toBe(document.activeElement);
+    expect(detailTrigger()).toBe(document.activeElement);
   }
   // The dialog's own daily values come first; the usage sections follow them.
-  fireEvent.click(detailTrigger('Tokens per day'));
+  fireEvent.click(detailTrigger());
   const method = await screen.findByRole('dialog', { name: METHOD });
   expect([...method.querySelectorAll('h2, h3')].map((heading) => heading.textContent)).toEqual([
     METHOD,
@@ -1541,14 +1539,13 @@ it('keeps Agent / human hours and Caught by your rules hidden at every range pre
   }
 });
 
-it('discloses untimed indexed history with coverage, whatever range is selected', async () => {
-  // F1 indexes nothing without a timestamp, so the Dashboard says nothing.
+it('discloses untimed indexed history with data coverage, whatever range is selected', async () => {
+  // F1 indexes nothing without a timestamp, so Data coverage says nothing.
   mount(nativeSource((days) => f1(days)));
   await loaded();
-  let coverage = await detail('Coverage');
+  let coverage = await openCoverage();
   expect(within(coverage).queryByTestId('coverage-untimed')).toBeNull();
   expect(coverage.textContent).not.toContain('Untimed history');
-  await closeDialog(coverage);
   cleanup();
   const disclosed = (report: DashboardMetrics) => {
     report.untimed_history = {
@@ -1561,11 +1558,8 @@ it('discloses untimed indexed history with coverage, whatever range is selected'
   };
   mount(nativeSource((days) => synthetic(disclosed, days)));
   await loaded();
-  // The count is heard from the Sessions header's Coverage without opening it;
-  // the explanation and the breakdown are in the dialog it opens.
-  expect(detailTrigger('Coverage').getAttribute('aria-label')).toMatch(/9 untimed records$/);
-  expect(screen.queryByRole('dialog')).toBeNull();
-  coverage = await detail('Coverage');
+  // The count, the explanation and the breakdown are on Settings, in full.
+  coverage = await openCoverage();
   const untimed = within(coverage).getByTestId('coverage-untimed');
   expect(within(untimed).getByRole('heading', { level: 3, name: 'Untimed history' })).toBeTruthy();
   expect(within(untimed).getByTestId('untimed-summary').textContent).toBe(
@@ -1574,46 +1568,38 @@ it('discloses untimed indexed history with coverage, whatever range is selected'
   expect(untimed.textContent).toContain(
     'Some indexed history has no timestamps and cannot contribute to date-based measurements.',
   );
-  await closeDialog(coverage);
+  await leaveCoverage();
   // The count is of all indexed history, so changing the range cannot move it,
-  // and none of the range's own measurements change with it either.
+  // and none of the range's own measurements change with it either. Settings
+  // reads the range last chosen on the Dashboard and names it.
   const summary = screen.getByTestId('dashboard-summary').textContent;
   for (const preset of ['14d', '30d'] as const) {
     fireEvent.click(screen.getByRole('radio', { name: preset }));
     await waitFor(() => expect(period()).toMatch(PERIOD[preset]));
-    expect(detailTrigger('Coverage').getAttribute('aria-label')).toMatch(/9 untimed records$/);
-    coverage = await detail('Coverage');
+    coverage = await openCoverage();
+    expect(coverage.textContent).toContain(`last ${preset.slice(0, 2)} days`);
     expect(within(coverage).getByTestId('untimed-count').textContent).toContain(
       '9 records in all indexed history',
     );
     expect(coverage.textContent).toContain('Cursor · unknown surface');
-    await closeDialog(coverage);
+    await leaveCoverage();
   }
   expect(screen.getByTestId('dashboard-summary').textContent).toBe(summary);
   // Not a banner over the dated cards, and not a line of the page.
   expect(document.querySelector('.xt-dashboard .xt-untimed')).toBeNull();
 });
 
-it('keeps an open Effort detail or Coverage open while another range loads', async () => {
+it('keeps an open Effort detail open while another range loads', async () => {
   mount(nativeSource((days) => synthetic(() => {}, days)));
   await loaded();
-  for (const [title, name] of [
-    ['Tokens per day', METHOD],
-    ['Coverage', 'Coverage'],
-  ] as const) {
-    fireEvent.click(detailTrigger(title));
-    await screen.findByRole('dialog', { name });
-    // The page under the dialog is inert to assistive technology, so the range
-    // changes as it would from elsewhere; the detail is the page's, not its trigger's.
-    fireEvent.click(
-      screen.getByRole('radio', { name: title === 'Coverage' ? '30d' : '14d', hidden: true }),
-    );
-    await waitFor(() => expect(period()).toMatch(PERIOD[title === 'Coverage' ? '30d' : '14d']));
-    const dialog = await screen.findByRole('dialog', { name });
-    await closeDialog(dialog);
-    fireEvent.click(screen.getByRole('radio', { name: '7d' }));
-    await waitFor(() => expect(period()).toMatch(PERIOD['7d']));
-  }
+  fireEvent.click(detailTrigger());
+  await screen.findByRole('dialog', { name: METHOD });
+  // The page under the dialog is inert to assistive technology, so the range
+  // changes as it would from elsewhere; the detail is the page's, not its trigger's.
+  fireEvent.click(screen.getByRole('radio', { name: '14d', hidden: true }));
+  await waitFor(() => expect(period()).toMatch(PERIOD['14d']));
+  const dialog = await screen.findByRole('dialog', { name: METHOD });
+  await closeDialog(dialog);
 });
 
 it('explains each card from a compact info control, with no rule ID in the chrome', async () => {
@@ -1655,15 +1641,13 @@ it('explains each card from a compact info control, with no rule ID in the chrom
     ['Sessions', ruleSummary('M-05')],
   ] as const)
     await definition(card(title), title, expected);
-  for (const [title, expected] of [
-    ['Tokens per day', ruleSummary('M-04')],
-    ['API-equivalent cost', ruleSummary('M-04')],
-    ['Coverage', ruleSummary('M-18')],
-  ] as const) {
+  for (const title of ['Tokens per day', 'API-equivalent cost']) {
     const dialog = await detail(title);
-    await definition(dialog, title, expected);
+    await definition(dialog, title, ruleSummary('M-04'));
     await closeDialog(dialog);
   }
+  // Data coverage, on Settings, keeps its definition beside its title.
+  await definition(await openCoverage(), 'Data coverage', ruleSummary('M-18'));
 });
 
 for (const [reason, explanation] of [

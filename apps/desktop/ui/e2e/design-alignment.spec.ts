@@ -33,13 +33,12 @@ const CARDS = [
 ] as const;
 /**
  * Measurements opened from the card they belong to — tokens and cost as sections of the dialog
- * behind Effort's ⓘ, coverage from the Sessions header — each with its definition beside its title.
+ * behind Effort's ⓘ — each with its definition beside its title. Data coverage is on Settings.
  */
 const METHOD = 'How effort is counted · daily values';
 const DETAILS = [
   ['Tokens per day', 'M-04', 'Effort', /^Effort definition$/, METHOD],
   ['API-equivalent cost', 'M-04', 'Effort', /^Effort definition$/, METHOD],
-  ['Coverage', 'M-18', 'Sessions', /^Coverage/, 'Coverage'],
 ] as const;
 
 for (const scheme of ['light'] as const)
@@ -94,6 +93,14 @@ for (const scheme of ['light'] as const)
       await expect(dialog).toHaveCount(0);
       await expect(item).toBeFocused();
     }
+    // Data coverage, shown in full on Settings, keeps its definition beside its title.
+    await page.goto('/settings');
+    const coverage = page.getByRole('region', { name: 'Data coverage', exact: true });
+    await expect(coverage.getByTestId('usage-coverage')).toBeVisible();
+    await explain(
+      coverage.getByRole('button', { name: 'Data coverage definition' }),
+      ruleSummary('M-18'),
+    );
   });
 
 for (const [width, height] of [

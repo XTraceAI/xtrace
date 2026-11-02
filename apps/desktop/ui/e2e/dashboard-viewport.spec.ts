@@ -803,9 +803,8 @@ for (const shape of ['plain', 'stress'] as const)
           await expect(page.getByTestId('effort-unresolved')).toHaveCount(0);
           // The lanes are capped, but no caption under the rows says so.
           await expect(page.getByTestId('lanes-disclosure')).toHaveCount(0);
-          await expect(page.getByTestId('coverage')).toHaveAccessibleName(
-            /^Coverage: .*2,318 untimed records$/,
-          );
+          // Data coverage, untimed history included, is on Settings, not here.
+          await expect(page.getByTestId('coverage')).toHaveCount(0);
           const merged = page.getByTestId('overview-tile').filter({ hasText: 'Merged PRs' });
           await expect(merged.getByTestId('overview-value')).toHaveText('5so far');
           await expect(merged.locator('.xt-overview-sub')).toHaveText('1 not checked yet');
@@ -892,7 +891,6 @@ for (const shape of ['plain', 'stress'] as const)
               page.getByRole('group', { name: 'Output tokens per day' }),
             ],
             ['Effort', /^Effort definition$/, method, page.getByTestId('cost-total')],
-            ['Sessions', /^Coverage/, 'Coverage', page.getByTestId('usage-coverage')],
           ] as const) {
             await page
               .getByRole('region', { name: card, exact: true })
@@ -1058,14 +1056,13 @@ test('a failed report keeps the page in the window', async ({ page }) => {
 
 /**
  * The secondary details, each one keyboard step from the page, from the card
- * it belongs to: tokens and cost are sections of the dialog behind Effort's ⓘ, coverage and untimed
- * history open from the Sessions header, each panel's unresolved data from
- * the triangle at its header's end, and the pull-request refresh from the
- * Effort card's red ! (the stress report has a linked pull request that this
- * source never checks on its own, so the red ! is there).
+ * it belongs to: tokens and cost are sections of the dialog behind Effort's ⓘ,
+ * each panel's unresolved data from the triangle at its header's end, and the
+ * pull-request refresh from the Effort card's red ! (the stress report has a
+ * linked pull request that this source never checks on its own, so the red !
+ * is there). Data coverage and untimed history are on Settings.
  */
 const OVERLAYS = [
-  { name: /^Coverage/, dialog: 'Coverage' },
   { name: /^Effort definition$/, dialog: 'How effort is counted · daily values' },
   { name: 'Pull-request checks need your attention', dialog: 'Refresh pull-request facts' },
 ] as const;
@@ -1107,9 +1104,9 @@ for (const [width, height, scheme] of [[1120, 720, 'light']] as const)
       expectFits(await page.evaluate(geometry), other[0], other[1]);
       await page.setViewportSize({ width, height });
       await within(dialog, width, height);
-      if (title === 'Coverage')
+      if (title === 'How effort is counted · daily values')
         await page.screenshot({
-          path: info.outputPath(`overlay-${title.split(' ')[0]}-${width}-${scheme}.png`),
+          path: info.outputPath(`overlay-effort-${width}-${scheme}.png`),
         });
       await page.keyboard.press('Escape');
       await expect(dialog).toHaveCount(0);
@@ -1382,7 +1379,7 @@ test('a window too short for the page scrolls the outlet and keeps three rows in
   expect(g.effort!.plot).toBeGreaterThanOrEqual(50);
   expect(g.rows.lanes).toBeGreaterThanOrEqual(3);
   expectLayers(g);
-  const sessions = page.getByRole('link', { name: 'View sessions' });
+  const sessions = page.getByRole('link', { name: 'All sessions & filters' });
   await sessions.scrollIntoViewIfNeeded();
   await expect(sessions).toBeInViewport();
 });

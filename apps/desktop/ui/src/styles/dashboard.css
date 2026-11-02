@@ -920,14 +920,6 @@
 .xt-dash-empty {
   margin: 8px 0;
 }
-.xt-dash-link {
-  color: var(--accent-ink);
-  font:
-    400 10.5px 'Geist Mono',
-    Menlo,
-    monospace;
-}
-.xt-dash-link:focus-visible,
 .xt-dash-inline-metric:focus-visible,
 .xt-dash-details summary:focus-visible {
   outline: 2px solid var(--accent);
@@ -1054,7 +1046,7 @@
   font-size: 13px;
   font-weight: 700;
 }
-/* Coverage's untimed history reads as one more section of the dialog, not a boxed notice. */
+/* Data coverage's untimed history reads as one more section, not a boxed notice. */
 .xt-coverage-untimed.xt-untimed {
   display: grid;
   gap: 8px;

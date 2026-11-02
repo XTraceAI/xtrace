@@ -280,7 +280,8 @@ it('ignores old-source completions after the provider replaces the query runtime
 
 it('does not request a full report for a header first opened off Dashboard or after navigating away', async () => {
   const data = source();
-  mount(data, '/settings');
+  // Scores reads no Dashboard report of its own (Settings does, for Data coverage).
+  mount(data, '/scores');
   await screen.findByText('fixture F1');
   await settle();
   expect(data.dashboard).not.toHaveBeenCalled();
@@ -289,7 +290,7 @@ it('does not request a full report for a header first opened off Dashboard or af
   await loaded();
   await settle();
   expect(data.dashboard).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Scores' }));
   await settle();
   expect(screen.queryByTestId('report-period')).toBeNull();
   expect(data.dashboard).toHaveBeenCalledTimes(1);
