@@ -1,8 +1,16 @@
 import { expect, test } from '@playwright/test';
 
+// The fixture holds each compaction and live read for 600 ms, and a slow CI
+// runner can spend most of the default 5 s building the dashboard before the
+// first read even starts. A wait for such a read gets a longer limit; it still
+// fails if the count never arrives.
+const delayedRead = { timeout: 15_000 };
+
 test('dashboard scrolling keeps resolved compactions, ticks and running glow during delayed reads', async ({
   page,
 }) => {
+  // Room for both delayed-read waits within the test's own limit.
+  test.slow();
   await page.setViewportSize({ width: 1120, height: 720 });
   await page.goto('/e2e/compactions.html?view=dashboard&readDelay=600');
   const first = page.locator('.xt-data-row').filter({
@@ -11,7 +19,9 @@ test('dashboard scrolling keeps resolved compactions, ticks and running glow dur
   const later = page.locator('.xt-data-row').filter({
     has: page.locator('[data-visible-id="compaction-20"]'),
   });
-  await expect(first.getByLabel('Recorded compactions: 1', { exact: true })).toBeVisible();
+  await expect(first.getByLabel('Recorded compactions: 1', { exact: true })).toBeVisible(
+    delayedRead,
+  );
   await expect(first.getByRole('img', { name: 'Codex · Running' })).toBeVisible();
   await expect(first.locator('.xt-compaction-tick')).toHaveCount(1);
   // This row has not been read yet: learning its count after the wheel proves
@@ -36,7 +46,9 @@ test('dashboard scrolling keeps resolved compactions, ticks and running glow dur
   await scroll.hover();
   await page.mouse.wheel(0, 400);
   await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  await expect(later.getByLabel('Recorded compactions: 20', { exact: true })).toBeInViewport();
+  await expect(later.getByLabel('Recorded compactions: 20', { exact: true })).toBeInViewport(
+    delayedRead,
+  );
   // Check the actual nested scroll area, not just movement of its scrollbar.
   await expect
     .poll(() =>
