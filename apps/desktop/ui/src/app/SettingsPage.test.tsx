@@ -305,6 +305,95 @@ it('says the controls are unavailable when the source has no app database', asyn
   await act(async () => {});
 });
 
+/** The Settings card titled `title`. */
+const card = (title: string) =>
+  screen.getByRole('heading', { level: 2, name: title }).closest('section')!;
+
+it('shows the data coverage of the selected range in full, untimed history included', async () => {
+  const { data } = source();
+  const seven = exported.dashboards.find((report) => report.window.days === 7)!;
+  const dashboard = vi.fn(async (days: number) => ({
+    ...structuredClone(seven),
+    // Synthetic untimed history: F1 indexes nothing without a timestamp.
+    untimed_history: {
+      records: 9,
+      by_surface: [{ host: 'claude' as const, surface: 'cli', records: 9 }],
+    },
+    window: { ...seven.window, days },
+  }));
+  await mount({ ...data, dashboard });
+  await screen.findByTestId('usage-coverage');
+  const coverage = card('Data coverage');
+  // No range control here, so the card names the range it read: the default one.
+  expect(dashboard).toHaveBeenCalledWith(7);
+  expect(within(coverage).getByText(/^last 7 days · Sep 1/)).toBeTruthy();
+  // Shown inline, not behind a dialog, with its definition beside the title.
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(within(coverage).getByRole('button', { name: 'Data coverage definition' })).toBeTruthy();
+  expect(
+    within(coverage)
+      .getAllByRole('heading', { level: 3 })
+      .map((heading) => heading.textContent),
+  ).toEqual([
+    'Token measurement',
+    'Session capture',
+    'Hands-off timestamp health',
+    'Untimed history',
+  ]);
+  expect(within(coverage).getByTestId('usage-coverage').textContent).toContain(
+    '100% of sessions (1 of 1',
+  );
+  const untimed = within(coverage).getByTestId('coverage-untimed');
+  expect(within(untimed).getByTestId('untimed-summary').textContent).toBe(
+    '9 records · outside dated measurements',
+  );
+  expect(within(untimed).getByTestId('untimed-count').textContent).toContain(
+    '9 records in all indexed history',
+  );
+});
+
+it('says when data coverage is being read or could not be read', async () => {
+  const { data } = source();
+  let fail!: (error: Error) => void;
+  const pending = new Promise<never>((_, reject) => (fail = reject));
+  await mount({ ...data, dashboard: () => pending });
+  expect(within(card('Data coverage')).getByRole('status').textContent).toBe(
+    'Reading data coverage…',
+  );
+  await act(async () => fail(new Error('Synthetic report failure')));
+  await waitFor(() =>
+    expect(within(card('Data coverage')).getByRole('alert').textContent).toBe(
+      'Data coverage could not be loaded. Retry',
+    ),
+  );
+});
+
+it('replaces shown coverage with the error and Retry when a refetch fails', async () => {
+  const { data, listeners } = source();
+  const seven = exported.dashboards.find((report) => report.window.days === 7)!;
+  let failing = false;
+  const dashboard = vi.fn(async () => {
+    if (failing) throw new Error('Synthetic report failure');
+    return structuredClone(seven);
+  });
+  await mount({ ...data, dashboard });
+  await screen.findByTestId('usage-coverage');
+  expect(within(card('Data coverage')).getByText(/^last 7 days · Sep 1/)).toBeTruthy();
+  // A data event re-reads the report while Settings is open, and that read fails.
+  failing = true;
+  await waitFor(() => expect(listeners.get(events.contentPurged)).toBeDefined());
+  act(() => listeners.get(events.contentPurged)!());
+  const alert = await within(card('Data coverage')).findByRole('alert', {}, { timeout: 3000 });
+  // The old coverage, and the dates it was read for, are not left up as if current.
+  expect(alert.textContent).toBe('Data coverage could not be loaded. Retry');
+  expect(screen.queryByTestId('usage-coverage')).toBeNull();
+  expect(within(card('Data coverage')).queryByText(/Sep 1/)).toBeNull();
+  failing = false;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+  await screen.findByTestId('usage-coverage');
+  expect(within(card('Data coverage')).queryByRole('alert')).toBeNull();
+});
+
 it('refreshes content views when the committed-purge event arrives', async () => {
   expect(eventPrefixes[events.contentPurged]).toEqual(['sessions', 'metrics', 'grading']);
   vi.useFakeTimers();

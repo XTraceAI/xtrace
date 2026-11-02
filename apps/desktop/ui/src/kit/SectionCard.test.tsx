@@ -31,3 +31,15 @@ it('renders named section, definition, metadata and caller slots with 36/40px he
   expect((section.querySelector('.xt-section-panel') as HTMLElement).style.padding).toBe('20px');
   expect(screen.queryByText('Footer')).toBeNull();
 });
+
+it('draws a title note after the title without changing the card name', () => {
+  render(
+    <SectionCard title="Sessions" titleNote="(last 48 hours)">
+      <p>Content</p>
+    </SectionCard>,
+  );
+  const section = screen.getByRole('region', { name: 'Sessions' });
+  const note = section.querySelector('.xt-section-title-note')!;
+  expect(note.textContent).toBe('(last 48 hours)');
+  expect(note.previousElementSibling?.tagName).toBe('H2');
+});

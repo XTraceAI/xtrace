@@ -5,6 +5,7 @@ import '../styles/metrics.css';
 
 export function SectionCard({
   title,
+  titleNote,
   ruleId,
   meta,
   metaFull,
@@ -15,6 +16,11 @@ export function SectionCard({
   footer,
 }: {
   title: string;
+  /**
+   * Drawn right after the title in its font but not in capitals, e.g. a
+   * window such as "(last 48 hours)". The card's name stays the title alone.
+   */
+  titleNote?: string;
   ruleId?: RuleId;
   meta?: string;
   /**
@@ -35,6 +41,7 @@ export function SectionCard({
         <h2 id={id} title={title}>
           {title}
         </h2>
+        {titleNote && <span className="xt-section-title-note">{titleNote}</span>}
         {ruleId && <RuleChip ruleId={ruleId} subject={title} />}
         {meta && (
           <span className="xt-section-meta" title={metaFull ?? meta}>

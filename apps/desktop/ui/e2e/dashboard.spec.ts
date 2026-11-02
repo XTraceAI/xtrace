@@ -110,7 +110,9 @@ for (const scheme of ['light'] as const)
       ).toEqual(labels);
       for (const name of ['Effort definition', 'Overview definition', 'Sessions definition'])
         expect(order).toContain(name);
-      expect(order.some((name) => name.startsWith('Coverage'))).toBe(true);
+      // Data coverage is on Settings, not in the Sessions card's header.
+      expect(order.some((name) => /coverage/i.test(name))).toBe(false);
+      expect(order.some((name) => name.startsWith('All sessions & filters'))).toBe(true);
       expect(order.join(' | ')).not.toMatch(
         /Agent \/ human hours|Caught by your rules|Agent hours|Human-in-the-loop|Agent to human ratio|Daily values/,
       );
@@ -141,7 +143,9 @@ test('hovering the favorite model lists its share of output tokens', async ({ pa
   );
 });
 
-test('keyboard focus opens tile definitions and reaches the Sessions link', async ({ page }) => {
+test('keyboard focus opens tile definitions and reaches the all-sessions link', async ({
+  page,
+}) => {
   await open(page, 1120, 720, 'dark');
   const tile = page.getByRole('button', { name: 'Hands-off median definition' });
   await tile.focus();
@@ -149,7 +153,11 @@ test('keyboard focus opens tile definitions and reaches the Sessions link', asyn
   await expect(tip).toContainText('The median time an agent worked on its own');
   await expect(tip).not.toContainText('M-09');
   await page.keyboard.press('Escape');
-  const link = page.getByRole('link', { name: 'View sessions' });
+  const link = page.getByRole('link', { name: 'All sessions & filters' });
+  // Drawn as underlined link text, not a button.
+  expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toBe(
+    'underline',
+  );
   await link.focus();
   await expect(link).toBeFocused();
   await link.press('Enter');

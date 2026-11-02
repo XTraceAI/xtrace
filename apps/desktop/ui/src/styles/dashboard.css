@@ -926,6 +926,8 @@
     400 10.5px 'Geist Mono',
     Menlo,
     monospace;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .xt-dash-link:focus-visible,
 .xt-dash-inline-metric:focus-visible,
@@ -1054,7 +1056,7 @@
   font-size: 13px;
   font-weight: 700;
 }
-/* Coverage's untimed history reads as one more section of the dialog, not a boxed notice. */
+/* Data coverage's untimed history reads as one more section, not a boxed notice. */
 .xt-coverage-untimed.xt-untimed {
   display: grid;
   gap: 8px;

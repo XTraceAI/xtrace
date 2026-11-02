@@ -246,6 +246,16 @@ button.xt-rule-chip {
   letter-spacing: 0.06em;
   white-space: nowrap;
 }
+.xt-section-title-note {
+  flex-shrink: 0;
+  margin-left: -2px;
+  color: var(--ink);
+  font:
+    400 11px 'Geist Mono',
+    Menlo,
+    monospace;
+  white-space: nowrap;
+}
 .xt-section-meta {
   flex: 1;
   min-width: 0;

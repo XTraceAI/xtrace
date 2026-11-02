@@ -7,7 +7,6 @@ import { percent, tokens as formatTokens } from '../../kit/format';
 import { MetricCell } from '../../kit/MetricCell';
 import { gatePercentText, gateVerdict } from '../pr-analytics';
 import { DefinitionInfo } from './DefinitionInfo';
-import { DetailDialog } from './DetailDialog';
 import {
   captureGapText,
   captureText,
@@ -25,7 +24,7 @@ import { UntimedBody, untimedSummary } from './UntimedNotice';
 import { NO_MODEL } from '../session-context';
 
 /** The measurement detail a viewer has open, if any. */
-export type DetailKey = 'method' | 'coverage';
+export type DetailKey = 'method';
 
 /** Which detail is open; kept by the page while another range loads. */
 export const DetailContext = createContext<{
@@ -99,40 +98,15 @@ function MeasurementSection({
 }
 
 /**
- * Coverage, from the Sessions card's header: what the range's numbers could
+ * Data coverage, shown in full on Settings: what the range's numbers could
  * measure — token measurement and its fixed 14-day gate, session capture,
  * hands-off timestamp health — and, when the index holds any, the history
- * with no timestamp that no dated number includes. The control reads as one
- * word; its name also states the capture inventory when it is known and not complete,
- * token measurement when it misses sessions, has gaps or fails its 14-day
- * gate, and the untimed count when there is one, so the exception is heard
- * without opening it.
+ * with no timestamp that no dated number includes.
  */
-export function CoverageDetail({ report }: { report: DashboardMetrics }) {
-  const { untimed_history: untimed, usage_gate_14d: gate } = report;
-  const usage = report.usage_coverage.total;
-  const inventory = inventoryState[report.capture_inventory];
-  const gaps = gapsText(usage);
-  const flags = [
-    report.capture_inventory === 'fresh_complete' || report.capture_inventory === 'unknown'
-      ? null
-      : inventory.label,
-    usage.measured < usage.sessions || gaps
-      ? `tokens measured for ${usage.measured}/${plural(usage.sessions, 'session')}${gaps ? ` (${gaps})` : ''}`
-      : null,
-    gate.passes === false ? 'trailing 14 days below the 90% gate' : null,
-    untimed.records > 0 ? `${plural(untimed.records, 'untimed record')}` : null,
-  ].filter(Boolean);
+export function DataCoverage({ report }: { report: DashboardMetrics }) {
+  const { untimed_history: untimed } = report;
   return (
-    <DetailDialog
-      {...useDetail('coverage')}
-      trigger="Coverage"
-      label={flags.length > 0 ? `Coverage: ${flags.join(', ')}` : undefined}
-      title="Coverage"
-      rule="M-18"
-      meta={`${report.capture_inventory === 'unknown' ? '' : `${inventory.label} · `}tokens measured for ${usage.measured}/${plural(usage.sessions, 'session')}`}
-      testId="coverage"
-    >
+    <div className="xt-coverage">
       <CoverageBody report={report} />
       {/* This history is in no day of any range, so it changes none of the
           dated numbers; it is stated with the other measurement limits, and
@@ -150,7 +124,7 @@ export function CoverageDetail({ report }: { report: DashboardMetrics }) {
           <UntimedBody untimed={untimed} />
         </section>
       )}
-    </DetailDialog>
+    </div>
   );
 }
 
@@ -235,7 +209,7 @@ function CoverageBody({ report }: { report: DashboardMetrics }) {
   const { usage_coverage: usage, usage_gate_14d: gate } = report;
   const inventory = inventoryState[report.capture_inventory];
   return (
-    <div className="xt-coverage">
+    <>
       <section aria-labelledby="xt-usage-coverage">
         <h3 id="xt-usage-coverage">Token measurement</h3>
         <p className="xt-dash-line" data-testid="usage-coverage">
@@ -325,6 +299,6 @@ function CoverageBody({ report }: { report: DashboardMetrics }) {
           </ul>
         )}
       </section>
-    </div>
+    </>
   );
 }
