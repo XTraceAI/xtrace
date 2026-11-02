@@ -107,10 +107,6 @@
   background: var(--surface);
   color: var(--secondary);
 }
-/* A link drawn as a button (a router `Link` given the kit's classes). */
-a.xt-button {
-  text-decoration: none;
-}
 .xt-button[data-variant='ghost'] {
   background: transparent;
   color: var(--secondary);

@@ -220,12 +220,9 @@ function DashboardReport({
         right={
           <span className="xt-dash-card-actions">
             <DefinitionInfo ruleId="M-05" name="Sessions" context={laneDefinition(report)} />
-            {/* A link drawn as the kit's outlined button. Explicit tab stop, as
-                the kit's buttons are: WebKit tabs past a link without it. */}
+            {/* Explicit tab stop: WebKit tabs past a link without it. */}
             <Link
-              className="xt-button"
-              data-variant="outline"
-              style={{ height: 28 }}
+              className="xt-dash-link"
               tabIndex={0}
               to={`/sessions?${sessionParams.range}=${range}`}
             >

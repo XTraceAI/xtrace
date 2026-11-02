@@ -328,11 +328,10 @@ it('renders the generated F1 report with honest unknowns and the shared sidebar 
   // Account limits remain separate from the Dashboard's recorded tokens.
   expect(screen.getByRole('region', { name: 'Account usage' })).toBeTruthy();
   // Sessions measures over the selected window, so the link into it carries
-  // the range the Dashboard was showing. It is drawn as the kit's outlined button.
+  // the range the Dashboard was showing. It is drawn as underlined link text.
   const all = within(card('Sessions')).getByRole('link', { name: 'All sessions & filters' });
   expect(all.getAttribute('href')).toBe('/sessions?range=7d');
-  expect(all.classList.contains('xt-button')).toBe(true);
-  expect(all.dataset.variant).toBe('outline');
+  expect(all.classList.contains('xt-dash-link')).toBe(true);
 });
 
 it('shows F2 concurrency and overlapping lanes on the fixed recent axis', async () => {
