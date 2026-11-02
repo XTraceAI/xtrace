@@ -422,6 +422,16 @@ test('the SDK cases target the candidate archive from the earlier folder and ver
   assert.equal(versions.target, release.version);
   assert.notEqual(versions.mismatch, versions.old);
   assert.notEqual(versions.mismatch, versions.target);
+  // The SDK offers only a newer version; an older one never reaches the
+  // signed-version check this case is for.
+  const parts = (version) => version.split('.').map(Number);
+  const newer = (a, b) => {
+    const [x, y] = [parts(a), parts(b)];
+    const index = x.findIndex((part, i) => part !== y[i]);
+    return index >= 0 && x[index] > y[index];
+  };
+  assert.ok(newer(versions.mismatch, versions.old));
+  assert.ok(newer(versions.target, versions.old));
   assert.equal(fixture.archive, release.archive);
   assert.equal(fixture.root, 'XTrace.app');
   for (const key of ['bytes', 'sha256', 'signatureBytes', 'signatureSha256', 'members'])

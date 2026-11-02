@@ -2,22 +2,20 @@ import { basename } from 'node:path';
 import { release, sha256, appInventory } from './hosted-release.mjs';
 import { requireProbeHost } from './hosted-validation.mjs';
 
-// The published 0.1.9 baseline, installed as "XTrace.app". Its public archive
+// The published 0.2.0 baseline, installed as "XTrace.app". Its public archive
 // and all 102 paths/bytes/modes were checked independently against its DMG.
-// It was published before the repository rename; its public archive is still
-// served under the current repository name.
 export const previousRelease = Object.freeze({
   identifier: release.identifier,
   bundle: '/Applications/XTrace.app',
   team: release.team,
   inventoryEntries: 102,
-  version: '0.1.9',
-  tag: 'v0.1.9',
-  source: '8bbc6c96d56780337cdc1644a0deebfde56514f1',
-  archive: 'XTrace-0.1.9-macos-arm64.app.tar.gz',
-  bytes: 12597709,
-  sha256: '05f73f2f7af4b5b0b698b4603ad3b97cb1487a1b6fa3b28104bd9d43f6b1238e',
-  inventorySha256: '7e4a76b78bd3d83a7c9474b26a7e1e2b0ba1e2d1dcc62e8f521698456c52420f',
+  version: '0.2.0',
+  tag: 'v0.2.0',
+  source: '65efa43ae1ae1621e32a4beaf5cd44eebebb9070',
+  archive: 'XTrace-0.2.0-macos-arm64.app.tar.gz',
+  bytes: 12766674,
+  sha256: '545f8a5afaeb062cbd0a77359aae2f733768aa2b59bc77fda48be2eda32a7698',
+  inventorySha256: '84200b77548c0ee50ea7c221caa5e6c994aaded9f0328f04ce2ac258cb6be952',
 });
 export const updateBudget = Object.freeze({ workMs: 14 * 60_000, cleanupMs: 2 * 60_000 });
 export const productionFeed =
@@ -59,7 +57,7 @@ export function verifyProductionFeed(bytes, pins = release) {
   // Defense in depth: the pinned bytes must also name this version and only
   // the public archive of its own tag under the current repository name. (The
   // published 0.1.9 feed predates the rename and names XTraceAI/xtrace-desktop;
-  // the 0.2.0 feed names XTraceAI/xtrace.)
+  // the 0.2.0 and 0.2.1 feeds name XTraceAI/xtrace.)
   const feed = JSON.parse(bytes);
   if (
     feed.version !== pins.version ||
