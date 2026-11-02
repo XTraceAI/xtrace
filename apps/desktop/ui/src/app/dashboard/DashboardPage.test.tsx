@@ -1072,10 +1072,12 @@ it('says which sessions the card lists, and that every number in a row is the wh
   mount(nativeSource(() => f1()));
   await loaded();
   const card = screen.getByRole('region', { name: 'Sessions' });
-  expect(card.querySelector('.xt-section-meta')!.textContent).toBe('Active in the last 48 hours');
+  // The window is said right after the title, which stays the card's name.
+  expect(card.querySelector('.xt-section-title-note')!.textContent).toBe('(last 48 hours)');
+  expect(card.querySelector('.xt-section-meta')).toBeNull();
   act(() => within(card).getByRole('button', { name: 'Sessions definition' }).focus());
   const tip = await screen.findByRole('tooltip');
-  // The card's meta already says which sessions are listed; the note says
+  // The card's title already says which sessions are listed; the note says
   // only what the meta does not: whose numbers the row shows.
   expect(tip.querySelector('.xt-rule-context')!.textContent).toBe(
     "Each row's numbers cover the whole session; only the Activity bars stop at 48 hours.",

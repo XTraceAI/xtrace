@@ -1811,8 +1811,8 @@ describe('sessions hidden while their check is unfinished', () => {
       ),
     ).toBeTruthy();
     const full =
-      'Active in the last 48 hours · 2 hidden: check not finished. 2 sessions are hidden because XTrace has not finished checking whether another session started them.';
-    expect(shownMeta()).toBe('Active in the last 48 hours · 2 hidden: check not finished');
+      '2 hidden: check not finished. 2 sessions are hidden because XTrace has not finished checking whether another session started them.';
+    expect(shownMeta()).toBe('2 hidden: check not finished');
     expect(meta().getAttribute('title')).toBe(full);
     // A screen reader reads the full sentence in place of the short line.
     expect(readMeta()).toBe(full);
@@ -1830,9 +1830,9 @@ describe('sessions hidden while their check is unfinished', () => {
     mount(data, '/dashboard');
     await screen.findByRole('table', { name: 'Session lanes' });
     expect(laneRows().map(([name]) => name)).toEqual(['Listed session']);
-    expect(shownMeta()).toBe('Active in the last 48 hours · 1 hidden: check not finished');
+    expect(shownMeta()).toBe('1 hidden: check not finished');
     expect(readMeta()).toBe(
-      'Active in the last 48 hours · 1 hidden: check not finished. 1 session is hidden because XTrace has not finished checking whether another session started it.',
+      '1 hidden: check not finished. 1 session is hidden because XTrace has not finished checking whether another session started it.',
     );
   });
 
@@ -1843,8 +1843,9 @@ describe('sessions hidden while their check is unfinished', () => {
     mount(data, '/dashboard');
     await screen.findByRole('table', { name: 'Session lanes' });
     expect(within(laneTable()).getByText(/^No session to list in the last 48 hours/)).toBeTruthy();
-    expect(meta().textContent).toBe('Active in the last 48 hours');
-    expect(meta().getAttribute('title')).toBe('Active in the last 48 hours');
-    expect(meta().querySelector('[aria-hidden="true"], .sr-only')).toBeNull();
+    // Nothing is hidden, so no subtitle; the window is said beside the title.
+    const card = screen.getByRole('region', { name: 'Sessions' });
+    expect(card.querySelector('.xt-section-meta')).toBeNull();
+    expect(card.querySelector('.xt-section-title-note')!.textContent).toBe('(last 48 hours)');
   });
 });

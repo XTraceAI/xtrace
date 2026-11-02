@@ -133,12 +133,10 @@ test('the Dashboard Sessions card says why it is empty and notes the hidden sess
   ).toBeVisible();
   const meta = card.locator('.xt-section-meta');
   const full =
-    'Active in the last 48 hours · 2 hidden: check not finished. 2 sessions are hidden because XTrace has not finished checking whether another session started them.';
+    '2 hidden: check not finished. 2 sessions are hidden because XTrace has not finished checking whether another session started them.';
   // The short line is drawn; the full sentence is its tooltip and what a
   // screen reader reads in its place.
-  await expect(meta.locator('[aria-hidden="true"]')).toHaveText(
-    'Active in the last 48 hours · 2 hidden: check not finished',
-  );
+  await expect(meta.locator('[aria-hidden="true"]')).toHaveText('2 hidden: check not finished');
   await expect(meta.locator('[aria-hidden="true"]')).toBeVisible();
   await expect(meta.locator('.sr-only')).toHaveText(full);
   await expect(meta).toHaveAttribute('title', full);

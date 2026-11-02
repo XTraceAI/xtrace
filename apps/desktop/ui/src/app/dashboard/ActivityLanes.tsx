@@ -112,16 +112,19 @@ export const lanesStillChecking = (report: DashboardMetrics) => {
   );
 };
 
+/** Which sessions the card lists, said beside the card's title. */
+export const laneTitleNote = (report: DashboardMetrics) => `(last ${laneHours(report)} hours)`;
+
 /**
- * Which sessions the card lists, said where the card is named, with how many
- * it leaves out while their check is unfinished, if any: a short line, and,
- * when some are left out, the same in full for its tooltip and screen readers.
+ * How many sessions the card leaves out while their check is unfinished, if
+ * any: a short line, and the same in full for its tooltip and screen readers.
  */
-export const laneSubtitle = (report: DashboardMetrics): { text: string; full?: string } => {
+export const laneSubtitle = (
+  report: DashboardMetrics,
+): { text: string; full: string } | undefined => {
   const hidden = lanesStillChecking(report);
-  const listed = `Active in the last ${laneHours(report)} hours`;
-  if (hidden === 0) return { text: listed };
-  const text = `${listed} · ${checkingHiddenShort(hidden)}`;
+  if (hidden === 0) return undefined;
+  const text = checkingHiddenShort(hidden);
   return { text, full: `${text}. ${checkingHidden(hidden)}` };
 };
 

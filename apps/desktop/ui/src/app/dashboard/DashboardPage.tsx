@@ -12,7 +12,7 @@ import { RulePopover } from '../../kit/RulePopover';
 import { SectionCard } from '../../kit/SectionCard';
 import type { TimeRange } from '../../kit/TopBar';
 import { sessionParams } from '../session-search';
-import { ActivityLanes, laneDefinition, laneSubtitle } from './ActivityLanes';
+import { ActivityLanes, laneDefinition, laneSubtitle, laneTitleNote } from './ActivityLanes';
 import { DashCard } from './DashCard';
 import { DashboardDetailsProvider } from './DashboardDetailsProvider';
 import { UsageMeasurements, useDetail } from './DashboardDetails';
@@ -215,8 +215,9 @@ function DashboardReport({
 
       <SectionCard
         title="Sessions"
-        meta={subtitle.text}
-        metaFull={subtitle.full}
+        titleNote={laneTitleNote(report)}
+        meta={subtitle?.text}
+        metaFull={subtitle?.full}
         right={
           <span className="xt-dash-card-actions">
             <DefinitionInfo ruleId="M-05" name="Sessions" context={laneDefinition(report)} />
