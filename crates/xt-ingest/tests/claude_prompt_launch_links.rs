@@ -297,6 +297,8 @@ fn settle(home: &Home, store: &mut Store, backlog: &mut BashBacklog) -> PromptPr
         total.ambiguous += p.ambiguous;
         total.refused += p.refused;
         total.withdrawn += p.withdrawn;
+        total.other_input += p.other_input;
+        total.held += p.held;
         total.changed += p.changed;
     }
     panic!("never settled: {total:?}");
@@ -474,48 +476,96 @@ fn a_child_saved_before_the_launch_abstains() {
     unlinked(&home, &store, MAIN_CHILD);
 }
 
+/// Launches and their children, minutes apart: each launch at `(caller,
+/// call, offset)` and each child at `(native, born)`, all of `PROMPT`.
+fn launches_and_children(home: &Home, launches: &[(&str, &str, i64)], children: &[(&str, i64)]) {
+    for (caller, call, offset) in launches {
+        write_parent(home, caller, call, *offset, &main_command(PROMPT));
+    }
+    for (native, born) in children {
+        write_child(home, native, *born, PROMPT);
+    }
+}
+
+const MINUTE: i64 = 60_000;
+const OTHER_CALL: &str = "toolu_01SyntheticOtherLaunch";
+
 #[test]
-fn two_launches_of_one_prompt_link_nothing() {
-    // Two parents each launch the prompt before the one child.
+fn a_retried_prompt_links_each_child_to_the_launch_just_before_it() {
+    // A launch at 9:00 and its retry at 9:10, children at 9:00:05 and
+    // 9:10:05: each child is its closest launch's, and only that one's.
     let home = Home::new();
-    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
-    write_parent(
+    launches_and_children(
         &home,
-        OTHER_PARENT,
-        "toolu_01SyntheticOtherLaunch",
-        1_000,
-        &main_command(PROMPT),
+        &[
+            (PARENT, MAIN_CALL, 0),
+            (OTHER_PARENT, OTHER_CALL, 10 * MINUTE),
+        ],
+        &[(MAIN_CHILD, 5_000), (EXTRA, 10 * MINUTE + 5_000)],
     );
-    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
     let (store, total) = run(&home);
-    assert_eq!((total.launches, total.linked), (2, 0), "{total:?}");
-    assert_eq!(total.ambiguous, 2, "{total:?}");
-    unlinked(&home, &store, MAIN_CHILD);
-    // Two launches and two children of one prompt: each launch could have
-    // made either, so neither is linked.
+    assert_eq!(
+        (total.launches, total.linked, total.ambiguous),
+        (2, 2, 0),
+        "{total:?}"
+    );
+    assert_eq!(
+        facts(&store, MAIN_CHILD),
+        [prompt_fact(PARENT, MAIN_CALL, true)]
+    );
+    assert_eq!(
+        facts(&store, EXTRA),
+        [prompt_fact(OTHER_PARENT, OTHER_CALL, true)]
+    );
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+    assert_eq!(
+        shown(&home, &store, EXTRA),
+        (true, Some(session(&store, OTHER_PARENT)))
+    );
+    // Two launches before one child: the later one is its launch.
     let home = Home::new();
-    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
-    write_parent(
+    launches_and_children(
         &home,
-        OTHER_PARENT,
-        "toolu_01SyntheticOtherLaunch",
-        10_000,
-        &main_command(PROMPT),
+        &[(PARENT, MAIN_CALL, 0), (OTHER_PARENT, OTHER_CALL, 1_000)],
+        &[(MAIN_CHILD, 4_800)],
     );
-    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
-    write_child(&home, EXTRA, 14_800, PROMPT);
     let (store, total) = run(&home);
-    assert_eq!(total.linked, 0, "{total:?}");
-    unlinked(&home, &store, MAIN_CHILD);
-    unlinked(&home, &store, EXTRA);
+    assert_eq!((total.launches, total.linked), (2, 1), "{total:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, OTHER_PARENT)))
+    );
 }
 
 #[test]
-fn one_launch_with_two_matching_children_links_nothing() {
+fn two_launches_at_the_same_moment_link_nothing() {
     let home = Home::new();
-    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
-    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
-    write_child(&home, EXTRA, 9_000_000, PROMPT);
+    launches_and_children(
+        &home,
+        &[(PARENT, MAIN_CALL, 0), (OTHER_PARENT, OTHER_CALL, 0)],
+        &[(MAIN_CHILD, 4_800)],
+    );
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.ambiguous),
+        (2, 0, 2),
+        "{total:?}"
+    );
+    unlinked(&home, &store, MAIN_CHILD);
+}
+
+#[test]
+fn one_launch_with_two_children_in_its_hour_links_nothing() {
+    // No second launch between them: either could be the launch's child.
+    let home = Home::new();
+    launches_and_children(
+        &home,
+        &[(PARENT, MAIN_CALL, 0)],
+        &[(MAIN_CHILD, 4_800), (EXTRA, 40 * MINUTE)],
+    );
     let (store, total) = run(&home);
     assert_eq!(
         (total.launches, total.linked, total.ambiguous),
@@ -523,6 +573,35 @@ fn one_launch_with_two_matching_children_links_nothing() {
         "{total:?}"
     );
     unlinked(&home, &store, MAIN_CHILD);
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn a_session_more_than_an_hour_after_the_launch_is_not_its_child() {
+    // Alone two hours later: no link.
+    let home = Home::new();
+    launches_and_children(&home, &[(PARENT, MAIN_CALL, 0)], &[(EXTRA, 120 * MINUTE)]);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.ambiguous),
+        (1, 0, 0),
+        "{total:?}"
+    );
+    unlinked(&home, &store, EXTRA);
+    // Beside the launch's own child, it does not stop that link; an hour
+    // exactly is still inside.
+    let home = Home::new();
+    launches_and_children(
+        &home,
+        &[(PARENT, MAIN_CALL, 0)],
+        &[(MAIN_CHILD, 60 * MINUTE), (EXTRA, 120 * MINUTE)],
+    );
+    let (store, total) = run(&home);
+    assert_eq!((total.linked, total.ambiguous), (1, 0), "{total:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
     unlinked(&home, &store, EXTRA);
 }
 
@@ -578,12 +657,13 @@ fn a_launch_found_later_that_could_have_made_the_child_withdraws_its_link() {
     write_child(&home, MAIN_CHILD, 4_800, PROMPT);
     let (mut store, total) = run(&home);
     assert_eq!(total.linked, 1, "{total:?}");
-    // Another session's earlier launch of the same prompt is saved later.
+    // Another session's launch of the same prompt, made after that launch
+    // and before the child, is saved later: the child's closest launch.
     write_parent(
         &home,
         OTHER_PARENT,
         "toolu_01SyntheticOtherLaunch",
-        -1_000,
+        1_000,
         &main_command(PROMPT),
     );
     scan(&home, &mut store);
@@ -678,8 +758,8 @@ fn a_launch_given_other_input_links_nothing_but_still_stops_a_link() {
         );
         unlinked(&home, &store, MAIN_CHILD);
     }
-    // Beside a launch that reads only its own input, it is still a launch
-    // that could have made the child: neither links.
+    // Made after a launch that reads only its own input, it is the child's
+    // closest launch: neither links.
     let home = Home::new();
     write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
     write_parent(
@@ -692,8 +772,8 @@ fn a_launch_given_other_input_links_nothing_but_still_stops_a_link() {
     write_child(&home, MAIN_CHILD, 4_800, PROMPT);
     let (store, total) = run(&home);
     assert_eq!(
-        (total.launches, total.linked, total.ambiguous),
-        (2, 0, 2),
+        (total.launches, total.linked, total.other_input),
+        (2, 0, 1),
         "{total:?}"
     );
     unlinked(&home, &store, MAIN_CHILD);
@@ -755,12 +835,16 @@ fn an_unreadable_caller_file_or_folder_links_nothing_until_it_is_read() {
     let (mut store, mut backlog, total) = run_after(&home, || set_mode(&helper, 0o000));
     assert_eq!(total.linked, 0, "{total:?}");
     unlinked(&home, &store, MAIN_CHILD);
-    // Readable again and read after the next import: the rival is seen.
+    // Readable again and read after the next import: the rival, made
+    // after the parent's launch, is the child's launch.
     set_mode(&helper, 0o644);
     backlog.add_sessions([PARENT]);
     let again = settle(&home, &mut store, &mut backlog);
-    assert_eq!((again.linked, again.ambiguous), (0, 2), "{again:?}");
-    unlinked(&home, &store, MAIN_CHILD);
+    assert_eq!(again.linked, 1, "{again:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, OTHER_PARENT)))
+    );
 
     // The same with the helper folder that cannot be listed.
     let home = Home::new();

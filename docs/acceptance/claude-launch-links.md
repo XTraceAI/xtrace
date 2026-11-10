@@ -320,12 +320,20 @@ Schema 32 adds the evidence kind `claude_prompt_launch`, with the witness
 triggers unchanged, and the saved-warning triggers on the relation table
 recreated): a Claude parent's own `Bash` call, in its transcript or one of
 its helper agents' transcripts, ran a create-mode `claude -p` launch with a
-literal prompt, and exactly one indexed Claude session saved at or after the
-call has exactly that prompt as its first input, with no other launch that
-could have made it and no other session that launch could have made. It
-keeps the exact parent, the child's first input, the call ID and the
-launch's position in the call. A link that later stops being unique is
-withdrawn for good (the fact withheld, the relation conflicted).
+literal prompt, and an indexed Claude session saved at or after the call,
+and no more than one hour after it, has exactly that prompt as its first
+input. When several launches of that prompt fall in the child's hour, the
+child belongs to the latest one before it, so each retry of a prompt keeps
+its own child; launches made at the same moment, or one that named the child
+with `--session-id`, leave it unlinked. The launch it belongs to must keep no
+other session: one launch followed by two sessions of its prompt in its hour,
+with no later launch of that prompt between them, links neither. A launch
+that cannot make a link itself (given other input, or in a file that could
+not be read) still counts as a launch inside the same hour. It keeps the
+exact parent, the child's first input, the call ID and the launch's position
+in the call. A link that later stops being sure is withdrawn for good (the
+fact withheld, the relation conflicted), and its child is not linked to
+another launch afterwards.
 
 A launch makes a link only when it reads no other input: one with a `<`
 redirection or a here-document, or after a `|`, may have sent its child more

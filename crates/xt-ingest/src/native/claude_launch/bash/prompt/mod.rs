@@ -17,10 +17,13 @@
 //!    eligible input (a user record that is not meta, sidechain or a tool
 //!    result) is exactly that prompt, read from its own transcript and
 //!    compared as a digest.
-//! 3. The child's first record is dated at or after the call.
-//! 4. No other launch found could have made that child, and that launch
-//!    could have made no other indexed session. A link that later stops
-//!    being so is withdrawn for good.
+//! 3. The child's first record is dated at or after the call, and no more
+//!    than an hour after it.
+//! 4. Of the launches found that could have made the child, it belongs to
+//!    the latest, the closest send before it (a retry of the same prompt
+//!    keeps its own child); and that launch keeps no other indexed session.
+//!    Launches tied for latest, or one that named the child, leave it
+//!    unlinked. A link that later stops being so is withdrawn for good.
 //! 5. The parent, the session owning the transcript, is exactly one indexed
 //!    Claude user session other than the child.
 //! 6. The launch reads only the input its `Bash` call was given
@@ -58,7 +61,7 @@ mod words;
 use super::super::options::{self, Action};
 use super::super::source::{self, Allowance, Budget, Reserved};
 use super::super::{LaunchLimits, command, rows};
-use super::{OwnFirst, OwnOpening, OwnRead, transcript};
+use super::{BIRTH_WINDOW_MS, OwnFirst, OwnOpening, OwnRead, transcript};
 use serde_json::Value;
 use sha2::Digest;
 use std::{
@@ -221,8 +224,8 @@ pub struct PromptProgress {
     /// Links written, or already stored.
     pub linked: usize,
     pub already: usize,
-    /// Launches with more than one possible child, or whose child another
-    /// launch could have made.
+    /// Launches keeping more than one possible child, or whose child
+    /// another launch keeps too.
     pub ambiguous: usize,
     /// Links the store refused or set aside.
     pub refused: usize,
@@ -887,11 +890,13 @@ fn read_children(
 
 /// Whether a launch `found` in `owner`'s transcripts could have made the
 /// possible child `native`, first saved at `first_record_ms`, if its first
-/// input is the launch's prompt: another session, saved at or after the call,
-/// and the one the launch named, if it named one.
+/// input is the launch's prompt: another session, saved at or after the call
+/// and no more than [`BIRTH_WINDOW_MS`] after it, and the one the launch
+/// named, if it named one. Every time check of this match goes through here.
 fn could_make(owner: &str, found: &Found, native: &str, first_record_ms: i64) -> bool {
     native != owner
         && first_record_ms >= found.launch_ms
+        && first_record_ms - found.launch_ms <= BIRTH_WINDOW_MS
         && found
             .session_id
             .as_deref()
@@ -1000,22 +1005,54 @@ fn decide(
             possible
         })
         .collect();
-    let mut claimants: HashMap<&str, usize> = HashMap::new();
-    for possible in &candidates {
+    // Each possible child belongs to the latest launch that could have made
+    // it: a retried prompt's child is the closest send before it. Launches
+    // tied for latest all keep it, and so does a launch that named it, so
+    // neither links it.
+    let mut could: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (at, possible) in candidates.iter().enumerate() {
         for native in possible {
-            *claimants.entry(native).or_default() += 1;
+            could.entry(native).or_default().push(at);
         }
     }
+    let owners: HashMap<&str, Vec<usize>> = could
+        .into_iter()
+        .map(|(native, ats)| {
+            let latest = ats
+                .iter()
+                .map(|&at| launches[at].found.launch_ms)
+                .max()
+                .unwrap_or(i64::MIN);
+            let owners: Vec<usize> = ats
+                .into_iter()
+                .filter(|&at| {
+                    launches[at].found.launch_ms == latest
+                        || launches[at].found.session_id.as_deref() == Some(native)
+                })
+                .collect();
+            (native, owners)
+        })
+        .collect();
+    // The children each launch keeps.
+    let mut kept: Vec<Vec<&str>> = vec![Vec::new(); launches.len()];
+    for (native, ats) in &owners {
+        for &at in ats {
+            kept[at].push(native);
+        }
+    }
+    // A launch links only the one child it keeps, and only when no other
+    // launch keeps that child too.
     let unique = |at: usize| -> Option<&str> {
-        match candidates[at].as_slice() {
-            [child] if claimants.get(child) == Some(&1) => Some(*child),
+        match kept[at].as_slice() {
+            [child] if owners.get(child).map(Vec::as_slice) == Some(&[at][..]) => Some(*child),
             _ => None,
         }
     };
+    let stored = store.claude_prompt_launches()?;
     let mut proofs = Vec::new();
     for (at, launch) in launches.iter().enumerate() {
         let Some(child) = unique(at) else {
-            if !candidates[at].is_empty() {
+            if !kept[at].is_empty() {
                 progress.ambiguous += 1;
             }
             continue;
@@ -1027,6 +1064,17 @@ fn decide(
             continue;
         }
         if unlinkable.contains(child) {
+            progress.ambiguous += 1;
+            continue;
+        }
+        // A child stored as another launch's, even one since withdrawn, is
+        // not linked again: a link that stops being sure is gone for good.
+        if stored.iter().any(|(proof, _)| {
+            proof.child_native_session_id == child
+                && !(proof.parent_native_session_id == launch.owner
+                    && proof.launch_call_id == launch.found.call_id
+                    && proof.launch_operation_index == launch.found.index)
+        }) {
             progress.ambiguous += 1;
             continue;
         }
@@ -1058,10 +1106,10 @@ fn decide(
             evidence_version: CLAUDE_PROMPT_LAUNCH_VERSION,
         });
     }
-    // A stored link whose launch is still found and could now have made
-    // another session, or whose child another launch could have made.
+    // A stored link whose launch is still found and now keeps another
+    // session, or whose child another launch keeps.
     let mut withdraw = Vec::new();
-    for (stored, accepted) in store.claude_prompt_launches()? {
+    for (stored, accepted) in stored {
         if !accepted {
             continue;
         }
@@ -1070,10 +1118,10 @@ fn decide(
                 && launch.found.call_id == stored.launch_call_id
                 && launch.found.index == stored.launch_operation_index
         });
-        let doubtful = at.is_some_and(|at| candidates[at].len() > 1)
-            || claimants
-                .get(stored.child_native_session_id.as_str())
-                .is_some_and(|count| *count > 1);
+        let owner = owners.get(stored.child_native_session_id.as_str());
+        let doubtful = at.is_some_and(|at| {
+            kept[at].len() > 1 || owner.is_some_and(|owner| owner.as_slice() != [at])
+        }) || owner.is_some_and(|owner| owner.len() > 1);
         if doubtful {
             withdraw.push(stored);
         }
