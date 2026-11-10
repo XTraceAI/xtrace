@@ -26,8 +26,8 @@
 use crate::{
     Error, Host, Result, Store,
     creation::{
-        CLAUDE_LAUNCH_CREATE_VERSION, CODEX_CLI_LAUNCH_VERSION, CODEX_THREAD_SPAWN_VERSION,
-        CreationAbstention, child_abstention, first_input, token,
+        CLAUDE_LAUNCH_CREATE_VERSION, CLAUDE_PROMPT_LAUNCH_VERSION, CODEX_CLI_LAUNCH_VERSION,
+        CODEX_THREAD_SPAWN_VERSION, CreationAbstention, child_abstention, first_input, token,
     },
     model::text_enum,
 };
@@ -55,13 +55,17 @@ pub const CLAUDE_BASH_CHILD_VERSION: u32 = 3;
 // print session whose child was found by its first input and whole answer.
 // `codex_cli_launch`: a Codex thread's own recorded `exec` launch of a fresh
 // `codex exec --json` command, whose own first process result named the
-// Codex child.
+// Codex child. `claude_prompt_launch`: a Claude session's own `Bash` call ran a
+// `claude -p` command whose literal prompt is exactly the child's first
+// input, the one launch and the one child possible
+// ([`crate::creation::ClaudePromptLaunchProof`]).
 text_enum!(ChildEvidence {
     CodexThreadSpawn => "codex_thread_spawn",
     CodexGuardian => "codex_guardian",
     CodexClaudeLaunch => "codex_claude_launch",
     ClaudeBashLaunch => "claude_bash_launch",
     CodexCliLaunch => "codex_cli_launch",
+    ClaudePromptLaunch => "claude_prompt_launch",
 });
 
 impl ChildEvidence {
@@ -73,6 +77,7 @@ impl ChildEvidence {
             Self::CodexClaudeLaunch => CLAUDE_LAUNCH_CREATE_VERSION,
             Self::ClaudeBashLaunch => CLAUDE_BASH_CHILD_VERSION,
             Self::CodexCliLaunch => CODEX_CLI_LAUNCH_VERSION,
+            Self::ClaudePromptLaunch => CLAUDE_PROMPT_LAUNCH_VERSION,
         }
     }
 
@@ -397,6 +402,16 @@ impl Store {
         )?)
     }
 
+    /// When the indexed session's earliest timed record of any kind was
+    /// recorded, if it has one. Index metadata only.
+    pub fn session_first_record_ms(&self, session_id: &str) -> Result<Option<i64>> {
+        Ok(self.connection.query_row(
+            "SELECT min(ts_ms) FROM records WHERE session_id=?1",
+            [session_id],
+            |row| row.get(0),
+        )?)
+    }
+
     /// The indexed session's own first eligible input, as the creation checks
     /// define it ([`crate::creation`]): its record identifier and time, when
     /// one timed user record with text, not meta, sidechain or a tool result,
@@ -512,7 +527,7 @@ pub(crate) fn validate(fact: &ChildFact) -> Result<()> {
                 && rollout
                 && matches!(launch, (Some(_), Some(_), Some(_)))
         }
-        ChildEvidence::ClaudeBashLaunch => {
+        ChildEvidence::ClaudeBashLaunch | ChildEvidence::ClaudePromptLaunch => {
             fact.child_host == Host::Claude
                 && fact.source_native_session_id != fact.child_native_session_id
                 && fact.source_rollout_id.is_none()

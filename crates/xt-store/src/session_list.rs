@@ -90,7 +90,8 @@ impl From<crate::creation::CreationEvidence> for ParentEvidence {
             crate::creation::CreationEvidence::CodexThreadSpawn => Self::NativeSpawn,
             crate::creation::CreationEvidence::CliArtifactCreate
             | crate::creation::CreationEvidence::CodexClaudeLaunch
-            | crate::creation::CreationEvidence::CodexCliLaunch => Self::AgentLaunch,
+            | crate::creation::CreationEvidence::CodexCliLaunch
+            | crate::creation::CreationEvidence::ClaudePromptLaunch => Self::AgentLaunch,
         }
     }
 }
@@ -462,9 +463,9 @@ fn listed(
 /// Accepted creation relations of the named children whose parent resolves by exact
 /// host and native identity to an indexed user session. The count beside each
 /// row says how many user sessions hold that identity; only exactly one is a
-/// parent. A relation resting on a Codex agent's CLI launch, of any kind,
-/// named its exact canonical parent as well, and resolves only to that
-/// session. Keyed lookups on the relation's
+/// parent. A relation resting on an agent's CLI launch, of any kind (a Codex
+/// agent's, or a Claude agent's literal-prompt launch), named its exact
+/// canonical parent as well, and resolves only to that session. Keyed lookups on the relation's
 /// primary key and the sessions' host/native index. The `IN` list is appended
 /// by [`parents`].
 pub const PARENT_SQL: &str = "SELECT r.child_session_id,r.evidence_kind,p.session_id,p.host,
@@ -477,7 +478,8 @@ pub const PARENT_SQL: &str = "SELECT r.child_session_id,r.evidence_kind,p.sessio
      WHERE r.state='accepted' AND c.kind='user' AND c.host=r.child_host
        AND c.native_session_id=r.child_native_session_id
        AND p.kind='user' AND p.session_id<>r.child_session_id
-       AND (r.evidence_kind NOT IN ('cli_artifact_create','codex_claude_launch','codex_cli_launch')
+       AND (r.evidence_kind NOT IN ('cli_artifact_create','codex_claude_launch','codex_cli_launch',
+                                    'claude_prompt_launch')
             OR p.session_id=r.parent_session_id)";
 
 /// The exactly resolved parent of each named session that has one, against a

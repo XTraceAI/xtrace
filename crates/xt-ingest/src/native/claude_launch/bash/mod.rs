@@ -40,9 +40,19 @@
 //! only once its transcript changed. A restart sweeps again; every write is
 //! an idempotent child fact. Only identifiers, positions and closed labels
 //! are stored; prompts and answers are compared in memory, as digests.
+//!
+//! The same passes then run the literal-prompt match ([`prompt`]): a launch
+//! whose output this reader cannot compare (run in the background, written to
+//! a file, or in a command outside its grammar) whose literal prompt is the
+//! first input of exactly one later session, with no other launch or session
+//! possible, links that session to its parent with a relation as well as a
+//! child fact.
 
 mod parent;
+mod prompt;
 mod script;
+
+pub use prompt::PromptProgress;
 
 use super::LaunchLimits;
 use super::command;
@@ -177,6 +187,8 @@ pub struct BashBacklog {
     /// Caller transcripts whose last read ended unfinished, changed or out
     /// of memory, as they were then: not asked for again until they change.
     attempted: HashMap<PathBuf, SegmentGeneration>,
+    /// Parent links for launches matched by their literal prompt.
+    prompt: prompt::PromptBacklog,
     #[cfg(test)]
     test_waiting_limit: Option<usize>,
     #[cfg(test)]
@@ -188,6 +200,7 @@ impl BashBacklog {
     pub fn starting() -> Self {
         Self {
             sweep: Some(None),
+            prompt: prompt::PromptBacklog::starting(),
             ..Self::default()
         }
     }
@@ -195,6 +208,8 @@ impl BashBacklog {
     /// Claude sessions a scan imported: each may be a newly born child, or
     /// a caller whose launches now have their result.
     pub fn add_sessions<'a>(&mut self, natives: impl IntoIterator<Item = &'a str>) {
+        let natives: Vec<&str> = natives.into_iter().collect();
+        self.prompt.add_sessions(natives.iter().copied());
         for native in natives {
             self.recheck = true;
             self.recheck_accepted = true;
@@ -263,8 +278,9 @@ impl BashBacklog {
     /// generation and could be read; and no
     /// supported launch any read found — of any age — has this input's
     /// prompt digest and directory, was made before it and had not ended
-    /// before it, unless a fact it rests on names another child. A caller
-    /// still to read is queued. `false` keeps the session checking.
+    /// before it, unless a fact it rests on names another child; and the
+    /// literal-prompt match has read and matched every launch it knows. A
+    /// caller still to read is queued. `false` keeps the session checking.
     pub(super) fn clear_for(
         &mut self,
         store: &Store,
@@ -273,6 +289,24 @@ impl BashBacklog {
         native: &str,
         first: &OwnFirst,
         _since: u64,
+    ) -> xt_store::Result<bool> {
+        let clear = self.clear_for_bash(store, home, session_id, native, first)?;
+        Ok(!self.prompt.holds_checks() && clear)
+    }
+
+    /// Whether the literal-prompt match finished since a display check
+    /// waited for it: the sessions still checking are looked at again.
+    pub(super) fn take_prompt_wake(&mut self) -> bool {
+        self.prompt.take_wake()
+    }
+
+    fn clear_for_bash(
+        &mut self,
+        store: &Store,
+        home: &Path,
+        session_id: &str,
+        native: &str,
+        first: &OwnFirst,
     ) -> xt_store::Result<bool> {
         let Some(born) = first.ts_ms else {
             return Ok(false);
@@ -382,6 +416,7 @@ impl BashBacklog {
             || (self.recheck
                 && (!self.waiting.is_empty()
                     || (self.recheck_accepted && !self.accepted.is_empty())))
+            || self.prompt.pending()
     }
 }
 
@@ -579,6 +614,8 @@ pub struct BashProgress {
     pub changed: usize,
     pub bytes_read: u64,
     pub advanced: bool,
+    /// The literal-prompt launch match, which runs after the rest.
+    pub prompt: PromptProgress,
 }
 
 /// One bounded pass over the backlog, counting into `progress`.
@@ -594,7 +631,7 @@ pub fn continue_claude_bash_into(
     let mut budget = Budget::new(limits.max_pass_bytes, limits.deadline, cancel)
         .with_entries(limits.max_pass_entries);
     let before = progress.clone();
-    let result = pass(
+    let mut result = pass(
         store,
         home,
         backlog,
@@ -603,6 +640,20 @@ pub fn continue_claude_bash_into(
         recorded_at,
         progress,
     );
+    // The literal-prompt match after the rest, within what is left.
+    if result.is_ok() {
+        let changed = progress.prompt.changed;
+        result = prompt::pass(
+            store,
+            home,
+            &mut backlog.prompt,
+            limits,
+            &mut budget,
+            recorded_at,
+            &mut progress.prompt,
+        );
+        progress.changed += progress.prompt.changed - changed;
+    }
     progress.bytes_read += budget.spent;
     progress.advanced |= budget.spent > 0 || budget.entries > 0 || *progress != before;
     result

@@ -35,8 +35,9 @@
 //! a launch relation of either kind (a Claude `--session-id` or a Codex
 //! `codex exec --json` launch) and the launch rows naming it, and the exact
 //! pull-request links of Codex sessions: how many, and each pull request
-//! (`owner/repo#number`) with how many Codex sessions link it. Never a path,
-//! prompt, command or transcript text.
+//! (`owner/repo#number`) with how many Codex sessions link it, and every
+//! Claude literal-prompt launch link (child, parent, call, position, state).
+//! Never a path, prompt, command or transcript text.
 use std::{
     env,
     path::PathBuf,
@@ -351,6 +352,14 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             add("bash_ambiguous", bash.ambiguous);
             add("bash_rejected", bash.rejected);
             add("bash_waiting", bash.waiting);
+            add("prompt_files_read", bash.prompt.files_read);
+            add("prompt_files_unreadable", bash.prompt.files_unreadable);
+            add("prompt_matches", bash.prompt.matches);
+            add("prompt_linked", bash.prompt.linked);
+            add("prompt_already", bash.prompt.already);
+            add("prompt_ambiguous", bash.prompt.ambiguous);
+            add("prompt_refused", bash.prompt.refused);
+            add("prompt_withdrawn", bash.prompt.withdrawn);
         }
         if pass.advanced() {
             idle = 0;
@@ -428,6 +437,18 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         launch_rows.extend(candidates);
     }
+    // Every Claude literal-prompt launch link: identifiers only.
+    let prompt_launches: Vec<serde_json::Value> = store
+        .claude_prompt_launches()?
+        .into_iter()
+        .map(|(proof, accepted)| {
+            serde_json::json!({"child_native_session_id": proof.child_native_session_id,
+                "parent_native_session_id": proof.parent_native_session_id,
+                "launch_call_id": proof.launch_call_id,
+                "launch_operation_index": proof.launch_operation_index,
+                "accepted": accepted})
+        })
+        .collect();
     let mut codex_prs = std::collections::BTreeMap::<String, u64>::new();
     let mut codex_links = 0_u64;
     for link in store.all_pr_links()? {
@@ -458,6 +479,7 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "launch_summary": store.claude_launch_summary()?,
             "sessions": sessions,
             "launch_rows": launch_rows,
+            "prompt_launches": prompt_launches,
             "codex_pr_links": {"links": codex_links, "pull_requests": codex_prs},
         })
     );

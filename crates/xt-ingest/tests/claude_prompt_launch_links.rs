@@ -1,0 +1,599 @@
+//! Parent links for Claude sessions a Claude agent launched with `claude -p`
+//! from its own `Bash` tool, matched by their exact prompt: a launch in the
+//! parent's own transcript run in the background with its output redirected
+//! to files through a shell variable, and a launch from one of the parent's
+//! helper agents through the absolute launcher path. Each child is the one
+//! indexed session whose first input is that literal prompt, saved after the
+//! call; it folds under its parent like a Codex-launched child.
+//!
+//! Every file is written here: synthetic parent, helper and child
+//! transcripts. Nothing real is read and no command runs.
+#![cfg(unix)]
+use serde_json::{Value, json};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
+use xt_ingest::native::{
+    ImportRequest, ProducerSource,
+    claude_launch::{
+        LaunchLimits,
+        bash::{BashBacklog, PromptProgress, continue_claude_bash},
+    },
+    readers_cli::read_pin,
+    session_creation::{SpawnBacklog, spawn_limits},
+};
+use xt_store::{
+    Host, Store,
+    child_fact::ChildEvidence,
+    creation::{CreationEvidence, CreationWitness},
+    session_list,
+};
+
+const PARENT: &str = "0d000000-0000-4000-8000-0000000000ca";
+const OTHER_PARENT: &str = "0d000000-0000-4000-8000-0000000000cb";
+const MAIN_CHILD: &str = "0d000000-0000-4000-8000-0000000000a1";
+const HELPER_CHILD: &str = "0d000000-0000-4000-8000-0000000000b1";
+const EXTRA: &str = "0d000000-0000-4000-8000-0000000000e1";
+const NAMED: &str = "0d000000-0000-4000-8000-0000000000f1";
+const PROMPT: &str =
+    "In my synthetic project called 'Check copy': fix the spelling. Tell me what changed.";
+const HELPER_PROMPT: &str = "Synthetic helper prompt: list the projects.";
+const MAIN_CALL: &str = "toolu_01SyntheticMainLaunch";
+const HELPER_CALL: &str = "toolu_01SyntheticHelperLaunch";
+const AGENT: &str = "a0d00000000000001";
+/// The main launch's time; everything else is an offset from it.
+const AT: i64 = 1_790_668_716_333;
+const T: i64 = 1_790_700_000_000;
+
+fn iso(offset: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(AT + offset)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn repo() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn bundle() -> ProducerSource {
+    ProducerSource::Bundle {
+        pin: read_pin(&repo().join(".plugin-pin")).unwrap(),
+        root: repo().join("vendor/agent-plugins"),
+    }
+}
+
+struct Home {
+    _temp: tempfile::TempDir,
+    home: PathBuf,
+    db: PathBuf,
+}
+
+impl Home {
+    fn new() -> Self {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let home = root.join("home");
+        fs::create_dir_all(home.join(".claude/projects")).unwrap();
+        // The installed launcher a helper names by its absolute path.
+        let launcher = home.join(".local/bin/claude");
+        fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        fs::write(&launcher, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        Self {
+            db: root.join("index.sqlite"),
+            _temp: temp,
+            home,
+        }
+    }
+
+    fn store(&self) -> Store {
+        Store::open(&self.db).unwrap()
+    }
+
+    fn project(&self, folder: &str) -> PathBuf {
+        let path = self.home.join(".claude/projects").join(folder);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn launcher(&self) -> String {
+        self.home.join(".local/bin/claude").display().to_string()
+    }
+}
+
+fn write_rows(path: &Path, rows: &[Value]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let body: String = rows.iter().map(|row| format!("{row}\n")).collect();
+    fs::write(path, body).unwrap();
+}
+
+/// The parent's launch: a variable, background output files and every
+/// neutral option of a real agent's test run.
+fn main_command(prompt: &str) -> String {
+    format!(
+        "S=/w/run && cd \"$S\" && claude -p \"{prompt}\" --name \"synthetic check\" \
+         --mcp-config \"$S/mcp.json\" --strict-mcp-config --allowedTools \"mcp__synthetic__*\" \
+         --setting-sources project --output-format stream-json --verbose \
+         > \"$S/run1.jsonl\" 2> \"$S/run1.err\"; echo \"exit $?\"; python3 - \"$S/run1.jsonl\" <<'EOF'\n\
+         import json,sys\nprint('claude -p \"not a launch\"')\nEOF"
+    )
+}
+
+/// A helper agent's launch: the absolute launcher and unquoted expansions.
+fn helper_command(home: &Home, prompt: &str) -> String {
+    format!(
+        "S=/w; cd $S/run && {} -p \"{prompt}\" --name \"synthetic helper\" \
+         --mcp-config $S/run/test.mcp.json --strict-mcp-config --setting-sources project \
+         --output-format stream-json --verbose > run1.jsonl 2> run1.err; echo \"exit $?\"",
+        home.launcher()
+    )
+}
+
+fn record(
+    native: &str,
+    kind: &str,
+    uuid: &str,
+    offset: i64,
+    side: Option<&str>,
+    message: Value,
+) -> Value {
+    let mut row = json!({"type": kind, "uuid": uuid, "parentUuid": null, "timestamp": iso(offset),
+        "sessionId": native, "isSidechain": side.is_some(), "cwd": "/w/parent",
+        "entrypoint": "claude-desktop", "userType": "external", "message": message});
+    if let Some(agent) = side {
+        row["agentId"] = json!(agent);
+    }
+    row
+}
+
+/// A transcript holding one `Bash` call run in the background, its result
+/// saying only that it runs.
+fn caller_rows(
+    native: &str,
+    side: Option<&str>,
+    call: &str,
+    offset: i64,
+    command: &str,
+) -> Vec<Value> {
+    let tag = side.unwrap_or("main");
+    vec![
+        record(
+            native,
+            "user",
+            &format!("{native}-{tag}-ask"),
+            offset - 60_000,
+            side,
+            json!({"role": "user", "content": "Run the synthetic check"}),
+        ),
+        record(
+            native,
+            "assistant",
+            &format!("{native}-{tag}-{call}"),
+            offset,
+            side,
+            json!({"role": "assistant", "id": format!("msg-{native}-{call}"),
+                "model": "fixture-model",
+                "content": [{"type": "tool_use", "id": call, "name": "Bash",
+                    "input": {"command": command, "description": "Run the check",
+                        "run_in_background": true}}],
+                "usage": {"input_tokens": 3, "output_tokens": 2}}),
+        ),
+        record(
+            native,
+            "user",
+            &format!("{native}-{tag}-{call}-result"),
+            offset + 50,
+            side,
+            json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": call,
+                "content": "Command running in background with ID: synthetic. Output is being written to a file."}]}),
+        ),
+    ]
+}
+
+/// A launched session: a title, a queue record, then its first input at
+/// `born`, and one answer.
+fn child_rows(native: &str, born: i64, first: &str) -> Vec<Value> {
+    vec![
+        json!({"type": "custom-title", "customTitle": "synthetic check", "sessionId": native}),
+        json!({"type": "queue-operation", "operation": "enqueue", "timestamp": iso(born - 20),
+            "sessionId": native, "content": first}),
+        json!({"type": "user", "uuid": format!("{native}-first"), "parentUuid": null,
+            "timestamp": iso(born), "sessionId": native, "cwd": "/w/run", "isSidechain": false,
+            "entrypoint": "claude-desktop", "userType": "external",
+            "message": {"role": "user", "content": first}}),
+        json!({"type": "assistant", "uuid": format!("{native}-answer"),
+            "parentUuid": format!("{native}-first"), "timestamp": iso(born + 2000),
+            "sessionId": native, "cwd": "/w/run", "isSidechain": false,
+            "entrypoint": "claude-desktop",
+            "message": {"role": "assistant", "id": format!("msg-{native}"),
+                "model": "fixture-model", "content": [{"type": "text", "text": "Done."}],
+                "usage": {"input_tokens": 3, "output_tokens": 2}}}),
+    ]
+}
+
+fn parent_path(home: &Home, native: &str) -> PathBuf {
+    home.project("-w-parent").join(format!("{native}.jsonl"))
+}
+
+fn write_parent(home: &Home, native: &str, call: &str, offset: i64, command: &str) {
+    write_rows(
+        &parent_path(home, native),
+        &caller_rows(native, None, call, offset, command),
+    );
+}
+
+fn write_helper(home: &Home, native: &str, command: &str) {
+    let path = home
+        .project("-w-parent")
+        .join(native)
+        .join("subagents")
+        .join(format!("agent-{AGENT}.jsonl"));
+    write_rows(
+        &path,
+        &caller_rows(native, Some(AGENT), HELPER_CALL, 30_000, command),
+    );
+}
+
+fn write_child(home: &Home, native: &str, born: i64, first: &str) {
+    write_rows(
+        &home.project("-w-run").join(format!("{native}.jsonl")),
+        &child_rows(native, born, first),
+    );
+}
+
+/// The parent's own launch and its helper's, and their two children.
+fn standard(home: &Home) {
+    write_parent(home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_helper(home, PARENT, &helper_command(home, HELPER_PROMPT));
+    write_child(home, MAIN_CHILD, 4_800, PROMPT);
+    write_child(home, HELPER_CHILD, 30_500, HELPER_PROMPT);
+}
+
+/// Index the Claude host through the ordinary importer.
+fn scan(home: &Home, store: &mut Store) {
+    let report = xt_ingest::native::scan_native_continued(
+        store,
+        &ImportRequest {
+            home: &home.home,
+            hosts: &[Host::Claude],
+            producer: &bundle(),
+            python: None,
+            observed_at: T,
+            cancel: None,
+        },
+        xt_ingest::native::ScanMode::Resume,
+        &mut |_| {},
+        &mut SpawnBacklog::default(),
+        spawn_limits(),
+    );
+    assert!(report.complete(), "{report:?}");
+}
+
+/// Bounded passes until nothing is pending; the literal-prompt counts summed.
+fn settle(home: &Home, store: &mut Store, backlog: &mut BashBacklog) -> PromptProgress {
+    let mut total = PromptProgress::default();
+    for _ in 0..1_000 {
+        if !backlog.pending() {
+            return total;
+        }
+        let pass = continue_claude_bash(
+            store,
+            &home.home,
+            backlog,
+            &LaunchLimits::default(),
+            None,
+            T,
+        )
+        .unwrap();
+        let p = pass.prompt;
+        total.files_read += p.files_read;
+        total.matches += p.matches;
+        total.launches = p.launches.max(total.launches);
+        total.linked += p.linked;
+        total.already += p.already;
+        total.ambiguous += p.ambiguous;
+        total.refused += p.refused;
+        total.withdrawn += p.withdrawn;
+        total.changed += p.changed;
+    }
+    panic!("never settled: {total:?}");
+}
+
+/// Index, then the background passes a fresh worker runs.
+fn run(home: &Home) -> (Store, PromptProgress) {
+    let mut store = home.store();
+    scan(home, &mut store);
+    let total = settle(home, &mut store, &mut BashBacklog::starting());
+    (store, total)
+}
+
+fn session(store: &Store, native: &str) -> String {
+    store
+        .user_sessions_with_native(Host::Claude, native)
+        .unwrap()
+        .remove(0)
+}
+
+/// The parent a list shows for one session, and whether it is a known child.
+fn shown(home: &Home, store: &Store, native: &str) -> (bool, Option<String>) {
+    let connection = rusqlite::Connection::open(&home.db).unwrap();
+    let context = session_list::context(&connection, &[&session(store, native)])
+        .unwrap()
+        .remove(0);
+    (
+        context.known_child,
+        context.parent.map(|parent| parent.session_id),
+    )
+}
+
+/// `(kind, source, call, position, accepted)` of one stored fact.
+type Stored = (ChildEvidence, String, Option<String>, Option<u32>, bool);
+
+/// Every stored fact of one session, as [`Stored`].
+fn facts(store: &Store, native: &str) -> Vec<Stored> {
+    store
+        .child_facts(&session(store, native))
+        .unwrap()
+        .into_iter()
+        .map(|(fact, accepted)| {
+            (
+                fact.evidence_kind,
+                fact.source_native_session_id,
+                fact.launch_call_id,
+                fact.launch_operation_index,
+                accepted,
+            )
+        })
+        .collect()
+}
+
+fn prompt_fact(source: &str, call: &str, accepted: bool) -> Stored {
+    (
+        ChildEvidence::ClaudePromptLaunch,
+        source.to_owned(),
+        Some(call.to_owned()),
+        Some(0),
+        accepted,
+    )
+}
+
+/// Nothing links `native`: no fact, no relation, no parent shown.
+fn unlinked(home: &Home, store: &Store, native: &str) {
+    assert!(facts(store, native).is_empty(), "{native}");
+    assert!(
+        store
+            .session_creation(&session(store, native))
+            .unwrap()
+            .is_none(),
+        "{native}"
+    );
+    assert_eq!(shown(home, store, native), (false, None), "{native}");
+}
+
+#[test]
+fn literal_prompt_launches_link_both_children_to_the_top_level_parent() {
+    let home = Home::new();
+    standard(&home);
+    let (mut store, total) = run(&home);
+    assert_eq!(total.launches, 2, "{total:?}");
+    assert_eq!(
+        (total.linked, total.ambiguous, total.refused),
+        (2, 0, 0),
+        "{total:?}"
+    );
+    let parent = session(&store, PARENT);
+    for (child, call) in [(MAIN_CHILD, MAIN_CALL), (HELPER_CHILD, HELPER_CALL)] {
+        // Shown under the parent, like a Codex-launched child.
+        assert_eq!(
+            shown(&home, &store, child),
+            (true, Some(parent.clone())),
+            "{child}"
+        );
+        assert_eq!(
+            facts(&store, child),
+            [prompt_fact(PARENT, call, true)],
+            "{child}"
+        );
+        let (relation, conflicted) = store
+            .session_creation(&session(&store, child))
+            .unwrap()
+            .unwrap();
+        assert!(!conflicted);
+        assert_eq!(relation.evidence_kind, CreationEvidence::ClaudePromptLaunch);
+        assert_eq!(relation.witness, CreationWitness::ClaudeBashLiteralPrompt);
+        assert_eq!(relation.parent_host, Host::Claude);
+        assert_eq!(relation.parent_native_session_id, PARENT);
+    }
+    // The parent is no child.
+    assert_eq!(shown(&home, &store, PARENT), (false, None));
+    // A restart reads and matches again and changes nothing.
+    let again = settle(&home, &mut store, &mut BashBacklog::starting());
+    assert_eq!(
+        (again.linked, again.changed, again.already),
+        (0, 0, 2),
+        "{again:?}"
+    );
+}
+
+#[test]
+fn a_first_input_that_is_not_the_prompt_abstains() {
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    // One character more, and only whitespace different.
+    write_child(&home, MAIN_CHILD, 4_800, &format!("{PROMPT}."));
+    write_child(&home, EXTRA, 5_800, &format!("{PROMPT} "));
+    let (store, total) = run(&home);
+    assert_eq!((total.launches, total.linked), (1, 0), "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn a_child_saved_before_the_launch_abstains() {
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, -1_000, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!((total.launches, total.linked), (1, 0), "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+}
+
+#[test]
+fn two_launches_of_one_prompt_link_nothing() {
+    // Two parents each launch the prompt before the one child.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_parent(
+        &home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherLaunch",
+        1_000,
+        &main_command(PROMPT),
+    );
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!((total.launches, total.linked), (2, 0), "{total:?}");
+    assert_eq!(total.ambiguous, 2, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    // Two launches and two children of one prompt: each launch could have
+    // made either, so neither is linked.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_parent(
+        &home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherLaunch",
+        10_000,
+        &main_command(PROMPT),
+    );
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child(&home, EXTRA, 14_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn one_launch_with_two_matching_children_links_nothing() {
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child(&home, EXTRA, 9_000_000, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.ambiguous),
+        (1, 0, 1),
+        "{total:?}"
+    );
+    unlinked(&home, &store, MAIN_CHILD);
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn a_named_session_launch_links_only_the_session_it_names() {
+    // The launch names its session; another session typed the same prompt
+    // later, which this launch could not have made.
+    let home = Home::new();
+    let command = format!("claude -p --session-id {NAMED} \"{PROMPT}\" > /w/out.json");
+    write_parent(&home, PARENT, MAIN_CALL, 0, &command);
+    write_child(&home, NAMED, 4_800, PROMPT);
+    write_child(&home, EXTRA, 60_000, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(total.linked, 1, "{total:?}");
+    assert_eq!(
+        shown(&home, &store, NAMED),
+        (true, Some(session(&store, PARENT)))
+    );
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn resume_continue_and_fork_are_not_launches() {
+    for command in [
+        format!("claude -p --resume {NAMED} \"{PROMPT}\""),
+        format!("claude -p -r {NAMED} \"{PROMPT}\""),
+        format!("claude -c -p \"{PROMPT}\""),
+        format!("claude --continue --print \"{PROMPT}\""),
+        format!("claude -p --resume {NAMED} --fork-session \"{PROMPT}\""),
+        // Not run: only text a here-document or `echo` holds.
+        format!("cat <<'EOF'\nclaude -p \"{PROMPT}\"\nEOF"),
+        format!("echo claude -p \"{PROMPT}\""),
+        // The prompt is not literal.
+        "P=x; claude -p \"$P\"".to_owned(),
+    ] {
+        let home = Home::new();
+        write_parent(&home, PARENT, MAIN_CALL, 0, &command);
+        write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+        let (store, total) = run(&home);
+        assert_eq!(
+            (total.launches, total.linked),
+            (0, 0),
+            "{command}: {total:?}"
+        );
+        unlinked(&home, &store, MAIN_CHILD);
+    }
+}
+
+#[test]
+fn a_launch_found_later_that_could_have_made_the_child_withdraws_its_link() {
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (mut store, total) = run(&home);
+    assert_eq!(total.linked, 1, "{total:?}");
+    // Another session's earlier launch of the same prompt is saved later.
+    write_parent(
+        &home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherLaunch",
+        -1_000,
+        &main_command(PROMPT),
+    );
+    scan(&home, &mut store);
+    let again = settle(&home, &mut store, &mut BashBacklog::starting());
+    assert_eq!((again.withdrawn, again.linked), (1, 0), "{again:?}");
+    assert_eq!(
+        facts(&store, MAIN_CHILD),
+        [prompt_fact(PARENT, MAIN_CALL, false)]
+    );
+    let (_, conflicted) = store
+        .session_creation(&session(&store, MAIN_CHILD))
+        .unwrap()
+        .unwrap();
+    assert!(conflicted);
+    assert_eq!(shown(&home, &store, MAIN_CHILD), (false, None));
+    // It stays withdrawn.
+    let later = settle(&home, &mut store, &mut BashBacklog::starting());
+    assert_eq!((later.linked, later.changed), (0, 0), "{later:?}");
+    assert_eq!(shown(&home, &store, MAIN_CHILD), (false, None));
+}
+
+#[test]
+fn a_record_of_another_session_in_a_transcript_is_not_its_launch() {
+    // The helper file's records name another session: it is not the
+    // parent's, so its launch is not read as the parent's.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, "echo ready");
+    let path = home
+        .project("-w-parent")
+        .join(PARENT)
+        .join("subagents")
+        .join(format!("agent-{AGENT}.jsonl"));
+    write_rows(
+        &path,
+        &caller_rows(
+            OTHER_PARENT,
+            Some(AGENT),
+            HELPER_CALL,
+            30_000,
+            &helper_command(&home, HELPER_PROMPT),
+        ),
+    );
+    write_child(&home, HELPER_CHILD, 30_500, HELPER_PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!((total.launches, total.linked), (0, 0), "{total:?}");
+    unlinked(&home, &store, HELPER_CHILD);
+}

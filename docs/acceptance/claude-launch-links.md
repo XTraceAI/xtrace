@@ -314,6 +314,19 @@ triggers unchanged): the same identifiers as `codex_claude_launch`, with a
 Codex child. Published and staged launches gain the child's host, `claude`
 for every row stored before.
 
+Schema 32 adds the evidence kind `claude_prompt_launch`, with the witness
+`claude_bash_literal_prompt`, to `session_creation_relations` and
+`session_child_facts` (both rebuilt with their rows, row IDs, indexes and
+triggers unchanged, and the saved-warning triggers on the relation table
+recreated): a Claude parent's own `Bash` call, in its transcript or one of
+its helper agents' transcripts, ran a create-mode `claude -p` launch with a
+literal prompt, and exactly one indexed Claude session saved at or after the
+call has exactly that prompt as its first input, with no other launch that
+could have made it and no other session that launch could have made. It
+keeps the exact parent, the child's first input, the call ID and the
+launch's position in the call. A link that later stops being unique is
+withdrawn for good (the fact withheld, the relation conflicted).
+
 Like every accepted creation relation, a link makes the Human input view
 count the child's user messages as the agent's, not a person's.
 
@@ -327,6 +340,7 @@ count the child's user messages as the agent's, not a person's.
 - `cargo test -p xt-store --test child_facts`
 - `cargo test -p xt-store --test codex_cli_launch_creation`
 - `cargo test -p xt-ingest --test codex_cli_launch_links`
+- `cargo test -p xt-ingest --test claude_prompt_launch_links`
 
 All sources are synthetic. Acceptance on a copied index uses
 `cargo run -p xt-ingest --example claude_launch_links` (see its header); with

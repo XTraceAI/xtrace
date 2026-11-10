@@ -14,7 +14,11 @@
 //! scan proved one Codex agent created with a recorded fresh
 //! `codex exec --json` launch rests on the same chain with a Codex child
 //! ([`CodexCliLaunchCreationProof`]), written only through the scan's guarded
-//! write. Nothing here accepts or keeps a
+//! write. A Claude session that the native prompt-launch match proved one
+//! Claude agent created from its own `Bash` tool, with a literal `claude -p`
+//! prompt equal to the child's first input, goes through
+//! [`Store::record_claude_prompt_launch`] ([`ClaudePromptLaunchProof`]),
+//! together with its child fact. Nothing here accepts or keeps a
 //! prompt, command, output, path, task path, role, title or a digest of any
 //! of them.
 //!
@@ -56,11 +60,16 @@ pub const MAX_CREATION_DEPTH: usize = 64;
 // [`ClaudeLaunchCreationProof`]. `codex_cli_launch`: a Codex agent's recorded
 // fresh `codex exec --json` launch created the Codex child its own first
 // process result named; see [`CodexCliLaunchCreationProof`].
+// `claude_prompt_launch`: a Claude agent's recorded `Bash` call ran a
+// `claude -p` command whose literal prompt is exactly the Claude child's first
+// input, with no other launch or child possible; see
+// [`ClaudePromptLaunchProof`].
 text_enum!(CreationEvidence {
     CodexThreadSpawn => "codex_thread_spawn",
     CliArtifactCreate => "cli_artifact_create",
     CodexClaudeLaunch => "codex_claude_launch",
     CodexCliLaunch => "codex_cli_launch",
+    ClaudePromptLaunch => "claude_prompt_launch",
 });
 
 // Which structural record carried the evidence. `rollout_opening_session_meta`:
@@ -73,12 +82,15 @@ text_enum!(CreationEvidence {
 // `codex_exec_json_thread_started`: the parent's own `exec` operation whose
 // literal command was a fresh `codex exec --json`, and that operation's own
 // first process result, whose output's one `thread.started` event named the
-// child.
+// child. `claude_bash_literal_prompt`: the parent's own `Bash` call whose
+// command held a create-mode `claude -p` launch with a literal prompt, equal
+// to the child's first input.
 text_enum!(CreationWitness {
     RolloutOpeningSessionMeta => "rollout_opening_session_meta",
     ClaudeCliRedirectedJsonResult => "claude_cli_redirected_json_result",
     CodexExecSessionIdLaunch => "codex_exec_session_id_launch",
     CodexExecJsonThreadStarted => "codex_exec_json_thread_started",
+    ClaudeBashLiteralPrompt => "claude_bash_literal_prompt",
 });
 
 /// Version of the native Codex spawn matcher. Version 2 reads
@@ -120,6 +132,11 @@ pub const CLAUDE_LAUNCH_CREATE_VERSION: u32 = 6;
 /// `codex exec --json` launch, whose Codex child its own first process result
 /// named. It is the only one accepted for [`CodexCliLaunchCreationProof`].
 pub const CODEX_CLI_LAUNCH_VERSION: u32 = 1;
+
+/// Version of the Claude `Bash` literal-prompt launch match whose proofs
+/// [`Store::record_claude_prompt_launch`] accepts, for its relations and its
+/// child facts alike. It is the only one accepted.
+pub const CLAUDE_PROMPT_LAUNCH_VERSION: u32 = 1;
 
 /// The identities that prove one session created another. Every field is
 /// structural; none is transcript content.
@@ -291,6 +308,71 @@ pub struct ClaudeLaunchCreationProof {
 ///   started by `exec` after the launch, naming no parent, fork or inherited
 ///   history.
 pub type CodexCliLaunchCreationProof = ClaudeLaunchCreationProof;
+
+/// The structural chain by which a Claude agent's own recorded `Bash` call
+/// created a Claude session with a literal `claude -p` prompt, as the native
+/// prompt-launch match established it. Every field is an identifier or a
+/// position; none is transcript content.
+///
+/// The store checks every identity it holds: the child is exactly one indexed
+/// Claude user session with this native identity, `first_record_uuid` is its
+/// own first eligible input, and the parent is exactly one indexed Claude user
+/// session with this canonical and native identity, other than the child and
+/// not reached from it. The match must have proven, before submitting, that:
+///
+/// - the call is an assistant `Bash` tool call recorded for the parent, in its
+///   own saved transcript or one of its helper agents' transcripts, whose
+///   command holds a create-mode `claude -p` launch (no resume, continue or
+///   fork) at position `launch_operation_index` with a literal prompt;
+/// - the child's first input is exactly that prompt, compared in memory and
+///   never kept, and is dated at or after the call; a launch naming a session
+///   with `--session-id` names exactly this child;
+/// - no other launch found could have created this child, and this launch
+///   could have created no other indexed session.
+///
+/// The same launch is kept as a [`crate::child_fact::ChildEvidence::ClaudePromptLaunch`]
+/// child fact. Like every accepted relation, the Human input view reads it:
+/// the child's user messages are taken as sent by the agent that created it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaudePromptLaunchProof {
+    pub child_session_id: String,
+    pub child_native_session_id: String,
+    pub parent_session_id: String,
+    pub parent_native_session_id: String,
+    pub first_record_uuid: String,
+    /// The parent's `Bash` tool call, and the launch's zero-based position
+    /// among the Claude launches its command holds.
+    pub launch_call_id: String,
+    pub launch_operation_index: u32,
+    pub evidence_version: u32,
+}
+
+impl ClaudePromptLaunchProof {
+    /// The child fact the same launch rests on.
+    pub fn child_fact(&self) -> crate::child_fact::ChildFact {
+        crate::child_fact::ChildFact {
+            child_session_id: self.child_session_id.clone(),
+            child_host: Host::Claude,
+            child_native_session_id: self.child_native_session_id.clone(),
+            evidence_kind: crate::child_fact::ChildEvidence::ClaudePromptLaunch,
+            evidence_version: self.evidence_version,
+            source_native_session_id: self.parent_native_session_id.clone(),
+            source_rollout_id: None,
+            launch_call_id: Some(self.launch_call_id.clone()),
+            launch_operation_index: Some(self.launch_operation_index),
+            first_record_uuid: Some(self.first_record_uuid.clone()),
+        }
+    }
+}
+
+/// What recording one Claude prompt launch did: its child fact, its relation,
+/// and how many of the two changed what a read shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PromptLaunchReport {
+    pub fact: crate::child_fact::ChildFactDisposition,
+    pub relation: CreationDisposition,
+    pub changed: usize,
+}
 
 /// Which child a native Codex launch proof names: the Claude session of a
 /// `--session-id` launch, or the Codex thread of a `codex exec --json` one.
@@ -573,6 +655,120 @@ impl Store {
         )
     }
 
+    /// Record one Claude prompt launch in one immediate transaction: its
+    /// child fact, then its relation. Only the native prompt-launch match,
+    /// having proved every precondition on [`ClaudePromptLaunchProof`], calls
+    /// this.
+    ///
+    /// A malformed identifier or an unknown version rejects the call before
+    /// anything is written. A proof the store cannot tie to one child and one
+    /// parent abstains for both and writes nothing. Otherwise the fact
+    /// follows the child-fact rules and the relation the launch rules of the
+    /// other CLI kinds: an exact replay changes nothing; any other proof for a
+    /// child already related withholds that child as conflicted; and a
+    /// launch claimed for a second child is disputed for good.
+    pub fn record_claude_prompt_launch(
+        &mut self,
+        proof: &ClaudePromptLaunchProof,
+        recorded_at: i64,
+    ) -> Result<PromptLaunchReport> {
+        validate_prompt_launch(proof)?;
+        let fact = proof.child_fact();
+        crate::child_fact::validate(&fact)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(reason) =
+            cli_abstention(&transaction, &proof.into(), Host::Claude, Host::Claude)?
+        {
+            return Ok(PromptLaunchReport {
+                fact: crate::child_fact::ChildFactDisposition::Abstained(reason),
+                relation: CreationDisposition::Abstained(reason),
+                changed: 0,
+            });
+        }
+        let (fact_disposition, fact_changed) =
+            crate::child_fact::apply(&transaction, &fact, recorded_at)?;
+        let (relation, relation_changed) = apply_prompt_launch(&transaction, proof, recorded_at)?;
+        transaction.commit()?;
+        Ok(PromptLaunchReport {
+            fact: fact_disposition,
+            relation,
+            changed: fact_changed + usize::from(relation_changed),
+        })
+    }
+
+    /// Withdraw what one recorded Claude prompt launch claims, once the
+    /// match finds it could also have made another session, or another
+    /// launch could also have made its child: every accepted child fact
+    /// resting on that launch is withheld, and the child's relation is
+    /// conflicted when it rests on that launch. Neither shows again. Returns
+    /// how many rows changed.
+    pub fn withhold_claude_prompt_launch(
+        &mut self,
+        proof: &ClaudePromptLaunchProof,
+    ) -> Result<usize> {
+        validate_prompt_launch(proof)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let facts = transaction.execute(
+            "UPDATE session_child_facts SET state='withheld'
+             WHERE evidence_kind='claude_prompt_launch' AND source_native_session_id=?1
+               AND source_rollout_id IS NULL AND launch_call_id=?2
+               AND launch_operation_index=?3 AND state='accepted'",
+            params![
+                proof.parent_native_session_id,
+                proof.launch_call_id,
+                proof.launch_operation_index
+            ],
+        )?;
+        let relations = transaction.execute(
+            "UPDATE session_creation_relations SET state='conflicted'
+             WHERE child_session_id=?1 AND evidence_kind='claude_prompt_launch'
+               AND parent_session_id=?2 AND launch_call_id=?3
+               AND launch_operation_index=?4 AND state='accepted'",
+            params![
+                proof.child_session_id,
+                proof.parent_session_id,
+                proof.launch_call_id,
+                proof.launch_operation_index
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(facts + relations)
+    }
+
+    /// Every stored Claude prompt-launch relation, and whether it is
+    /// accepted, in child order.
+    pub fn claude_prompt_launches(&self) -> Result<Vec<(ClaudePromptLaunchProof, bool)>> {
+        Ok(self
+            .connection
+            .prepare(
+                "SELECT child_session_id,child_native_session_id,parent_session_id,
+                        parent_native_session_id,first_record_uuid,launch_call_id,
+                        launch_operation_index,evidence_version,state='accepted'
+                 FROM session_creation_relations WHERE evidence_kind='claude_prompt_launch'
+                 ORDER BY child_session_id",
+            )?
+            .query_map([], |row| {
+                Ok((
+                    ClaudePromptLaunchProof {
+                        child_session_id: row.get(0)?,
+                        child_native_session_id: row.get(1)?,
+                        parent_session_id: row.get(2)?,
+                        parent_native_session_id: row.get(3)?,
+                        first_record_uuid: row.get(4)?,
+                        launch_call_id: row.get(5)?,
+                        launch_operation_index: row.get(6)?,
+                        evidence_version: row.get(7)?,
+                    },
+                    row.get(8)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The stored relation of one child, whatever its state: its proof and
     /// whether it is withheld as conflicted.
     pub fn session_creation(
@@ -781,7 +977,8 @@ fn validate(proof: &SessionCreationProof) -> Result<()> {
         // Only their own paths, with their whole witness, record these kinds.
         CreationEvidence::CliArtifactCreate
         | CreationEvidence::CodexClaudeLaunch
-        | CreationEvidence::CodexCliLaunch => false,
+        | CreationEvidence::CodexCliLaunch
+        | CreationEvidence::ClaudePromptLaunch => false,
     };
     if !fits {
         return Err(Error::InvalidInput(
@@ -1140,6 +1337,20 @@ impl<'a> From<&'a ClaudeLaunchCreationProof> for CliClaim<'a> {
     }
 }
 
+impl<'a> From<&'a ClaudePromptLaunchProof> for CliClaim<'a> {
+    fn from(proof: &'a ClaudePromptLaunchProof) -> Self {
+        Self {
+            child_session_id: &proof.child_session_id,
+            child_native_session_id: &proof.child_native_session_id,
+            parent_session_id: &proof.parent_session_id,
+            parent_native_session_id: &proof.parent_native_session_id,
+            first_record_uuid: &proof.first_record_uuid,
+            launch_call_id: &proof.launch_call_id,
+            launch_operation_index: proof.launch_operation_index,
+        }
+    }
+}
+
 /// Whether two CLI claims name the same child, parent, first input and
 /// launch operation.
 fn same_claim(a: &CliClaim<'_>, b: &CliClaim<'_>) -> bool {
@@ -1152,12 +1363,14 @@ fn same_claim(a: &CliClaim<'_>, b: &CliClaim<'_>) -> bool {
         && a.launch_operation_index == b.launch_operation_index
 }
 
-/// Why a CLI claim for a child of `child_host` cannot be related, checked
-/// before it claims anything: the same checks for every CLI kind.
+/// Why a CLI claim for a child of `child_host`, launched by a parent of
+/// `parent_host`, cannot be related, checked before it claims anything: the
+/// same checks for every CLI kind.
 fn cli_abstention(
     connection: &Connection,
     proof: &CliClaim<'_>,
     child_host: Host,
+    parent_host: Host,
 ) -> Result<Option<CreationAbstention>> {
     if proof.parent_session_id == proof.child_session_id {
         return Ok(Some(CreationAbstention::SelfLink));
@@ -1190,14 +1403,14 @@ fn cli_abstention(
         .optional()?;
     if parent
         != Some((
-            Host::Codex,
+            parent_host,
             Some(proof.parent_native_session_id.to_owned()),
             "user".to_owned(),
         ))
     {
         return Ok(Some(CreationAbstention::ParentMismatch));
     }
-    if user_sessions_with_native(connection, Host::Codex, proof.parent_native_session_id)?.len()
+    if user_sessions_with_native(connection, parent_host, proof.parent_native_session_id)?.len()
         != 1
     {
         return Ok(Some(CreationAbstention::AmbiguousParent));
@@ -1221,7 +1434,7 @@ fn cli_abstention(
     if leads_back(
         connection,
         (child_host, proof.child_native_session_id),
-        (Host::Codex, proof.parent_native_session_id),
+        (parent_host, proof.parent_native_session_id),
     )? {
         return Ok(Some(CreationAbstention::Cycle));
     }
@@ -1234,7 +1447,7 @@ fn apply_artifact(
     proof: &CliArtifactCreationProof,
     recorded_at: i64,
 ) -> Result<(CreationDisposition, bool)> {
-    if let Some(reason) = cli_abstention(connection, &proof.into(), Host::Claude)? {
+    if let Some(reason) = cli_abstention(connection, &proof.into(), Host::Claude, Host::Codex)? {
         return Ok((CreationDisposition::Abstained(reason), false));
     }
     // Every valid proof claims its launch first, whatever becomes of its
@@ -1332,7 +1545,7 @@ fn claim_launch(connection: &Connection, proof: &CliClaim<'_>) -> Result<(bool, 
             let withheld = connection.execute(
                 "UPDATE session_creation_relations SET state='conflicted'
                  WHERE evidence_kind IN ('cli_artifact_create','codex_claude_launch',
-                                         'codex_cli_launch')
+                                         'codex_cli_launch','claude_prompt_launch')
                    AND state='accepted'
                    AND ((parent_session_id=?1 AND launch_call_id=?2 AND launch_operation_index=?3)
                         OR child_session_id=?4)",
@@ -1449,7 +1662,7 @@ pub(crate) fn apply_launch(
     child: LaunchChild,
     recorded_at: i64,
 ) -> Result<(CreationDisposition, bool)> {
-    if let Some(reason) = cli_abstention(connection, &proof.into(), child.host())? {
+    if let Some(reason) = cli_abstention(connection, &proof.into(), child.host(), Host::Codex)? {
         return Ok((CreationDisposition::Abstained(reason), false));
     }
     let (owned, withheld) = claim_launch(connection, &proof.into())?;
@@ -1505,6 +1718,105 @@ pub(crate) fn apply_launch(
             child.host(),
             child.kind(),
             child.witness(),
+        ],
+    )?;
+    Ok(if owned {
+        (CreationDisposition::Recorded, true)
+    } else {
+        (CreationDisposition::Conflicted, withheld > 0)
+    })
+}
+
+fn validate_prompt_launch(proof: &ClaudePromptLaunchProof) -> Result<()> {
+    for value in [
+        &proof.child_session_id,
+        &proof.child_native_session_id,
+        &proof.parent_session_id,
+        &proof.parent_native_session_id,
+        &proof.first_record_uuid,
+        &proof.launch_call_id,
+    ] {
+        token(value)?;
+    }
+    if proof.evidence_version != CLAUDE_PROMPT_LAUNCH_VERSION {
+        return Err(Error::InvalidInput(
+            "a Claude prompt launch proof requires a known validator version",
+        ));
+    }
+    Ok(())
+}
+
+/// A Claude prompt launch's relation disposition, and whether applying it
+/// changed what is stored: the launch claim first, then the child's stored
+/// claim, as for the other CLI kinds. Its abstentions are checked before.
+fn apply_prompt_launch(
+    connection: &Connection,
+    proof: &ClaudePromptLaunchProof,
+    recorded_at: i64,
+) -> Result<(CreationDisposition, bool)> {
+    let (owned, withheld) = claim_launch(connection, &proof.into())?;
+    let stored = connection
+        .query_row(
+            "SELECT evidence_kind,child_native_session_id,parent_session_id,
+                    parent_native_session_id,first_record_uuid,launch_call_id,
+                    launch_operation_index,state
+             FROM session_creation_relations WHERE child_session_id=?1",
+            [&proof.child_session_id],
+            |row| {
+                Ok((
+                    row.get::<_, CreationEvidence>(0)?,
+                    (
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<u32>>(6)?,
+                    ),
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    if let Some((kind, fields, state)) = stored {
+        let same = kind == CreationEvidence::ClaudePromptLaunch
+            && fields
+                == (
+                    proof.child_native_session_id.clone(),
+                    Some(proof.parent_session_id.clone()),
+                    proof.parent_native_session_id.clone(),
+                    Some(proof.first_record_uuid.clone()),
+                    Some(proof.launch_call_id.clone()),
+                    Some(proof.launch_operation_index),
+                );
+        if owned && state == "accepted" && same {
+            return Ok((CreationDisposition::AlreadyRecorded, false));
+        }
+        let first = connection.execute(
+            "UPDATE session_creation_relations SET state='conflicted'
+             WHERE child_session_id=?1 AND state='accepted'",
+            [&proof.child_session_id],
+        )? > 0;
+        return Ok((CreationDisposition::Conflicted, first || withheld > 0));
+    }
+    connection.execute(
+        "INSERT INTO session_creation_relations(child_session_id,child_host,
+             child_native_session_id,parent_host,parent_native_session_id,evidence_kind,
+             evidence_version,witness,state,recorded_at,parent_session_id,first_record_uuid,
+             launch_call_id,launch_operation_index)
+         VALUES (?1,'claude',?2,'claude',?3,'claude_prompt_launch',?4,
+             'claude_bash_literal_prompt',?5,?6,?7,?8,?9,?10)",
+        params![
+            proof.child_session_id,
+            proof.child_native_session_id,
+            proof.parent_native_session_id,
+            proof.evidence_version,
+            if owned { "accepted" } else { "conflicted" },
+            recorded_at,
+            proof.parent_session_id,
+            proof.first_record_uuid,
+            proof.launch_call_id,
+            proof.launch_operation_index,
         ],
     )?;
     Ok(if owned {

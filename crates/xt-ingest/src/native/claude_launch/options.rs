@@ -275,16 +275,53 @@ fn lookup(word: &str) -> Option<(usize, Option<&str>)> {
 /// value an option needs missing or starting with `-`, `--`, two prompt
 /// words, or a plain word after a many-valued option's value.
 pub(super) fn read(args: &[String]) -> Option<Read> {
+    read_words(args.iter().map(|arg| Some(arg.as_str())), Values::Checked)
+}
+
+/// [`read`] for the Claude `Bash` literal-prompt match, whose launch is
+/// proved by its child's first input rather than by the command alone. A
+/// `None` word is one the shell supplies only when it runs (an expansion):
+/// it is accepted only as the value of an option that never decides which
+/// session is created, and anywhere else leaves the launch undecided. The
+/// values of the neutral, MCP configuration, budget and turn-limit options
+/// are not checked: a value the CLI refuses starts no session, so it creates
+/// no child to match. Every action, the session identifier, the formats and
+/// the prompt are read exactly as [`read`] reads them.
+pub(super) fn read_opaque(args: &[Option<String>]) -> Option<Read> {
+    read_words(args.iter().map(Option::as_deref), Values::Opaque)
+}
+
+/// How option values are read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Values {
+    /// Every word is literal, and every value is checked.
+    Checked,
+    /// Words may be unknown expansions; values that cannot change which
+    /// session is created are not checked.
+    Opaque,
+}
+
+/// One option value: literal text, or an expansion the shell supplies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Value<'a> {
+    Text(&'a str),
+    Unknown,
+}
+
+fn read_words<'a>(args: impl Iterator<Item = Option<&'a str>>, values: Values) -> Option<Read> {
+    let opaque = values == Values::Opaque;
     let mut seen: Vec<usize> = Vec::new();
-    let mut prompt: Option<&String> = None;
+    let mut prompt: Option<&str> = None;
     let mut session_id = None;
     let mut format = Format::Text;
     let mut structured = false;
     let mut meanings: Vec<Meaning> = Vec::new();
     let mut after_many = false;
-    let mut args = args.iter().peekable();
+    let mut args = args.peekable();
     while let Some(arg) = args.next() {
         let many_before = std::mem::take(&mut after_many);
+        // Where an option or the prompt goes, an expansion is undecided.
+        let arg = arg?;
         if !arg.starts_with('-') {
             if many_before || prompt.replace(arg).is_some() {
                 return None;
@@ -300,15 +337,36 @@ pub(super) fn read(args: &[String]) -> Option<Read> {
         let value = match (opt.arity, inline) {
             (Switch, None) => None,
             (Switch, Some(_)) => return None,
-            (One | Many | Optional, Some(value)) => Some(value),
-            (One | Many, None) => Some(args.next()?.as_str()),
+            (One | Many | Optional, Some(value)) => Some(Value::Text(value)),
+            (One | Many, None) => Some(args.next()?.map_or(Value::Unknown, Value::Text)),
             (Optional, None) => args
-                .next_if(|next| !next.starts_with('-'))
-                .map(String::as_str),
+                .next_if(|next| next.is_none_or(|next| !next.starts_with('-')))
+                .map(|next| next.map_or(Value::Unknown, Value::Text)),
         };
         if opt.arity == Many {
             after_many = true;
         }
+        // An expansion is one of the values that never decide the session.
+        let unchecked = opaque
+            && matches!(opt.meaning, Neutral | McpConfig | Budget | MaxTurns)
+            && match value {
+                Some(Value::Unknown) => true,
+                Some(Value::Text(text)) => {
+                    !(text.starts_with('-') || (opt.arity == One && text.is_empty()))
+                }
+                None => false,
+            };
+        if unchecked {
+            meanings.push(opt.meaning);
+            continue;
+        }
+        let value = match value {
+            Some(Value::Text(text)) => Some(text),
+            // Only a resume may take one it never reads.
+            Some(Value::Unknown) if opt.meaning == Resume => None,
+            Some(Value::Unknown) => return None,
+            None => None,
+        };
         match (opt.meaning, value) {
             (SessionId, Some(value)) if super::command::uuid(value) => {
                 session_id = Some(value.to_owned());
@@ -346,7 +404,7 @@ pub(super) fn read(args: &[String]) -> Option<Read> {
         meanings.push(opt.meaning);
     }
     let has = |meaning| meanings.contains(&meaning);
-    let action = if has(Info) || prompt.is_some_and(|word| SUBCOMMANDS.contains(&word.as_str())) {
+    let action = if has(Info) || prompt.is_some_and(|word| SUBCOMMANDS.contains(&word)) {
         Action::NoSession
     } else if has(Print) && format == Format::StreamJson && !has(Verbose) {
         Action::Invalid
@@ -368,7 +426,7 @@ pub(super) fn read(args: &[String]) -> Option<Read> {
         session_id,
         format,
         verbose: has(Verbose),
-        prompt: prompt.cloned(),
+        prompt: prompt.map(str::to_owned),
     })
 }
 
