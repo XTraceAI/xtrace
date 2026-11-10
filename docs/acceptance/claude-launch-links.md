@@ -327,6 +327,18 @@ keeps the exact parent, the child's first input, the call ID and the
 launch's position in the call. A link that later stops being unique is
 withdrawn for good (the fact withheld, the relation conflicted).
 
+A launch makes a link only when it reads no other input: one with a `<`
+redirection or a here-document, or after a `|`, may have sent its child more
+than the prompt, so it only counts as a launch that could have made a child.
+Text a command does not run as it stands — a here-document body, also
+inside `$(…)`, an array's words, a function's body — holds no launch. While
+any transcript, helper-agent folder or possible child's opening could not be
+read whole, no new link is written; it is read again after the next import.
+A child that other evidence already relates or names (another kind of
+relation or child fact, a parent origin, or a recorded Codex launch naming
+its session) is never touched. Migration 32 keeps the finished display
+checks of every host but Claude, which this match cannot affect.
+
 Like every accepted creation relation, a link makes the Human input view
 count the child's user messages as the agent's, not a person's.
 

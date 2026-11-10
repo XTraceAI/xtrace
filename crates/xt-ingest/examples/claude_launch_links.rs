@@ -311,6 +311,34 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let entry = sums.entry(name.to_owned()).or_insert(serde_json::json!(0));
         *entry = serde_json::json!(entry.as_u64().unwrap_or(0) + value as u64);
     };
+    // How many user sessions of each host a list still holds back as
+    // checking, and when and after how many bytes none of a host's were.
+    let reader =
+        rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let checking = |_: &Store| -> Result<(u64, u64), Box<dyn std::error::Error>> {
+        let count = |host: &str| -> rusqlite::Result<u64> {
+            reader.query_row(
+                "SELECT count(*) FROM sessions s WHERE s.host=?1 AND s.kind='user'
+                   AND NOT EXISTS(SELECT 1 FROM session_child_checks k
+                       WHERE k.session_id=s.session_id
+                         AND k.completed_generation=k.required_generation
+                         AND k.detector_versions=?2)
+                   AND NOT EXISTS(SELECT 1 FROM session_creation_relations c
+                       WHERE c.child_session_id=s.session_id AND c.state='accepted')
+                   AND NOT EXISTS(SELECT 1 FROM session_child_facts f
+                       WHERE f.child_session_id=s.session_id AND f.state='accepted')
+                   AND NOT EXISTS(SELECT 1 FROM human_session_origins o
+                       WHERE o.session_id=s.session_id AND o.conflicted=0)",
+                rusqlite::params![host, xt_store::child_check::DETECTOR_VERSIONS],
+                |row| row.get::<_, i64>(0).map(|count| count as u64),
+            )
+        };
+        Ok((count("claude")?, count("codex")?))
+    };
+    let checking_at_start = checking(&store)?;
+    let mut settled: [Option<(u64, u64)>; 2] = [None, None];
+    let mut last_change: [(u64, u64, u64); 2] =
+        [(0, 0, checking_at_start.0), (0, 0, checking_at_start.1)];
     while spawns.pending() && started.elapsed() < timeout && idle < 20 {
         let pass = continue_codex_spawns(
             &mut store,
@@ -360,6 +388,25 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             add("prompt_ambiguous", bash.prompt.ambiguous);
             add("prompt_refused", bash.prompt.refused);
             add("prompt_withdrawn", bash.prompt.withdrawn);
+            add("prompt_other_input", bash.prompt.other_input);
+            add("prompt_held", bash.prompt.held);
+            add("prompt_incomplete_matches", bash.prompt.incomplete_matches);
+            add(
+                "prompt_children_unreadable",
+                bash.prompt.children_unreadable,
+            );
+            add("prompt_commands_refused", bash.prompt.commands_refused);
+        }
+        let now = checking(&store)?;
+        for (slot, left) in settled.iter_mut().zip([now.0, now.1]) {
+            if left == 0 && slot.is_none() {
+                *slot = Some((started.elapsed().as_millis() as u64, bytes));
+            }
+        }
+        for (last, left) in last_change.iter_mut().zip([now.0, now.1]) {
+            if left != last.2 {
+                *last = (started.elapsed().as_millis() as u64, bytes, left);
+            }
         }
         if pass.advanced() {
             idle = 0;
@@ -470,6 +517,10 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         serde_json::json!({
             "mode": "children",
             "quiet": quiet,
+            "checking_at_start": {"claude": checking_at_start.0, "codex": checking_at_start.1},
+            "checking_at_end": {"claude": checking(&store)?.0, "codex": checking(&store)?.1},
+            "settled_ms_and_bytes": {"claude": settled[0], "codex": settled[1]},
+            "last_change_ms_bytes_left": {"claude": last_change[0], "codex": last_change[1]},
             "left_idle": idle >= 20,
             "elapsed_ms": started.elapsed().as_millis() as u64,
             "passes": passes,

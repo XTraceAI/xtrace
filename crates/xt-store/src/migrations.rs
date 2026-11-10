@@ -188,7 +188,7 @@ const MIGRATIONS: &[Migration] = &[
     migration!(
         32,
         "0032_claude_prompt_launch_children",
-        "9c3483942932a3cda55e6c50446617ddd07c4638f89dbb5085df09fa6df7b0a1"
+        "885d0e6a28dcdaca65b7348bb4cb97326635818040999d59014a5a81f1607eca"
     ),
 ];
 

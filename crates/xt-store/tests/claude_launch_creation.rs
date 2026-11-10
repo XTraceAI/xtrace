@@ -13,10 +13,11 @@ use serde_json::json;
 use tempfile::TempDir;
 use xt_store::{
     CanonicalRecord, SessionMeta, SessionSource, Store,
+    child_fact::ChildFactDisposition,
     creation::{
-        CLAUDE_LAUNCH_CREATE_VERSION, CLI_ARTIFACT_CREATE_VERSION, ClaudeLaunchCreationProof,
-        CliArtifactCreationProof, CreationAbstention, CreationDisposition, CreationEvidence,
-        CreationWitness,
+        CLAUDE_LAUNCH_CREATE_VERSION, CLAUDE_PROMPT_LAUNCH_VERSION, CLI_ARTIFACT_CREATE_VERSION,
+        ClaudeLaunchCreationProof, ClaudePromptLaunchProof, CliArtifactCreationProof,
+        CreationAbstention, CreationDisposition, CreationEvidence, CreationWitness,
     },
     session_list::{ParentEvidence, SessionFilter},
 };
@@ -208,6 +209,66 @@ fn a_launch_shows_its_exact_parent_replays_silently_and_feeds_the_existing_human
         (vec![CreationDisposition::AlreadyRecorded], 0)
     );
     assert_eq!(eligibility(&directory), after);
+}
+
+#[test]
+fn a_prompt_launch_never_touches_a_child_another_kind_relates_or_names() {
+    // A Claude agent earlier ran the same prompt with `claude -p`: its weaker
+    // prompt match must not conflict the Codex `--session-id` launch link.
+    const CLAUDE_PARENT: &str = "0c000000-0000-4000-8000-0000000000d1";
+    let directory = TempDir::new().unwrap();
+    let mut store = open(&directory);
+    seed(&mut store);
+    let mut meta = SessionMeta::new(CLAUDE_PARENT, "claude", SessionSource::Transcript);
+    meta.native_session_id = Some(CLAUDE_PARENT.into());
+    meta.started_at_ms = Some(1);
+    store.upsert_session(&meta, false).unwrap();
+    assert_eq!(
+        apply(&mut store, &[proof(CHILD)]),
+        (vec![CreationDisposition::Recorded], 1)
+    );
+    let prompt = |child: &str| ClaudePromptLaunchProof {
+        child_session_id: child.into(),
+        child_native_session_id: child.into(),
+        parent_session_id: CLAUDE_PARENT.into(),
+        parent_native_session_id: CLAUDE_PARENT.into(),
+        first_record_uuid: first(child),
+        launch_call_id: "toolu_01SyntheticPromptLaunch".into(),
+        launch_operation_index: 0,
+        evidence_version: CLAUDE_PROMPT_LAUNCH_VERSION,
+    };
+    let report = store
+        .record_claude_prompt_launch(&prompt(CHILD), T)
+        .unwrap();
+    assert_eq!(
+        (report.fact, report.relation, report.changed),
+        (
+            ChildFactDisposition::Abstained(CreationAbstention::OtherEvidence),
+            CreationDisposition::Abstained(CreationAbstention::OtherEvidence),
+            0
+        )
+    );
+    // The Codex link stands, shown as before; no prompt fact was kept.
+    assert_eq!(
+        store.claude_launch_creation(CHILD).unwrap(),
+        Some((proof(CHILD), false))
+    );
+    assert_eq!(
+        shown(&store),
+        [(CHILD.to_owned(), codex(PARENT), ParentEvidence::AgentLaunch)]
+    );
+    assert!(store.child_facts(CHILD).unwrap().is_empty());
+    assert!(store.claude_prompt_launches().unwrap().is_empty());
+    // Its launch was not claimed: the same launch still links a child that
+    // nothing else names.
+    let report = store
+        .record_claude_prompt_launch(&prompt(SECOND), T)
+        .unwrap();
+    assert_eq!(report.relation, CreationDisposition::Recorded);
+    assert_eq!(
+        store.claude_launch_creation(CHILD).unwrap(),
+        Some((proof(CHILD), false))
+    );
 }
 
 #[test]

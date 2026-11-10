@@ -23,6 +23,27 @@
 //!    being so is withdrawn for good.
 //! 5. The parent, the session owning the transcript, is exactly one indexed
 //!    Claude user session other than the child.
+//! 6. The launch reads only the input its `Bash` call was given
+//!    ([`words::Command::own_input`]): no `<` redirection or here-document,
+//!    and not after a `|`. A launch given other input may have sent its child
+//!    more than the prompt, so it never makes a link; it still counts as a
+//!    launch that could have made a child, so it can stop a link.
+//! 7. Nothing the link could rest on is missing from what was read. A
+//!    caller's transcript or helper folder that could not be read whole, or
+//!    held more than this version keeps, may hide a launch made at or after
+//!    that caller's first record: no new link is written for a child saved at
+//!    or after it. A possible child whose opening could not be read may be
+//!    the child of any launch made at or before it was saved: no such launch
+//!    makes a new link. Too many files or sessions to keep stop every new
+//!    link. A stored link stays, unless what was read withdraws it. What
+//!    could not be read is read again once a scan imports anything, and a
+//!    later match decides again. A transcript that no longer exists is
+//!    history that was deleted, like one the index never located: its
+//!    launches are not known and stop nothing, while a possible child that
+//!    no longer exists still stops the launches that could have made it.
+//! 8. The child is not already related, or named as a child, by any other
+//!    evidence, such as a Codex launch naming its session: the store abstains
+//!    ([`Store::record_claude_prompt_launch`]).
 //!
 //! The child fact and the relation are written together
 //! ([`Store::record_claude_prompt_launch`]). Work lives in memory in a
@@ -77,6 +98,9 @@ struct Found {
     launch_ms: i64,
     digest: [u8; 32],
     session_id: Option<String>,
+    /// It reads only the input its call was given, so its child's first
+    /// input is its prompt alone: only such a launch may make a link.
+    matchable: bool,
 }
 
 /// What a transcript file was read to hold.
@@ -90,6 +114,9 @@ struct FileFacts {
     /// The bytes just before `complete`.
     tail: Vec<u8>,
     launches: Vec<Found>,
+    /// It held more launches, or a longer line, than this version reads:
+    /// launches it holds may be missing.
+    overfull: bool,
 }
 
 /// One transcript being read, from `next`.
@@ -107,6 +134,10 @@ struct FileRead {
     /// A line longer than the bound is being passed over.
     skipping: bool,
     launches: Vec<Found>,
+    /// A line was passed over, or launches dropped, since its first byte.
+    overfull: bool,
+    /// Commands naming `claude` that the word reader refused.
+    refused_commands: usize,
     _held: Reserved,
 }
 
@@ -159,6 +190,21 @@ pub(in crate::native::claude_launch) struct PromptBacklog {
     waited: bool,
     wake: bool,
     memory: Option<Allowance>,
+    /// Transcript files that could not be read, with the session owning
+    /// each: read again once a scan imports anything.
+    unreadable: HashMap<PathBuf, String>,
+    /// Callers whose helper-agent folder could not be listed whole: listed
+    /// again once a scan imports anything.
+    unlisted: HashSet<String>,
+    /// More callers or files were seen than this version keeps, so evidence
+    /// was forgotten: no new link is written for the rest of this run.
+    overflowed: bool,
+    /// Possible children of the match in progress whose opening could not be
+    /// read, and when each first saved a record.
+    child_gaps: Vec<(String, i64)>,
+    /// The possible children of the match in progress could not all be
+    /// listed or told apart.
+    children_unknown: bool,
 }
 
 /// What one pass of literal-prompt launch work did. Counts only.
@@ -184,6 +230,17 @@ pub struct PromptProgress {
     pub withdrawn: usize,
     /// Rows that changed what a read shows.
     pub changed: usize,
+    /// Launches with one possible child that were given other input (a `<`
+    /// redirection, a here-document or a pipe), so make no link.
+    pub other_input: usize,
+    /// Links not written because some evidence could not be read whole.
+    pub held: usize,
+    /// Matches that ran with some evidence missing.
+    pub incomplete_matches: usize,
+    /// Possible children whose opening could not be read.
+    pub children_unreadable: usize,
+    /// `Bash` commands naming `claude` that the word reader refused.
+    pub commands_refused: usize,
 }
 
 impl PromptBacklog {
@@ -198,16 +255,53 @@ impl PromptBacklog {
     /// Claude sessions a scan imported: each may be a caller with new
     /// launches, or a child.
     pub fn add_sessions<'a>(&mut self, natives: impl IntoIterator<Item = &'a str>) {
+        let mut any = false;
         for native in natives {
+            any = true;
             self.dirty = true;
             self.enqueue(native.to_owned());
+        }
+        // What could not be read before is read again.
+        if any {
+            let again: Vec<String> = self
+                .unreadable
+                .values()
+                .chain(self.unlisted.iter())
+                .cloned()
+                .collect();
+            for owner in again {
+                self.enqueue(owner);
+            }
         }
     }
 
     fn enqueue(&mut self, native: String) {
-        if self.queued.len() < MAX_FILES && self.queued.insert(native.clone()) {
-            self.queue.push_back(native);
+        if self.queued.contains(&native) {
+            return;
         }
+        if self.queued.len() >= MAX_FILES {
+            self.overflowed = true;
+            return;
+        }
+        self.queued.insert(native.clone());
+        self.queue.push_back(native);
+    }
+
+    /// The callers whose launches may not all have been read: those owning a
+    /// file that could not be read whole, or a helper folder that could not
+    /// be listed whole.
+    fn hidden_callers(&self) -> HashSet<&str> {
+        self.unreadable
+            .values()
+            .map(String::as_str)
+            .chain(self.unlisted.iter().map(String::as_str))
+            .chain(
+                self.files
+                    .values()
+                    .filter(|facts| facts.overfull)
+                    .map(|facts| facts.owner.as_str()),
+            )
+            .collect()
     }
 
     /// Whether a later pass has anything to do. While it has, a display
@@ -259,16 +353,23 @@ pub(in crate::native::claude_launch) fn pass(
                 Ok(true) => {
                     let reading = backlog.reading.take().expect("reading");
                     progress.files_read += 1;
+                    progress.commands_refused += reading.refused_commands;
                     backlog.dirty = true;
                     let tail = tail(&reading.file, reading.complete);
-                    if backlog.files.len() >= MAX_FILES {
+                    if backlog.files.len() >= MAX_FILES
+                        && !backlog.files.contains_key(&reading.path)
+                    {
+                        // Forgotten launches could have made any child.
                         backlog.files.clear();
+                        backlog.overflowed = true;
                     }
-                    let launches = if reading.launches.len() > MAX_FILE_LAUNCHES {
+                    let overfull = reading.overfull || reading.launches.len() > MAX_FILE_LAUNCHES;
+                    let launches = if overfull {
                         Vec::new()
                     } else {
                         reading.launches
                     };
+                    backlog.unreadable.remove(&reading.path);
                     backlog.files.insert(
                         reading.path,
                         FileFacts {
@@ -278,12 +379,15 @@ pub(in crate::native::claude_launch) fn pass(
                             complete: reading.complete,
                             tail,
                             launches,
+                            overfull,
                         },
                     );
                 }
                 Err(()) => {
                     let reading = backlog.reading.take().expect("reading");
                     backlog.files.remove(&reading.path);
+                    backlog.unreadable.insert(reading.path, reading.owner);
+                    backlog.dirty = true;
                     progress.files_unreadable += 1;
                 }
             }
@@ -294,10 +398,15 @@ pub(in crate::native::claude_launch) fn pass(
             match start(backlog, &owner, &path, limits.max_line, &memory) {
                 Start::Reading(reading) => backlog.reading = Some(reading),
                 Start::Unchanged => {}
-                Start::Failed => {
+                Start::Missing => {
                     if backlog.files.remove(&path).is_some() {
                         backlog.dirty = true;
                     }
+                }
+                Start::Failed => {
+                    backlog.files.remove(&path);
+                    backlog.unreadable.insert(path, owner);
+                    backlog.dirty = true;
                     progress.files_unreadable += 1;
                 }
             }
@@ -306,32 +415,47 @@ pub(in crate::native::claude_launch) fn pass(
         // 3. The next caller: its transcript and its helpers' transcripts.
         if let Some(native) = backlog.queue.pop_front() {
             backlog.queued.remove(&native);
+            // This caller's files are listed afresh: what could not be read
+            // before is read again, or is gone.
+            backlog.unreadable.retain(|_, owner| *owner != native);
+            backlog.unlisted.remove(&native);
             if let Some(path) = transcript(store, home, &native)? {
                 let helpers = path.with_extension("").join("subagents");
                 let mut found = Vec::new();
-                if let Ok(entries) = std::fs::read_dir(&helpers) {
-                    for entry in entries {
-                        if !budget.entry() {
-                            // Listed again, whole, next pass.
-                            backlog.queued.insert(native.clone());
-                            backlog.queue.push_front(native);
-                            return Ok(());
+                let mut whole = true;
+                match std::fs::read_dir(&helpers) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            if !budget.entry() {
+                                // Listed again, whole, next pass.
+                                backlog.queued.insert(native.clone());
+                                backlog.queue.push_front(native);
+                                return Ok(());
+                            }
+                            let Ok(entry) = entry else {
+                                whole = false;
+                                break;
+                            };
+                            let name = entry.file_name();
+                            let name = name.to_string_lossy();
+                            if !(name.starts_with("agent-") && name.ends_with(".jsonl")) {
+                                continue;
+                            }
+                            if found.len() >= MAX_HELPERS {
+                                whole = false;
+                                break;
+                            }
+                            found.push(entry.path());
                         }
-                        let Ok(entry) = entry else {
-                            progress.files_unreadable += 1;
-                            break;
-                        };
-                        let name = entry.file_name();
-                        let name = name.to_string_lossy();
-                        if !(name.starts_with("agent-") && name.ends_with(".jsonl")) {
-                            continue;
-                        }
-                        if found.len() >= MAX_HELPERS {
-                            progress.files_unreadable += 1;
-                            break;
-                        }
-                        found.push(entry.path());
                     }
+                    // No helper agents.
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => whole = false,
+                }
+                if !whole {
+                    progress.files_unreadable += 1;
+                    backlog.unlisted.insert(native.clone());
+                    backlog.dirty = true;
                 }
                 found.sort();
                 backlog.due.push_back((native.clone(), path));
@@ -355,7 +479,7 @@ pub(in crate::native::claude_launch) fn pass(
         }
         // 5. One match over every launch found, once everything is read.
         if backlog.dirty || backlog.children.is_some() {
-            if !read_children(store, home, backlog, limits, budget, &memory)? {
+            if !read_children(store, home, backlog, limits, budget, &memory, progress)? {
                 return Ok(());
             }
             decide(store, backlog, recorded_at, progress)?;
@@ -376,6 +500,8 @@ enum Start {
     Reading(Box<FileRead>),
     /// Read to its end already, and only possibly grown by a partial line.
     Unchanged,
+    /// It no longer exists: deleted history.
+    Missing,
     Failed,
 }
 
@@ -386,8 +512,10 @@ fn start(
     max_line: usize,
     memory: &Allowance,
 ) -> Start {
-    let Ok((file, generation)) = source::open(path) else {
-        return Start::Failed;
+    let (file, generation) = match source::open(path) {
+        Ok(opened) => opened,
+        Err(source::Unread::Missing) => return Start::Missing,
+        Err(_) => return Start::Failed,
     };
     let Ok(length) = u64::try_from(generation.length) else {
         return Start::Failed;
@@ -399,6 +527,7 @@ fn start(
     // bytes before where it was read up to are unchanged.
     let mut from = 0;
     let mut launches = Vec::new();
+    let mut overfull = false;
     if let Some(known) = backlog.files.get(path)
         && known.owner == owner
         && known.device == generation.device
@@ -411,6 +540,7 @@ fn start(
         }
         from = known.complete;
         launches = known.launches.clone();
+        overfull = known.overfull;
     }
     Start::Reading(Box::new(FileRead {
         owner: owner.to_owned(),
@@ -424,6 +554,8 @@ fn start(
         carry: Vec::new(),
         skipping: false,
         launches,
+        overfull,
+        refused_commands: 0,
         _held: held,
     }))
 }
@@ -474,9 +606,11 @@ impl FileRead {
             }
             if !self.skipping {
                 if self.carry.len() + rest.len() > max_line {
-                    // A longer line is passed over: it holds no launch.
+                    // A longer line is passed over: a launch it may hold is
+                    // missing.
                     self.carry = Vec::new();
                     self.skipping = true;
+                    self.overfull = true;
                 } else {
                     self.carry.extend_from_slice(rest);
                 }
@@ -494,9 +628,11 @@ impl FileRead {
     fn line(&mut self, bytes: &[u8], programs: &[PathBuf], home: &Path) {
         // A launch names `claude`; a line that escapes characters may spell
         // it otherwise, and is read whole.
-        if self.launches.len() > MAX_FILE_LAUNCHES
-            || !(contains(bytes, b"claude") || contains(bytes, b"\\u"))
-        {
+        if self.launches.len() > MAX_FILE_LAUNCHES {
+            self.overfull = true;
+            return;
+        }
+        if !(contains(bytes, b"claude") || contains(bytes, b"\\u")) {
             return;
         }
         let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
@@ -530,16 +666,24 @@ impl FileRead {
             let Some(command) = block["input"].get("command").and_then(Value::as_str) else {
                 continue;
             };
-            for (index, launch) in launches(command, programs, home).into_iter().enumerate() {
+            let Some(found) = launches(command, programs, home) else {
+                if command.contains("claude") {
+                    self.refused_commands += 1;
+                }
+                continue;
+            };
+            for (index, launch) in found.into_iter().enumerate() {
                 let Ok(index) = u32::try_from(index) else {
+                    self.overfull = true;
                     break;
                 };
                 self.launches.push(Found {
                     call_id: id.to_owned(),
                     index,
                     launch_ms,
-                    digest: launch.0,
-                    session_id: launch.1,
+                    digest: launch.digest,
+                    session_id: launch.session_id,
+                    matchable: launch.own_input,
                 });
             }
         }
@@ -556,15 +700,21 @@ fn token(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
+/// One create-mode Claude print launch with a literal prompt.
+struct Literal {
+    digest: [u8; 32],
+    session_id: Option<String>,
+    own_input: bool,
+}
+
 /// The create-mode Claude print launches with a literal prompt one command
-/// holds, in order: each prompt's digest and the session it names.
-fn launches(command: &str, programs: &[PathBuf], home: &Path) -> Vec<([u8; 32], Option<String>)> {
-    let Some(commands) = words::simple_commands(command) else {
-        return Vec::new();
-    };
+/// holds, in order: each prompt's digest, the session it names and whether
+/// it reads only its call's input. `None` when the command cannot be read.
+fn launches(command: &str, programs: &[PathBuf], home: &Path) -> Option<Vec<Literal>> {
+    let commands = words::simple_commands(command)?;
     let mut found = Vec::new();
     for simple in &commands {
-        let Some((program, args)) = words::program(simple) else {
+        let Some((program, args)) = words::program(&simple.words) else {
             continue;
         };
         let claude = match program {
@@ -597,17 +747,20 @@ fn launches(command: &str, programs: &[PathBuf], home: &Path) -> Vec<([u8; 32], 
         let Some(prompt) = read.prompt.filter(|prompt| !prompt.is_empty()) else {
             continue;
         };
-        found.push((
-            sha2::Sha256::digest(prompt.as_bytes()).into(),
-            read.session_id,
-        ));
+        found.push(Literal {
+            digest: sha2::Sha256::digest(prompt.as_bytes()).into(),
+            session_id: read.session_id,
+            own_input: simple.own_input,
+        });
     }
-    found
+    Some(found)
 }
 
 /// Read the opening of every indexed Claude session that may be a child of
 /// a launch found: those first saving an input at or after the earliest
 /// launch. `false` when the budget ended first; the reads resume next pass.
+/// An opening that cannot be read now is a gap of this match, never kept:
+/// the next match reads it again.
 fn read_children(
     store: &Store,
     home: &Path,
@@ -615,8 +768,11 @@ fn read_children(
     limits: &LaunchLimits,
     budget: &mut Budget<'_>,
     memory: &Allowance,
+    progress: &mut PromptProgress,
 ) -> xt_store::Result<bool> {
     if backlog.children.is_none() {
+        backlog.child_gaps.clear();
+        backlog.children_unknown = false;
         let earliest = backlog
             .files
             .values()
@@ -629,6 +785,7 @@ fn read_children(
         let born = store.claude_sessions_born_between(earliest, i64::MAX, MAX_CHILDREN + 1)?;
         // Too many to look at: nothing is decided.
         let born: VecDeque<String> = if born.len() > MAX_CHILDREN {
+            backlog.children_unknown = true;
             VecDeque::new()
         } else {
             born.into_iter().map(|(native, _)| native).collect()
@@ -644,7 +801,15 @@ fn read_children(
                     return Ok(false);
                 }
                 OwnOpening::Input(_, first) => Some(first),
-                OwnOpening::NoInput(_) | OwnOpening::Failed(_) | OwnOpening::Again(_) => None,
+                OwnOpening::NoInput(_) => None,
+                OwnOpening::Failed(_) | OwnOpening::Again(_) => {
+                    backlog.openings.remove(&reading.native);
+                    backlog
+                        .child_gaps
+                        .push((reading.native, reading.first_record_ms));
+                    progress.children_unreadable += 1;
+                    continue;
+                }
             };
             backlog.openings.insert(
                 std::mem::take(&mut reading.native),
@@ -666,6 +831,12 @@ fn read_children(
         };
         let sessions = store.user_sessions_with_native(Host::Claude, &native)?;
         let [session] = sessions.as_slice() else {
+            // More than one indexed session of this identity: which one
+            // holds which input is not known.
+            if sessions.len() > 1 {
+                backlog.children_unknown = true;
+                progress.children_unreadable += 1;
+            }
             backlog.openings.remove(&native);
             continue;
         };
@@ -682,6 +853,8 @@ fn read_children(
         };
         let Ok(now) = source::stat(&path) else {
             backlog.openings.remove(&native);
+            backlog.child_gaps.push((native, first_record_ms));
+            progress.children_unreadable += 1;
             continue;
         };
         if let Some(known) = backlog.openings.get_mut(&native)
@@ -704,19 +877,25 @@ fn read_children(
                 });
             }
             Err(_) => {
-                backlog.openings.insert(
-                    native,
-                    Opening {
-                        device: now.device,
-                        inode: now.inode,
-                        index_uuid,
-                        first_record_ms,
-                        first: None,
-                    },
-                );
+                backlog.openings.remove(&native);
+                backlog.child_gaps.push((native, first_record_ms));
+                progress.children_unreadable += 1;
             }
         }
     }
+}
+
+/// Whether a launch `found` in `owner`'s transcripts could have made the
+/// possible child `native`, first saved at `first_record_ms`, if its first
+/// input is the launch's prompt: another session, saved at or after the call,
+/// and the one the launch named, if it named one.
+fn could_make(owner: &str, found: &Found, native: &str, first_record_ms: i64) -> bool {
+    native != owner
+        && first_record_ms >= found.launch_ms
+        && found
+            .session_id
+            .as_deref()
+            .is_none_or(|named| named == native)
 }
 
 /// One launch as the match sees it.
@@ -739,6 +918,32 @@ fn decide(
     // Only the sessions this match listed are possible children.
     let listed = std::mem::take(&mut backlog.listed);
     backlog.openings.retain(|native, _| listed.contains(native));
+    // Where evidence is missing, a launch that looks unique may not be: a
+    // caller not read whole may hide a launch that made any child saved at
+    // or after its first record, and every child, when too much was seen
+    // to keep. A stored link may still be withdrawn by what was read.
+    let mut hidden_from: Option<i64> =
+        (backlog.overflowed || backlog.children_unknown).then_some(i64::MIN);
+    for owner in backlog.hidden_callers() {
+        // A caller with no timed record could have made any child.
+        let mut first = None;
+        let mut untimed = false;
+        for session in store.user_sessions_with_native(Host::Claude, owner)? {
+            match store.session_first_record_ms(&session)? {
+                Some(ms) => first = Some(first.map_or(ms, |known: i64| known.min(ms))),
+                None => untimed = true,
+            }
+        }
+        let first = if untimed {
+            i64::MIN
+        } else {
+            first.unwrap_or(i64::MIN)
+        };
+        hidden_from = Some(hidden_from.map_or(first, |known| known.min(first)));
+    }
+    if hidden_from.is_some() || !backlog.child_gaps.is_empty() {
+        progress.incomplete_matches += 1;
+    }
     // One entry per launch: the same call read in two files of its owner is
     // one launch.
     let mut seen = HashSet::new();
@@ -757,18 +962,20 @@ fn decide(
         }
     }
     progress.launches = launches.len();
-    // The possible children, by the digest of their first input.
+    // The possible children, by the digest of their first input. One whose
+    // transcript's first input is not the one the index holds may still have
+    // been made by a launch, but is never linked.
     let mut by_digest: HashMap<[u8; 32], Vec<&str>> = HashMap::new();
+    let mut unlinkable: HashSet<&str> = HashSet::new();
     for (native, opening) in &backlog.openings {
         let Some(first) = &opening.first else {
             continue;
         };
-        let (Some(digest), Some(uuid)) = (first.digest, first.uuid.as_deref()) else {
+        let Some(digest) = first.digest else {
             continue;
         };
-        // The transcript's own first input must be the one the index holds.
-        if uuid != opening.index_uuid {
-            continue;
+        if first.uuid.as_deref() != Some(opening.index_uuid.as_str()) {
+            unlinkable.insert(native);
         }
         by_digest.entry(digest).or_default().push(native);
     }
@@ -781,13 +988,12 @@ fn decide(
                 .flatten()
                 .copied()
                 .filter(|native| {
-                    *native != launch.owner
-                        && backlog.openings[*native].first_record_ms >= launch.found.launch_ms
-                        && launch
-                            .found
-                            .session_id
-                            .as_deref()
-                            .is_none_or(|named| named == *native)
+                    could_make(
+                        launch.owner,
+                        launch.found,
+                        native,
+                        backlog.openings[*native].first_record_ms,
+                    )
                 })
                 .collect();
             possible.sort_unstable();
@@ -814,6 +1020,27 @@ fn decide(
             }
             continue;
         };
+        // Given other input, its child's first input may not be its prompt
+        // alone: it only stops other links.
+        if !launch.found.matchable {
+            progress.other_input += 1;
+            continue;
+        }
+        if unlinkable.contains(child) {
+            progress.ambiguous += 1;
+            continue;
+        }
+        // A child saved after a hidden launch could be its child, and a
+        // possible child that could not be read could be this launch's.
+        let born = backlog.openings[child].first_record_ms;
+        if hidden_from.is_some_and(|from| born >= from)
+            || backlog.child_gaps.iter().any(|(native, first_record_ms)| {
+                could_make(launch.owner, launch.found, native, *first_record_ms)
+            })
+        {
+            progress.held += 1;
+            continue;
+        }
         let parents = store.user_sessions_with_native(Host::Claude, launch.owner)?;
         let children = store.user_sessions_with_native(Host::Claude, child)?;
         let ([parent], [child_session]) = (parents.as_slice(), children.as_slice()) else {

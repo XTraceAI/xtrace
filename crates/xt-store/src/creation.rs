@@ -451,6 +451,10 @@ pub enum CreationAbstention {
     ParentMismatch,
     /// More than one indexed user session holds the parent's native identity.
     AmbiguousParent,
+    /// Other evidence already relates or names this child: a relation or
+    /// child fact of another kind, a parent origin, or a recorded Codex
+    /// launch naming its session. A weaker proof never touches it.
+    OtherEvidence,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -662,7 +666,11 @@ impl Store {
     ///
     /// A malformed identifier or an unknown version rejects the call before
     /// anything is written. A proof the store cannot tie to one child and one
-    /// parent abstains for both and writes nothing. Otherwise the fact
+    /// parent abstains for both and writes nothing, and so does a proof for a
+    /// child that other evidence already relates or names
+    /// ([`CreationAbstention::OtherEvidence`]): this match is the weakest, so
+    /// it never claims a launch or conflicts a relation of another kind.
+    /// Otherwise the fact
     /// follows the child-fact rules and the relation the launch rules of the
     /// other CLI kinds: an exact replay changes nothing; any other proof for a
     /// child already related withholds that child as conflicted; and a
@@ -678,9 +686,13 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(reason) =
-            cli_abstention(&transaction, &proof.into(), Host::Claude, Host::Claude)?
+        let reason = match cli_abstention(&transaction, &proof.into(), Host::Claude, Host::Claude)?
         {
+            Some(reason) => Some(reason),
+            None => other_child_evidence(&transaction, proof)?
+                .then_some(CreationAbstention::OtherEvidence),
+        };
+        if let Some(reason) = reason {
             return Ok(PromptLaunchReport {
                 fact: crate::child_fact::ChildFactDisposition::Abstained(reason),
                 relation: CreationDisposition::Abstained(reason),
@@ -1725,6 +1737,25 @@ pub(crate) fn apply_launch(
     } else {
         (CreationDisposition::Conflicted, withheld > 0)
     })
+}
+
+/// Whether anything but a Claude prompt launch relates or names the proof's
+/// child, in any state: a creation relation or child fact of another kind, a
+/// parent origin, or a recorded Codex `--session-id` launch of its session.
+fn other_child_evidence(connection: &Connection, proof: &ClaudePromptLaunchProof) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM session_creation_relations
+                WHERE (child_session_id=?1 OR (child_host='claude' AND child_native_session_id=?2))
+                  AND evidence_kind<>'claude_prompt_launch')
+             OR EXISTS(SELECT 1 FROM session_child_facts
+                WHERE (child_session_id=?1 OR (child_host='claude' AND child_native_session_id=?2))
+                  AND evidence_kind<>'claude_prompt_launch')
+             OR EXISTS(SELECT 1 FROM human_session_origins
+                WHERE session_id=?1 OR (host='claude' AND native_session_id=?2))
+             OR EXISTS(SELECT 1 FROM claude_launch_candidates WHERE child_native_session_id=?2)",
+        params![proof.child_session_id, proof.child_native_session_id],
+        |row| row.get(0),
+    )?)
 }
 
 fn validate_prompt_launch(proof: &ClaudePromptLaunchProof) -> Result<()> {

@@ -17,9 +17,17 @@
 //! (`$NAME`, `${…}`, `$(…)`, `` `…` ``, `$((…))`, `$'…'`, `$"…"`), a glob
 //! character, a brace expansion or a leading `~` (kept apart, for a program
 //! path). A redirection and its target are set aside; a here-document's body
-//! is skipped, never read as commands. A command or process substitution's
-//! body is read as commands too, up to a small depth. Comments are skipped.
-//! An unterminated quote or substitution refuses the whole command.
+//! is skipped, never read as commands, also inside a substitution. A command
+//! or process substitution's body is read as commands too, up to a small
+//! depth. Comments and array literals (`x=( … )`) are skipped. An
+//! unterminated quote, substitution or here-document, a function definition,
+//! or an array literal holding a substitution refuses the whole command.
+//!
+//! Each simple command says whether it reads only the input the whole
+//! command was given ([`Command::own_input`]): not when it, or a group or
+//! loop around it, has a `<` redirection or a here-document, or follows a `|`
+//! in a pipeline, or is inside a substitution or `sh -c` script of a command
+//! that does not.
 
 /// Longest command read; a longer one is refused.
 pub(super) const MAX_COMMAND: usize = 256 * 1024;
@@ -45,15 +53,31 @@ pub(super) enum Word {
 /// The words of one simple command, redirections set aside.
 pub(super) type Simple = Vec<Word>;
 
+/// One simple command and where its input comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Command {
+    pub(super) words: Simple,
+    /// It reads only the input the whole recorded command was given: no `<`
+    /// redirection or here-document of its own or of a group or loop around
+    /// it, not after a `|`, and not inside a substitution or `sh -c` script of
+    /// a command that does read other input.
+    pub(super) own_input: bool,
+}
+
+/// Shell words that open a compound command; one after a `|` reads the pipe.
+const COMPOUND: &[&str] = &["{", "while", "until", "for", "if", "case", "select"];
+/// Shell words that close one; a `<` after it feeds the whole group.
+const CLOSERS: &[&str] = &["}", "done", "fi", "esac"];
+
 /// Every simple command `command` holds, in order, with those in
 /// substitutions after the command that holds them; `None` when it cannot be
 /// split.
-pub(super) fn simple_commands(command: &str) -> Option<Vec<Simple>> {
+pub(super) fn simple_commands(command: &str) -> Option<Vec<Command>> {
     if command.len() > MAX_COMMAND {
         return None;
     }
     let mut out = Vec::new();
-    split(command, 0, &mut out)?;
+    split(command, 0, true, &mut out)?;
     Some(out)
 }
 
@@ -74,7 +98,9 @@ pub(super) fn shell_script(words: &[Word]) -> Option<&str> {
 }
 
 /// Read `script` as commands into `out`, then the substitutions it holds.
-pub(super) fn split(script: &str, depth: usize, out: &mut Vec<Simple>) -> Option<()> {
+/// `inherited` says whether the script itself reads only the input the whole
+/// recorded command was given.
+fn split(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) -> Option<()> {
     let chars: Vec<char> = script.chars().collect();
     let mut reader = Reader {
         chars: &chars,
@@ -85,24 +111,42 @@ pub(super) fn split(script: &str, depth: usize, out: &mut Vec<Simple>) -> Option
         target: None,
         heredocs: Vec::new(),
         subs: Vec::new(),
+        current_subs: Vec::new(),
+        redirected: false,
+        piped: false,
+        closer: false,
+        group_input: false,
+        refused: false,
     };
     reader.run()?;
-    let Reader { commands, subs, .. } = reader;
-    for simple in commands {
+    let Reader {
+        commands,
+        subs,
+        group_input,
+        refused,
+        ..
+    } = reader;
+    if refused {
+        return None;
+    }
+    let inherited = inherited && !group_input;
+    for mut command in commands {
         if out.len() >= MAX_COMMANDS {
             return None;
         }
-        let nested = shell_script(&simple).map(str::to_owned);
-        out.push(simple);
+        command.own_input &= inherited;
+        let own = command.own_input;
+        let nested = shell_script(&command.words).map(str::to_owned);
+        out.push(command);
         if let Some(nested) = nested
             && depth < MAX_DEPTH
         {
-            split(&nested, depth + 1, out)?;
+            split(&nested, depth + 1, own, out)?;
         }
     }
     if depth < MAX_DEPTH {
-        for body in subs {
-            split(&body, depth + 1, out)?;
+        for (body, own) in subs {
+            split(&body, depth + 1, inherited && own, out)?;
         }
     }
     Some(())
@@ -176,6 +220,17 @@ fn is_assignment(bare: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Whether a word read so far is exactly `NAME=` or `NAME+=`: a `(` right
+/// after it opens an array literal, whose words are not commands.
+fn array_start(word: &Building) -> bool {
+    word.plain
+        && word.text == word.bare
+        && word.bare.strip_suffix('=').is_some_and(|name| {
+            let name = name.strip_suffix('+').unwrap_or(name);
+            is_assignment(&format!("{name}="))
+        })
+}
+
 /// What the next word ends up as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
@@ -188,12 +243,28 @@ enum Target {
 struct Reader<'a> {
     chars: &'a [char],
     i: usize,
-    commands: Vec<Simple>,
+    commands: Vec<Command>,
     current: Simple,
     word: Option<Building>,
     target: Option<Target>,
     heredocs: Vec<(String, bool)>,
-    subs: Vec<String>,
+    /// Substitution bodies, and whether the command holding each reads only
+    /// its own input.
+    subs: Vec<(String, bool)>,
+    /// The substitutions of the command being read.
+    current_subs: Vec<String>,
+    /// The command being read has a `<` redirection or a here-document.
+    redirected: bool,
+    /// A `|` came before the command being read.
+    piped: bool,
+    /// The command being read follows a `)`: its redirections are the
+    /// group's.
+    closer: bool,
+    /// A group or loop of this script reads a pipe or a redirection, so no
+    /// command in it is known to read only its own input.
+    group_input: bool,
+    /// Text that is not run as it stands was found: a function definition.
+    refused: bool,
 }
 
 impl Reader<'_> {
@@ -219,9 +290,42 @@ impl Reader<'_> {
     fn end_command(&mut self) {
         self.end_word();
         self.target = None;
-        if !self.current.is_empty() {
-            self.commands.push(std::mem::take(&mut self.current));
+        let first = match self.current.first() {
+            Some(Word::Lit(first)) => Some(first.as_str()),
+            _ => None,
+        };
+        // A redirection of a group's closing word feeds the whole group, and
+        // a group after a `|` reads the pipe.
+        if self.redirected && (self.closer || first.is_some_and(|word| CLOSERS.contains(&word))) {
+            self.group_input = true;
         }
+        let piped = self.piped && !self.current.is_empty();
+        if piped && first.is_some_and(|word| COMPOUND.contains(&word)) {
+            self.group_input = true;
+        }
+        // `function name …` defines a function: its body is not run here.
+        if first == Some("function") {
+            self.refused = true;
+        }
+        let own = !self.redirected && !piped;
+        for body in self.current_subs.drain(..) {
+            self.subs.push((body, own));
+        }
+        if !self.current.is_empty() {
+            self.commands.push(Command {
+                words: std::mem::take(&mut self.current),
+                own_input: own,
+            });
+            self.piped = false;
+        }
+        self.redirected = false;
+        self.closer = false;
+    }
+
+    /// End the command at a separator that is not a pipe.
+    fn end_list(&mut self) {
+        self.end_command();
+        self.piped = false;
     }
 
     fn run(&mut self) -> Option<()> {
@@ -232,6 +336,7 @@ impl Reader<'_> {
                     self.i += 1;
                 }
                 '\n' => {
+                    // A line ending after a `|` continues the pipeline.
                     self.end_command();
                     self.i += 1;
                     self.skip_heredocs();
@@ -241,13 +346,45 @@ impl Reader<'_> {
                         self.i += 1;
                     }
                 }
-                ';' | '(' | ')' => {
-                    self.end_command();
+                '(' if self.word.as_ref().is_some_and(array_start) => {
+                    // `x=( … )`: an array's words, never run, unless it holds
+                    // a substitution, which this reader does not read there.
+                    let end = close(self.chars, self.i + 1, '(', ')', false)?;
+                    let body = &self.chars[self.i + 1..end];
+                    if body.iter().any(|&c| matches!(c, '$' | '`' | '<' | '>')) {
+                        return None;
+                    }
+                    self.word().opaque();
+                    self.i = end + 1;
+                }
+                '(' => {
+                    // `name ()` defines a function, whose body is not run here.
+                    let mut next = self.i + 1;
+                    while matches!(self.chars.get(next), Some(' ' | '\t')) {
+                        next += 1;
+                    }
+                    if self.chars.get(next) == Some(&')') {
+                        return None;
+                    }
+                    // A subshell after a `|` reads the pipe.
+                    if self.piped && self.current.is_empty() && self.word.is_none() {
+                        self.group_input = true;
+                    }
+                    self.end_list();
+                    self.i += 1;
+                }
+                ')' => {
+                    self.end_list();
+                    self.closer = true;
+                    self.i += 1;
+                }
+                ';' => {
+                    self.end_list();
                     self.i += 1;
                 }
                 '&' => match self.peek(1) {
                     Some('&') => {
-                        self.end_command();
+                        self.end_list();
                         self.i += 2;
                     }
                     Some('>') => {
@@ -259,12 +396,15 @@ impl Reader<'_> {
                         self.target = Some(Target::Redirect);
                     }
                     _ => {
-                        self.end_command();
+                        self.end_list();
                         self.i += 1;
                     }
                 },
                 '|' => {
-                    self.end_command();
+                    let or = self.peek(1) == Some('|');
+                    self.end_list();
+                    // `|` and `|&` feed the next command; `||` does not.
+                    self.piped = !or;
                     self.i += if matches!(self.peek(1), Some('|' | '&')) {
                         2
                     } else {
@@ -365,6 +505,11 @@ impl Reader<'_> {
         } else {
             self.end_word();
         }
+        // Any `<` form gives the command other input: a file, a here-string,
+        // a here-document or another descriptor.
+        if c == '<' {
+            self.redirected = true;
+        }
         if c == '<' && self.peek(1) == Some('<') {
             if self.peek(2) == Some('<') {
                 self.i += 3;
@@ -437,15 +582,16 @@ impl Reader<'_> {
             Some('(') => {
                 let arithmetic = self.peek(2) == Some('(');
                 let start = self.i + 2;
-                let end = close(self.chars, start, '(', ')')?;
+                let end = close(self.chars, start, '(', ')', !arithmetic)?;
                 if !arithmetic {
-                    self.subs.push(self.chars[start..end].iter().collect());
+                    self.current_subs
+                        .push(self.chars[start..end].iter().collect());
                 }
                 self.word().opaque();
                 self.i = end + 1;
             }
             Some('{') => {
-                let end = close(self.chars, self.i + 2, '{', '}')?;
+                let end = close(self.chars, self.i + 2, '{', '}', false)?;
                 self.word().opaque();
                 self.i = end + 1;
             }
@@ -495,7 +641,7 @@ impl Reader<'_> {
             }
         }
         self.i += 1;
-        self.subs.push(body);
+        self.current_subs.push(body);
         self.word().opaque();
         Some(())
     }
@@ -525,13 +671,73 @@ impl Reader<'_> {
 }
 
 /// The index of the `close` that ends what opened just before `start`,
-/// skipping quotes and nested pairs; `None` when it never ends.
-fn close(chars: &[char], start: usize, open: char, close: char) -> Option<usize> {
+/// skipping quotes and nested pairs; `None` when it never ends. Inside
+/// a `script` (a command substitution's body), comments and here-document
+/// bodies are skipped too: a `)` in them closes nothing.
+fn close(chars: &[char], start: usize, open: char, close: char, script: bool) -> Option<usize> {
+    let parens = script;
     let mut depth = 1_usize;
     let mut i = start;
+    let mut heredocs: Vec<(String, bool)> = Vec::new();
+    // Whether the character at `i` starts a word, where `#` opens a comment.
+    let mut word_start = true;
     while i < chars.len() {
+        let starts = word_start;
+        word_start = matches!(chars[i], ' ' | '\t' | '\n' | ';' | '&' | '|' | '(' | ')');
         match chars[i] {
             '\\' => i += 1,
+            '#' if parens && starts => {
+                while chars.get(i + 1).is_some_and(|&c| c != '\n') {
+                    i += 1;
+                }
+            }
+            '<' if parens && chars.get(i + 1) == Some(&'<') => {
+                if chars.get(i + 2) == Some(&'<') {
+                    // A here-string: its word is read as any other.
+                    i += 2;
+                } else {
+                    i += 2;
+                    let strip = chars.get(i) == Some(&'-');
+                    if strip {
+                        i += 1;
+                    }
+                    while matches!(chars.get(i), Some(' ' | '\t')) {
+                        i += 1;
+                    }
+                    let (delimiter, end) = heredoc_delimiter(chars, i)?;
+                    heredocs.push((delimiter, strip));
+                    i = end;
+                    continue;
+                }
+            }
+            '\n' if parens && !heredocs.is_empty() => {
+                i += 1;
+                for (delimiter, strip) in std::mem::take(&mut heredocs) {
+                    loop {
+                        let line_start = i;
+                        while chars.get(i).is_some_and(|&c| c != '\n') {
+                            i += 1;
+                        }
+                        let line: String = chars[line_start..i].iter().collect();
+                        let last = i >= chars.len();
+                        i += 1;
+                        let line = if strip {
+                            line.trim_start_matches('\t')
+                        } else {
+                            line.as_str()
+                        };
+                        if line == delimiter {
+                            break;
+                        }
+                        if last {
+                            // The body never ends.
+                            return None;
+                        }
+                    }
+                }
+                word_start = true;
+                continue;
+            }
             '\'' if open == '(' => {
                 i += 1;
                 while *chars.get(i)? != '\'' {
@@ -561,6 +767,36 @@ fn close(chars: &[char], start: usize, open: char, close: char) -> Option<usize>
         i += 1;
     }
     None
+}
+
+/// A here-document's delimiter word at `start`, quotes removed, and the
+/// index just after it; `None` when it is empty or holds an expansion.
+fn heredoc_delimiter(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let mut text = String::new();
+    let mut i = start;
+    while let Some(&c) = chars.get(i) {
+        match c {
+            ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | '(' | ')' => break,
+            '\'' | '"' => {
+                i += 1;
+                while *chars.get(i)? != c {
+                    if c == '"' && matches!(chars[i], '$' | '`' | '\\') {
+                        return None;
+                    }
+                    text.push(chars[i]);
+                    i += 1;
+                }
+            }
+            '\\' => {
+                i += 1;
+                text.push(*chars.get(i)?);
+            }
+            '$' | '`' => return None,
+            _ => text.push(c),
+        }
+        i += 1;
+    }
+    (!text.is_empty()).then_some((text, i))
 }
 
 /// The program word of a simple command and the words after it, with the
@@ -616,6 +852,29 @@ mod tests {
 
     fn lit(text: &str) -> Word {
         Word::Lit(text.to_owned())
+    }
+
+    /// The words of every simple command, where their input comes from set
+    /// aside.
+    fn simple_commands(command: &str) -> Option<Vec<Simple>> {
+        super::simple_commands(command)
+            .map(|commands| commands.into_iter().map(|command| command.words).collect())
+    }
+
+    /// How many simple commands run `claude`, and of those, how many read
+    /// only their own input; `None` when the command is refused.
+    fn claude_runs(command: &str) -> Option<(usize, usize)> {
+        let commands = super::simple_commands(command)?;
+        let runs: Vec<&Command> = commands
+            .iter()
+            .filter(|command| {
+                program(&command.words).is_some_and(|(first, _)| *first == lit("claude"))
+            })
+            .collect();
+        Some((
+            runs.len(),
+            runs.iter().filter(|command| command.own_input).count(),
+        ))
     }
 
     #[test]
@@ -725,5 +984,87 @@ mod tests {
         let commands =
             simple_commands("claude -p x >out 2>&1 <in 3>>log &>all >| f 1> o <<< here").unwrap();
         assert_eq!(commands, vec![vec![lit("claude"), lit("-p"), lit("x")]]);
+    }
+
+    #[test]
+    fn here_documents_in_substitutions_are_not_commands() {
+        // A `)` inside a here-document body inside `$(…)` closes nothing.
+        for command in [
+            "x=$(cat <<'EOF'\n) ; claude -p \"fake\" ; (\nEOF\n)",
+            "msg=$(cat <<'EOF'\nfoo) claude -p 'zzz'\nEOF\n)",
+            "git commit -m \"$(cat <<\"END\"\nfix) claude -p q\nEND\n)\"",
+            "y=$(cat <<-EOF\n\t) claude -p tab\n\tEOF\n)",
+            "z=$(echo a # ) claude -p comment\n)",
+        ] {
+            assert_eq!(claude_runs(command), Some((0, 0)), "{command:?}");
+        }
+        // A here-document that never ends refuses the command.
+        assert_eq!(claude_runs("x=$(cat <<EOF\n) claude -p y\n"), None);
+        // A launch after the substitution is still read.
+        assert_eq!(
+            claude_runs("m=$(cat <<'EOF'\nbody\nEOF\n); claude -p after"),
+            Some((1, 1))
+        );
+        // A shift in arithmetic is no here-document.
+        assert_eq!(claude_runs("n=$((1 << 2)); claude -p after"), Some((1, 1)));
+    }
+
+    #[test]
+    fn arrays_and_function_bodies_are_not_launches() {
+        assert_eq!(claude_runs("x=( claude -p arr )"), Some((0, 0)));
+        assert_eq!(
+            claude_runs("x+=( claude -p arr ); claude -p real"),
+            Some((1, 1))
+        );
+        assert_eq!(claude_runs("local x=(claude -p arr)"), Some((0, 0)));
+        // An array holding a substitution, and a function, refuse the command.
+        assert_eq!(claude_runs("x=( $(claude -p arr) )"), None);
+        assert_eq!(claude_runs("f() { claude -p inner; }"), None);
+        assert_eq!(claude_runs("f () { claude -p inner; }; f"), None);
+        assert_eq!(claude_runs("function f { claude -p inner; }"), None);
+        // A subshell is run.
+        assert_eq!(claude_runs("( claude -p sub )"), Some((1, 1)));
+    }
+
+    #[test]
+    fn a_launch_given_other_input_does_not_read_only_its_own() {
+        for command in [
+            "git diff | claude -p \"Review this\"",
+            "git diff |& claude -p x",
+            "git diff |\n claude -p x",
+            "claude -p \"x\" < file",
+            "< file claude -p x",
+            "claude -p x <<EOF\nmore\nEOF",
+            "claude -p x <<< more",
+            "claude -p x 0<&3",
+            "echo a | { claude -p x; }",
+            "echo a | ( cd /w && claude -p x )",
+            "echo a | while read l; do claude -p x; done",
+            "while read l; do claude -p x; done < list",
+            "for i in 1; do claude -p x; done <<EOF\na\nEOF",
+            "{ claude -p x; } < in",
+            "( claude -p x ) < in",
+            "if true; then claude -p x; fi < in",
+            "echo a | bash -c 'claude -p x'",
+            "echo a | echo \"$(claude -p x)\"",
+        ] {
+            assert_eq!(claude_runs(command), Some((1, 0)), "{command:?}");
+        }
+        // Output redirections, a pipe after it, and other lists keep it.
+        for command in [
+            "claude -p x > out 2> err",
+            "claude -p x 2>&1 | tee log",
+            "claude -p x >> out 2>&1 &",
+            "a || claude -p x",
+            "a | b; claude -p x",
+            "a | b && claude -p x",
+            "a | b\nclaude -p x",
+            "cat <<EOF > f\nbody\nEOF\nclaude -p x > out",
+            "out=$(claude -p x 2>&1); echo \"$out\" | grep y",
+            "bash -c 'claude -p x' > out",
+            "( claude -p x ) > out 2>&1",
+        ] {
+            assert_eq!(claude_runs(command), Some((1, 1)), "{command:?}");
+        }
     }
 }

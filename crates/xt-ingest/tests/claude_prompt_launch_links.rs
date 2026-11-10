@@ -597,3 +597,286 @@ fn a_record_of_another_session_in_a_transcript_is_not_its_launch() {
     assert_eq!((total.launches, total.linked), (0, 0), "{total:?}");
     unlinked(&home, &store, HELPER_CHILD);
 }
+
+/// Index, change the sources with `then`, then the passes of a fresh worker;
+/// the worker's backlog is kept for later passes.
+fn run_after(home: &Home, then: impl FnOnce()) -> (Store, BashBacklog, PromptProgress) {
+    let mut store = home.store();
+    scan(home, &mut store);
+    then();
+    let mut backlog = BashBacklog::starting();
+    let total = settle(home, &mut store, &mut backlog);
+    (store, backlog, total)
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn helper_path(home: &Home, native: &str) -> PathBuf {
+    home.project("-w-parent")
+        .join(native)
+        .join("subagents")
+        .join(format!("agent-{AGENT}.jsonl"))
+}
+
+fn child_path(home: &Home, native: &str) -> PathBuf {
+    home.project("-w-run").join(format!("{native}.jsonl"))
+}
+
+#[test]
+fn a_launch_given_other_input_links_nothing_but_still_stops_a_link() {
+    // Its child's first input may be more than the prompt.
+    for command in [
+        format!("git diff | claude -p \"{PROMPT}\" > /w/out.txt"),
+        format!("claude -p \"{PROMPT}\" < /w/in.txt > /w/out.txt"),
+        format!("claude -p \"{PROMPT}\" <<'EOF' > /w/out.txt\nmore input\nEOF"),
+        format!("cat /w/in.txt | while read l; do claude -p \"{PROMPT}\"; done"),
+    ] {
+        let home = Home::new();
+        write_parent(&home, PARENT, MAIN_CALL, 0, &command);
+        write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+        let (store, total) = run(&home);
+        assert_eq!(
+            (total.launches, total.linked),
+            (1, 0),
+            "{command}: {total:?}"
+        );
+        unlinked(&home, &store, MAIN_CHILD);
+    }
+    // Beside a launch that reads only its own input, it is still a launch
+    // that could have made the child: neither links.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_parent(
+        &home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherLaunch",
+        1_000,
+        &format!("git diff | claude -p \"{PROMPT}\""),
+    );
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.ambiguous),
+        (2, 0, 2),
+        "{total:?}"
+    );
+    unlinked(&home, &store, MAIN_CHILD);
+}
+
+#[test]
+fn text_a_command_does_not_run_is_no_launch() {
+    for command in [
+        // A `)` in a here-document inside `$(…)` closes nothing.
+        format!("x=$(cat <<'EOF'\n) ; claude -p \"{PROMPT}\" ; (\nEOF\n)"),
+        format!("msg=$(cat <<'EOF'\nfoo) claude -p '{PROMPT}'\nEOF\n)"),
+        // An array's words, and a function's body.
+        format!("x=( claude -p \"{PROMPT}\" )"),
+        format!("f() {{ claude -p \"{PROMPT}\"; }}"),
+    ] {
+        let home = Home::new();
+        write_parent(&home, PARENT, MAIN_CALL, 0, &command);
+        write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+        let (store, total) = run(&home);
+        assert_eq!(
+            (total.launches, total.linked),
+            (0, 0),
+            "{command:?}: {total:?}"
+        );
+        unlinked(&home, &store, MAIN_CHILD);
+    }
+}
+
+/// The parent's launch, and another caller whose helper agent launched the
+/// same prompt before the one child.
+fn rival_in_helper(home: &Home) {
+    write_parent(home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_parent(
+        home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherCall",
+        -2_000,
+        "echo ready",
+    );
+    write_rows(
+        &helper_path(home, OTHER_PARENT),
+        &caller_rows(
+            OTHER_PARENT,
+            Some(AGENT),
+            HELPER_CALL,
+            1_000,
+            &helper_command(home, PROMPT),
+        ),
+    );
+    write_child(home, MAIN_CHILD, 4_800, PROMPT);
+}
+
+#[test]
+fn an_unreadable_caller_file_or_folder_links_nothing_until_it_is_read() {
+    // The rival launch is in a helper file that cannot be read.
+    let home = Home::new();
+    rival_in_helper(&home);
+    let helper = helper_path(&home, OTHER_PARENT);
+    let (mut store, mut backlog, total) = run_after(&home, || set_mode(&helper, 0o000));
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    // Readable again and read after the next import: the rival is seen.
+    set_mode(&helper, 0o644);
+    backlog.add_sessions([PARENT]);
+    let again = settle(&home, &mut store, &mut backlog);
+    assert_eq!((again.linked, again.ambiguous), (0, 2), "{again:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+
+    // The same with the helper folder that cannot be listed.
+    let home = Home::new();
+    rival_in_helper(&home);
+    let folder = helper_path(&home, OTHER_PARENT)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let (store, _, total) = run_after(&home, || set_mode(&folder, 0o000));
+    set_mode(&folder, 0o755);
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+
+    // An unreadable helper file holding no launch holds the link back until
+    // it is read.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_helper(&home, OTHER_PARENT, "echo nothing to launch with claude");
+    write_parent(
+        &home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherCall",
+        -2_000,
+        "echo ready",
+    );
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let helper = helper_path(&home, OTHER_PARENT);
+    let (mut store, mut backlog, total) = run_after(&home, || set_mode(&helper, 0o000));
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    set_mode(&helper, 0o644);
+    backlog.add_sessions([PARENT]);
+    let again = settle(&home, &mut store, &mut backlog);
+    assert_eq!(again.linked, 1, "{again:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+}
+
+#[test]
+fn an_unreadable_possible_child_links_nothing_until_it_is_read() {
+    // A second session with the same first input cannot be read.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child(&home, EXTRA, 9_000, PROMPT);
+    let extra = child_path(&home, EXTRA);
+    let (mut store, mut backlog, total) = run_after(&home, || set_mode(&extra, 0o000));
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    set_mode(&extra, 0o644);
+    backlog.add_sessions([PARENT]);
+    let again = settle(&home, &mut store, &mut backlog);
+    assert_eq!((again.linked, again.ambiguous), (0, 1), "{again:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    unlinked(&home, &store, EXTRA);
+
+    // One whose first input is another holds the link back until it is read.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child(&home, EXTRA, 9_000, HELPER_PROMPT);
+    let extra = child_path(&home, EXTRA);
+    let (mut store, mut backlog, total) = run_after(&home, || set_mode(&extra, 0o000));
+    assert_eq!(total.linked, 0, "{total:?}");
+    set_mode(&extra, 0o644);
+    backlog.add_sessions([EXTRA]);
+    let again = settle(&home, &mut store, &mut backlog);
+    assert_eq!(again.linked, 1, "{again:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn what_could_not_be_read_stops_only_the_links_it_could_change() {
+    let linked = |home: &Home, store: &Store| {
+        assert_eq!(
+            shown(home, store, MAIN_CHILD),
+            (true, Some(session(store, PARENT)))
+        );
+    };
+    // A caller first recorded after the child was saved hid no launch of it.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_parent(
+        &home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherCall",
+        200_000,
+        "echo ready",
+    );
+    write_rows(
+        &helper_path(&home, OTHER_PARENT),
+        &caller_rows(
+            OTHER_PARENT,
+            Some(AGENT),
+            HELPER_CALL,
+            210_000,
+            "echo later",
+        ),
+    );
+    let helper = helper_path(&home, OTHER_PARENT);
+    let (store, _, total) = run_after(&home, || set_mode(&helper, 0o000));
+    set_mode(&helper, 0o644);
+    assert_eq!(total.linked, 1, "{total:?}");
+    linked(&home, &store);
+
+    // A session saved before the launch, unreadable, was not its child.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child(&home, EXTRA, -5_000, PROMPT);
+    let extra = child_path(&home, EXTRA);
+    let (store, _, total) = run_after(&home, || set_mode(&extra, 0o000));
+    set_mode(&extra, 0o644);
+    assert_eq!(total.linked, 1, "{total:?}");
+    linked(&home, &store);
+
+    // A caller whose transcript was deleted is history that is gone: its
+    // launches are not known and stop nothing.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_parent(
+        &home,
+        OTHER_PARENT,
+        "toolu_01SyntheticOtherCall",
+        -2_000,
+        "echo ready",
+    );
+    let (store, _, total) = run_after(&home, || {
+        fs::remove_file(parent_path(&home, OTHER_PARENT)).unwrap();
+    });
+    assert_eq!(total.linked, 1, "{total:?}");
+    linked(&home, &store);
+
+    // A possible child whose transcript was deleted, saved after the
+    // launch, may have been its child: nothing links.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child(&home, EXTRA, 9_000, PROMPT);
+    let (store, _, total) = run_after(&home, || {
+        fs::remove_file(child_path(&home, EXTRA)).unwrap();
+    });
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+}
