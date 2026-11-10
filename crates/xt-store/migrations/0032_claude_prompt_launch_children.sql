@@ -353,11 +353,14 @@ CREATE TRIGGER session_child_facts_immutable_delete
 BEFORE DELETE ON session_child_facts
 BEGIN SELECT RAISE(ABORT, 'a child fact is immutable'); END;
 
--- The new detector, the Claude literal-prompt launch match, can only find
--- Claude children. A finished check of any other host stays finished: it
--- carries the new detector versions as it is. Claude sessions check again.
+-- A finished check of every host stays finished: it carries the new
+-- detector versions as it is. The new detector, the Claude literal-prompt
+-- launch match, reads every indexed caller whatever its check says, and the
+-- link it writes shows its child as a sub-session whatever the child's check
+-- says, so no session shown today has to be hidden again to wait for it.
+-- Checking a Claude session again instead would also rerun its older checks,
+-- which a deleted transcript can hold back for good.
 UPDATE session_child_checks
 SET detector_versions = 'check1.spawn2.scan11.claude6.cli1.bash3.prompt1'
 WHERE detector_versions = 'check1.spawn2.scan11.claude6.cli1.bash3'
-  AND completed_generation IS NOT NULL
-  AND session_id IN (SELECT session_id FROM sessions WHERE host <> 'claude');
+  AND completed_generation IS NOT NULL;

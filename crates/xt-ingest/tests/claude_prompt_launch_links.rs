@@ -26,6 +26,7 @@ use xt_ingest::native::{
 };
 use xt_store::{
     Host, Store,
+    child_check::{ChildCheck, DETECTOR_VERSIONS},
     child_fact::ChildEvidence,
     creation::{CreationEvidence, CreationWitness},
     session_list,
@@ -414,6 +415,39 @@ fn literal_prompt_launches_link_both_children_to_the_top_level_parent() {
         (again.linked, again.changed, again.already),
         (0, 0, 2),
         "{again:?}"
+    );
+}
+
+#[test]
+fn a_child_whose_display_check_already_finished_is_still_linked() {
+    // A session checked before this match existed (migration 32 keeps such
+    // checks) stays shown on its own only until the match links it.
+    let home = Home::new();
+    standard(&home);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    let connection = rusqlite::Connection::open(&home.db).unwrap();
+    let child = session(&store, MAIN_CHILD);
+    connection
+        .execute(
+            "UPDATE session_child_checks SET completed_generation=required_generation,
+                 detector_versions=?2 WHERE session_id=?1",
+            [&child, DETECTOR_VERSIONS],
+        )
+        .unwrap();
+    let check = || {
+        session_list::context(&connection, &[&child])
+            .unwrap()
+            .remove(0)
+            .check
+    };
+    assert_eq!(check(), ChildCheck::Checked);
+    let total = settle(&home, &mut store, &mut BashBacklog::starting());
+    assert_eq!(total.linked, 2, "{total:?}");
+    assert_eq!(check(), ChildCheck::Child);
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
     );
 }
 

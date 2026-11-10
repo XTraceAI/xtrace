@@ -337,7 +337,9 @@ read whole, no new link is written; it is read again after the next import.
 A child that other evidence already relates or names (another kind of
 relation or child fact, a parent origin, or a recorded Codex launch naming
 its session) is never touched. Migration 32 keeps the finished display
-checks of every host but Claude, which this match cannot affect.
+checks of every host, Claude included: the match reads every indexed caller
+whatever its check says, and its link folds an already-checked child under
+its parent, so no session shown before is hidden again to wait for it.
 
 Like every accepted creation relation, a link makes the Human input view
 count the child's user messages as the agent's, not a person's.

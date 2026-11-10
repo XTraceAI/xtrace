@@ -17,6 +17,7 @@ use xt_store::{
     child_check::{ChildCheck, DETECTOR_VERSIONS},
     child_fact::{ChildEvidence, ChildFact},
     claude_launch::{GroupStatus, LaunchCandidate, LaunchKey, MemberRecord, SegmentGeneration},
+    creation::{CLAUDE_PROMPT_LAUNCH_VERSION, ClaudePromptLaunchProof, CreationDisposition},
     ingest::DiscoveredSession,
     session_list,
 };
@@ -563,9 +564,11 @@ fn an_undecided_launch_holds_its_child_until_a_decision() {
 }
 
 #[test]
-fn schema_32_keeps_finished_checks_of_hosts_the_prompt_match_cannot_affect() {
-    // Migration 32 adds a detector that finds only Claude children: a Codex
-    // session's finished check stays finished, a Claude session's runs again.
+fn schema_32_keeps_finished_checks_and_a_prompt_link_still_shows_a_checked_child() {
+    // Migration 32 adds the literal-prompt match. A finished check of every
+    // host stays finished, so no session shown before is hidden again; the
+    // match's link still folds an already-checked Claude session under its
+    // parent.
     const VIEWS: [&str; 6] = [
         xt_store::views::RECORD_METADATA,
         xt_store::views::HUMAN_INPUTS,
@@ -620,18 +623,64 @@ fn schema_32_keeps_finished_checks_of_hosts_the_prompt_match_cannot_affect() {
                 .unwrap();
         }
     }
-    let store = Store::open(path(&directory)).unwrap();
+    let mut store = Store::open(path(&directory)).unwrap();
     assert!(store.schema_version().unwrap() >= 32);
     assert!(store.completed_child_check(&id(MAIN)).unwrap());
-    assert!(!store.completed_child_check(CLAUDE).unwrap());
+    assert!(store.completed_child_check(CLAUDE).unwrap());
     assert!(!store.completed_child_check(&id(CALLER)).unwrap());
     assert!(!store.completed_child_check(&id(CHILD)).unwrap());
-    let stored: String = sql(&directory)
-        .query_row(
-            "SELECT detector_versions FROM session_child_checks WHERE session_id=?1",
-            [id(MAIN)],
-            |row| row.get(0),
+    for session in [id(MAIN), CLAUDE.to_owned()] {
+        let stored: String = sql(&directory)
+            .query_row(
+                "SELECT detector_versions FROM session_child_checks WHERE session_id=?1",
+                [&session],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, DETECTOR_VERSIONS, "{session}");
+    }
+    // The checked Claude session is shown on its own until the match links
+    // it: its first input, then a Claude parent whose literal prompt it was.
+    const PARENT: &str = "0c000000-0000-4000-8000-00000000aa05";
+    store
+        .upsert_records(CLAUDE, &[record(CLAUDE, 1)], false)
+        .unwrap();
+    let mut meta = SessionMeta::new(PARENT, "claude", SessionSource::Transcript);
+    meta.native_session_id = Some(PARENT.into());
+    store.upsert_session(&meta, false).unwrap();
+    let shown = |directory: &TempDir| {
+        let context = session_list::context(&sql(directory), &[CLAUDE])
+            .unwrap()
+            .remove(0);
+        (
+            context.check,
+            context
+                .parent
+                .map(|parent| (parent.session_id, parent.evidence)),
+        )
+    };
+    assert_eq!(shown(&directory), (ChildCheck::Checked, None));
+    let report = store
+        .record_claude_prompt_launch(
+            &ClaudePromptLaunchProof {
+                child_session_id: CLAUDE.into(),
+                child_native_session_id: CLAUDE.into(),
+                parent_session_id: PARENT.into(),
+                parent_native_session_id: PARENT.into(),
+                first_record_uuid: format!("r1-{CLAUDE}"),
+                launch_call_id: "toolu_01SyntheticPromptLaunch".into(),
+                launch_operation_index: 0,
+                evidence_version: CLAUDE_PROMPT_LAUNCH_VERSION,
+            },
+            1,
         )
         .unwrap();
-    assert_eq!(stored, DETECTOR_VERSIONS);
+    assert_eq!(report.relation, CreationDisposition::Recorded);
+    assert_eq!(
+        shown(&directory),
+        (
+            ChildCheck::Child,
+            Some((PARENT.to_owned(), session_list::ParentEvidence::AgentLaunch))
+        )
+    );
 }
