@@ -36,8 +36,10 @@
 //! `codex exec --json` launch) and the launch rows naming it, and the exact
 //! pull-request links of Codex sessions: how many, and each pull request
 //! (`owner/repo#number`) with how many Codex sessions link it, and every
-//! Claude literal-prompt launch link (child, parent, call, position, state).
-//! Never a path, prompt, command or transcript text.
+//! Claude literal-prompt launch link (child, parent, call, position, state),
+//! the links the last literal-prompt match held with the closed reasons it
+//! held each for, and how long after the start that match first held no
+//! display check. Never a path, prompt, command or transcript text.
 use std::{
     env,
     path::PathBuf,
@@ -336,6 +338,7 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         Ok((count("claude")?, count("codex")?))
     };
     let checking_at_start = checking(&store)?;
+    let mut prompt_released: Option<u64> = None;
     let mut settled: [Option<(u64, u64)>; 2] = [None, None];
     let mut last_change: [(u64, u64, u64); 2] =
         [(0, 0, checking_at_start.0), (0, 0, checking_at_start.1)];
@@ -387,15 +390,32 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             add("prompt_already", bash.prompt.already);
             add("prompt_ambiguous", bash.prompt.ambiguous);
             add("prompt_refused", bash.prompt.refused);
-            add("prompt_withdrawn", bash.prompt.withdrawn);
+            add("prompt_callers_gone", bash.prompt.callers_gone);
+            add("prompt_codex_waits", bash.prompt.codex_waits);
             add("prompt_other_input", bash.prompt.other_input);
             add("prompt_held", bash.prompt.held);
+            add("prompt_held_hour", bash.prompt.held_hour);
+            add("prompt_held_unknown", bash.prompt.held_unknown);
+            add("prompt_held_caller_unread", bash.prompt.held_caller_unread);
+            add("prompt_held_caller_gone", bash.prompt.held_caller_gone);
+            add(
+                "prompt_held_command_unread",
+                bash.prompt.held_command_unread,
+            );
+            add("prompt_held_untimed", bash.prompt.held_untimed);
+            add("prompt_held_child_unread", bash.prompt.held_child_unread);
+            add("prompt_held_codex", bash.prompt.held_codex);
             add("prompt_incomplete_matches", bash.prompt.incomplete_matches);
             add(
                 "prompt_children_unreadable",
                 bash.prompt.children_unreadable,
             );
             add("prompt_commands_refused", bash.prompt.commands_refused);
+        }
+        // The first time the literal-prompt match no longer holds the
+        // display checks of Claude sessions.
+        if prompt_released.is_none() && !spawns.bash.prompt_holds_checks() {
+            prompt_released = Some(started.elapsed().as_millis() as u64);
         }
         let now = checking(&store)?;
         for (slot, left) in settled.iter_mut().zip([now.0, now.1]) {
@@ -496,6 +516,18 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 "accepted": accepted})
         })
         .collect();
+    // The links the last literal-prompt match held, and why: identifiers
+    // and closed labels only.
+    let prompt_held: Vec<serde_json::Value> = spawns
+        .bash
+        .prompt_held()
+        .iter()
+        .map(|held| {
+            serde_json::json!({"child_native_session_id": held.child_native_session_id,
+                "parent_native_session_id": held.parent_native_session_id,
+                "by": held.by.iter().map(|by| by.label()).collect::<Vec<_>>()})
+        })
+        .collect();
     let mut codex_prs = std::collections::BTreeMap::<String, u64>::new();
     let mut codex_links = 0_u64;
     for link in store.all_pr_links()? {
@@ -531,6 +563,8 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "sessions": sessions,
             "launch_rows": launch_rows,
             "prompt_launches": prompt_launches,
+            "prompt_held": prompt_held,
+            "prompt_released_ms": prompt_released,
             "codex_pr_links": {"links": codex_links, "pull_requests": codex_prs},
         })
     );

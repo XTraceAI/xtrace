@@ -18,8 +18,9 @@ use std::{
 use xt_ingest::native::{
     ImportRequest, ProducerSource,
     claude_launch::{
-        LaunchLimits,
-        bash::{BashBacklog, PromptProgress, continue_claude_bash},
+        LaunchBacklog, LaunchLimits,
+        bash::{BashBacklog, BashProgress, PromptProgress, continue_claude_bash},
+        continue_claude_launches,
     },
     readers_cli::read_pin,
     session_creation::{SpawnBacklog, spawn_limits},
@@ -272,34 +273,65 @@ fn scan(home: &Home, store: &mut Store) {
     assert!(report.complete(), "{report:?}");
 }
 
+/// One pass in the worker's order: the Codex launch work, then the `Bash`
+/// work, at `now`.
+fn pass_at(
+    home: &Home,
+    store: &mut Store,
+    backlog: &mut BashBacklog,
+    launches: &mut LaunchBacklog,
+    now: i64,
+) -> BashProgress {
+    continue_claude_launches(
+        store,
+        &home.home,
+        launches,
+        &LaunchLimits::default(),
+        None,
+        now,
+    )
+    .unwrap();
+    continue_claude_bash(
+        store,
+        &home.home,
+        backlog,
+        launches,
+        &LaunchLimits::default(),
+        None,
+        now,
+    )
+    .unwrap()
+}
+
+fn add(total: &mut PromptProgress, p: &PromptProgress) {
+    total.files_read += p.files_read;
+    total.matches += p.matches;
+    total.launches = p.launches.max(total.launches);
+    total.linked += p.linked;
+    total.already += p.already;
+    total.ambiguous += p.ambiguous;
+    total.refused += p.refused;
+    total.other_input += p.other_input;
+    total.held += p.held;
+    total.held_hour += p.held_hour;
+    total.held_caller_gone += p.held_caller_gone;
+    total.held_command_unread += p.held_command_unread;
+    total.held_untimed += p.held_untimed;
+    total.held_child_unread += p.held_child_unread;
+    total.held_codex += p.held_codex;
+    total.changed += p.changed;
+}
+
 /// Bounded passes until nothing is pending; the literal-prompt counts summed.
 fn settle(home: &Home, store: &mut Store, backlog: &mut BashBacklog) -> PromptProgress {
     let mut total = PromptProgress::default();
+    let mut launches = LaunchBacklog::starting();
     for _ in 0..1_000 {
-        if !backlog.pending() {
+        if !backlog.pending() && !launches.pending() {
             return total;
         }
-        let pass = continue_claude_bash(
-            store,
-            &home.home,
-            backlog,
-            &LaunchLimits::default(),
-            None,
-            T,
-        )
-        .unwrap();
-        let p = pass.prompt;
-        total.files_read += p.files_read;
-        total.matches += p.matches;
-        total.launches = p.launches.max(total.launches);
-        total.linked += p.linked;
-        total.already += p.already;
-        total.ambiguous += p.ambiguous;
-        total.refused += p.refused;
-        total.withdrawn += p.withdrawn;
-        total.other_input += p.other_input;
-        total.held += p.held;
-        total.changed += p.changed;
+        let pass = pass_at(home, store, backlog, &mut launches, T);
+        add(&mut total, &pass.prompt);
     }
     panic!("never settled: {total:?}");
 }
@@ -651,14 +683,15 @@ fn resume_continue_and_fork_are_not_launches() {
 }
 
 #[test]
-fn a_launch_found_later_that_could_have_made_the_child_withdraws_its_link() {
+fn a_stored_link_is_never_withdrawn_or_moved() {
     let home = Home::new();
     write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
     write_child(&home, MAIN_CHILD, 4_800, PROMPT);
     let (mut store, total) = run(&home);
     assert_eq!(total.linked, 1, "{total:?}");
     // Another session's launch of the same prompt, made after that launch
-    // and before the child, is saved later: the child's closest launch.
+    // and before the child, is saved after the link was decided. The link
+    // was decided once its hour was over, and stays as it is.
     write_parent(
         &home,
         OTHER_PARENT,
@@ -668,21 +701,15 @@ fn a_launch_found_later_that_could_have_made_the_child_withdraws_its_link() {
     );
     scan(&home, &mut store);
     let again = settle(&home, &mut store, &mut BashBacklog::starting());
-    assert_eq!((again.withdrawn, again.linked), (1, 0), "{again:?}");
+    assert_eq!((again.linked, again.changed), (0, 0), "{again:?}");
     assert_eq!(
         facts(&store, MAIN_CHILD),
-        [prompt_fact(PARENT, MAIN_CALL, false)]
+        [prompt_fact(PARENT, MAIN_CALL, true)]
     );
-    let (_, conflicted) = store
-        .session_creation(&session(&store, MAIN_CHILD))
-        .unwrap()
-        .unwrap();
-    assert!(conflicted);
-    assert_eq!(shown(&home, &store, MAIN_CHILD), (false, None));
-    // It stays withdrawn.
-    let later = settle(&home, &mut store, &mut BashBacklog::starting());
-    assert_eq!((later.linked, later.changed), (0, 0), "{later:?}");
-    assert_eq!(shown(&home, &store, MAIN_CHILD), (false, None));
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
 }
 
 #[test]
@@ -968,8 +995,8 @@ fn what_could_not_be_read_stops_only_the_links_it_could_change() {
     assert_eq!(total.linked, 1, "{total:?}");
     linked(&home, &store);
 
-    // A caller whose transcript was deleted is history that is gone: its
-    // launches are not known and stop nothing.
+    // A caller whose transcript was deleted is a gap only over the time its
+    // indexed records span: all before the launch, it stops nothing.
     let home = Home::new();
     write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
     write_child(&home, MAIN_CHILD, 4_800, PROMPT);
@@ -997,4 +1024,232 @@ fn what_could_not_be_read_stops_only_the_links_it_could_change() {
     });
     assert_eq!(total.linked, 0, "{total:?}");
     unlinked(&home, &store, MAIN_CHILD);
+}
+
+fn write_child_in(home: &Home, folder: &str, native: &str, born: i64, first: &str) {
+    write_rows(
+        &home.project(folder).join(format!("{native}.jsonl")),
+        &child_rows(native, born, first),
+    );
+}
+
+#[test]
+fn a_possible_child_whose_project_folder_is_gone_stops_the_links_it_could_change() {
+    // A second session of the prompt in the launch's hour, in a project
+    // folder deleted since it was indexed: either could be the child.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child_in(&home, "-w-gone", EXTRA, 9_000, PROMPT);
+    let (store, _, total) = run_after(&home, || {
+        fs::remove_dir_all(home.project("-w-gone")).unwrap();
+    });
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    // Saved before the launch, it could not be its child: the link is made.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    write_child_in(&home, "-w-gone", EXTRA, -9_000, PROMPT);
+    let (store, _, total) = run_after(&home, || {
+        fs::remove_dir_all(home.project("-w-gone")).unwrap();
+    });
+    assert_eq!(total.linked, 1, "{total:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+}
+
+#[test]
+fn a_stored_link_stays_when_a_rival_caller_is_deleted() {
+    // Two launches half an hour apart, each with its own child.
+    let home = Home::new();
+    launches_and_children(
+        &home,
+        &[
+            (PARENT, MAIN_CALL, 0),
+            (OTHER_PARENT, OTHER_CALL, 30 * MINUTE),
+        ],
+        &[(MAIN_CHILD, MINUTE), (EXTRA, 31 * MINUTE)],
+    );
+    let (mut store, total) = run(&home);
+    assert_eq!(total.linked, 2, "{total:?}");
+    // The rival's transcript is deleted, as Claude's clean-up does: after a
+    // restart its launch is unknown, and the first launch could now seem to
+    // keep both children. Neither stored link is withdrawn or moved.
+    fs::remove_file(parent_path(&home, OTHER_PARENT)).unwrap();
+    let again = settle(&home, &mut store, &mut BashBacklog::starting());
+    assert_eq!((again.linked, again.changed), (0, 0), "{again:?}");
+    assert_eq!(
+        facts(&store, MAIN_CHILD),
+        [prompt_fact(PARENT, MAIN_CALL, true)]
+    );
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+    assert_eq!(
+        shown(&home, &store, EXTRA),
+        (true, Some(session(&store, OTHER_PARENT)))
+    );
+}
+
+#[test]
+fn a_deleted_rival_caller_blocks_a_child_not_linked_yet() {
+    // The child's own launch is the rival's, whose transcript (begun before
+    // the first launch) is deleted before any match: the earlier launch
+    // must not take its child.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    let mut rival = caller_rows(
+        OTHER_PARENT,
+        None,
+        "toolu_01SyntheticOtherCall",
+        -10 * MINUTE,
+        "echo ready",
+    );
+    rival.extend(caller_rows(
+        OTHER_PARENT,
+        None,
+        OTHER_CALL,
+        30 * MINUTE,
+        &main_command(PROMPT),
+    ));
+    write_rows(&parent_path(&home, OTHER_PARENT), &rival);
+    write_child(&home, EXTRA, 31 * MINUTE, PROMPT);
+    let (store, _, total) = run_after(&home, || {
+        fs::remove_file(parent_path(&home, OTHER_PARENT)).unwrap();
+    });
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn a_command_naming_claude_that_cannot_be_read_stops_the_links_it_could_change() {
+    for rival in [
+        format!("sudo claude -p \"{PROMPT}\" > /w/out.txt"),
+        format!("CLAUDE=claude; $CLAUDE -p \"{PROMPT}\""),
+        format!("bash -euc 'claude -p \"{PROMPT}\"'"),
+        format!("printf '%s' \"{PROMPT}\" | xargs -0 claude -p"),
+        format!("f() {{ claude -p \"$1\"; }}; f \"{PROMPT}\""),
+        "P=$(cat /w/prompt.txt); claude -p \"$P\"".to_owned(),
+        "cat /w/prompt.txt | claude -p > /w/out.txt".to_owned(),
+        format!("claude -p --no-such-option \"{PROMPT}\""),
+    ] {
+        // Made after the launch and before the child: it could be the
+        // child's closest launch.
+        let home = Home::new();
+        write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+        write_parent(&home, OTHER_PARENT, OTHER_CALL, 1_000, &rival);
+        write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+        let (store, total) = run(&home);
+        assert_eq!(total.linked, 0, "{rival}: {total:?}");
+        unlinked(&home, &store, MAIN_CHILD);
+        // Made before the launch, it is not: the link is made.
+        let home = Home::new();
+        write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+        write_parent(&home, OTHER_PARENT, OTHER_CALL, -2_000, &rival);
+        write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+        let (store, total) = run(&home);
+        assert_eq!(total.linked, 1, "{rival}: {total:?}");
+        assert_eq!(
+            shown(&home, &store, MAIN_CHILD),
+            (true, Some(session(&store, PARENT)))
+        );
+    }
+    // Commands that only name the folder or the word run no launch.
+    for harmless in [
+        "ls ~/.claude/projects && cat ~/.claude/settings.json".to_owned(),
+        format!("echo claude -p \"{PROMPT}\""),
+        "grep -rn claude /w/notes.md".to_owned(),
+    ] {
+        let home = Home::new();
+        write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+        write_parent(&home, OTHER_PARENT, OTHER_CALL, 1_000, &harmless);
+        write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+        let (_, total) = run(&home);
+        assert_eq!(total.linked, 1, "{harmless}: {total:?}");
+    }
+}
+
+#[test]
+fn a_launch_record_with_no_time_stops_the_links_its_caller_could_change() {
+    let untimed = |home: &Home, at: i64| {
+        let mut rows = caller_rows(
+            OTHER_PARENT,
+            None,
+            "toolu_01SyntheticOtherCall",
+            at - 3_000,
+            "echo ready",
+        );
+        let mut launch = caller_rows(OTHER_PARENT, None, OTHER_CALL, at, &main_command(PROMPT));
+        launch[1].as_object_mut().unwrap().remove("timestamp");
+        rows.push(launch.remove(1));
+        rows.push(launch.remove(1));
+        write_rows(&parent_path(home, OTHER_PARENT), &rows);
+    };
+    // Its caller was writing when the launch was made: no link.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    untimed(&home, 1_000);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    // Its caller's whole history ended before the launch: the link is made.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    untimed(&home, -120_000);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (_, total) = run(&home);
+    assert_eq!(total.linked, 1, "{total:?}");
+}
+
+#[test]
+fn a_link_waits_until_its_launch_hour_is_over() {
+    // A launch ten minutes ago: another session of its prompt may still
+    // appear within its hour.
+    let home = Home::new();
+    let launched = T - AT - 10 * MINUTE;
+    write_parent(&home, PARENT, MAIN_CALL, launched, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, launched + 4_800, PROMPT);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    let mut backlog = BashBacklog::starting();
+    let mut launches = LaunchBacklog::starting();
+    let mut passes = |store: &mut Store, backlog: &mut BashBacklog, now: i64| {
+        let mut total = PromptProgress::default();
+        for _ in 0..50 {
+            let pass = pass_at(&home, store, backlog, &mut launches, now);
+            add(&mut total, &pass.prompt);
+            if !pass.advanced {
+                break;
+            }
+        }
+        total
+    };
+    let waiting = passes(&mut store, &mut backlog, T);
+    assert_eq!(waiting.linked, 0, "{waiting:?}");
+    assert!(waiting.held_hour >= 1, "{waiting:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    assert_eq!(
+        backlog
+            .prompt_held()
+            .iter()
+            .map(|held| held.by.clone())
+            .collect::<Vec<_>>(),
+        [vec![xt_ingest::native::claude_launch::bash::HeldBy::Hour]]
+    );
+    // It is looked at again once due, and holds no display check meanwhile.
+    assert!(backlog.pending());
+    assert!(!backlog.prompt_holds_checks());
+    // The hour is over.
+    let done = passes(&mut store, &mut backlog, AT + launched + 61 * MINUTE);
+    assert_eq!(done.linked, 1, "{done:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+    assert!(!backlog.pending());
 }

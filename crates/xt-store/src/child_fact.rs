@@ -307,6 +307,37 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Whether the indexed Claude user sessions with this native identity
+    /// hold a `Bash` tool call, and whether one is on a sidechain (a helper
+    /// agent's) record. Index metadata only.
+    pub fn claude_bash_calls(&self, native: &str) -> Result<(bool, bool)> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tool_uses t JOIN sessions s ON s.session_id=t.session_id
+                     WHERE s.host='claude' AND s.kind='user' AND s.native_session_id=?1
+                       AND t.name='Bash'),
+                    EXISTS(SELECT 1 FROM tool_uses t
+                     JOIN records r ON r.uuid=t.uuid AND r.session_id=t.session_id
+                     JOIN sessions s ON s.session_id=t.session_id
+                     WHERE s.host='claude' AND s.kind='user' AND s.native_session_id=?1
+                       AND t.name='Bash' AND r.is_sidechain=1)",
+            [native],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    }
+
+    /// When the indexed Claude user sessions with this native identity
+    /// recorded their earliest and latest timed records, if they have any.
+    /// Index metadata only.
+    pub fn claude_record_span(&self, native: &str) -> Result<(Option<i64>, Option<i64>)> {
+        Ok(self.connection.query_row(
+            "SELECT min(r.ts_ms),max(r.ts_ms) FROM records r
+             JOIN sessions s ON s.session_id=r.session_id
+             WHERE s.host='claude' AND s.kind='user' AND s.native_session_id=?1",
+            [native],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    }
+
     /// Indexed Claude user sessions with a `Bash` tool call recorded between
     /// `from_ms` and `to_ms`, at most `limit`. `(canonical, native)` pairs.
     pub fn claude_bash_callers_between(

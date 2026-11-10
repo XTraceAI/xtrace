@@ -1620,6 +1620,7 @@ mod claude {
             store,
             &home.home,
             &mut spawns.bash,
+            &mut spawns.launches,
             &LaunchLimits::default(),
             None,
             T,

@@ -331,17 +331,50 @@ with no later launch of that prompt between them, links neither. A launch
 that cannot make a link itself (given other input, or in a file that could
 not be read) still counts as a launch inside the same hour. It keeps the
 exact parent, the child's first input, the call ID and the launch's position
-in the call. A link that later stops being sure is withdrawn for good (the
-fact withheld, the relation conflicted), and its child is not linked to
-another launch afterwards.
+in the call. A link is written only once the launch's hour is over, so no
+other session of that hour can still appear, and it is then never withdrawn
+or moved: what a later read misses, such as a transcript Claude has since
+deleted, never changes it.
 
 A launch makes a link only when it reads no other input: one with a `<`
 redirection or a here-document, or after a `|`, may have sent its child more
 than the prompt, so it only counts as a launch that could have made a child.
 Text a command does not run as it stands — a here-document body, also
-inside `$(…)`, an array's words, a function's body — holds no launch. While
-any transcript, helper-agent folder or possible child's opening could not be
-read whole, no new link is written; it is read again after the next import.
+inside `$(…)`, an array's words, a function's body — holds no launch.
+
+No new link is written where the evidence could hide what would change it.
+A launch this match cannot see stops every link from a launch made before it
+to a child saved after it:
+
+- a caller's transcript or helper-agent folder that could not be read whole:
+  from its first indexed record on;
+- a caller the index records with `Bash` calls whose transcript, helper file
+  or helper folder no longer exists, or is not the one file in a real
+  project folder: from its first to its last indexed record;
+- a `Bash` command naming `claude` that the reader cannot read as what it
+  runs — a wrapper such as `sudo` or `xargs`, a program given by a variable
+  with a print option, a function, a shell given a script or input not read
+  (`bash -euc '…'`), an unknown option, or a prompt that is not literal or
+  not given: at that call's time; a launch record naming `claude` with no
+  time: its caller's indexed span. Commands that only name the folder or the
+  word (`ls ~/.claude`, `echo`, `grep`) are not such commands.
+
+A possible child that cannot be read for any reason — its project folder
+gone, several recorded locations, outside the projects folder, a read error,
+an opening the index does not match — stops every launch that could have
+made it. What could not be read is read again after the next import, and a
+later match decides again. The possible children a match reads are the
+sessions whose first input came within two hours after some launch.
+
+A link also waits while the Codex launch work could still name its child:
+until every Codex history the census finds has been read since the match
+began, and no published or unfinished Codex launch naming the child is open
+(the same checks a display check waits for); the Codex link is then written
+and the prompt match abstains. A Codex history found only after a prompt
+link was written still conflicts both: a known limit. A link waiting for its
+hour or for a Codex launch holds no display check, and is looked at again
+once due.
+
 A child that other evidence already relates or names (another kind of
 relation or child fact, a parent origin, or a recorded Codex launch naming
 its session) is never touched. Migration 32 keeps the finished display

@@ -45,19 +45,20 @@
 //! whose output this reader cannot compare (run in the background, written to
 //! a file, or in a command outside its grammar) whose literal prompt is the
 //! first input of exactly one later session, with no other launch or session
-//! possible, links that session to its parent with a relation as well as a
-//! child fact.
+//! possible and no gap in what was read, links that session to its parent
+//! with a relation as well as a child fact, once the launch's hour is over
+//! and the Codex launch work could no longer name it.
 
 mod parent;
 mod prompt;
 mod script;
 
-pub use prompt::PromptProgress;
+pub use prompt::{HeldBy, HeldLink, PromptProgress};
 
-use super::LaunchLimits;
 use super::command;
 use super::resolve::{self, ChildStream, Recorded, Sources, Walk};
 use super::source::{self, Allowance, Budget, Reserved, Unread};
+use super::{LaunchBacklog, LaunchLimits};
 use crate::native::readers_cli::CancelToken;
 use crate::native::session_titles::{claude_contained, title_sources};
 use parent::{First, Invocation, ParentScan, ScanError};
@@ -298,6 +299,17 @@ impl BashBacklog {
     /// waited for it: the sessions still checking are looked at again.
     pub(super) fn take_prompt_wake(&mut self) -> bool {
         self.prompt.take_wake()
+    }
+
+    /// Whether the literal-prompt match still holds the display checks of
+    /// Claude sessions: it has reading or matching left to do.
+    pub fn prompt_holds_checks(&self) -> bool {
+        self.prompt.busy_now()
+    }
+
+    /// The links the last literal-prompt match held, by identifiers only.
+    pub fn prompt_held(&self) -> &[HeldLink] {
+        self.prompt.held()
     }
 
     fn clear_for_bash(
@@ -619,10 +631,12 @@ pub struct BashProgress {
 }
 
 /// One bounded pass over the backlog, counting into `progress`.
+#[allow(clippy::too_many_arguments)]
 pub fn continue_claude_bash_into(
     store: &mut Store,
     home: &Path,
     backlog: &mut BashBacklog,
+    launches: &mut LaunchBacklog,
     limits: &LaunchLimits,
     cancel: Option<&CancelToken>,
     recorded_at: i64,
@@ -647,6 +661,7 @@ pub fn continue_claude_bash_into(
             store,
             home,
             &mut backlog.prompt,
+            launches,
             limits,
             &mut budget,
             recorded_at,
@@ -664,6 +679,7 @@ pub fn continue_claude_bash(
     store: &mut Store,
     home: &Path,
     backlog: &mut BashBacklog,
+    launches: &mut LaunchBacklog,
     limits: &LaunchLimits,
     cancel: Option<&CancelToken>,
     recorded_at: i64,
@@ -673,6 +689,7 @@ pub fn continue_claude_bash(
         store,
         home,
         backlog,
+        launches,
         limits,
         cancel,
         recorded_at,
@@ -1873,19 +1890,45 @@ mod tests {
             max_pass_entries: 1,
             ..LaunchLimits::default()
         };
-        continue_claude_bash(&mut store, temp.path(), &mut backlog, &limits, None, 20).unwrap();
+        continue_claude_bash(
+            &mut store,
+            temp.path(),
+            &mut backlog,
+            &mut LaunchBacklog::default(),
+            &limits,
+            None,
+            20,
+        )
+        .unwrap();
         assert_eq!((backlog.waiting.len(), backlog.accepted.len()), (1, 1));
         assert!(!backlog.recheck && backlog.recheck_accepted);
 
         // No new import means no new possible child and no useful retry.
-        let again =
-            continue_claude_bash(&mut store, temp.path(), &mut backlog, &limits, None, 20).unwrap();
+        let again = continue_claude_bash(
+            &mut store,
+            temp.path(),
+            &mut backlog,
+            &mut LaunchBacklog::default(),
+            &limits,
+            None,
+            20,
+        )
+        .unwrap();
         assert_eq!(again, BashProgress::default());
         assert_eq!((backlog.waiting.len(), backlog.accepted.len()), (1, 1));
 
         backlog.waiting[0].invocation.answer = None;
         backlog.add_sessions(["new-synthetic-child"]);
-        continue_claude_bash(&mut store, temp.path(), &mut backlog, &limits, None, 20).unwrap();
+        continue_claude_bash(
+            &mut store,
+            temp.path(),
+            &mut backlog,
+            &mut LaunchBacklog::default(),
+            &limits,
+            None,
+            20,
+        )
+        .unwrap();
         assert_eq!((backlog.waiting.len(), backlog.accepted.len()), (1, 0));
         assert_eq!(backlog.waiting[0].invocation.call_id, "accepted");
     }

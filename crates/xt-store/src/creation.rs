@@ -710,47 +710,6 @@ impl Store {
         })
     }
 
-    /// Withdraw what one recorded Claude prompt launch claims, once the
-    /// match finds it could also have made another session, or another
-    /// launch could also have made its child: every accepted child fact
-    /// resting on that launch is withheld, and the child's relation is
-    /// conflicted when it rests on that launch. Neither shows again. Returns
-    /// how many rows changed.
-    pub fn withhold_claude_prompt_launch(
-        &mut self,
-        proof: &ClaudePromptLaunchProof,
-    ) -> Result<usize> {
-        validate_prompt_launch(proof)?;
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let facts = transaction.execute(
-            "UPDATE session_child_facts SET state='withheld'
-             WHERE evidence_kind='claude_prompt_launch' AND source_native_session_id=?1
-               AND source_rollout_id IS NULL AND launch_call_id=?2
-               AND launch_operation_index=?3 AND state='accepted'",
-            params![
-                proof.parent_native_session_id,
-                proof.launch_call_id,
-                proof.launch_operation_index
-            ],
-        )?;
-        let relations = transaction.execute(
-            "UPDATE session_creation_relations SET state='conflicted'
-             WHERE child_session_id=?1 AND evidence_kind='claude_prompt_launch'
-               AND parent_session_id=?2 AND launch_call_id=?3
-               AND launch_operation_index=?4 AND state='accepted'",
-            params![
-                proof.child_session_id,
-                proof.parent_session_id,
-                proof.launch_call_id,
-                proof.launch_operation_index
-            ],
-        )?;
-        transaction.commit()?;
-        Ok(facts + relations)
-    }
-
     /// Every stored Claude prompt-launch relation, and whether it is
     /// accepted, in child order.
     pub fn claude_prompt_launches(&self) -> Result<Vec<(ClaudePromptLaunchProof, bool)>> {
