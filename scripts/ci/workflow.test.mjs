@@ -71,7 +71,7 @@ test('routine CI is Linux-only and native work is explicit release preparation',
     ].map((x) => x[1]),
     ['workflow_dispatch'],
   );
-  assert.match(release, /runs-on: macos-14/);
+  assert.match(release, /runs-on: macos-15/);
   assert.match(release, /test "\$\(uname -m\)" = arm64/);
   assert.match(release, /sw_vers -productVersion/);
   assert.match(release, /CANDIDATE_SHA.*\^\[0-9a-f\]\{40\}\$/);
@@ -255,7 +255,7 @@ test('actual release shell guards accept only default history or matching review
         '-o',
         'pipefail',
         '-c',
-        'uname() { echo "${TEST_MACHINE:-arm64}"; }; sw_vers() { echo "${TEST_MACOS:-14.7}"; };\n' +
+        'uname() { echo "${TEST_MACHINE:-arm64}"; }; sw_vers() { echo "${TEST_MACOS:-15.7}"; };\n' +
           guards[index],
       ],
       { cwd: repo, env: { ...env, ...values }, encoding: 'utf8' },
@@ -369,8 +369,8 @@ test('actual release shell guards accept only default history or matching review
       1,
     );
     await check(
-      'macOS 15 rejects despite identical source commits',
-      { ...tagged, TEST_MACOS: '15.7' },
+      'macOS 14 rejects despite identical source commits',
+      { ...tagged, TEST_MACOS: '14.7' },
       false,
       1,
     );
@@ -494,7 +494,7 @@ test('only the signing step of the packaging job sees Apple values, after valida
   );
   assert.match(job, /^ {4}needs: native$/m);
   assert.match(job, /^ {4}environment: macos-signing$/m);
-  assert.match(job, /runs-on: macos-14/);
+  assert.match(job, /runs-on: macos-15/);
   assert.doesNotMatch(job, /permissions:|continue-on-error|\|\| true/);
   for (const check of [
     /CANDIDATE_SHA.*\^\[0-9a-f\]\{40\}\$/,

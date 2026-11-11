@@ -30,7 +30,7 @@ let releaseAuthorized = releaseMode && identifier == "ai.xtrace.app" &&
     authorization["GITHUB_ACTIONS"] == "true" &&
     authorization["GITHUB_EVENT_NAME"] == "workflow_dispatch" &&
     authorization["RUNNER_ENVIRONMENT"] == "github-hosted" &&
-    ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14
+    ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15
 let probeAuthorized = identifier.range(of: #"^ai\.xtrace\.app\.test\.[a-f0-9-]+$"#,
                        options: .regularExpression) != nil &&
     bundle.lastPathComponent == "Hosted AX Probe.app" && (mode == "missing-control" || mode == "press")

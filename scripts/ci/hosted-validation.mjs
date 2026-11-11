@@ -21,14 +21,14 @@ export function requireProbeHost({ mode, platform, arch, osVersion, env, head })
   if (
     platform !== 'darwin' ||
     arch !== 'arm64' ||
-    !/^14\./.test(osVersion) ||
+    !/^15\./.test(osVersion) ||
     env.GITHUB_ACTIONS !== 'true' ||
     env.GITHUB_EVENT_NAME !== 'workflow_dispatch' ||
     env.RUNNER_ENVIRONMENT !== 'github-hosted' ||
     env.RUNNER_OS !== 'macOS' ||
     env.RUNNER_ARCH !== 'ARM64'
   )
-    throw new Error('Requires a fresh GitHub-hosted macOS 14 arm64 manual run');
+    throw new Error('Requires a fresh GitHub-hosted macOS 15 arm64 manual run');
   if (
     !shaPattern.test(head) ||
     head !== env.CANDIDATE_SHA ||

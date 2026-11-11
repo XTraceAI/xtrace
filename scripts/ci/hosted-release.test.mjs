@@ -38,7 +38,7 @@ const host = () => ({
   allowReleaseIdentity: 'true',
   platform: 'darwin',
   arch: 'arm64',
-  osVersion: '14.8.9',
+  osVersion: '15.8.9',
   head: sha,
   env: {
     GITHUB_ACTIONS: 'true',
@@ -408,7 +408,7 @@ test('signed first-launch job needs explicit opt-in before checkout and receives
         '-o',
         'pipefail',
         '-c',
-        'uname() { echo arm64; }; sw_vers() { echo 14.8.9; };\n' + script,
+        'uname() { echo arm64; }; sw_vers() { echo 15.8.9; };\n' + script,
       ],
       {
         env: {

@@ -39,7 +39,7 @@ const host = () => ({
   mode: 'updater-failures',
   platform: 'darwin',
   arch: 'arm64',
-  osVersion: '14.8.9',
+  osVersion: '15.8.9',
   head: sha,
   env: {
     GITHUB_ACTIONS: 'true',
@@ -354,7 +354,7 @@ test('SDK mode requires every hosted/source guard and refuses even reviewed tags
     { mode: 'update' },
     { platform: 'linux' },
     { arch: 'x64' },
-    { osVersion: '15.0' },
+    { osVersion: '14.0' },
     { head: 'b'.repeat(40) },
   ])
     assert.throws(() => requireFailureHost({ ...host(), ...changed }));
