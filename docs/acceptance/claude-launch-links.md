@@ -432,16 +432,18 @@ raised whenever a read of the same bytes may find something else), its
 longest line, the Claude launchers
 installed, the session owning the file, its device and inode, and a
 fingerprint of where it was read up to and the first and last 4 KiB before
-that point. For this match the file may also have grown: only what was
-appended is read, as within a run. For the other reader the file must be
-exactly the generation it was read at. Anything else reads the file whole,
-as if nothing was saved. What the read found that is not a launch is saved
+that point. A file not grown is taken as saved only if it is still exactly
+the generation the read began at (the same modification and change times);
+for this match a grown one is read from where it was read up to, as within a
+run. For the other reader the file must be exactly the generation it was
+read at. A read is saved only if the file did not change while it was read,
+and under the launchers installed when it began, which it reads every line
+with. Anything else reads the file whole, as if nothing was saved. What the read found that is not a launch is saved
 with it and counts after the restart as before: the times of commands naming
 `claude` it could not read, and whether a launch record had no time. A
 transcript that holds a launch, held more than this version reads, or could
-not be read is never saved: it is read whole on every start. On a copy of a
-real index, a restart read 9 of 664 transcript files for this match and 3 of
-148 for the other reader, and every link it found and held was the same.
+not be read is never saved: it is read whole on every start. A saved
+read that cannot be stored is dropped; it never stops the match.
 
 ### Known limits
 
@@ -471,6 +473,11 @@ another launch made:
   not hold, or a second child the index does not hold, is not known.
 - A Codex history found only after a prompt link was written: if it names the
   same child, the two links conflict and both are withheld.
+- A transcript rewritten in place in its middle and grown at once, keeping
+  its inode, its first 4 KiB and the 4 KiB before where it was read up to,
+  is read only from that point, within a run as after a restart: a launch
+  the rewrite added before it is not seen. Claude only appends to its
+  transcripts.
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and
@@ -480,8 +487,8 @@ Schema 33 adds `claude_transcript_reads`: one row per reader (`prompt` or
 `bash`) and transcript file that held no launch, with the session owning it,
 the reader version, line bound and a digest of the readers' rules and the
 installed launchers, the
-file's device, inode and where it was read up to (and, for `bash`, its exact
-modification and change times), a SHA-256 fingerprint of those bytes'
+file's device, inode and exact modification and change times when the read
+began and where it was read up to, a SHA-256 fingerprint of those bytes'
 first and last 4 KiB, and for `prompt` the times of commands naming `claude`
 it could not read and whether a launch record had no time. The path is the
 one the index's source cursors already hold. No prompt, command, record text

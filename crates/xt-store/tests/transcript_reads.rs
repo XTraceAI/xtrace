@@ -15,8 +15,8 @@ fn prompt_read(path: &str) -> SavedTranscriptRead {
         device: 1,
         inode: 2,
         read_to: 4_096,
-        mtime_ns: None,
-        ctime_ns: None,
+        mtime_ns: 11,
+        ctime_ns: 12,
         fingerprint: [9; 32],
         untimed: true,
         refused_ms: vec![1_790_668_716_333, -5],
@@ -26,8 +26,6 @@ fn prompt_read(path: &str) -> SavedTranscriptRead {
 fn bash_read(path: &str) -> SavedTranscriptRead {
     SavedTranscriptRead {
         reader: TranscriptReader::Bash,
-        mtime_ns: Some(11),
-        ctime_ns: Some(12),
         untimed: false,
         refused_ms: Vec::new(),
         ..prompt_read(path)
@@ -94,21 +92,11 @@ fn a_saved_read_round_trips_per_reader_and_is_replaced_or_forgotten() {
 }
 
 #[test]
-fn the_table_refuses_a_row_that_mixes_the_readers_fields() {
+fn the_table_refuses_a_row_it_does_not_describe() {
     let mut store = Store::open_in_memory().unwrap();
     let path = "/home/.claude/projects/-w/x.jsonl";
     for bad in [
-        // Only the `bash` reader keeps exact times; only `prompt` keeps
-        // what is not a launch.
-        SavedTranscriptRead {
-            mtime_ns: Some(1),
-            ctime_ns: Some(1),
-            ..prompt_read(path)
-        },
-        SavedTranscriptRead {
-            mtime_ns: None,
-            ..bash_read(path)
-        },
+        // Only `prompt` keeps what is not a launch.
         SavedTranscriptRead {
             refused_ms: vec![1],
             ..bash_read(path)

@@ -43,10 +43,9 @@ pub struct SavedTranscriptRead {
     pub inode: i64,
     /// Just after the last complete line read.
     pub read_to: u64,
-    /// The exact modification and change times, for [`TranscriptReader::Bash`]
-    /// only.
-    pub mtime_ns: Option<i64>,
-    pub ctime_ns: Option<i64>,
+    /// The exact modification and change times when the read began.
+    pub mtime_ns: i64,
+    pub ctime_ns: i64,
     pub fingerprint: [u8; 32],
     /// [`TranscriptReader::Prompt`] only: a record or line naming `claude`
     /// had no time.
@@ -95,8 +94,8 @@ impl Store {
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, i64>(6)?,
-                        row.get::<_, Option<i64>>(7)?,
-                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
                         row.get::<_, Vec<u8>>(9)?,
                         row.get::<_, i64>(10)?,
                         row.get::<_, Vec<u8>>(11)?,

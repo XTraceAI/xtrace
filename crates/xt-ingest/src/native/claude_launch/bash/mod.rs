@@ -434,12 +434,12 @@ impl BashBacklog {
         let same = saved.owner_native_session_id == native
             && saved.reader_version == saved::BASH_READ_VERSION
             && saved.max_line == run.limits.max_line as u64
-            && saved.rules_digest == saved::rules_digest(&run.programs)
+            && saved.rules_digest == run.rules
             && saved.device == now.device
             && saved.inode == now.inode
             && i64::try_from(saved.read_to).ok() == Some(now.length)
-            && saved.mtime_ns == Some(now.mtime_ns)
-            && saved.ctime_ns == Some(now.ctime_ns)
+            && saved.mtime_ns == now.mtime_ns
+            && saved.ctime_ns == now.ctime_ns
             && saved.refused_ms.is_empty()
             && !saved.untimed
             && saved::fingerprint(&file, saved.read_to) == Some(saved.fingerprint);
@@ -455,6 +455,7 @@ impl BashBacklog {
 
     /// Save a whole read that found no launch, so a restart need not read
     /// the file again; forget the saved read of one that found launches.
+    #[allow(clippy::too_many_arguments)]
     fn note_read(
         &mut self,
         path: &Path,
@@ -462,6 +463,7 @@ impl BashBacklog {
         file: &std::fs::File,
         generation: SegmentGeneration,
         empty: bool,
+        programs: &[PathBuf],
         run: &Pass<'_>,
     ) {
         let Some(text) = path.to_str() else {
@@ -482,12 +484,12 @@ impl BashBacklog {
             owner_native_session_id: native.to_owned(),
             reader_version: saved::BASH_READ_VERSION,
             max_line: run.limits.max_line as u64,
-            rules_digest: saved::rules_digest(&run.programs),
+            rules_digest: saved::rules_digest(programs),
             device: generation.device,
             inode: generation.inode,
             read_to,
-            mtime_ns: Some(generation.mtime_ns),
-            ctime_ns: Some(generation.ctime_ns),
+            mtime_ns: generation.mtime_ns,
+            ctime_ns: generation.ctime_ns,
             fingerprint,
             untimed: false,
             refused_ms: Vec::new(),
@@ -718,6 +720,9 @@ pub struct BashProgress {
     /// Caller transcripts not read again because a saved read showed them
     /// unchanged.
     pub callers_skipped: usize,
+    /// Passes whose whole reads could not be saved (each is read again after
+    /// a restart).
+    pub saves_failed: usize,
     /// Caller transcripts that could not be read now, or are beyond bounds.
     pub callers_unreadable: usize,
     /// Supported launches whose child was looked for.
@@ -764,14 +769,17 @@ pub fn continue_claude_bash_into(
         recorded_at,
         progress,
     );
-    // What this pass read whole, saved in one transaction; kept for the next
-    // pass if the store fails.
-    let saved = store.save_transcript_reads(&backlog.unsaved, &backlog.forget, recorded_at);
-    if saved.is_ok() {
-        backlog.unsaved.clear();
-        backlog.forget.clear();
+    // What this pass read whole, saved in one transaction. Saved reads are
+    // only a shortcut: one the store refuses is dropped, never in the way of
+    // the rest of the pass.
+    if store
+        .save_transcript_reads(&backlog.unsaved, &backlog.forget, recorded_at)
+        .is_err()
+    {
+        progress.saves_failed += 1;
     }
-    result = result.and(saved);
+    backlog.unsaved.clear();
+    backlog.forget.clear();
     // The literal-prompt match after the rest, within what is left.
     if result.is_ok() {
         let changed = progress.prompt.changed;
@@ -820,6 +828,8 @@ pub fn continue_claude_bash(
 struct Pass<'a> {
     home: &'a Path,
     programs: Vec<PathBuf>,
+    /// The readers' rules with these launchers ([`saved::rules_digest`]).
+    rules: [u8; 32],
     limits: &'a LaunchLimits,
     memory: Allowance,
     recorded_at: i64,
@@ -838,9 +848,11 @@ fn pass(
         .memory
         .get_or_insert_with(|| Allowance::new(limits.thread_memory))
         .clone();
+    let programs = command::installed_programs(home);
     let run = Pass {
         home,
-        programs: command::installed_programs(home),
+        rules: saved::rules_digest(&programs),
+        programs,
         limits,
         memory,
         recorded_at,
@@ -863,6 +875,7 @@ fn pass(
                         reading.scan.file(),
                         facts.generation,
                         invocations.is_empty(),
+                        reading.scan.programs(),
                         &run,
                     );
                     if invocations
@@ -1024,7 +1037,20 @@ fn pass(
             if let Some(path) = transcript(store, home, &native)? {
                 let unchanged =
                     source::stat(&path).is_ok_and(|now| backlog.read.get(&path) == Some(&now));
-                if !unchanged && backlog.restore(store, &path, &native, &run)? {
+                let restored = if unchanged {
+                    false
+                } else {
+                    match backlog.restore(store, &path, &native, &run) {
+                        Ok(restored) => restored,
+                        Err(error) => {
+                            // Looked at again next pass.
+                            backlog.queued.insert(native.clone());
+                            backlog.queue.push_front(native);
+                            return Err(error);
+                        }
+                    }
+                };
+                if restored {
                     // Read whole by an earlier run, which found no launch.
                     progress.callers_skipped += 1;
                     continue;

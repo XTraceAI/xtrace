@@ -10,7 +10,7 @@
 //! was saved.
 
 use sha2::Digest;
-use std::{fs::File, os::unix::fs::FileExt, path::PathBuf};
+use std::{fs::File, os::unix::fs::FileExt, path::PathBuf, sync::OnceLock};
 
 /// The literal-prompt match's reading rules. Raise it whenever what a read of
 /// the same bytes finds may change (the word reader, the option map, what a
@@ -38,14 +38,24 @@ const RULES: &[&str] = &[
     include_str!("../source.rs"),
 ];
 
+/// A digest of [`RULES`], worked out once per process.
+fn rules_source() -> [u8; 32] {
+    static SOURCE: OnceLock<[u8; 32]> = OnceLock::new();
+    *SOURCE.get_or_init(|| {
+        let mut digest = sha2::Sha256::new();
+        for rules in RULES {
+            digest.update((rules.len() as u64).to_le_bytes());
+            digest.update(rules.as_bytes());
+        }
+        digest.finalize().into()
+    })
+}
+
 /// A digest of the readers' rules ([`RULES`]) and of the Claude launcher
-/// programs installed now, in order.
+/// programs `programs`, in order: those a read was made with.
 pub(super) fn rules_digest(programs: &[PathBuf]) -> [u8; 32] {
     let mut digest = sha2::Sha256::new();
-    for rules in RULES {
-        digest.update((rules.len() as u64).to_le_bytes());
-        digest.update(rules.as_bytes());
-    }
+    digest.update(rules_source());
     for program in programs {
         let bytes = program.as_os_str().as_encoded_bytes();
         digest.update((bytes.len() as u64).to_le_bytes());

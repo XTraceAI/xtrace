@@ -352,6 +352,12 @@ impl ParentScan {
         &self.file
     }
 
+    /// The Claude launchers installed when this read began, which it reads
+    /// every line with.
+    pub fn programs(&self) -> &[PathBuf] {
+        &self.programs
+    }
+
     /// Open `path` as the history of session `native` (its file name).
     pub fn new(
         path: &Path,

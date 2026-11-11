@@ -1576,3 +1576,151 @@ fn a_launcher_installed_or_removed_since_a_read_reads_every_transcript_again() {
     assert_eq!(counts, [2, 0, 2, 0], "{again:?}");
     assert_eq!(restart(&home, &mut store).1, [1, 1, 0, 2]);
 }
+
+#[test]
+fn a_launcher_installed_while_a_transcript_is_read_reads_it_again_after_a_restart() {
+    // A helper launch names the launcher by its absolute path, which is
+    // installed only after the read has passed the launch's line: that read
+    // cannot see the launch, and must not be saved as the read of a later
+    // start, which has the launcher.
+    let home = Home::new();
+    let launcher = home.home.join(".local/bin/claude");
+    fs::remove_file(&launcher).unwrap();
+    let path = parent_path(&home, PARENT);
+    let mut rows = caller_rows(PARENT, None, MAIN_CALL, 0, &helper_command(&home, PROMPT));
+    let head: usize = rows.iter().map(|row| format!("{row}\n").len()).sum();
+    for i in 0..200 {
+        rows.push(record(
+            PARENT,
+            "user",
+            &format!("{PARENT}-pad-{i}"),
+            100 + i,
+            None,
+            json!({"role": "user", "content": "synthetic padding line for a long read"}),
+        ));
+    }
+    write_rows(&path, &rows);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    let mut backlog = BashBacklog::starting();
+    let mut launches = LaunchBacklog::starting();
+    let mut read = 0;
+    for _ in 0..10_000 {
+        continue_claude_launches(
+            &mut store,
+            &home.home,
+            &mut launches,
+            &LaunchLimits::default(),
+            None,
+            T,
+        )
+        .unwrap();
+        let pass = continue_claude_bash(
+            &mut store,
+            &home.home,
+            &mut backlog,
+            &mut launches,
+            &LaunchLimits::remaining(1024, std::time::Duration::from_secs(5)),
+            None,
+            T,
+        )
+        .unwrap();
+        assert_eq!(pass.prompt.files_read, 0, "the read is still under way");
+        read += pass.prompt.bytes_read;
+        if read as usize > head + 64 {
+            break;
+        }
+    }
+    fs::write(&launcher, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+    let first = settle(&home, &mut store, &mut backlog);
+    assert_eq!(first.linked, 0, "{first:?}");
+    let (again, counts) = restart(&home, &mut store);
+    assert_eq!(
+        counts[1], 0,
+        "the read made without the launcher is not taken"
+    );
+    assert_eq!(again.linked, 1, "{again:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+}
+
+/// A rival caller's transcript longer than both fingerprint windows, with
+/// `command` in the middle.
+fn padded_rival(command: &str) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for i in 0..60 {
+        rows.push(record(
+            OTHER_PARENT,
+            "user",
+            &format!("{OTHER_PARENT}-a-{i}"),
+            -10_000 + i,
+            None,
+            json!({"role": "user", "content": "synthetic padding line before the middle"}),
+        ));
+    }
+    rows.push(caller_rows(OTHER_PARENT, None, OTHER_CALL, 1_000, command)[1].clone());
+    for i in 0..60 {
+        rows.push(record(
+            OTHER_PARENT,
+            "user",
+            &format!("{OTHER_PARENT}-b-{i}"),
+            2_000 + i,
+            None,
+            json!({"role": "user", "content": "synthetic padding line after the middle"}),
+        ));
+    }
+    rows
+}
+
+#[test]
+fn a_transcript_rewritten_in_place_in_its_middle_is_read_again_after_a_restart() {
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    // A harmless command as long as the rival one, so the rewrite keeps the
+    // length and both ends of the file.
+    let rival = unreadable_rival();
+    let line = |command: &str| {
+        format!(
+            "{}",
+            caller_rows(OTHER_PARENT, None, OTHER_CALL, 1_000, command)[1]
+        )
+        .len()
+    };
+    let mut harmless = String::from("ls ~/.claude/projects");
+    while line(&harmless) < line(&rival) {
+        harmless.push(' ');
+    }
+    assert_eq!(line(&harmless), line(&rival));
+    let other = parent_path(&home, OTHER_PARENT);
+    write_rows(&other, &padded_rival(&harmless));
+    assert!(fs::metadata(&other).unwrap().len() > 3 * 4096);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    restart(&home, &mut store);
+    assert_eq!(restart(&home, &mut store).1[1], 1, "the rival is saved");
+    let before = (inode(&other), fs::metadata(&other).unwrap().len());
+    let body: String = padded_rival(&rival)
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect();
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().write(true).open(&other).unwrap();
+        file.write_all(body.as_bytes()).unwrap();
+    }
+    assert_eq!((inode(&other), fs::metadata(&other).unwrap().len()), before);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    scan(&home, &mut store);
+    let (again, counts) = restart(&home, &mut store);
+    assert_eq!(counts[1], 0, "the rewritten file is read again");
+    assert_eq!(
+        (again.linked, again.held_command_unread),
+        (0, 1),
+        "{again:?}"
+    );
+    unlinked(&home, &store, MAIN_CHILD);
+}

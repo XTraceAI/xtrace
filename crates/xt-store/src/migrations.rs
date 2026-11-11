@@ -193,7 +193,7 @@ const MIGRATIONS: &[Migration] = &[
     migration!(
         33,
         "0033_claude_transcript_reads",
-        "13efaa551ae07b4647663f3f97d2817d2ea43aaba7a23e4138a5bb29a079f91b"
+        "3560d721253bb5fb79378c9df1940662cc6ae657125bfca2bc6665c14224d962"
     ),
 ];
 

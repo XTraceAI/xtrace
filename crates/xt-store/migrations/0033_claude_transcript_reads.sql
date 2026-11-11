@@ -6,19 +6,19 @@
 -- `bash` (the launch reader that compares printed answers). A row is kept
 -- only while what it was read with is what reads it now: the same
 -- `reader_version`, longest line `max_line` and `rules_digest`, a digest of
--- the readers' own rules and of the Claude launcher programs installed then.
--- It names the file by the path the index's own source cursors already hold,
--- the session owning it, and the generation it was read at: device and inode, `read_to` (the
--- byte just after the last complete line read), and for `bash` the exact
--- modification and change times. `fingerprint` is a SHA-256 digest of
--- `read_to` and the bytes of the first and last 4 KiB before it, so a file
--- rewritten in place is told apart. For `prompt`, `untimed` and `refused_ms`
--- keep what the read found that is not a launch: whether a record or line
--- naming `claude` had no time, and the times (UTC milliseconds, each eight
--- little-endian bytes) of `Bash` commands naming `claude` it could not read.
--- No prompt, command, record text or output is kept. A row is only a
--- shortcut: a file whose generation or fingerprint differs is read as if no
--- row existed. Additive only: no existing table changes.
+-- the readers' own rules and of the Claude launcher programs installed when
+-- the read began. It names the file by the path the index's own source
+-- cursors already hold, the session owning it, and the generation the read
+-- began at: device, inode and exact modification and change times, and
+-- `read_to`, the byte just after the last complete line read. `fingerprint`
+-- is a SHA-256 digest of `read_to` and the bytes of the first and last 4 KiB
+-- before it. For `prompt`, `untimed` and `refused_ms` keep what the read
+-- found that is not a launch: whether a record or line naming `claude` had no
+-- time, and the times (UTC milliseconds, each eight little-endian bytes) of
+-- `Bash` commands naming `claude` it could not read. No prompt, command,
+-- record text or output is kept. A row is only a shortcut: a file whose
+-- generation or fingerprint differs is read as if no row existed. Additive
+-- only: no existing table changes.
 CREATE TABLE claude_transcript_reads (
     reader TEXT NOT NULL CHECK(reader IN ('prompt', 'bash')),
     path TEXT NOT NULL CHECK(
@@ -39,14 +39,8 @@ CREATE TABLE claude_transcript_reads (
     device INTEGER NOT NULL CHECK(typeof(device) = 'integer'),
     inode INTEGER NOT NULL CHECK(typeof(inode) = 'integer'),
     read_to INTEGER NOT NULL CHECK(typeof(read_to) = 'integer' AND read_to >= 0),
-    mtime_ns INTEGER CHECK(
-        (mtime_ns IS NULL) = (reader = 'prompt')
-        AND (mtime_ns IS NULL OR typeof(mtime_ns) = 'integer')
-    ),
-    ctime_ns INTEGER CHECK(
-        (ctime_ns IS NULL) = (reader = 'prompt')
-        AND (ctime_ns IS NULL OR typeof(ctime_ns) = 'integer')
-    ),
+    mtime_ns INTEGER NOT NULL CHECK(typeof(mtime_ns) = 'integer'),
+    ctime_ns INTEGER NOT NULL CHECK(typeof(ctime_ns) = 'integer'),
     fingerprint BLOB NOT NULL CHECK(
         typeof(fingerprint) = 'blob' AND length(fingerprint) = 32
     ),
