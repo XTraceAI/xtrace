@@ -351,7 +351,8 @@ one the reader cannot read (below), because the extra words could be any
 option, such as `--continue`: an unquoted expansion (`--model $MODEL`,
 `$(…)`, `` `…` ``, `$1`), a glob (`*`), a brace expansion (`{a,b}`),
 `"$@"` or `"${a[@]}"`, or one of zsh's forms that split even when quoted
-(`$=M`, `$~M`, `$^M`, `"${=M}"`, `"${(f)M}"`, `"$M[@]"`). Other quoted
+(`$=M`, `$~M`, `$^M`, `"${=M}"`, `"${(f)M}"`, `"$M[@]"`), also inside a
+quoted default (`"${U:-$=M}"`; any `$` there counts). Other quoted
 expansions (`"$MODEL"`) are one word. So is
 `$NAME` or `${NAME}` when the command starts by setting `NAME` to a plain
 value with no spaces or special characters (`S=/w/run; cd $S && claude -p …
@@ -480,6 +481,8 @@ another launch made:
   function or alias the command did not define (a `cd` function that sets
   the variable, say), or the user's shell setup, which Claude's `Bash` tool
   loads before the command, setting `IFS`.
+- Text the reader does not read as commands can still give later launches
+  other input, such as `eval 'exec < file'`.
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and

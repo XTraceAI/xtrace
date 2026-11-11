@@ -1858,6 +1858,12 @@ mod tests {
             "claude --model \"${(z)M}\" -p x",
             "claude --model \"${~M}\" -p x",
             "claude --model \"$M[@]\" -p x",
+            // A zsh form nested in a quoted default.
+            "claude --model \"${U:-${=M}}\" -p x",
+            "claude --model \"${U:-$=M}\" -p x",
+            "claude --model \"${U-$=M}\" -p x",
+            "claude --model \"${M:+$=M}\" -p x",
+            "claude --model \"${U:-${(f)X}}\" -p x",
             "S=/w; claude -p x --mcp-config $=S/c.json",
             // A variable the command changes, or that may not be one word.
             "S=/w; S+=' --continue'; claude -p x --model $S",

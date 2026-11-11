@@ -18,9 +18,9 @@
 //! character, a brace expansion, a process substitution or a leading `~`
 //! (kept apart, for a program path). A word that is not literal is one word
 //! ([`Word::Opaque`]) only when the shell cannot split it: its expansions are
-//! quoted (but `"$@"`, a `"${…}"` holding `@` or starting with a zsh flag
-//! such as `(f)` or `=`, a `"$NAME[…]"` subscript and zsh's `$=`, `$~` and
-//! `$^`), `$'…'`, `$"…"`, a tilde,
+//! quoted (but `"$@"`, a `"${…}"` holding `@` or another `$` or starting
+//! with a zsh flag such as `(f)` or `=`, a `"$NAME[…]"` subscript and zsh's
+//! `$=`, `$~` and `$^`), `$'…'`, `$"…"`, a tilde,
 //! a process substitution, or a `$NAME` or `${NAME}` of a variable the
 //! command set to a plain value at its start and never touches again, and
 //! that no command of it may set without naming it ([`one_word_names`],
@@ -660,11 +660,18 @@ impl Reader<'_> {
         if self.redirected && (self.closer || first.is_some_and(|word| CLOSERS.contains(&word))) {
             self.group_input = true;
         }
-        // `exec < f`, with no program, makes the file the input of every
-        // later command of the script.
+        // `exec < f` (also `builtin exec < f`), with no program, makes the
+        // file the input of every later command of the script.
+        let builtin = Word::Lit("builtin".to_owned());
+        let unwrapped: Vec<Word> = self
+            .current
+            .iter()
+            .filter(|word| **word != builtin)
+            .cloned()
+            .collect();
         if self.redirected
-            && program(&self.current).is_none()
-            && self.current.contains(&Word::Lit("exec".to_owned()))
+            && program(&unwrapped).is_none()
+            && unwrapped.contains(&Word::Lit("exec".to_owned()))
         {
             self.group_input = true;
         }
@@ -995,9 +1002,10 @@ impl Reader<'_> {
     /// One `$` expansion, at `$`. A `$` that starts none is literal. Unquoted,
     /// every expansion may split its word, but a `$NAME` or `${NAME}` of a
     /// [`Self::known`] variable; quoted, only `"$@"`, a `${…}` holding `@`
-    /// (`"${a[@]}"`, `"${@:2}"`) or starting with a zsh flag (`"${(f)M}"`,
-    /// `"${=M}"`, `"${~M}"`, `"${^M}"`), a `"$NAME[…]"` subscript and zsh's
-    /// `$=M`, `$~M` and `$^M` may.
+    /// (`"${a[@]}"`, `"${@:2}"`) or another expansion (`"${U:-$=M}"`) or
+    /// starting with a zsh flag (`"${(f)M}"`, `"${=M}"`, `"${~M}"`,
+    /// `"${^M}"`), a `"$NAME[…]"` subscript and zsh's `$=M`, `$~M` and `$^M`
+    /// may.
     fn expansion(&mut self, quoted: bool) -> Option<()> {
         let splits = match self.peek(1) {
             Some('(') => {
@@ -1024,8 +1032,8 @@ impl Reader<'_> {
                 self.i = end + 1;
                 if quoted {
                     // zsh's flags (`"${(f)M}"`, `"${=M}"`, `"${~M}"`) split
-                    // it too.
-                    body.contains('@') || body.starts_with(['(', '=', '~', '^'])
+                    // it too, also in a default (`"${U:-$=M}"`).
+                    body.contains(['@', '$']) || body.starts_with(['(', '=', '~', '^'])
                 } else {
                     !self.known.contains(&body)
                 }
@@ -1763,6 +1771,7 @@ mod tests {
             "exec <<<x; claude -p x",
             "exec <<EOF\nx\nEOF\nclaude -p x",
             "exec </w/f\nclaude -p x",
+            "builtin exec < /w/f; claude -p x",
         ] {
             assert_eq!(claude_runs(command), Some((1, 0)), "{command:?}");
         }
