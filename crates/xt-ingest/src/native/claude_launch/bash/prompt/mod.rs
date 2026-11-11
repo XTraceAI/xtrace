@@ -93,7 +93,7 @@ mod words;
 use super::super::options::{self, Action};
 use super::super::source::{self, Allowance, Budget, Reserved};
 use super::super::{LaunchBacklog, LaunchLimits, command, rows};
-use super::saved::{self, PROMPT_READ_VERSION};
+use super::saved::{self, Fingerprint, PROMPT_READ_VERSION};
 use super::{BIRTH_WINDOW_MS, OwnFirst, OwnOpening, OwnRead, transcript};
 use serde_json::Value;
 use sha2::Digest;
@@ -686,7 +686,7 @@ fn pass_within(
                         overfull,
                         rules: reading.rules,
                     };
-                    note_read(backlog, &reading, &facts, limits.max_line);
+                    note_read(backlog, &reading, &facts, limits.max_line, budget);
                     keep(backlog, reading.path.clone(), facts);
                 }
                 Err(()) => {
@@ -710,6 +710,7 @@ fn pass_within(
                 memory,
                 programs,
                 digest,
+                budget,
             );
             let started = match started {
                 Ok(started) => started,
@@ -722,6 +723,10 @@ fn pass_within(
             match started {
                 Start::Reading(reading) => backlog.reading = Some(reading),
                 Start::Unchanged => {}
+                Start::Deferred => {
+                    backlog.due.push_front((owner, path));
+                    return Ok(());
+                }
                 Start::Saved(facts) => {
                     // What a read would find again, as an earlier run saved
                     // it.
@@ -900,6 +905,9 @@ enum Start {
     Unchanged,
     /// Read to its end by an earlier run, which saved what it found.
     Saved(Box<FileFacts>),
+    /// What is left of the pass's bytes cannot check a saved read: looked at
+    /// again next pass.
+    Deferred,
     /// It no longer exists: deleted history.
     Missing,
     Failed,
@@ -915,6 +923,7 @@ fn start(
     memory: &Allowance,
     programs: &[PathBuf],
     rules: [u8; 32],
+    budget: &mut Budget<'_>,
 ) -> xt_store::Result<Start> {
     let (file, generation) = match source::open(path) {
         Ok(opened) => opened,
@@ -953,30 +962,39 @@ fn start(
         && saved.device == generation.device
         && saved.inode == generation.inode
         && saved.read_to <= length
-        && saved::fingerprint(&file, saved.read_to) == Some(saved.fingerprint)
     {
-        // An earlier run read it up to `read_to` and found no launch there.
-        if saved.read_to < length {
-            // It grew: only what was appended is read.
-            from = saved.read_to;
-            refused = saved.refused_ms;
-            untimed = saved.untimed;
-        } else if saved.mtime_ns == generation.mtime_ns && saved.ctime_ns == generation.ctime_ns {
-            // Still exactly the generation that read began at.
-            return Ok(Start::Saved(Box::new(FileFacts {
-                owner: owner.to_owned(),
-                device: generation.device,
-                inode: generation.inode,
-                complete: length,
-                tail: tail(&file, length),
-                launches: Vec::new(),
-                refused: saved.refused_ms,
-                untimed: saved.untimed,
-                overfull: false,
-                rules,
-            })));
+        match saved::fingerprint(&file, saved.read_to, budget) {
+            Fingerprint::Deferred => return Ok(Start::Deferred),
+            // An earlier run read it up to `read_to` and found no launch
+            // there.
+            Fingerprint::Digest(digest) if digest == saved.fingerprint => {
+                if saved.read_to < length {
+                    // It grew: only what was appended is read.
+                    from = saved.read_to;
+                    refused = saved.refused_ms;
+                    untimed = saved.untimed;
+                } else if saved.mtime_ns == generation.mtime_ns
+                    && saved.ctime_ns == generation.ctime_ns
+                {
+                    // Still exactly the generation that read began at.
+                    return Ok(Start::Saved(Box::new(FileFacts {
+                        owner: owner.to_owned(),
+                        device: generation.device,
+                        inode: generation.inode,
+                        complete: length,
+                        tail: tail(&file, length),
+                        launches: Vec::new(),
+                        refused: saved.refused_ms,
+                        untimed: saved.untimed,
+                        overfull: false,
+                        rules,
+                    })));
+                }
+                // The same length at another time: rewritten in place, read
+                // whole.
+            }
+            Fingerprint::Digest(_) | Fingerprint::Unreadable => {}
         }
-        // The same length at another time: rewritten in place, read whole.
     }
     let Ok(held) = memory.reserve(path.as_os_str().len() + max_line.min(1 << 20)) else {
         return Ok(Start::Failed);
@@ -1043,13 +1061,23 @@ fn keep(backlog: &mut PromptBacklog, path: PathBuf, facts: FileFacts) {
 /// Save a whole read of a file that held no launch, so a restart need not
 /// read it again; forget the saved read of one that holds launches, held
 /// more than this version reads, or changed while it was read.
-fn note_read(backlog: &mut PromptBacklog, reading: &FileRead, facts: &FileFacts, max_line: usize) {
+fn note_read(
+    backlog: &mut PromptBacklog,
+    reading: &FileRead,
+    facts: &FileFacts,
+    max_line: usize,
+    budget: &mut Budget<'_>,
+) {
     let path = reading.path.as_path();
     let Some(text) = path.to_str() else {
         return;
     };
     let unchanged = source::generation_of(&reading.file).ok() == Some(reading.generation);
-    let fingerprint = saved::fingerprint(&reading.file, facts.complete);
+    // A read not saved for want of bytes is only read again after a restart.
+    let fingerprint = match saved::fingerprint(&reading.file, facts.complete, budget) {
+        Fingerprint::Digest(digest) => Some(digest),
+        Fingerprint::Unreadable | Fingerprint::Deferred => None,
+    };
     let (true, false, true, Some(fingerprint)) = (
         unchanged,
         facts.overfull,
@@ -1972,6 +2000,7 @@ mod tests {
             &memory,
             &[],
             saved::rules_digest(&[]),
+            &mut Budget::new(1 << 20, Duration::from_secs(5), None),
         ) else {
             panic!("the transcript is read");
         };

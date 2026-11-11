@@ -9,6 +9,7 @@
 //! fingerprint of the bytes read. Anything else reads the file as if nothing
 //! was saved.
 
+use super::super::source::Budget;
 use sha2::Digest;
 use std::{fs::File, os::unix::fs::FileExt, path::PathBuf, sync::OnceLock};
 
@@ -64,26 +65,72 @@ pub(super) fn rules_digest(programs: &[PathBuf]) -> [u8; 32] {
     digest.finalize().into()
 }
 
+/// What [`fingerprint`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Fingerprint {
+    Digest([u8; 32]),
+    /// The bytes could not be read.
+    Unreadable,
+    /// What is left of the pass's bytes cannot cover them, after other reads
+    /// this pass: nothing was read, and a later pass may.
+    Deferred,
+}
+
 /// A digest of `read_to` and the first and last [`WINDOW`] bytes of `file`
 /// before it: a file rewritten in place under the same name, device and inode
-/// differs. `None` when those bytes cannot be read.
-pub(super) fn fingerprint(file: &File, read_to: u64) -> Option<[u8; 32]> {
-    let mut digest = sha2::Sha256::new();
-    digest.update(read_to.to_le_bytes());
+/// differs. Its bytes are asked of `budget` first, all at once, and charged
+/// to it.
+pub(super) fn fingerprint(file: &File, read_to: u64, budget: &mut Budget<'_>) -> Fingerprint {
     let head = read_to.min(WINDOW);
     let tail = read_to.saturating_sub(WINDOW);
-    for (from, to) in [(0, head), (tail, read_to)] {
-        let mut bytes = vec![0_u8; usize::try_from(to - from).ok()?];
-        file.read_exact_at(&mut bytes, from).ok()?;
+    let windows = [(0, head), (tail, read_to)];
+    let wanted: u64 = windows.iter().map(|(from, to)| to - from).sum();
+    if !budget.fits(wanted) {
+        // A pass whose whole share is smaller never could: the file is read
+        // as if nothing was saved, within its share.
+        return if budget.spent > 0 {
+            Fingerprint::Deferred
+        } else {
+            Fingerprint::Unreadable
+        };
+    }
+    let mut digest = sha2::Sha256::new();
+    digest.update(read_to.to_le_bytes());
+    for (from, to) in windows {
+        let Ok(length) = usize::try_from(to - from) else {
+            return Fingerprint::Unreadable;
+        };
+        let mut bytes = vec![0_u8; length];
+        let read = file.read_exact_at(&mut bytes, from);
+        // What was asked for is charged, read whole or not.
+        budget.charge(to - from);
+        #[cfg(test)]
+        super::super::source::READ.with(|total| total.set(total.get() + (to - from)));
+        if read.is_err() {
+            return Fingerprint::Unreadable;
+        }
         digest.update(&bytes);
     }
-    Some(digest.finalize().into())
+    Fingerprint::Digest(digest.finalize().into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::{io::Write, time::Duration};
+
+    /// [`fingerprint`] within a budget that covers it.
+    fn digest(file: &File, read_to: u64) -> Option<[u8; 32]> {
+        match fingerprint(
+            file,
+            read_to,
+            &mut Budget::new(1 << 20, Duration::from_secs(5), None),
+        ) {
+            Fingerprint::Digest(digest) => Some(digest),
+            Fingerprint::Unreadable => None,
+            Fingerprint::Deferred => panic!("the budget covers it"),
+        }
+    }
 
     #[test]
     fn fingerprint_tells_rewritten_bytes_and_lengths_apart() {
@@ -95,25 +142,62 @@ mod tests {
             .write_all(&long)
             .unwrap();
         let file = std::fs::File::open(&path).unwrap();
-        let whole = fingerprint(&file, 10_000).unwrap();
-        assert_eq!(fingerprint(&file, 10_000), Some(whole));
-        assert_ne!(fingerprint(&file, 9_999), Some(whole));
+        let whole = digest(&file, 10_000).unwrap();
+        assert_eq!(digest(&file, 10_000), Some(whole));
+        assert_ne!(digest(&file, 9_999), Some(whole));
         // A change in the first or the last window before the point.
         for at in [0, 9_999] {
             long[at] = b'b';
             std::fs::write(&path, &long).unwrap();
-            assert_ne!(fingerprint(&file, 10_000), Some(whole), "{at}");
+            assert_ne!(digest(&file, 10_000), Some(whole), "{at}");
             long[at] = b'a';
         }
         // Beyond what was read is not covered.
         std::fs::write(&path, [long.as_slice(), b"more"].concat()).unwrap();
-        assert_eq!(fingerprint(&file, 10_000), Some(whole));
+        assert_eq!(digest(&file, 10_000), Some(whole));
         // Bytes that cannot be read.
-        assert_eq!(fingerprint(&file, 20_000), None);
+        assert_eq!(digest(&file, 20_000), None);
         // A short file is covered whole.
         std::fs::write(&path, b"ab\n").unwrap();
-        assert!(fingerprint(&file, 3).is_some());
-        assert_ne!(fingerprint(&file, 3), fingerprint(&file, 2));
+        assert!(digest(&file, 3).is_some());
+        assert_ne!(digest(&file, 3), digest(&file, 2));
+    }
+
+    #[test]
+    fn fingerprint_bytes_are_asked_of_the_budget_and_charged() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("t.jsonl");
+        std::fs::write(&path, vec![b'a'; 10_000]).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        // Both windows, 8 KiB, are charged.
+        let mut budget = Budget::new(1 << 20, Duration::from_secs(5), None);
+        assert!(matches!(
+            fingerprint(&file, 10_000, &mut budget),
+            Fingerprint::Digest(_)
+        ));
+        assert_eq!(budget.spent, 2 * WINDOW);
+        // A short file: both windows are the whole file.
+        let mut budget = Budget::new(1 << 20, Duration::from_secs(5), None);
+        fingerprint(&file, 100, &mut budget);
+        assert_eq!(budget.spent, 200);
+        // Less left than both windows: nothing is read or charged. A pass
+        // whose whole share is smaller never could check it: no shortcut.
+        let mut budget = Budget::new(2 * WINDOW - 1, Duration::from_secs(5), None);
+        assert_eq!(
+            fingerprint(&file, 10_000, &mut budget),
+            Fingerprint::Unreadable
+        );
+        assert_eq!(budget.spent, 0);
+        let mut budget = Budget::new(0, Duration::from_secs(5), None);
+        assert_eq!(fingerprint(&file, 3, &mut budget), Fingerprint::Unreadable);
+        // After other reads this pass: deferred to a later one.
+        let mut budget = Budget::new(2 * WINDOW, Duration::from_secs(5), None);
+        budget.charge(1);
+        assert_eq!(
+            fingerprint(&file, 10_000, &mut budget),
+            Fingerprint::Deferred
+        );
+        assert_eq!(budget.spent, 1);
     }
 
     #[test]

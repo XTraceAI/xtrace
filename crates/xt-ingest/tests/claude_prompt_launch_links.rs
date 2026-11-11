@@ -1772,3 +1772,50 @@ fn a_launcher_installed_between_two_reads_of_a_run_reads_the_whole_transcript_ag
         (true, Some(session(&store, PARENT)))
     );
 }
+
+#[test]
+fn a_restart_in_small_passes_still_finishes_and_reads_within_them() {
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    let other = parent_path(&home, OTHER_PARENT);
+    write_rows(&other, &padded_rival("ls ~/.claude/projects"));
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    restart(&home, &mut store);
+    assert_eq!(restart(&home, &mut store).1[1], 1, "the rival is saved");
+    // Passes whose share is smaller than a saved read's check: nothing waits
+    // for ever, and no pass reads more than its share.
+    let limit = 1024;
+    let mut backlog = BashBacklog::starting();
+    let mut launches = LaunchBacklog::starting();
+    let mut total = PromptProgress::default();
+    for _ in 0..100_000 {
+        if !backlog.pending() && !launches.pending() {
+            break;
+        }
+        continue_claude_launches(
+            &mut store,
+            &home.home,
+            &mut launches,
+            &LaunchLimits::default(),
+            None,
+            T,
+        )
+        .unwrap();
+        let pass = continue_claude_bash(
+            &mut store,
+            &home.home,
+            &mut backlog,
+            &mut launches,
+            &LaunchLimits::remaining(limit, std::time::Duration::from_secs(5)),
+            None,
+            T,
+        )
+        .unwrap();
+        assert!(pass.bytes_read <= limit, "{}", pass.bytes_read);
+        add(&mut total, &pass.prompt);
+    }
+    assert!(!backlog.pending(), "finished");
+    assert_eq!(total.already, 1, "{total:?}");
+}

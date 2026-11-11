@@ -65,6 +65,7 @@ use super::{LaunchBacklog, LaunchLimits};
 use crate::native::readers_cli::CancelToken;
 use crate::native::session_titles::{claude_contained, title_sources};
 use parent::{First, Invocation, ParentScan, ScanError};
+use saved::Fingerprint;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::Read,
@@ -415,21 +416,23 @@ impl BashBacklog {
     /// `path` as this run's read, if it still describes the file exactly:
     /// read whole by these rules, with this line bound and these launchers
     /// installed, at the generation the file has now, and no launch found.
+    /// `None` when what is left of the pass's bytes cannot check it.
     fn restore(
         &mut self,
         store: &Store,
         path: &Path,
         native: &str,
         run: &Pass<'_>,
-    ) -> xt_store::Result<bool> {
+        budget: &mut Budget<'_>,
+    ) -> xt_store::Result<Option<bool>> {
         let Some(text) = path.to_str() else {
-            return Ok(false);
+            return Ok(Some(false));
         };
         let Some(saved) = store.saved_transcript_read(TranscriptReader::Bash, text)? else {
-            return Ok(false);
+            return Ok(Some(false));
         };
         let Ok((file, now)) = source::open(path) else {
-            return Ok(false);
+            return Ok(Some(false));
         };
         let same = saved.owner_native_session_id == native
             && saved.reader_version == saved::BASH_READ_VERSION
@@ -441,16 +444,20 @@ impl BashBacklog {
             && saved.mtime_ns == now.mtime_ns
             && saved.ctime_ns == now.ctime_ns
             && saved.refused_ms.is_empty()
-            && !saved.untimed
-            && saved::fingerprint(&file, saved.read_to) == Some(saved.fingerprint);
+            && !saved.untimed;
         if !same {
-            return Ok(false);
+            return Ok(Some(false));
+        }
+        match saved::fingerprint(&file, saved.read_to, budget) {
+            Fingerprint::Deferred => return Ok(None),
+            Fingerprint::Digest(digest) if digest == saved.fingerprint => {}
+            Fingerprint::Digest(_) | Fingerprint::Unreadable => return Ok(Some(false)),
         }
         self.note_scanned(path, native, now, &[]);
         if self.read.len() < MAX_READ {
             self.read.insert(path.to_path_buf(), now);
         }
-        Ok(true)
+        Ok(Some(true))
     }
 
     /// Save a whole read that found no launch, so a restart need not read
@@ -465,12 +472,19 @@ impl BashBacklog {
         empty: bool,
         programs: &[PathBuf],
         run: &Pass<'_>,
+        budget: &mut Budget<'_>,
     ) {
         let Some(text) = path.to_str() else {
             return;
         };
         let read_to = u64::try_from(generation.length).ok();
-        let fingerprint = read_to.and_then(|read_to| saved::fingerprint(file, read_to));
+        // A read not saved for want of bytes is only read again after a
+        // restart.
+        let fingerprint =
+            read_to.and_then(|read_to| match saved::fingerprint(file, read_to, budget) {
+                Fingerprint::Digest(digest) => Some(digest),
+                Fingerprint::Unreadable | Fingerprint::Deferred => None,
+            });
         let (true, Some(read_to), Some(fingerprint)) = (empty, read_to, fingerprint) else {
             self.forget_read(path);
             return;
@@ -877,6 +891,7 @@ fn pass(
                         invocations.is_empty(),
                         reading.scan.programs(),
                         &run,
+                        budget,
                     );
                     if invocations
                         .iter()
@@ -1040,8 +1055,14 @@ fn pass(
                 let restored = if unchanged {
                     false
                 } else {
-                    match backlog.restore(store, &path, &native, &run) {
-                        Ok(restored) => restored,
+                    match backlog.restore(store, &path, &native, &run, budget) {
+                        Ok(Some(restored)) => restored,
+                        Ok(None) => {
+                            // Checked next pass, with bytes to spare.
+                            backlog.queued.insert(native.clone());
+                            backlog.queue.push_front(native);
+                            return Ok(());
+                        }
                         Err(error) => {
                             // Looked at again next pass.
                             backlog.queued.insert(native.clone());

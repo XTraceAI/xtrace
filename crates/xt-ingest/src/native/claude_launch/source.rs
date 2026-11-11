@@ -126,6 +126,11 @@ impl<'a> Budget<'a> {
         }
     }
 
+    /// Whether `bytes` may still be read this pass, all at once.
+    pub fn fits(&self, bytes: u64) -> bool {
+        !self.exhausted() && self.bytes_left >= bytes
+    }
+
     /// Count bytes actually read.
     pub fn charge(&mut self, bytes: u64) {
         self.bytes_left = self.bytes_left.saturating_sub(bytes);
