@@ -280,9 +280,11 @@ pub(super) fn read(args: &[String]) -> Option<Read> {
 
 /// [`read`] for the Claude `Bash` literal-prompt match, whose launch is
 /// proved by its child's first input rather than by the command alone. A
-/// `None` word is one the shell supplies only when it runs (an expansion):
-/// it is accepted only as the value of an option that never decides which
-/// session is created, and anywhere else leaves the launch undecided. The
+/// `None` word is one the shell supplies only when it runs (an expansion),
+/// always as exactly one word; a caller must refuse a word the shell may
+/// turn into no word or several, which could spell any option. It is
+/// accepted only as the value of an option that never decides which session
+/// is created, and anywhere else leaves the launch undecided. The
 /// values of the neutral, MCP configuration, budget and turn-limit options
 /// are not checked: a value the CLI refuses starts no session, so it creates
 /// no child to match. Every action, the session identifier, the formats and
