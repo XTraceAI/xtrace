@@ -35,8 +35,11 @@
 //! a launch relation of either kind (a Claude `--session-id` or a Codex
 //! `codex exec --json` launch) and the launch rows naming it, and the exact
 //! pull-request links of Codex sessions: how many, and each pull request
-//! (`owner/repo#number`) with how many Codex sessions link it. Never a path,
-//! prompt, command or transcript text.
+//! (`owner/repo#number`) with how many Codex sessions link it, and every
+//! Claude literal-prompt launch link (child, parent, call, position, state),
+//! the links the last literal-prompt match held with the closed reasons it
+//! held each for, and how long after the start that match first held no
+//! display check. Never a path, prompt, command or transcript text.
 use std::{
     env,
     path::PathBuf,
@@ -310,6 +313,35 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let entry = sums.entry(name.to_owned()).or_insert(serde_json::json!(0));
         *entry = serde_json::json!(entry.as_u64().unwrap_or(0) + value as u64);
     };
+    // How many user sessions of each host a list still holds back as
+    // checking, and when and after how many bytes none of a host's were.
+    let reader =
+        rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let checking = |_: &Store| -> Result<(u64, u64), Box<dyn std::error::Error>> {
+        let count = |host: &str| -> rusqlite::Result<u64> {
+            reader.query_row(
+                "SELECT count(*) FROM sessions s WHERE s.host=?1 AND s.kind='user'
+                   AND NOT EXISTS(SELECT 1 FROM session_child_checks k
+                       WHERE k.session_id=s.session_id
+                         AND k.completed_generation=k.required_generation
+                         AND k.detector_versions=?2)
+                   AND NOT EXISTS(SELECT 1 FROM session_creation_relations c
+                       WHERE c.child_session_id=s.session_id AND c.state='accepted')
+                   AND NOT EXISTS(SELECT 1 FROM session_child_facts f
+                       WHERE f.child_session_id=s.session_id AND f.state='accepted')
+                   AND NOT EXISTS(SELECT 1 FROM human_session_origins o
+                       WHERE o.session_id=s.session_id AND o.conflicted=0)",
+                rusqlite::params![host, xt_store::child_check::DETECTOR_VERSIONS],
+                |row| row.get::<_, i64>(0).map(|count| count as u64),
+            )
+        };
+        Ok((count("claude")?, count("codex")?))
+    };
+    let checking_at_start = checking(&store)?;
+    let mut prompt_released: Option<u64> = None;
+    let mut settled: [Option<(u64, u64)>; 2] = [None, None];
+    let mut last_change: [(u64, u64, u64); 2] =
+        [(0, 0, checking_at_start.0), (0, 0, checking_at_start.1)];
     while spawns.pending() && started.elapsed() < timeout && idle < 20 {
         let pass = continue_codex_spawns(
             &mut store,
@@ -351,6 +383,50 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             add("bash_ambiguous", bash.ambiguous);
             add("bash_rejected", bash.rejected);
             add("bash_waiting", bash.waiting);
+            add("prompt_files_read", bash.prompt.files_read);
+            add("prompt_files_unreadable", bash.prompt.files_unreadable);
+            add("prompt_matches", bash.prompt.matches);
+            add("prompt_linked", bash.prompt.linked);
+            add("prompt_already", bash.prompt.already);
+            add("prompt_ambiguous", bash.prompt.ambiguous);
+            add("prompt_refused", bash.prompt.refused);
+            add("prompt_callers_gone", bash.prompt.callers_gone);
+            add("prompt_codex_waits", bash.prompt.codex_waits);
+            add("prompt_other_input", bash.prompt.other_input);
+            add("prompt_held", bash.prompt.held);
+            add("prompt_held_hour", bash.prompt.held_hour);
+            add("prompt_held_unknown", bash.prompt.held_unknown);
+            add("prompt_held_caller_unread", bash.prompt.held_caller_unread);
+            add("prompt_held_caller_gone", bash.prompt.held_caller_gone);
+            add(
+                "prompt_held_command_unread",
+                bash.prompt.held_command_unread,
+            );
+            add("prompt_held_untimed", bash.prompt.held_untimed);
+            add("prompt_held_child_unread", bash.prompt.held_child_unread);
+            add("prompt_held_codex", bash.prompt.held_codex);
+            add("prompt_incomplete_matches", bash.prompt.incomplete_matches);
+            add(
+                "prompt_children_unreadable",
+                bash.prompt.children_unreadable,
+            );
+            add("prompt_commands_refused", bash.prompt.commands_refused);
+        }
+        // The first time the literal-prompt match no longer holds the
+        // display checks of Claude sessions.
+        if prompt_released.is_none() && !spawns.bash.prompt_holds_checks() {
+            prompt_released = Some(started.elapsed().as_millis() as u64);
+        }
+        let now = checking(&store)?;
+        for (slot, left) in settled.iter_mut().zip([now.0, now.1]) {
+            if left == 0 && slot.is_none() {
+                *slot = Some((started.elapsed().as_millis() as u64, bytes));
+            }
+        }
+        for (last, left) in last_change.iter_mut().zip([now.0, now.1]) {
+            if left != last.2 {
+                *last = (started.elapsed().as_millis() as u64, bytes, left);
+            }
         }
         if pass.advanced() {
             idle = 0;
@@ -428,6 +504,30 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         launch_rows.extend(candidates);
     }
+    // Every Claude literal-prompt launch link: identifiers only.
+    let prompt_launches: Vec<serde_json::Value> = store
+        .claude_prompt_launches()?
+        .into_iter()
+        .map(|(proof, accepted)| {
+            serde_json::json!({"child_native_session_id": proof.child_native_session_id,
+                "parent_native_session_id": proof.parent_native_session_id,
+                "launch_call_id": proof.launch_call_id,
+                "launch_operation_index": proof.launch_operation_index,
+                "accepted": accepted})
+        })
+        .collect();
+    // The links the last literal-prompt match held, and why: identifiers
+    // and closed labels only.
+    let prompt_held: Vec<serde_json::Value> = spawns
+        .bash
+        .prompt_held()
+        .iter()
+        .map(|held| {
+            serde_json::json!({"child_native_session_id": held.child_native_session_id,
+                "parent_native_session_id": held.parent_native_session_id,
+                "by": held.by.iter().map(|by| by.label()).collect::<Vec<_>>()})
+        })
+        .collect();
     let mut codex_prs = std::collections::BTreeMap::<String, u64>::new();
     let mut codex_links = 0_u64;
     for link in store.all_pr_links()? {
@@ -449,6 +549,10 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         serde_json::json!({
             "mode": "children",
             "quiet": quiet,
+            "checking_at_start": {"claude": checking_at_start.0, "codex": checking_at_start.1},
+            "checking_at_end": {"claude": checking(&store)?.0, "codex": checking(&store)?.1},
+            "settled_ms_and_bytes": {"claude": settled[0], "codex": settled[1]},
+            "last_change_ms_bytes_left": {"claude": last_change[0], "codex": last_change[1]},
             "left_idle": idle >= 20,
             "elapsed_ms": started.elapsed().as_millis() as u64,
             "passes": passes,
@@ -458,6 +562,9 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "launch_summary": store.claude_launch_summary()?,
             "sessions": sessions,
             "launch_rows": launch_rows,
+            "prompt_launches": prompt_launches,
+            "prompt_held": prompt_held,
+            "prompt_released_ms": prompt_released,
             "codex_pr_links": {"links": codex_links, "pull_requests": codex_prs},
         })
     );

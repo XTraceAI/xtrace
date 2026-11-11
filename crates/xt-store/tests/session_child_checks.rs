@@ -5,6 +5,9 @@
 //! or a launch newly naming exactly that session. Positive child evidence
 //! stays independent of it.
 
+#[path = "support/migration_history.rs"]
+mod migration_history;
+
 use rusqlite::Connection;
 use serde_json::json;
 use tempfile::TempDir;
@@ -14,6 +17,7 @@ use xt_store::{
     child_check::{ChildCheck, DETECTOR_VERSIONS},
     child_fact::{ChildEvidence, ChildFact},
     claude_launch::{GroupStatus, LaunchCandidate, LaunchKey, MemberRecord, SegmentGeneration},
+    creation::{CLAUDE_PROMPT_LAUNCH_VERSION, ClaudePromptLaunchProof, CreationDisposition},
     ingest::DiscoveredSession,
     session_list,
 };
@@ -556,5 +560,127 @@ fn an_undecided_launch_holds_its_child_until_a_decision() {
             .reopen_undecided_claude_launch_children()
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn schema_32_keeps_finished_checks_and_a_prompt_link_still_shows_a_checked_child() {
+    // Migration 32 adds the literal-prompt match. A finished check of every
+    // host stays finished, so no session shown before is hidden again; the
+    // match's link still folds an already-checked Claude session under its
+    // parent.
+    const VIEWS: [&str; 6] = [
+        xt_store::views::RECORD_METADATA,
+        xt_store::views::HUMAN_INPUTS,
+        xt_store::views::RECORDS,
+        xt_store::views::USAGE_RECORDS,
+        xt_store::views::RESPONSE_USAGE,
+        xt_store::views::SESSION_EVENTS,
+    ];
+    const BEFORE: &str = "check1.spawn2.scan11.claude6.cli1.bash3";
+    let directory = TempDir::new().unwrap();
+    {
+        let connection = sql(&directory);
+        xt_store::timestamp::register_sqlite(&connection).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        migration_history::apply_migrations(
+            &connection,
+            &migration_history::migrations()[..31],
+            "2026-11-10T00:00:00Z",
+            |_, _| {},
+        );
+        for view in VIEWS {
+            connection.execute_batch(view).unwrap();
+        }
+        for (session, host, native, versions) in [
+            (id(MAIN), "codex", MAIN, Some(BEFORE)),
+            (CLAUDE.to_owned(), "claude", CLAUDE, Some(BEFORE)),
+            // An older label stays a check to run, whatever the host.
+            (
+                id(CALLER),
+                "codex",
+                CALLER,
+                Some("check1.spawn2.scan11.claude6.cli1.bash2"),
+            ),
+            (id(CHILD), "codex", CHILD, None),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO sessions(session_id,host,native_session_id,kind,source)
+                     VALUES (?1,?2,?3,'user','readers_cli')",
+                    [&session, host, native],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO session_child_checks(session_id,required_generation,
+                         completed_generation,detector_versions,own_check_key)
+                     VALUES (?1,1,CASE WHEN ?2 IS NULL THEN NULL ELSE 1 END,?2,?3)",
+                    rusqlite::params![session, versions, KEY_A],
+                )
+                .unwrap();
+        }
+    }
+    let mut store = Store::open(path(&directory)).unwrap();
+    assert!(store.schema_version().unwrap() >= 32);
+    assert!(store.completed_child_check(&id(MAIN)).unwrap());
+    assert!(store.completed_child_check(CLAUDE).unwrap());
+    assert!(!store.completed_child_check(&id(CALLER)).unwrap());
+    assert!(!store.completed_child_check(&id(CHILD)).unwrap());
+    for session in [id(MAIN), CLAUDE.to_owned()] {
+        let stored: String = sql(&directory)
+            .query_row(
+                "SELECT detector_versions FROM session_child_checks WHERE session_id=?1",
+                [&session],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, DETECTOR_VERSIONS, "{session}");
+    }
+    // The checked Claude session is shown on its own until the match links
+    // it: its first input, then a Claude parent whose literal prompt it was.
+    const PARENT: &str = "0c000000-0000-4000-8000-00000000aa05";
+    store
+        .upsert_records(CLAUDE, &[record(CLAUDE, 1)], false)
+        .unwrap();
+    let mut meta = SessionMeta::new(PARENT, "claude", SessionSource::Transcript);
+    meta.native_session_id = Some(PARENT.into());
+    store.upsert_session(&meta, false).unwrap();
+    let shown = |directory: &TempDir| {
+        let context = session_list::context(&sql(directory), &[CLAUDE])
+            .unwrap()
+            .remove(0);
+        (
+            context.check,
+            context
+                .parent
+                .map(|parent| (parent.session_id, parent.evidence)),
+        )
+    };
+    assert_eq!(shown(&directory), (ChildCheck::Checked, None));
+    let report = store
+        .record_claude_prompt_launch(
+            &ClaudePromptLaunchProof {
+                child_session_id: CLAUDE.into(),
+                child_native_session_id: CLAUDE.into(),
+                parent_session_id: PARENT.into(),
+                parent_native_session_id: PARENT.into(),
+                first_record_uuid: format!("r1-{CLAUDE}"),
+                launch_call_id: "toolu_01SyntheticPromptLaunch".into(),
+                launch_operation_index: 0,
+                evidence_version: CLAUDE_PROMPT_LAUNCH_VERSION,
+            },
+            1,
+        )
+        .unwrap();
+    assert_eq!(report.relation, CreationDisposition::Recorded);
+    assert_eq!(
+        shown(&directory),
+        (
+            ChildCheck::Child,
+            Some((PARENT.to_owned(), session_list::ParentEvidence::AgentLaunch))
+        )
     );
 }

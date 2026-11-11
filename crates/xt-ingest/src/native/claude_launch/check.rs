@@ -263,6 +263,11 @@ fn pass(
         .memory
         .get_or_insert_with(|| Allowance::new(limits.thread_memory))
         .clone();
+    // The literal-prompt match finished after a check waited for it: every
+    // session still checking is looked at again.
+    if bash.take_prompt_wake() {
+        checks.woken = true;
+    }
     if checks.after.is_none() {
         checks.woken = false;
     }

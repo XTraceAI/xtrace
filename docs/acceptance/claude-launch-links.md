@@ -314,8 +314,145 @@ triggers unchanged): the same identifiers as `codex_claude_launch`, with a
 Codex child. Published and staged launches gain the child's host, `claude`
 for every row stored before.
 
+Schema 32 adds the evidence kind `claude_prompt_launch`, with the witness
+`claude_bash_literal_prompt`, to `session_creation_relations` and
+`session_child_facts` (both rebuilt with their rows, row IDs, indexes and
+triggers unchanged, and the saved-warning triggers on the relation table
+recreated): a Claude parent's own `Bash` call, in its transcript or one of
+its helper agents' transcripts, ran a create-mode `claude -p` launch with a
+literal prompt, and an indexed Claude session saved at or after the call,
+and no more than one hour after it, has exactly that prompt as its first
+input. When several launches of that prompt fall in the child's hour, the
+child belongs to the latest one before it, so each retry of a prompt keeps
+its own child; launches made at the same moment, or one that named the child
+with `--session-id`, leave it unlinked. The launch it belongs to must keep no
+other session: one launch followed by two sessions of its prompt in its hour,
+with no later launch of that prompt between them, links neither. A launch
+that cannot make a link itself (given other input, or in a file that could
+not be read) still counts as a launch inside the same hour. It keeps the
+exact parent, the child's first input, the call ID and the launch's position
+in the call. A link is written only if the launch's hour was already over
+when the match listed its possible children, so no other session of that
+hour can still appear (a session imported after the list was taken is in the
+next match's list), and it is then never withdrawn or moved: what a later
+read misses, such as a transcript Claude has since deleted, never changes it.
+
+A launch makes a link only when it reads no other input: one with a `<`
+redirection or a here-document, or after a `|`, may have sent its child more
+than the prompt, so it only counts as a launch that could have made a child.
+Text a command does not run as it stands — a here-document body, also
+inside `$(…)`, an array's words, a function's body — holds no launch.
+
+One rule decides when skipped text is a launch the reader cannot see. Text
+names the Claude program when it holds the word `claude`, or a path ending
+in `/claude`, standing alone between spaces, shell operators, quotes,
+braces, `$`, `=` or `\` (`~/.claude`, `claude-code` and `Claude` do not).
+Comments are never read. The command is one the reader cannot read (below)
+when such text is:
+
+- text the shell runs that the reader does not read as commands: a
+  parameter expansion's body (`${OUTPUT:-$(claude -p …)}`), an arithmetic
+  expansion's (`$(( $(claude -p … | wc -c) ))`, `$[…]`), a `$(…)` or
+  `` `…` `` in a here-document whose delimiter is not quoted (`<<EOF`, not
+  `<<'EOF'`), or a substitution or `sh -c` script nested deeper than three
+  levels;
+- data given to any program except a short list that never runs what it is
+  given (`echo`, `printf`, `grep`, `cat`, `ls`, `git`, `cd`, `command -v`
+  and similar): its words, quoted or not, the literal parts of a word that
+  holds an expansion (`"cd $S && claude -p …"`), `$'…'`, a here-string, a
+  here-document body (`python3 - <<'EOF'` … `["claude", "-p", …]` … `EOF`), an array's
+  words, a value assigned to a variable, and what a shell is given besides
+  the script it was read from.
+
+A recognised launch's own words, its prompt among them
+(`claude -p "ask claude to review"`), and an `sh -c` script read as
+commands are not skipped text. A gap does not hide the launches the reader
+did read in the same command.
+
+No new link is written where the evidence could hide what would change it.
+A launch this match cannot see stops every link from a launch made before it
+to a child saved after it:
+
+- a caller's transcript or helper-agent folder that could not be read whole,
+  including one holding a line longer than the reader's bound: from its
+  first indexed record on;
+- a caller the index records with `Bash` calls whose transcript no longer
+  exists, or is not the one file in a real project folder; or, when the
+  index records `Bash` calls of its helper agents, whose helper folder or
+  any helper file the index read (`subagents/agent-*.jsonl`) is no longer
+  listed: from its first to its last indexed record. The index does not
+  record which helper file held which call, so any lost helper file counts;
+- a `Bash` command naming `claude` that the reader cannot read as what it
+  runs — a wrapper such as `sudo` or `xargs`, a program given by a variable
+  with a print option, a function, a shell given a script or input not read
+  (`bash -euc '…'`), skipped text naming the Claude program by the rule
+  above (`tmux new-session -d 'claude -p …'`, `${V:-$(claude -p …)}`), an
+  unknown option, or a prompt that is not literal or not given: at that
+  call's time; a launch record naming `claude` with no time: its caller's
+  indexed span. Commands that only name the folder or the word
+  (`ls ~/.claude`, `echo "claude -p …"`, `grep 'claude -p' f`) are not such
+  commands.
+
+A possible child that cannot be read for any reason — its project folder
+gone, several recorded locations, outside the projects folder, a read error,
+an opening the index does not match — stops every launch that could have
+made it. What could not be read is read again after the next import, and a
+later match decides again. The possible children a match reads are the
+sessions whose first input came within two hours after some launch.
+
+A link also waits while the Codex launch work could still name its child:
+until every Codex history the census finds has been read since the match
+began, and no published or unfinished Codex launch naming the child is open
+(the same checks a display check waits for); the Codex link is then written
+and the prompt match abstains. A Codex history found only after a prompt
+link was written still conflicts both (see Known limits). A link waiting for
+its hour or for a Codex launch holds no display check. It is looked at again
+once due (every 60 seconds while a Codex launch is open) by a new match, and
+that match holds the Claude display checks only if a session was imported or
+a transcript read since the last match.
+
+A child that other evidence already relates or names (another kind of
+relation or child fact, a parent origin, or a recorded Codex launch naming
+its session) is never touched. Migration 32 keeps the finished display
+checks of every host, Claude included: the match reads every indexed caller
+whatever its check says, and its link folds an already-checked child under
+its parent, so no session shown before is hidden again to wait for it.
+
 Like every accepted creation relation, a link makes the Human input view
 count the child's user messages as the agent's, not a person's.
+
+### Known limits
+
+The prompt match links only from what it can read. These cases can make a
+child look like the only session of a launch when it is not, or link a child
+another launch made:
+
+- A rival launch the reader cannot see. A `claude` call hidden inside a
+  quoted script, `sh -c '…'` run under `find -exec`, `sudo` or `xargs`,
+  `tmux`, `python -c`, a script fed on standard input or an expansion is not
+  seen as a launch; when the recorded command names the Claude program by
+  the rule above, it holds links at that call's time. It is invisible when
+  the command itself never names it that way: a script file run by path, a
+  name built from pieces or quoted inside the word (`cl""aude`,
+  `clau'de'`, `$C$D`; a recorded line that never spells `claude` is not
+  read at all), a program on the never-runs list that runs it after all
+  through an option or its own language (`git -c alias…`,
+  `tar --to-command=…`, `awk '… system(…)'`), `env -v claude …` (read
+  like `command -v claude`), a launcher by another name
+  (`npx @anthropic-ai/claude-code`), or a helper file in a nested folder
+  such as `subagents/workflows/…` (only `subagents/agent-*.jsonl` is read).
+- Skipped text holds links widely. Prose naming `claude` in a quoted
+  argument of a program not on the never-runs list (a `gh` pull-request
+  body, for example) holds links at that call's time, as if it were a
+  launch.
+- Callers or children never indexed. A launch in a session the index does
+  not hold, or a second child the index does not hold, is not known.
+- A Codex history found only after a prompt link was written: if it names the
+  same child, the two links conflict and both are withheld.
+- No margin for import delay at the end of the hour. A session saved just
+  before the launch's hour ends but imported after a match listed the
+  possible children (after the hour was over) is missed by that match, and
+  the link it decides stays.
 
 ## Checks
 
@@ -327,6 +464,7 @@ count the child's user messages as the agent's, not a person's.
 - `cargo test -p xt-store --test child_facts`
 - `cargo test -p xt-store --test codex_cli_launch_creation`
 - `cargo test -p xt-ingest --test codex_cli_launch_links`
+- `cargo test -p xt-ingest --test claude_prompt_launch_links`
 
 All sources are synthetic. Acceptance on a copied index uses
 `cargo run -p xt-ingest --example claude_launch_links` (see its header); with

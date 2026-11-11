@@ -30,12 +30,13 @@ use rusqlite::{Connection, params};
 
 /// The versions of the detectors a finished check ran, as stored with it:
 /// the check itself, the Codex header reading, the Codex history scan
-/// ([`LAUNCH_VALIDATION_VERSION`]), the Claude and Codex launch proofs and
-/// the Claude `Bash` launch validation. A check finished under any other
-/// versions is a check still to run.
+/// ([`LAUNCH_VALIDATION_VERSION`]), the Claude and Codex launch proofs, the
+/// Claude `Bash` launch validation and the Claude `Bash` literal-prompt
+/// launch match. A check finished under any other versions is a check still
+/// to run.
 macro_rules! child_check_versions {
     () => {
-        "check1.spawn2.scan11.claude6.cli1.bash3"
+        "check1.spawn2.scan11.claude6.cli1.bash3.prompt1"
     };
 }
 pub(crate) use child_check_versions;
@@ -393,12 +394,13 @@ mod tests {
         assert_eq!(
             DETECTOR_VERSIONS,
             format!(
-                "check1.spawn{}.scan{}.claude{}.cli{}.bash{}",
+                "check1.spawn{}.scan{}.claude{}.cli{}.bash{}.prompt{}",
                 crate::creation::CODEX_THREAD_SPAWN_VERSION,
                 LAUNCH_VALIDATION_VERSION,
                 crate::creation::CLAUDE_LAUNCH_CREATE_VERSION,
                 crate::creation::CODEX_CLI_LAUNCH_VERSION,
                 crate::child_fact::CLAUDE_BASH_CHILD_VERSION,
+                crate::creation::CLAUDE_PROMPT_LAUNCH_VERSION,
             )
         );
         assert!(DETECTOR_VERSIONS.len() <= 64);

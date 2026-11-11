@@ -629,6 +629,7 @@ fn continue_within(
             store,
             home,
             &mut backlog.bash,
+            &mut backlog.launches,
             &LaunchLimits::remaining(bytes.saturating_sub(spent), time),
             cancel,
             recorded_at,

@@ -432,7 +432,7 @@ fn migration_31_clears_claude_checkpoints_and_a_reread_drops_quoted_phrases() {
         store.schema_version().unwrap(),
         xt_store::LATEST_SCHEMA_VERSION
     );
-    assert_eq!(xt_store::LATEST_SCHEMA_VERSION, 31);
+    const { assert!(xt_store::LATEST_SCHEMA_VERSION >= 31) };
     assert_eq!(
         store
             .native_checkpoint(SessionSource::Transcript, &transcript.cursor_key)

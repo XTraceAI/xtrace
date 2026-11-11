@@ -40,14 +40,25 @@
 //! only once its transcript changed. A restart sweeps again; every write is
 //! an idempotent child fact. Only identifiers, positions and closed labels
 //! are stored; prompts and answers are compared in memory, as digests.
+//!
+//! The same passes then run the literal-prompt match ([`prompt`]): a launch
+//! whose output this reader cannot compare (run in the background, written to
+//! a file, or in a command outside its grammar) whose literal prompt is the
+//! first input of exactly one later session, with no other launch or session
+//! possible and no gap in what was read, links that session to its parent
+//! with a relation as well as a child fact, once the launch's hour is over
+//! and the Codex launch work could no longer name it.
 
 mod parent;
+mod prompt;
 mod script;
 
-use super::LaunchLimits;
+pub use prompt::{HeldBy, HeldLink, PromptProgress};
+
 use super::command;
 use super::resolve::{self, ChildStream, Recorded, Sources, Walk};
 use super::source::{self, Allowance, Budget, Reserved, Unread};
+use super::{LaunchBacklog, LaunchLimits};
 use crate::native::readers_cli::CancelToken;
 use crate::native::session_titles::{claude_contained, title_sources};
 use parent::{First, Invocation, ParentScan, ScanError};
@@ -177,6 +188,8 @@ pub struct BashBacklog {
     /// Caller transcripts whose last read ended unfinished, changed or out
     /// of memory, as they were then: not asked for again until they change.
     attempted: HashMap<PathBuf, SegmentGeneration>,
+    /// Parent links for launches matched by their literal prompt.
+    prompt: prompt::PromptBacklog,
     #[cfg(test)]
     test_waiting_limit: Option<usize>,
     #[cfg(test)]
@@ -188,6 +201,7 @@ impl BashBacklog {
     pub fn starting() -> Self {
         Self {
             sweep: Some(None),
+            prompt: prompt::PromptBacklog::starting(),
             ..Self::default()
         }
     }
@@ -195,6 +209,8 @@ impl BashBacklog {
     /// Claude sessions a scan imported: each may be a newly born child, or
     /// a caller whose launches now have their result.
     pub fn add_sessions<'a>(&mut self, natives: impl IntoIterator<Item = &'a str>) {
+        let natives: Vec<&str> = natives.into_iter().collect();
+        self.prompt.add_sessions(natives.iter().copied());
         for native in natives {
             self.recheck = true;
             self.recheck_accepted = true;
@@ -263,8 +279,9 @@ impl BashBacklog {
     /// generation and could be read; and no
     /// supported launch any read found — of any age — has this input's
     /// prompt digest and directory, was made before it and had not ended
-    /// before it, unless a fact it rests on names another child. A caller
-    /// still to read is queued. `false` keeps the session checking.
+    /// before it, unless a fact it rests on names another child; and the
+    /// literal-prompt match has read and matched every launch it knows. A
+    /// caller still to read is queued. `false` keeps the session checking.
     pub(super) fn clear_for(
         &mut self,
         store: &Store,
@@ -273,6 +290,35 @@ impl BashBacklog {
         native: &str,
         first: &OwnFirst,
         _since: u64,
+    ) -> xt_store::Result<bool> {
+        let clear = self.clear_for_bash(store, home, session_id, native, first)?;
+        Ok(!self.prompt.holds_checks() && clear)
+    }
+
+    /// Whether the literal-prompt match finished since a display check
+    /// waited for it: the sessions still checking are looked at again.
+    pub(super) fn take_prompt_wake(&mut self) -> bool {
+        self.prompt.take_wake()
+    }
+
+    /// Whether the literal-prompt match still holds the display checks of
+    /// Claude sessions: it has reading or matching left to do.
+    pub fn prompt_holds_checks(&self) -> bool {
+        self.prompt.busy_now()
+    }
+
+    /// The links the last literal-prompt match held, by identifiers only.
+    pub fn prompt_held(&self) -> &[HeldLink] {
+        self.prompt.held()
+    }
+
+    fn clear_for_bash(
+        &mut self,
+        store: &Store,
+        home: &Path,
+        session_id: &str,
+        native: &str,
+        first: &OwnFirst,
     ) -> xt_store::Result<bool> {
         let Some(born) = first.ts_ms else {
             return Ok(false);
@@ -382,6 +428,7 @@ impl BashBacklog {
             || (self.recheck
                 && (!self.waiting.is_empty()
                     || (self.recheck_accepted && !self.accepted.is_empty())))
+            || self.prompt.pending()
     }
 }
 
@@ -579,13 +626,17 @@ pub struct BashProgress {
     pub changed: usize,
     pub bytes_read: u64,
     pub advanced: bool,
+    /// The literal-prompt launch match, which runs after the rest.
+    pub prompt: PromptProgress,
 }
 
 /// One bounded pass over the backlog, counting into `progress`.
+#[allow(clippy::too_many_arguments)]
 pub fn continue_claude_bash_into(
     store: &mut Store,
     home: &Path,
     backlog: &mut BashBacklog,
+    launches: &mut LaunchBacklog,
     limits: &LaunchLimits,
     cancel: Option<&CancelToken>,
     recorded_at: i64,
@@ -594,7 +645,7 @@ pub fn continue_claude_bash_into(
     let mut budget = Budget::new(limits.max_pass_bytes, limits.deadline, cancel)
         .with_entries(limits.max_pass_entries);
     let before = progress.clone();
-    let result = pass(
+    let mut result = pass(
         store,
         home,
         backlog,
@@ -603,6 +654,21 @@ pub fn continue_claude_bash_into(
         recorded_at,
         progress,
     );
+    // The literal-prompt match after the rest, within what is left.
+    if result.is_ok() {
+        let changed = progress.prompt.changed;
+        result = prompt::pass(
+            store,
+            home,
+            &mut backlog.prompt,
+            launches,
+            limits,
+            &mut budget,
+            recorded_at,
+            &mut progress.prompt,
+        );
+        progress.changed += progress.prompt.changed - changed;
+    }
     progress.bytes_read += budget.spent;
     progress.advanced |= budget.spent > 0 || budget.entries > 0 || *progress != before;
     result
@@ -613,6 +679,7 @@ pub fn continue_claude_bash(
     store: &mut Store,
     home: &Path,
     backlog: &mut BashBacklog,
+    launches: &mut LaunchBacklog,
     limits: &LaunchLimits,
     cancel: Option<&CancelToken>,
     recorded_at: i64,
@@ -622,6 +689,7 @@ pub fn continue_claude_bash(
         store,
         home,
         backlog,
+        launches,
         limits,
         cancel,
         recorded_at,
@@ -1822,19 +1890,45 @@ mod tests {
             max_pass_entries: 1,
             ..LaunchLimits::default()
         };
-        continue_claude_bash(&mut store, temp.path(), &mut backlog, &limits, None, 20).unwrap();
+        continue_claude_bash(
+            &mut store,
+            temp.path(),
+            &mut backlog,
+            &mut LaunchBacklog::default(),
+            &limits,
+            None,
+            20,
+        )
+        .unwrap();
         assert_eq!((backlog.waiting.len(), backlog.accepted.len()), (1, 1));
         assert!(!backlog.recheck && backlog.recheck_accepted);
 
         // No new import means no new possible child and no useful retry.
-        let again =
-            continue_claude_bash(&mut store, temp.path(), &mut backlog, &limits, None, 20).unwrap();
+        let again = continue_claude_bash(
+            &mut store,
+            temp.path(),
+            &mut backlog,
+            &mut LaunchBacklog::default(),
+            &limits,
+            None,
+            20,
+        )
+        .unwrap();
         assert_eq!(again, BashProgress::default());
         assert_eq!((backlog.waiting.len(), backlog.accepted.len()), (1, 1));
 
         backlog.waiting[0].invocation.answer = None;
         backlog.add_sessions(["new-synthetic-child"]);
-        continue_claude_bash(&mut store, temp.path(), &mut backlog, &limits, None, 20).unwrap();
+        continue_claude_bash(
+            &mut store,
+            temp.path(),
+            &mut backlog,
+            &mut LaunchBacklog::default(),
+            &limits,
+            None,
+            20,
+        )
+        .unwrap();
         assert_eq!((backlog.waiting.len(), backlog.accepted.len()), (1, 0));
         assert_eq!(backlog.waiting[0].invocation.call_id, "accepted");
     }

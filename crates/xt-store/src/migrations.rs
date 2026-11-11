@@ -185,6 +185,11 @@ const MIGRATIONS: &[Migration] = &[
         "0031_reply_admissions_quotes",
         "6132e981fdcb8a0343a0867842409e2b91578e00759651560b8a70fc6d64791a"
     ),
+    migration!(
+        32,
+        "0032_claude_prompt_launch_children",
+        "f9a21f1f6750a8955eaefcfb9ac562a0b2d04d050ac3fd6ed4b75e9700bc46a4"
+    ),
 ];
 
 /// Newest schema supported by the embedded migration chain.

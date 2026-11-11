@@ -4719,3 +4719,88 @@ fn evaluated_expansion_refuses_the_scan_and_can_be_retried_with_more_memory() {
         );
     }
 }
+
+/// A Claude session whose own `Bash` call ran `claude -p` with the same
+/// literal prompt as the Codex launch, `offset` after it.
+fn write_prompt_caller(home: &Home, offset: i64) {
+    const CALLER: &str = "0d000000-0000-4000-8000-0000000000ca";
+    let project = home.home.join(".claude/projects/-w-caller");
+    fs::create_dir_all(&project).unwrap();
+    let command = format!(
+        "claude -p '{}' > /w/prompt-out.json 2>&1 &",
+        PROMPT.replace('\'', "'\\''")
+    );
+    let record = |kind: &str, uuid: &str, at: i64, message: Value| {
+        json!({"type": kind, "uuid": uuid, "parentUuid": null, "timestamp": iso(at),
+            "sessionId": CALLER, "cwd": "/w", "isSidechain": false,
+            "entrypoint": "claude-desktop", "userType": "external", "message": message})
+    };
+    write_rows(
+        &project.join(format!("{CALLER}.jsonl")),
+        &[
+            record(
+                "user",
+                "0d000000-0000-4000-8000-00000000ca01",
+                offset - 60_000,
+                json!({"role": "user", "content": "Run the synthetic worker"}),
+            ),
+            record(
+                "assistant",
+                "0d000000-0000-4000-8000-00000000ca02",
+                offset,
+                json!({"role": "assistant", "id": "msg_synthetic_caller", "model": "fixture-model",
+                    "content": [{"type": "tool_use", "id": "toolu_01SyntheticCallerLaunch",
+                        "name": "Bash", "input": {"command": command}}],
+                    "usage": {"input_tokens": 3, "output_tokens": 2}}),
+            ),
+            record(
+                "user",
+                "0d000000-0000-4000-8000-00000000ca03",
+                offset + 50,
+                json!({"role": "user", "content": [{"type": "tool_result",
+                    "tool_use_id": "toolu_01SyntheticCallerLaunch", "content": "started"}]}),
+            ),
+        ],
+    );
+}
+
+/// A Claude agent's literal-prompt launch of the same prompt, before the
+/// child, while the Codex history naming the child is not read yet: the
+/// weaker prompt match waits for the Codex launch work, which links the
+/// child; the prompt match then abstains, and neither is conflicted.
+#[test]
+fn a_prompt_match_waits_for_a_codex_launch_that_could_name_its_child() {
+    let home = Home::new();
+    let files = actual_history(&home, exit(0, ""));
+    write_child(&home, &child_rows(4203, PROMPT));
+    write_prompt_caller(&home, 1_000);
+    let mut store = home.store();
+    index_parent(&mut store, &files[0]);
+    // Only the Claude work is queued at first: the Codex history is on disk
+    // but no sweep has read it yet.
+    let mut spawns = SpawnBacklog::default();
+    spawns.bash = xt_ingest::native::claude_launch::bash::BashBacklog::starting();
+    scan_claude(&home, &mut store, &mut spawns);
+    settle(&home, &mut store, &mut spawns);
+    // Then the Codex sweep a worker also runs.
+    spawns.launches = LaunchBacklog::starting();
+    settle(&home, &mut store, &mut spawns);
+    let child = child_session(&store).expect("child indexed");
+    let (proof, conflicted) = store
+        .claude_launch_creation(&child)
+        .unwrap()
+        .expect("linked by the Codex launch");
+    assert!(!conflicted);
+    assert_eq!(proof.parent_native_session_id, PARENT);
+    let (stored, conflicted) = store.session_creation(&child).unwrap().unwrap();
+    assert!(!conflicted);
+    assert_eq!(stored.evidence_kind, CreationEvidence::CodexClaudeLaunch);
+    assert_eq!(
+        shown_parent(&store, &child),
+        Some((format!("codex-{PARENT}"), ParentEvidence::AgentLaunch))
+    );
+    assert!(
+        store.claude_prompt_launches().unwrap().is_empty(),
+        "the prompt match wrote nothing"
+    );
+}

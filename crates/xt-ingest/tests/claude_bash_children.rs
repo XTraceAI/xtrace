@@ -16,8 +16,9 @@ use std::{
 use xt_ingest::native::{
     ImportRequest, ProducerSource,
     claude_launch::{
-        LaunchLimits,
+        LaunchBacklog, LaunchLimits,
         bash::{BashBacklog, BashProgress, continue_claude_bash},
+        continue_claude_launches,
     },
     readers_cli::read_pin,
     session_creation::{SpawnBacklog, continue_codex_spawns, spawn_limits},
@@ -211,11 +212,16 @@ fn settle_with(
     passes: usize,
 ) -> BashProgress {
     let mut total = BashProgress::default();
+    // The Codex launch work a worker runs before it: the literal-prompt
+    // match waits for it.
+    let mut launches = LaunchBacklog::starting();
     for _ in 0..passes {
-        if !backlog.pending() {
+        if !backlog.pending() && !launches.pending() {
             return total;
         }
-        let pass = continue_claude_bash(store, &home.home, backlog, limits, None, T).unwrap();
+        continue_claude_launches(store, &home.home, &mut launches, limits, None, T).unwrap();
+        let pass = continue_claude_bash(store, &home.home, backlog, &mut launches, limits, None, T)
+            .unwrap();
         total.callers_read += pass.callers_read;
         total.launches += pass.launches;
         total.children += pass.children;
