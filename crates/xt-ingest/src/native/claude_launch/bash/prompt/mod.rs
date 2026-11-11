@@ -29,7 +29,8 @@
 //!    Claude user session other than the child.
 //! 6. The launch reads only the input its `Bash` call was given
 //!    ([`words::Command::own_input`]): no `<` redirection or here-document,
-//!    and not after a `|`. A launch given other input may have sent its child
+//!    not after a `|` and not inside a process substitution (`>(…)`,
+//!    `<(…)`). A launch given other input may have sent its child
 //!    more than the prompt, so it never makes a link; it still counts as a
 //!    launch that could have made a child, so it can stop a link.
 //! 7. The launch's hour was over when the match listed its possible
@@ -53,7 +54,9 @@
 //!    - a `Bash` command naming `claude` that this reader cannot read as
 //!      what it runs (a wrapper such as `sudo` or `xargs`, an expansion as
 //!      the program, a function, a shell script or input not read, an
-//!      unknown option, a prompt that is not literal or not given): at that
+//!      unknown option, a word the shell may split into no word or several
+//!      ([`words::Word::Fields`]), a prompt that is not literal or not
+//!      given): at that
 //!      call's time; and a launch record naming `claude` with no time: its
 //!      caller's indexed span.
 //!
@@ -373,7 +376,8 @@ pub struct PromptProgress {
     /// Rows that changed what a read shows.
     pub changed: usize,
     /// Launches with one possible child that were given other input (a `<`
-    /// redirection, a here-document or a pipe), so make no link.
+    /// redirection, a here-document, a pipe or a process substitution), so
+    /// make no link.
     pub other_input: usize,
     /// Links not written now, and how many each reason held ([`HeldBy`]; a
     /// link may be held by several).
@@ -1062,10 +1066,21 @@ fn read_command(command: &str, programs: &[PathBuf], home: &Path) -> CommandRead
                         .any(|known| known.as_os_str() == name.as_str())
             }
             words::Word::Home(rest) => programs.iter().any(|known| *known == home.join(rest)),
-            words::Word::Opaque | words::Word::Assign(_) => false,
+            words::Word::Opaque | words::Word::Fields | words::Word::Assign(_) => false,
         };
         if !claude {
             refused |= names && hides_claude(program, args, simple);
+            continue;
+        }
+        // A word the shell may turn into no word or several may spell any
+        // option (`--model $M` with `M='x --continue'`), and an expanding
+        // word after the program that looks like an assignment is split
+        // too: where the launch's words are is not known.
+        if args
+            .iter()
+            .any(|word| matches!(word, words::Word::Fields | words::Word::Assign(None)))
+        {
+            refused = true;
             continue;
         }
         let args: Vec<Option<String>> = args
@@ -1073,7 +1088,7 @@ fn read_command(command: &str, programs: &[PathBuf], home: &Path) -> CommandRead
             .map(|word| match word {
                 words::Word::Lit(text) => Some(text.clone()),
                 words::Word::Assign(text) => text.clone(),
-                words::Word::Home(_) | words::Word::Opaque => None,
+                words::Word::Home(_) | words::Word::Opaque | words::Word::Fields => None,
             })
             .collect();
         let Some(read) = options::read_opaque(&args) else {
@@ -1107,7 +1122,7 @@ fn mentions(words: &[words::Word]) -> bool {
         words::Word::Lit(text) | words::Word::Home(text) | words::Word::Assign(Some(text)) => {
             text.contains("claude")
         }
-        words::Word::Opaque | words::Word::Assign(None) => false,
+        words::Word::Opaque | words::Word::Fields | words::Word::Assign(None) => false,
     })
 }
 
@@ -1118,7 +1133,7 @@ fn carries_claude(all: &[words::Word], data: &[String]) -> bool {
         words::Word::Lit(text) | words::Word::Home(text) | words::Word::Assign(Some(text)) => {
             words::names_claude(text)
         }
-        words::Word::Opaque | words::Word::Assign(None) => false,
+        words::Word::Opaque | words::Word::Fields | words::Word::Assign(None) => false,
     }) || data.iter().any(|text| words::names_claude(text))
 }
 
@@ -1133,7 +1148,7 @@ fn carries_claude(all: &[words::Word], data: &[String]) -> bool {
 /// `tmux new-session 'claude -p x'`, `python3 - <<EOF … claude … EOF`).
 fn hides_claude(program: &words::Word, args: &[words::Word], simple: &words::Command) -> bool {
     let name = match program {
-        words::Word::Opaque => {
+        words::Word::Opaque | words::Word::Fields => {
             return args.iter().any(|word| {
                 matches!(word, words::Word::Lit(text)
                     if text == "-p" || text == "--print" || text.starts_with("--print="))
@@ -1799,6 +1814,136 @@ mod tests {
         ] {
             assert_eq!(read(command), (1, false), "{command:?}");
         }
+    }
+
+    /// Whether each literal launch one recorded command holds reads only
+    /// its call's input, with `programs` as the installed launchers.
+    fn own_inputs(command: &str, programs: &[&str]) -> (Vec<bool>, bool) {
+        let programs: Vec<PathBuf> = programs.iter().map(PathBuf::from).collect();
+        let read = read_command(command, &programs, Path::new("/home/synthetic"));
+        (
+            read.launches
+                .iter()
+                .map(|launch| launch.own_input)
+                .collect(),
+            read.refused,
+        )
+    }
+
+    #[test]
+    fn a_launch_word_the_shell_may_split_is_a_gap() {
+        // An expansion that may become no word or several may spell an
+        // option that resumes (`MODEL='sonnet --continue'`).
+        for command in [
+            "claude --model $MODEL -p 'same prompt'",
+            "claude -p 'x' --mcp-config $CFG",
+            "claude -p x --tools ${T}",
+            "claude -p x --model $(cat /w/model)",
+            "claude -p x --model `cat /w/model`",
+            "claude -p x --max-turns $((N + 1))",
+            "claude -p x --model $1",
+            "claude -p x --model \"$@\"",
+            "claude -p x --add-dir \"${dirs[@]}\"",
+            "claude -p x --add-dir *",
+            "claude -p x --add-dir /w/{a,b}",
+            "claude -p x --model a=$B",
+            // zsh's splitting and glob flags, also quoted, and its subscripts.
+            "claude --model $=M -p x",
+            "claude --model $~M -p x",
+            "claude --model $^M -p x",
+            "claude --model \"$=M\" -p x",
+            "claude --model \"${=M}\" -p x",
+            "claude --model \"${(f)M}\" -p x",
+            "claude --model \"${(s: :)M}\" -p x",
+            "claude --model \"${(z)M}\" -p x",
+            "claude --model \"${~M}\" -p x",
+            "claude --model \"$M[@]\" -p x",
+            // A zsh form nested in a quoted default.
+            "claude --model \"${U:-${=M}}\" -p x",
+            "claude --model \"${U:-$=M}\" -p x",
+            "claude --model \"${U-$=M}\" -p x",
+            "claude --model \"${M:+$=M}\" -p x",
+            "claude --model \"${U:-${(f)X}}\" -p x",
+            "S=/w; claude -p x --mcp-config $=S/c.json",
+            // A variable the command changes, or that may not be one word.
+            "S=/w; S+=' --continue'; claude -p x --model $S",
+            "S=/w; read S; claude -p x --model $S",
+            "S=/w; export S; claude -p x --model $S",
+            "S=/w; claude -p x --model ${S:-y}",
+            "S='a b'; claude -p x --model $S",
+            "S=; claude -p x --model $S",
+            "IFS=/; S=/w; claude -p x --mcp-config $S/c.json",
+            "S=/w; IFS=/; claude -p x --mcp-config $S/c.json",
+            "S=/w; eval \"$X\"; claude -p x --mcp-config $S/c.json",
+            "S=/w; . /w/env; claude -p x --mcp-config $S/c.json",
+            "S=/w; . ./env; claude -p x --mcp-config $S/c.json",
+            "S=/w; read \"$N\"; claude -p x --mcp-config $S/c.json",
+            "S=/w; printf -v \"$N\" x; claude -p x --mcp-config $S/c.json",
+            "S=/w; $CMD; claude -p x --mcp-config $S/c.json",
+            "S=/w; (eval \"$X\"; claude -p x --mcp-config $S/c.json)",
+            "false && S=/w; claude -p x --mcp-config $S/c.json",
+            "(S=/w); claude -p x --mcp-config $S/c.json",
+            "S=/w || true; claude -p x --mcp-config $S/c.json",
+            "PATH=/w; claude -p x --mcp-config $PATH/c.json",
+            // An `sh -c` script does not see an unexported variable.
+            "S=/w bash -c 'claude -p x --mcp-config $S/c.json'",
+            "S=/w; bash -c 'claude -p x --mcp-config $S/c.json'",
+        ] {
+            assert_eq!(read(command), (0, true), "{command:?}");
+        }
+        // One word whatever its value: quoted, or a variable the command set
+        // to a plain value at its start and never touches again.
+        for command in [
+            "claude --model \"$MODEL\" -p 'x'",
+            "claude -p x --model \"$*\" --name \"${N}\" --add-dir ~/w",
+            "S=/w/run; cd $S && claude -p 'x' --mcp-config $S/test.mcp.json --strict-mcp-config",
+            "S=/w && cd \"$S\" && claude -p 'x' --mcp-config \"$S/mcp.json\"",
+            "  S=/w T='/w/t' ; claude -p x --mcp-config ${S}/c.json --add-dir $T",
+            "S=/w; claude -p x --mcp-config $S/c.json; echo \"$(ls $S)\"",
+            // Prompt words are never programs.
+            "S=/w; claude -p 'Fix it . Then read the source, eval it.' --mcp-config $S/c.json",
+            "S=/w; cd . && claude -p \"source . eval read\" --mcp-config $S/c.json",
+        ] {
+            assert_eq!(read(command), (1, false), "{command:?}");
+        }
+        // The two shapes of an agent's real test runs.
+        let launcher = "/home/synthetic/.local/bin/claude";
+        for command in [
+            format!(
+                "S=/private/tmp/synthetic/scratchpad; cd $S/p3b-run && {launcher} -p \"Check the \
+                 synthetic tool.\" --name \"p3b run\" --mcp-config $S/p3b-run/test.mcp.json \
+                 --strict-mcp-config --setting-sources project --output-format stream-json \
+                 --verbose > run1.jsonl 2> run1.err; echo \"exit $?\""
+            ),
+            "S=/private/tmp/synthetic; cd $S/trialcwd && claude -p \"Run the synthetic trial.\" \
+             --name \"trial\" --mcp-config $S/trial-mcp.json --strict-mcp-config \
+             --output-format stream-json --verbose > $S/trial.jsonl 2>&1"
+                .to_owned(),
+        ] {
+            assert_eq!(
+                own_inputs(&command, &[launcher]),
+                (vec![true], false),
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_launch_in_a_process_substitution_is_given_other_input() {
+        for command in [
+            "printf extra > >(claude -p 'same prompt')",
+            "cat f | cat <(claude -p 'same prompt')",
+        ] {
+            assert_eq!(
+                own_inputs(command, &[]),
+                (vec![false], false),
+                "{command:?}"
+            );
+        }
+        assert_eq!(
+            own_inputs("cat <(echo a) && claude -p 'same prompt'", &[]),
+            (vec![true], false)
+        );
     }
 
     #[test]
