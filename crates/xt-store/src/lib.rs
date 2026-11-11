@@ -129,6 +129,7 @@ pub mod timestamp;
 pub mod tool_result;
 pub mod tool_sent;
 pub mod tool_use;
+pub mod transcript_read;
 pub mod typing_speed;
 pub mod views;
 pub mod words;

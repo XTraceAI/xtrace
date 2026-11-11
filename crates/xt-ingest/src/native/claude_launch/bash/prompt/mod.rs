@@ -85,14 +85,18 @@
 //! record). A link waiting for its hour or for the Codex launch work is
 //! looked at again once due, by a match that holds no display check unless
 //! something was read or imported since the last one. A transcript is read
-//! once and then only what is appended to it. Only digests of prompts are
-//! kept in memory; identifiers and positions are stored.
+//! once and then only what is appended to it. A read of a transcript that
+//! held no launch is saved ([`saved`]), so after a restart an unchanged one
+//! is not read again and a grown one only from where it was read up to; one
+//! holding a launch is read whole on every start. Only digests of prompts
+//! are kept in memory; identifiers and positions are stored.
 
 mod words;
 
 use super::super::options::{self, Action};
 use super::super::source::{self, Allowance, Budget, Reserved};
 use super::super::{LaunchBacklog, LaunchLimits, command, rows};
+use super::saved::{self, Fingerprint, PROMPT_READ_VERSION};
 use super::{BIRTH_WINDOW_MS, OwnFirst, OwnOpening, OwnRead, transcript};
 use serde_json::Value;
 use sha2::Digest;
@@ -106,7 +110,9 @@ use xt_store::{
     Host, SessionSource, Store,
     batch::escape_like,
     child_fact::ChildFactDisposition,
+    claude_launch::SegmentGeneration,
     creation::{CLAUDE_PROMPT_LAUNCH_VERSION, ClaudePromptLaunchProof, CreationDisposition},
+    transcript_read::{SavedTranscriptRead, TranscriptReader},
 };
 
 /// Callers one sweep page reads from the index.
@@ -170,6 +176,9 @@ struct FileFacts {
     /// It held more launches, or a longer line, than this version reads:
     /// launches it holds may be missing.
     overfull: bool,
+    /// The rules and launchers it was read with ([`saved::rules_digest`]):
+    /// a later read goes on from `complete` only with the same.
+    rules: [u8; 32],
 }
 
 /// One transcript being read, from `next`.
@@ -193,6 +202,12 @@ struct FileRead {
     overfull: bool,
     /// Commands naming `claude` that could not be read, this read.
     refused_commands: usize,
+    /// The generation it had when this read began.
+    generation: SegmentGeneration,
+    /// The Claude launchers installed when this read began: every line is
+    /// read with them, and a saved read names them ([`saved::rules_digest`]).
+    programs: Vec<PathBuf>,
+    rules: [u8; 32],
     _held: Reserved,
 }
 
@@ -285,7 +300,8 @@ enum Decision {
 }
 
 /// Literal-prompt launch work not yet done. A restarted worker sweeps every
-/// indexed caller again; every write it repeats changes nothing.
+/// indexed caller again, reading only the files no saved read describes;
+/// every write it repeats changes nothing.
 #[derive(Debug, Default)]
 pub(in crate::native::claude_launch) struct PromptBacklog {
     sweep: Option<Option<String>>,
@@ -347,6 +363,10 @@ pub(in crate::native::claude_launch) struct PromptBacklog {
     recheck_at: Option<i64>,
     /// The links the last match held, for a report.
     held: Vec<HeldLink>,
+    /// Reads of files that held no launch, to save at the end of the pass,
+    /// and saved reads to forget.
+    unsaved: Vec<SavedTranscriptRead>,
+    forget: Vec<(TranscriptReader, String)>,
 }
 
 /// What one pass of literal-prompt launch work did. Counts only.
@@ -354,6 +374,15 @@ pub(in crate::native::claude_launch) struct PromptBacklog {
 pub struct PromptProgress {
     /// Transcript files read, whole or what was appended.
     pub files_read: usize,
+    /// Bytes this match read: caller transcripts and possible children's
+    /// openings.
+    pub bytes_read: u64,
+    /// Transcript files not read again because a saved read showed them
+    /// unchanged.
+    pub files_skipped: usize,
+    /// Passes whose reads could not be saved (each is read again after a
+    /// restart).
+    pub saves_failed: usize,
     /// Files that could not be read now.
     pub files_unreadable: usize,
     /// Callers whose transcript, helper file or helper folder is gone.
@@ -521,6 +550,43 @@ impl PromptBacklog {
         &self.held
     }
 
+    /// For acceptance reports: per transcript file this run knows, a digest
+    /// of its path, where it was read up to, and a digest of what the match
+    /// takes from it (owner, launches, unreadable command times, untimed,
+    /// overfull). Digests and a length only; never a path or a prompt.
+    pub fn file_digests(&self) -> Vec<([u8; 32], u64, [u8; 32])> {
+        let mut out: Vec<([u8; 32], u64, [u8; 32])> = self
+            .files
+            .iter()
+            .map(|(path, facts)| {
+                let mut digest = sha2::Sha256::new();
+                digest.update(facts.owner.as_bytes());
+                digest.update([0]);
+                for found in &facts.launches {
+                    digest.update(found.call_id.as_bytes());
+                    digest.update([0]);
+                    digest.update(found.index.to_le_bytes());
+                    digest.update(found.launch_ms.to_le_bytes());
+                    digest.update(found.digest);
+                    digest.update(found.session_id.as_deref().unwrap_or("-").as_bytes());
+                    digest.update([u8::from(found.matchable), 0]);
+                }
+                digest.update([1]);
+                for at in &facts.refused {
+                    digest.update(at.to_le_bytes());
+                }
+                digest.update([u8::from(facts.untimed), u8::from(facts.overfull)]);
+                (
+                    sha2::Sha256::digest(path.as_os_str().as_encoded_bytes()).into(),
+                    facts.complete,
+                    digest.finalize().into(),
+                )
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Look at a held link again no later than `at`.
     fn recheck(&mut self, at: i64) {
         self.recheck_at = Some(self.recheck_at.map_or(at, |known| known.min(at)));
@@ -549,47 +615,83 @@ pub(in crate::native::claude_launch) fn pass(
         backlog.again = true;
     }
     let programs = command::installed_programs(home);
+    let spent = budget.spent;
+    let result = pass_within(
+        store,
+        home,
+        backlog,
+        launches,
+        limits,
+        budget,
+        recorded_at,
+        progress,
+        &memory,
+        &programs,
+    );
+    progress.bytes_read += budget.spent - spent;
+    // What this pass read, saved in one transaction. Saved reads are only a
+    // shortcut: one the store refuses is dropped, never in the way of the
+    // match.
+    if store
+        .save_transcript_reads(&backlog.unsaved, &backlog.forget, recorded_at)
+        .is_err()
+    {
+        progress.saves_failed += 1;
+    }
+    backlog.unsaved.clear();
+    backlog.forget.clear();
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pass_within(
+    store: &mut Store,
+    home: &Path,
+    backlog: &mut PromptBacklog,
+    launches: &mut LaunchBacklog,
+    limits: &LaunchLimits,
+    budget: &mut Budget<'_>,
+    recorded_at: i64,
+    progress: &mut PromptProgress,
+    memory: &Allowance,
+    programs: &[PathBuf],
+) -> xt_store::Result<()> {
+    let digest = saved::rules_digest(programs);
     while !budget.exhausted() && budget.entries < limits.max_pass_entries {
         // 1. A file being read.
         if let Some(reading) = backlog.reading.as_mut() {
-            match reading.advance(budget, &programs, home, limits.max_line) {
+            match reading.advance(budget, home, limits.max_line) {
                 Ok(false) => return Ok(()),
                 Ok(true) => {
-                    let reading = backlog.reading.take().expect("reading");
+                    let mut reading = backlog.reading.take().expect("reading");
                     progress.files_read += 1;
                     progress.commands_refused += reading.refused_commands;
-                    backlog.dirty = true;
                     let tail = tail(&reading.file, reading.complete);
-                    if backlog.files.len() >= MAX_FILES
-                        && !backlog.files.contains_key(&reading.path)
-                    {
-                        // Forgotten launches could have made any child.
-                        backlog.files.clear();
-                        backlog.overflowed = true;
-                    }
                     let overfull = reading.overfull
                         || reading.launches.len() > MAX_FILE_LAUNCHES
                         || reading.refused.len() > MAX_FILE_LAUNCHES;
                     let (launches, refused) = if overfull {
                         (Vec::new(), Vec::new())
                     } else {
-                        (reading.launches, reading.refused)
+                        (
+                            std::mem::take(&mut reading.launches),
+                            std::mem::take(&mut reading.refused),
+                        )
                     };
-                    backlog.unreadable.remove(&reading.path);
-                    backlog.files.insert(
-                        reading.path,
-                        FileFacts {
-                            owner: reading.owner,
-                            device: reading.device,
-                            inode: reading.inode,
-                            complete: reading.complete,
-                            tail,
-                            launches,
-                            refused,
-                            untimed: reading.untimed,
-                            overfull,
-                        },
-                    );
+                    let facts = FileFacts {
+                        owner: reading.owner.clone(),
+                        device: reading.device,
+                        inode: reading.inode,
+                        complete: reading.complete,
+                        tail,
+                        launches,
+                        refused,
+                        untimed: reading.untimed,
+                        overfull,
+                        rules: reading.rules,
+                    };
+                    note_read(backlog, &reading, &facts, limits.max_line, budget);
+                    keep(backlog, reading.path.clone(), facts);
                 }
                 Err(()) => {
                     let reading = backlog.reading.take().expect("reading");
@@ -603,12 +705,42 @@ pub(in crate::native::claude_launch) fn pass(
         }
         // 2. The next file of a caller.
         if let Some((owner, path)) = backlog.due.pop_front() {
-            match start(backlog, &owner, &path, limits.max_line, &memory) {
+            let started = start(
+                store,
+                backlog,
+                &owner,
+                &path,
+                limits.max_line,
+                memory,
+                programs,
+                digest,
+                budget,
+            );
+            let started = match started {
+                Ok(started) => started,
+                Err(error) => {
+                    // Looked at again next pass.
+                    backlog.due.push_front((owner, path));
+                    return Err(error);
+                }
+            };
+            match started {
                 Start::Reading(reading) => backlog.reading = Some(reading),
                 Start::Unchanged => {}
+                Start::Deferred => {
+                    backlog.due.push_front((owner, path));
+                    return Ok(());
+                }
+                Start::Saved(facts) => {
+                    // What a read would find again, as an earlier run saved
+                    // it.
+                    progress.files_skipped += 1;
+                    keep(backlog, path, *facts);
+                }
                 Start::Missing => {
                     // Deleted history: what was read of it is kept, and its
                     // caller's indexed span is a gap.
+                    forget(backlog, &path);
                     backlog.gone.insert(owner);
                     backlog.dirty = true;
                     progress.callers_gone += 1;
@@ -722,7 +854,7 @@ pub(in crate::native::claude_launch) fn pass(
                 backlog,
                 limits,
                 budget,
-                &memory,
+                memory,
                 recorded_at,
                 progress,
             )? {
@@ -775,28 +907,35 @@ enum Start {
     Reading(Box<FileRead>),
     /// Read to its end already, and only possibly grown by a partial line.
     Unchanged,
+    /// Read to its end by an earlier run, which saved what it found.
+    Saved(Box<FileFacts>),
+    /// What is left of the pass's bytes cannot check a saved read: looked at
+    /// again next pass.
+    Deferred,
     /// It no longer exists: deleted history.
     Missing,
     Failed,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start(
+    store: &Store,
     backlog: &PromptBacklog,
     owner: &str,
     path: &Path,
     max_line: usize,
     memory: &Allowance,
-) -> Start {
+    programs: &[PathBuf],
+    rules: [u8; 32],
+    budget: &mut Budget<'_>,
+) -> xt_store::Result<Start> {
     let (file, generation) = match source::open(path) {
         Ok(opened) => opened,
-        Err(source::Unread::Missing) => return Start::Missing,
-        Err(_) => return Start::Failed,
+        Err(source::Unread::Missing) => return Ok(Start::Missing),
+        Err(_) => return Ok(Start::Failed),
     };
     let Ok(length) = u64::try_from(generation.length) else {
-        return Start::Failed;
-    };
-    let Ok(held) = memory.reserve(path.as_os_str().len() + max_line.min(1 << 20)) else {
-        return Start::Failed;
+        return Ok(Start::Failed);
     };
     // Only what was appended is read, when the file is the same one and the
     // bytes before where it was read up to are unchanged.
@@ -805,23 +944,66 @@ fn start(
     let mut refused = Vec::new();
     let mut untimed = false;
     let mut overfull = false;
-    if let Some(known) = backlog.files.get(path)
-        && known.owner == owner
-        && known.device == generation.device
-        && known.inode == generation.inode
-        && known.complete <= length
-        && tail(&file, known.complete) == known.tail
-    {
-        if known.complete == length {
-            return Start::Unchanged;
+    if let Some(known) = backlog.files.get(path) {
+        // What was read with other rules or launchers is read again whole.
+        if known.owner == owner
+            && known.rules == rules
+            && known.device == generation.device
+            && known.inode == generation.inode
+            && known.complete <= length
+            && tail(&file, known.complete) == known.tail
+        {
+            if known.complete == length {
+                return Ok(Start::Unchanged);
+            }
+            from = known.complete;
+            launches = known.launches.clone();
+            refused = known.refused.clone();
+            untimed = known.untimed;
+            overfull = known.overfull;
         }
-        from = known.complete;
-        launches = known.launches.clone();
-        refused = known.refused.clone();
-        untimed = known.untimed;
-        overfull = known.overfull;
+    } else if let Some(saved) = saved_read(store, owner, path, max_line, rules)?
+        && saved.device == generation.device
+        && saved.inode == generation.inode
+        && saved.read_to <= length
+    {
+        match saved::fingerprint(&file, saved.read_to, budget) {
+            Fingerprint::Deferred => return Ok(Start::Deferred),
+            // An earlier run read it up to `read_to` and found no launch
+            // there.
+            Fingerprint::Digest(digest) if digest == saved.fingerprint => {
+                if saved.read_to < length {
+                    // It grew: only what was appended is read.
+                    from = saved.read_to;
+                    refused = saved.refused_ms;
+                    untimed = saved.untimed;
+                } else if saved.mtime_ns == generation.mtime_ns
+                    && saved.ctime_ns == generation.ctime_ns
+                {
+                    // Still exactly the generation that read began at.
+                    return Ok(Start::Saved(Box::new(FileFacts {
+                        owner: owner.to_owned(),
+                        device: generation.device,
+                        inode: generation.inode,
+                        complete: length,
+                        tail: tail(&file, length),
+                        launches: Vec::new(),
+                        refused: saved.refused_ms,
+                        untimed: saved.untimed,
+                        overfull: false,
+                        rules,
+                    })));
+                }
+                // The same length at another time: rewritten in place, read
+                // whole.
+            }
+            Fingerprint::Digest(_) | Fingerprint::Unreadable => {}
+        }
     }
-    Start::Reading(Box::new(FileRead {
+    let Ok(held) = memory.reserve(path.as_os_str().len() + max_line.min(1 << 20)) else {
+        return Ok(Start::Failed);
+    };
+    Ok(Start::Reading(Box::new(FileRead {
         owner: owner.to_owned(),
         path: path.to_path_buf(),
         file,
@@ -837,8 +1019,109 @@ fn start(
         untimed,
         overfull,
         refused_commands: 0,
+        generation,
+        programs: programs.to_vec(),
+        rules,
         _held: held,
-    }))
+    })))
+}
+
+/// The read an earlier run saved of `owner`'s file at `path`, if it was read
+/// by these rules, with this line bound and these launchers installed.
+fn saved_read(
+    store: &Store,
+    owner: &str,
+    path: &Path,
+    max_line: usize,
+    rules: [u8; 32],
+) -> xt_store::Result<Option<SavedTranscriptRead>> {
+    let Some(text) = path.to_str() else {
+        return Ok(None);
+    };
+    Ok(store
+        .saved_transcript_read(TranscriptReader::Prompt, text)?
+        .filter(|saved| {
+            saved.owner_native_session_id == owner
+                && saved.reader_version == PROMPT_READ_VERSION
+                && saved.max_line == max_line as u64
+                && saved.rules_digest == rules
+                && saved.refused_ms.len() <= MAX_FILE_LAUNCHES
+        }))
+}
+
+/// Keep what a file was read, or saved, to hold: something new for the
+/// match.
+fn keep(backlog: &mut PromptBacklog, path: PathBuf, facts: FileFacts) {
+    backlog.dirty = true;
+    if backlog.files.len() >= MAX_FILES && !backlog.files.contains_key(&path) {
+        // Forgotten launches could have made any child.
+        backlog.files.clear();
+        backlog.overflowed = true;
+    }
+    backlog.unreadable.remove(&path);
+    backlog.files.insert(path, facts);
+}
+
+/// Save a whole read of a file that held no launch, so a restart need not
+/// read it again; forget the saved read of one that holds launches, held
+/// more than this version reads, or changed while it was read.
+fn note_read(
+    backlog: &mut PromptBacklog,
+    reading: &FileRead,
+    facts: &FileFacts,
+    max_line: usize,
+    budget: &mut Budget<'_>,
+) {
+    let path = reading.path.as_path();
+    let Some(text) = path.to_str() else {
+        return;
+    };
+    let unchanged = source::generation_of(&reading.file).ok() == Some(reading.generation);
+    // A read not saved for want of bytes is only read again after a restart.
+    let fingerprint = match saved::fingerprint(&reading.file, facts.complete, budget) {
+        Fingerprint::Digest(digest) => Some(digest),
+        Fingerprint::Unreadable | Fingerprint::Deferred => None,
+    };
+    let (true, false, true, Some(fingerprint)) = (
+        unchanged,
+        facts.overfull,
+        facts.launches.is_empty(),
+        fingerprint,
+    ) else {
+        forget(backlog, path);
+        return;
+    };
+    // The latest read of a file is the one saved.
+    backlog.forget.retain(|(_, known)| known != text);
+    backlog.unsaved.retain(|saved| saved.path != text);
+    backlog.unsaved.push(SavedTranscriptRead {
+        reader: TranscriptReader::Prompt,
+        path: text.to_owned(),
+        owner_native_session_id: facts.owner.clone(),
+        reader_version: PROMPT_READ_VERSION,
+        max_line: max_line as u64,
+        rules_digest: reading.rules,
+        device: facts.device,
+        inode: facts.inode,
+        read_to: facts.complete,
+        mtime_ns: reading.generation.mtime_ns,
+        ctime_ns: reading.generation.ctime_ns,
+        fingerprint,
+        untimed: facts.untimed,
+        refused_ms: facts.refused.clone(),
+    });
+}
+
+/// Forget the saved read of the file at `path`.
+fn forget(backlog: &mut PromptBacklog, path: &Path) {
+    if let Some(text) = path.to_str() {
+        backlog.unsaved.retain(|saved| saved.path != text);
+        if !backlog.forget.iter().any(|(_, known)| known == text) {
+            backlog
+                .forget
+                .push((TranscriptReader::Prompt, text.to_owned()));
+        }
+    }
 }
 
 /// The bytes of `file` just before `end`.
@@ -857,10 +1140,11 @@ impl FileRead {
     fn advance(
         &mut self,
         budget: &mut Budget<'_>,
-        programs: &[PathBuf],
         home: &Path,
         max_line: usize,
     ) -> Result<bool, ()> {
+        let programs = self.programs.clone();
+        let programs = programs.as_slice();
         while self.next < self.length {
             let chunk =
                 match source::read_chunk(&self.file, self.next, self.length - self.next, budget) {
@@ -1721,17 +2005,28 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         let backlog = PromptBacklog::starting();
         let memory = Allowance::new(1 << 20);
-        let Start::Reading(mut reading) = start(&backlog, "owner", &path, max_line, &memory) else {
+        let store = Store::open_in_memory().unwrap();
+        let Ok(Start::Reading(mut reading)) = start(
+            &store,
+            &backlog,
+            "owner",
+            &path,
+            max_line,
+            &memory,
+            &[],
+            saved::rules_digest(&[]),
+            &mut Budget::new(1 << 20, Duration::from_secs(5), None),
+        ) else {
             panic!("the transcript is read");
         };
         let mut budget = Budget::new(first, Duration::from_secs(5), None);
         assert_eq!(
-            reading.advance(&mut budget, &[], temp.path(), max_line),
+            reading.advance(&mut budget, temp.path(), max_line),
             Ok(false)
         );
         let mut budget = Budget::new(u64::MAX, Duration::from_secs(5), None);
         assert_eq!(
-            reading.advance(&mut budget, &[], temp.path(), max_line),
+            reading.advance(&mut budget, temp.path(), max_line),
             Ok(true)
         );
         reading.overfull

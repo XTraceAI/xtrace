@@ -448,6 +448,30 @@ its parent, so no session shown before is hidden again to wait for it.
 Like every accepted creation relation, a link makes the Human input view
 count the child's user messages as the agent's, not a person's.
 
+### After a restart
+
+Both Claude `Bash` readers (this match and the one that compares printed
+answers) save what a read of a caller transcript found when it held no
+launch, so a restart does not read an unchanged transcript again (schema 33,
+below). A saved read is used only when everything it was read with is the
+same now: the reader's rules (the source of both readers, and a version
+raised whenever a read of the same bytes may find something else), its
+longest line, the Claude launchers
+installed, the session owning the file, its device and inode, and a
+fingerprint of where it was read up to and the first and last 4 KiB before
+that point. A file not grown is taken as saved only if it is still exactly
+the generation the read began at (the same modification and change times);
+for this match a grown one is read from where it was read up to, as within a
+run. For the other reader the file must be exactly the generation it was
+read at. A read is saved only if the file did not change while it was read,
+and under the launchers installed when it began, which it reads every line
+with. Anything else reads the file whole, as if nothing was saved. What the read found that is not a launch is saved
+with it and counts after the restart as before: the times of commands naming
+`claude` it could not read, and whether a launch record had no time. A
+transcript that holds a launch, held more than this version reads, or could
+not be read is never saved: it is read whole on every start. A saved
+read that cannot be stored is dropped; it never stops the match.
+
 ### Known limits
 
 The prompt match links only from what it can read. These cases can make a
@@ -487,10 +511,27 @@ another launch made:
   for every launch in its script, also one run before it
   (`claude -p x; exec < /dev/null`) or outside the subshell it ran in
   (`(exec < f); claude -p x`), so such a launch makes no link.
+- A transcript rewritten in place before where it was read up to, keeping
+  its inode, is read only from that point when it also grew and still
+  matches what was checked: within a run, the 64 bytes before that point;
+  after a restart, its first 4 KiB and the 4 KiB before that point. A launch
+  or an unreadable command naming `claude` the rewrite added before it is
+  not seen. Claude only appends to its transcripts.
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and
   the link it decides stays.
+
+Schema 33 adds `claude_transcript_reads`: one row per reader (`prompt` or
+`bash`) and transcript file that held no launch, with the session owning it,
+the reader version, line bound and a digest of the readers' rules and the
+installed launchers, the
+file's device, inode and exact modification and change times when the read
+began and where it was read up to, a SHA-256 fingerprint of those bytes'
+first and last 4 KiB, and for `prompt` the times of commands naming `claude`
+it could not read and whether a launch record had no time. The path is the
+one the index's source cursors already hold. No prompt, command, record text
+or output is stored. A row is only a shortcut; no other table changes.
 
 ## Checks
 
@@ -503,6 +544,7 @@ another launch made:
 - `cargo test -p xt-store --test codex_cli_launch_creation`
 - `cargo test -p xt-ingest --test codex_cli_launch_links`
 - `cargo test -p xt-ingest --test claude_prompt_launch_links`
+- `cargo test -p xt-store --test transcript_reads`
 
 All sources are synthetic. Acceptance on a copied index uses
 `cargo run -p xt-ingest --example claude_launch_links` (see its header); with
