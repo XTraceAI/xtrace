@@ -1847,6 +1847,18 @@ mod tests {
             "claude -p x --add-dir *",
             "claude -p x --add-dir /w/{a,b}",
             "claude -p x --model a=$B",
+            // zsh's splitting and glob flags, also quoted, and its subscripts.
+            "claude --model $=M -p x",
+            "claude --model $~M -p x",
+            "claude --model $^M -p x",
+            "claude --model \"$=M\" -p x",
+            "claude --model \"${=M}\" -p x",
+            "claude --model \"${(f)M}\" -p x",
+            "claude --model \"${(s: :)M}\" -p x",
+            "claude --model \"${(z)M}\" -p x",
+            "claude --model \"${~M}\" -p x",
+            "claude --model \"$M[@]\" -p x",
+            "S=/w; claude -p x --mcp-config $=S/c.json",
             // A variable the command changes, or that may not be one word.
             "S=/w; S+=' --continue'; claude -p x --model $S",
             "S=/w; read S; claude -p x --model $S",

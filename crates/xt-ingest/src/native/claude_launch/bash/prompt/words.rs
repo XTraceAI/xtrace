@@ -18,14 +18,17 @@
 //! character, a brace expansion, a process substitution or a leading `~`
 //! (kept apart, for a program path). A word that is not literal is one word
 //! ([`Word::Opaque`]) only when the shell cannot split it: its expansions are
-//! quoted (but `"$@"` and a `"${…}"` holding `@`), `$'…'`, `$"…"`, a tilde,
+//! quoted (but `"$@"`, a `"${…}"` holding `@` or starting with a zsh flag
+//! such as `(f)` or `=`, a `"$NAME[…]"` subscript and zsh's `$=`, `$~` and
+//! `$^`), `$'…'`, `$"…"`, a tilde,
 //! a process substitution, or a `$NAME` or `${NAME}` of a variable the
 //! command set to a plain value at its start and never touches again, and
 //! that no command of it may set without naming it ([`one_word_names`],
 //! [`sets_unnamed`]); any other may become no word or several
 //! ([`Word::Fields`]). A redirection and its target are set aside; a
 //! here-document's body is skipped, never read as commands, also inside a
-//! substitution. A command or process substitution's (`<(…)`, `>(…)`) body
+//! substitution. A command or process substitution's (`<(…)`, `>(…)`, zsh's
+//! `=(…)`) body
 //! is read as commands too, up to a small depth. Comments and array literals
 //! (`x=( … )`) are skipped. An
 //! unterminated quote, substitution or here-document, a function definition,
@@ -44,7 +47,7 @@
 //! Each simple command says whether it reads only the input the whole
 //! command was given ([`Command::own_input`]): not when it, or a group or
 //! loop around it, has a `<` redirection or a here-document, or follows a `|`
-//! in a pipeline, or is inside a process substitution (whose input is what
+//! in a pipeline or an `exec` that redirects the script's input, or is inside a process substitution (whose input is what
 //! the command writes to it, or what the command reads), or inside a
 //! substitution or `sh -c` script of a command that does not.
 
@@ -153,7 +156,9 @@ const SETS_NAMES: &[&str] = &[
     "let",
     "builtin",
     "trap",
-    // zsh.
+    // zsh, its precommand modifiers among them.
+    "noglob",
+    "nocorrect",
     "integer",
     "float",
     "vared",
@@ -162,7 +167,8 @@ const SETS_NAMES: &[&str] = &[
 
 /// Whether a simple command may set a variable without naming it in the
 /// text ([`one_word_names`]): its program is one of [`SETS_NAMES`],
-/// `printf` or `print` given `-v` (or a word that may be it), a program the
+/// `printf` or `print` given `-v`, `wait` given `-p` (or a word that may be
+/// such an option), a program the
 /// shell supplies (`$CMD …`), or one this reader cannot find (`timeout`
 /// with no literal duration).
 fn sets_unnamed(words: &[Word]) -> bool {
@@ -179,14 +185,16 @@ fn sets_unnamed(words: &[Word]) -> bool {
     if SETS_NAMES.contains(&name) {
         return true;
     }
-    if !matches!(name, "printf" | "print") {
-        return false;
-    }
+    let flag = match name {
+        "printf" | "print" => 'v',
+        "wait" => 'p',
+        _ => return false,
+    };
     // Its options come before its first other word.
     for word in args {
         match word {
             Word::Lit(text) if text == "--" || !text.starts_with('-') => return false,
-            Word::Lit(text) if text.contains('v') => return true,
+            Word::Lit(text) if text.contains(flag) => return true,
             Word::Lit(_) => {}
             _ => return true,
         }
@@ -217,6 +225,9 @@ const UNSAFE_NAMES: &[&str] = &[
     "EUID",
     "PATH",
     "HOME",
+    // An assignment bash 3.2 ignores, and zsh's directory stack.
+    "DIRSTACK",
+    "dirstack",
 ];
 
 /// The variables whose unquoted `$NAME` or `${NAME}` the shell supplies as
@@ -649,6 +660,14 @@ impl Reader<'_> {
         if self.redirected && (self.closer || first.is_some_and(|word| CLOSERS.contains(&word))) {
             self.group_input = true;
         }
+        // `exec < f`, with no program, makes the file the input of every
+        // later command of the script.
+        if self.redirected
+            && program(&self.current).is_none()
+            && self.current.contains(&Word::Lit("exec".to_owned()))
+        {
+            self.group_input = true;
+        }
         let piped = self.piped && !self.current.is_empty();
         if piped && first.is_some_and(|word| COMPOUND.contains(&word)) {
             self.group_input = true;
@@ -774,16 +793,11 @@ impl Reader<'_> {
                         1
                     };
                 }
-                '<' | '>' if self.peek(1) == Some('(') => {
-                    // `<(…)` or `>(…)`: one word, a path the body reads from
-                    // or writes to; the body never reads only the whole
-                    // command's input.
-                    let start = self.i + 2;
-                    let end = close(self.chars, start, '(', ')', true)?;
-                    self.current_subs
-                        .push((self.chars[start..end].iter().collect(), false));
-                    self.word().opaque();
-                    self.i = end + 1;
+                '<' | '>' if self.peek(1) == Some('(') => self.process_substitution()?,
+                // zsh's `=(…)`, at the start of a word: a temporary file the
+                // body writes, run like `<(…)`.
+                '=' if self.word.is_none() && self.peek(1) == Some('(') => {
+                    self.process_substitution()?;
                 }
                 '<' | '>' => self.redirection(c),
                 '\'' => {
@@ -878,6 +892,20 @@ impl Reader<'_> {
         Some(())
     }
 
+    /// `<(…)`, `>(…)` or zsh's `=(…)`, at its first character: one word, a
+    /// path the body reads from or writes to. The body never reads only the
+    /// whole command's input: it may read what the command writes to it, or
+    /// what the command reads (a pipe into it).
+    fn process_substitution(&mut self) -> Option<()> {
+        let start = self.i + 2;
+        let end = close(self.chars, start, '(', ')', true)?;
+        self.current_subs
+            .push((self.chars[start..end].iter().collect(), false));
+        self.word().opaque();
+        self.i = end + 1;
+        Some(())
+    }
+
     /// `<`, `>` and their forms, after an optional file-descriptor number.
     fn redirection(&mut self, c: char) {
         // A word of digits right before it names a descriptor.
@@ -966,8 +994,10 @@ impl Reader<'_> {
 
     /// One `$` expansion, at `$`. A `$` that starts none is literal. Unquoted,
     /// every expansion may split its word, but a `$NAME` or `${NAME}` of a
-    /// [`Self::known`] variable; quoted, only `"$@"` and a `${…}` holding
-    /// `@` (`"${a[@]}"`, `"${@:2}"`) may.
+    /// [`Self::known`] variable; quoted, only `"$@"`, a `${…}` holding `@`
+    /// (`"${a[@]}"`, `"${@:2}"`) or starting with a zsh flag (`"${(f)M}"`,
+    /// `"${=M}"`, `"${~M}"`, `"${^M}"`), a `"$NAME[…]"` subscript and zsh's
+    /// `$=M`, `$~M` and `$^M` may.
     fn expansion(&mut self, quoted: bool) -> Option<()> {
         let splits = match self.peek(1) {
             Some('(') => {
@@ -993,7 +1023,9 @@ impl Reader<'_> {
                 let body: String = self.chars[self.i + 2..end].iter().collect();
                 self.i = end + 1;
                 if quoted {
-                    body.contains('@')
+                    // zsh's flags (`"${(f)M}"`, `"${=M}"`, `"${~M}"`) split
+                    // it too.
+                    body.contains('@') || body.starts_with(['(', '=', '~', '^'])
                 } else {
                     !self.known.contains(&body)
                 }
@@ -1015,7 +1047,18 @@ impl Reader<'_> {
                     self.i += 1;
                 }
                 let name: String = self.chars[start..self.i].iter().collect();
-                !quoted && !self.known.contains(&name)
+                // zsh reads `"$M[@]"` as every element of an array.
+                if quoted {
+                    self.peek(0) == Some('[')
+                } else {
+                    !self.known.contains(&name)
+                }
+            }
+            Some('=' | '~' | '^') => {
+                // zsh's `$=M`, `$~M` and `$^M`: split, globbed or expanded
+                // over an array, also quoted (`"$=M"`).
+                self.i += 2;
+                true
             }
             Some(c)
                 if c.is_ascii_digit() || matches!(c, '@' | '*' | '#' | '?' | '$' | '!' | '-') =>
@@ -1498,6 +1541,7 @@ mod tests {
             "PATH=/w; echo $PATH",
             "BASH_ENV=/w; echo $BASH_ENV",
             "_=/w; echo $_",
+            "DIRSTACK=/w; echo $DIRSTACK",
         ] {
             assert_eq!(known(command), Vec::<String>::new(), "{command:?}");
         }
@@ -1536,6 +1580,8 @@ mod tests {
             "timeout $T read \"$N\"",
             "(eval \"$X\")",
             "x=$(trap \"$X\" EXIT)",
+            "noglob read \"$N\"",
+            "wait -p \"$N\"",
         ] {
             assert_eq!(word(pre), Word::Fields, "{pre:?}");
         }
@@ -1709,6 +1755,27 @@ mod tests {
     }
 
     #[test]
+    fn a_redirected_exec_feeds_every_later_command() {
+        // `exec < f` makes the file the standard input of the rest.
+        for command in [
+            "exec < /w/f; claude -p x",
+            "exec 0</w/f; claude -p x",
+            "exec <<<x; claude -p x",
+            "exec <<EOF\nx\nEOF\nclaude -p x",
+            "exec </w/f\nclaude -p x",
+        ] {
+            assert_eq!(claude_runs(command), Some((1, 0)), "{command:?}");
+        }
+        // Output redirected, or a program run with its own input, keeps it.
+        for command in [
+            "exec > /w/log 2>&1; claude -p x",
+            "exec cat < /w/f; claude -p x",
+        ] {
+            assert_eq!(claude_runs(command), Some((1, 1)), "{command:?}");
+        }
+    }
+
+    #[test]
     fn a_launch_in_a_process_substitution_does_not_read_only_its_own() {
         // `>(…)` reads what the command writes to it; `<(…)` reads what the
         // command holding it reads, a pipe among it.
@@ -1722,6 +1789,9 @@ mod tests {
             "echo 2>(claude -p x)",
             "x=$(cat <(claude -p x))",
             "cat <(echo \"$(claude -p x)\")",
+            // zsh's `=(…)`, a temporary file the body writes.
+            "printf extra | cat =(claude -p x)",
+            "cat =(claude -p x)",
         ] {
             assert_eq!(claude_runs(command), Some((1, 0)), "{command:?}");
         }

@@ -338,27 +338,33 @@ next match's list), and it is then never withdrawn or moved: what a later
 read misses, such as a transcript Claude has since deleted, never changes it.
 
 A launch makes a link only when it reads no other input: one with a `<`
-redirection or a here-document, after a `|`, or inside a process
-substitution (`printf extra > >(claude -p …)`, `cat <(claude -p …)`), may
-have sent its child more than the prompt, so it only counts as a launch
-that could have made a child.
+redirection or a here-document, after a `|`, or after `exec < file` in the
+same script, may have sent its child more than the prompt, so it only
+counts as a launch that could have made a child. A launch inside a process
+substitution (`<(…)`, `>(…)`, zsh's `=(…)`) counts the same way, because
+it may read other input: what the command around it writes to it
+(`printf extra > >(claude -p …)`), or a pipe into that command
+(`cat f | cat <(claude -p …)`).
 
 A launch word the shell may turn into no word or several makes the command
 one the reader cannot read (below), because the extra words could be any
 option, such as `--continue`: an unquoted expansion (`--model $MODEL`,
 `$(…)`, `` `…` ``, `$1`), a glob (`*`), a brace expansion (`{a,b}`),
-`"$@"` or `"${a[@]}"`. A quoted expansion (`"$MODEL"`) is one word. So is
+`"$@"` or `"${a[@]}"`, or one of zsh's forms that split even when quoted
+(`$=M`, `$~M`, `$^M`, `"${=M}"`, `"${(f)M}"`, `"$M[@]"`). Other quoted
+expansions (`"$MODEL"`) are one word. So is
 `$NAME` or `${NAME}` when the command starts by setting `NAME` to a plain
 value with no spaces or special characters (`S=/w/run; cd $S && claude -p …
 --mcp-config $S/mcp.json`) and never names it again any other way. The
 command must not hold the text `IFS`, nor run a command that may set a
 variable without spelling its name: `eval`, `source`, `.`, `read`,
 `declare`, `typeset`, `local`, `export`, `readonly`, `unset`, `mapfile`,
-`readarray`, `getopts`, `let`, `builtin`, `trap`, `printf -v` (and zsh's
-`print -v`, `integer`, `float`, `vared`, `zparseopts`), or a program given
-by a variable (`$CMD`). Those words in a prompt or other argument do not
-count. This does not reach into an `sh -c` script, which does not see the
-variable.
+`readarray`, `getopts`, `let`, `builtin`, `trap`, `printf -v`, `wait -p`
+(and zsh's `print -v`, `noglob`, `nocorrect`, `integer`, `float`, `vared`,
+`zparseopts`), or a program given by a variable (`$CMD`). Those words in a
+prompt or other argument do not count. This does not reach into an
+`sh -c` script, which does not see the variable.
+
 Text a command does not run as it stands — a here-document body, also
 inside `$(…)`, an array's words, a function's body — holds no launch.
 
@@ -469,10 +475,11 @@ another launch made:
   not hold, or a second child the index does not hold, is not known.
 - A Codex history found only after a prompt link was written: if it names the
   same child, the two links conflict and both are withheld.
-- Draft: a variable set at the command's start counts as one word even if
-  a shell function or alias the command did not define changes it, such as
-  one from the user's shell setup that Claude's `Bash` tool loads before the
-  command (a `cd` function that sets the variable, say).
+- A variable set at the command's start counts as one word even if
+  something the command did not write changes it or how it splits: a shell
+  function or alias the command did not define (a `cd` function that sets
+  the variable, say), or the user's shell setup, which Claude's `Bash` tool
+  loads before the command, setting `IFS`.
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and
