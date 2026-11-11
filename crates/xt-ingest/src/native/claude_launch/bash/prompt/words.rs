@@ -21,7 +21,9 @@
 //! or process substitution's body is read as commands too, up to a small
 //! depth. Comments and array literals (`x=( … )`) are skipped. An
 //! unterminated quote, substitution or here-document, a function definition,
-//! or an array literal holding a substitution refuses the whole command.
+//! an array literal holding a substitution, or a here-document whose
+//! delimiter is not quoted and whose body holds a substitution naming
+//! `claude` (the shell runs it) refuses the whole command.
 //!
 //! Each simple command says whether it reads only the input the whole
 //! command was given ([`Command::own_input`]): not when it, or a group or
@@ -165,6 +167,9 @@ struct Building {
     brace: bool,
     /// It starts with an unquoted `~`.
     tilde: bool,
+    /// Part of it was quoted: as a here-document's delimiter, the body is
+    /// then text the shell does not expand.
+    quoted: bool,
 }
 
 impl Building {
@@ -179,6 +184,7 @@ impl Building {
     fn push(&mut self, c: char, quoted: bool) {
         if quoted {
             self.plain = false;
+            self.quoted = true;
         } else if self.plain {
             self.bare.push(c);
         }
@@ -240,6 +246,16 @@ enum Target {
     Heredoc(bool),
 }
 
+/// A here-document whose body is still to come.
+#[derive(Debug)]
+struct Heredoc {
+    delimiter: String,
+    /// Leading tabs are stripped (`<<-`).
+    strip: bool,
+    /// The delimiter was quoted, so the body is not expanded.
+    quoted: bool,
+}
+
 struct Reader<'a> {
     chars: &'a [char],
     i: usize,
@@ -247,7 +263,7 @@ struct Reader<'a> {
     current: Simple,
     word: Option<Building>,
     target: Option<Target>,
-    heredocs: Vec<(String, bool)>,
+    heredocs: Vec<Heredoc>,
     /// Substitution bodies, and whether the command holding each reads only
     /// its own input.
     subs: Vec<(String, bool)>,
@@ -263,7 +279,8 @@ struct Reader<'a> {
     /// A group or loop of this script reads a pipe or a redirection, so no
     /// command in it is known to read only its own input.
     group_input: bool,
-    /// Text that is not run as it stands was found: a function definition.
+    /// Text that is not run as it stands was found: a function definition,
+    /// or an unquoted here-document body whose substitutions name `claude`.
     refused: bool,
 }
 
@@ -281,7 +298,11 @@ impl Reader<'_> {
             return;
         };
         match self.target.take() {
-            Some(Target::Heredoc(strip)) => self.heredocs.push((building.text, strip)),
+            Some(Target::Heredoc(strip)) => self.heredocs.push(Heredoc {
+                delimiter: building.text,
+                strip,
+                quoted: building.quoted,
+            }),
             Some(Target::Redirect) => {}
             None => self.current.push(building.finish()),
         }
@@ -426,6 +447,7 @@ impl Reader<'_> {
                     }
                     // `''` is a word even when empty.
                     word.plain = false;
+                    word.quoted = true;
                 }
                 '"' => {
                     self.i += 1;
@@ -548,7 +570,9 @@ impl Reader<'_> {
 
     /// The rest of a `"…"` word, after its opening quote.
     fn double_quoted(&mut self) -> Option<()> {
-        self.word().plain = false;
+        let word = self.word();
+        word.plain = false;
+        word.quoted = true;
         loop {
             match self.peek(0)? {
                 '"' => {
@@ -647,8 +671,13 @@ impl Reader<'_> {
     }
 
     /// Skip the bodies of the here-documents the line just ended opened.
+    /// The shell runs the substitutions of a body whose delimiter is not
+    /// quoted; one naming `claude` refuses the command, since this reader
+    /// does not read them as commands.
     fn skip_heredocs(&mut self) {
-        for (delimiter, strip) in std::mem::take(&mut self.heredocs) {
+        for heredoc in std::mem::take(&mut self.heredocs) {
+            let body_start = self.i;
+            let mut body_end = self.chars.len();
             while self.i < self.chars.len() {
                 let start = self.i;
                 while self.peek(0).is_some_and(|c| c != '\n') {
@@ -657,17 +686,60 @@ impl Reader<'_> {
                 let line: String = self.chars[start..self.i].iter().collect();
                 // Past the newline, if any.
                 self.i = (self.i + 1).min(self.chars.len());
-                let line = if strip {
+                let line = if heredoc.strip {
                     line.trim_start_matches('\t')
                 } else {
                     line.as_str()
                 };
-                if line == delimiter {
+                if line == heredoc.delimiter {
+                    body_end = start;
                     break;
                 }
             }
+            if !heredoc.quoted && substitutes_claude(&self.chars[body_start..body_end]) {
+                self.refused = true;
+            }
         }
     }
+}
+
+/// Whether an unquoted here-document body holds a command substitution
+/// (`$(…)` or `` `…` ``) naming `claude`. One that never ends counts when
+/// the rest of the body names `claude`.
+fn substitutes_claude(body: &[char]) -> bool {
+    let names = |text: &[char]| text.iter().collect::<String>().contains("claude");
+    let mut i = 0;
+    while i < body.len() {
+        match body[i] {
+            // `\$`, `\`` and `\\` are literal in the body.
+            '\\' => i += 1,
+            '$' if body.get(i + 1) == Some(&'(') => {
+                let start = i + 2;
+                let Some(end) = close(body, start, '(', ')', true) else {
+                    return names(&body[start..]);
+                };
+                if names(&body[start..end]) {
+                    return true;
+                }
+                i = end;
+            }
+            '`' => {
+                let start = i + 1;
+                let mut end = start;
+                while end < body.len() && body[end] != '`' {
+                    end += if body[end] == '\\' { 2 } else { 1 };
+                }
+                let end = end.min(body.len());
+                if names(&body[start..end]) {
+                    return true;
+                }
+                i = end;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// The index of the `close` that ends what opened just before `start`,
@@ -1007,6 +1079,37 @@ mod tests {
         );
         // A shift in arithmetic is no here-document.
         assert_eq!(claude_runs("n=$((1 << 2)); claude -p after"), Some((1, 1)));
+    }
+
+    #[test]
+    fn an_unquoted_here_document_running_claude_refuses_the_command() {
+        // The shell runs the substitutions of an unquoted body: one naming
+        // `claude` may be a launch, which this reader does not read there.
+        for command in [
+            "cat <<EOF\n$(claude -p 'same prompt')\nEOF",
+            "cat <<EOF\n`claude -p same`\nEOF",
+            "cat <<-EOF\n\tx $(cd /w && claude -p tab) y\n\tEOF",
+            "cat <<$D\n$(claude -p d)\n$D",
+            "x=$(cat <<EOF\n$(claude -p inner)\nEOF\n)",
+            "cat <<EOF\n${v:-$(claude -p deep)}\nEOF\nclaude -p after",
+            "cat <<EOF\n$(echo \"never ends\" claude\nEOF",
+        ] {
+            assert_eq!(claude_runs(command), None, "{command:?}");
+        }
+        // A quoted delimiter keeps the body as text, and a body whose
+        // substitutions do not name `claude` runs no launch.
+        for command in [
+            "cat <<'EOF'\n$(claude -p 'same prompt')\nEOF",
+            "cat <<\"EOF\"\n`claude -p same`\nEOF",
+            "cat <<\\EOF\n$(claude -p escaped)\nEOF",
+            "cat <<-'EOF'\n\t$(claude -p tab)\n\tEOF",
+            "cat <<E\"O\"F\n$(claude -p part)\nEOF",
+            "cat <<EOF\n$(date) claude -p text `pwd`\nEOF",
+            "cat <<EOF\n\\$(claude -p escaped)\nEOF",
+            "cat <<-EOF\n\tclaude -p plain\n\tEOF",
+        ] {
+            assert_eq!(claude_runs(command), Some((0, 0)), "{command:?}");
+        }
     }
 
     #[test]

@@ -341,14 +341,18 @@ A launch makes a link only when it reads no other input: one with a `<`
 redirection or a here-document, or after a `|`, may have sent its child more
 than the prompt, so it only counts as a launch that could have made a child.
 Text a command does not run as it stands — a here-document body, also
-inside `$(…)`, an array's words, a function's body — holds no launch.
+inside `$(…)`, an array's words, a function's body — holds no launch. The
+shell does run the `$(…)` and `` `…` `` substitutions of a here-document
+whose delimiter is not quoted (`<<EOF`, not `<<'EOF'`); one naming `claude`
+there makes the command one the reader cannot read (below).
 
 No new link is written where the evidence could hide what would change it.
 A launch this match cannot see stops every link from a launch made before it
 to a child saved after it:
 
-- a caller's transcript or helper-agent folder that could not be read whole:
-  from its first indexed record on;
+- a caller's transcript or helper-agent folder that could not be read whole,
+  including one holding a line longer than the reader's bound: from its
+  first indexed record on;
 - a caller the index records with `Bash` calls whose transcript no longer
   exists, or is not the one file in a real project folder; or, when the
   index records `Bash` calls of its helper agents, whose helper folder or
@@ -358,7 +362,8 @@ to a child saved after it:
 - a `Bash` command naming `claude` that the reader cannot read as what it
   runs — a wrapper such as `sudo` or `xargs`, a program given by a variable
   with a print option, a function, a shell given a script or input not read
-  (`bash -euc '…'`), an unknown option, or a prompt that is not literal or
+  (`bash -euc '…'`), a substitution naming `claude` in an unquoted
+  here-document body, an unknown option, or a prompt that is not literal or
   not given: at that call's time; a launch record naming `claude` with no
   time: its caller's indexed span. Commands that only name the folder or the
   word (`ls ~/.claude`, `echo`, `grep`) are not such commands.

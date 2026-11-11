@@ -875,6 +875,10 @@ impl FileRead {
                     let mut whole = std::mem::take(&mut self.carry);
                     whole.extend_from_slice(&rest[..end]);
                     self.line(&whole, programs, home);
+                } else {
+                    // A line whose end makes it longer than the bound is
+                    // passed over: a launch it may hold is missing.
+                    self.overfull = true;
                 }
                 self.carry.clear();
                 at += end as u64 + 1;
@@ -1673,4 +1677,47 @@ fn decide(
         }
     }
     Ok(Decision::Decided)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Read `bytes` as a transcript with lines of at most `max_line`, in
+    /// reads of `first` bytes and then the rest; whether it reports a line
+    /// passed over.
+    fn overfull_after(bytes: &[u8], max_line: usize, first: u64) -> bool {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("caller.jsonl");
+        std::fs::write(&path, bytes).unwrap();
+        let backlog = PromptBacklog::starting();
+        let memory = Allowance::new(1 << 20);
+        let Start::Reading(mut reading) = start(&backlog, "owner", &path, max_line, &memory) else {
+            panic!("the transcript is read");
+        };
+        let mut budget = Budget::new(first, Duration::from_secs(5), None);
+        assert_eq!(
+            reading.advance(&mut budget, &[], temp.path(), max_line),
+            Ok(false)
+        );
+        let mut budget = Budget::new(u64::MAX, Duration::from_secs(5), None);
+        assert_eq!(
+            reading.advance(&mut budget, &[], temp.path(), max_line),
+            Ok(true)
+        );
+        reading.overfull
+    }
+
+    #[test]
+    fn a_long_line_ending_in_a_later_read_is_reported_passed_over() {
+        let mut bytes = vec![b'x'; 150];
+        bytes.extend_from_slice(b"\n{}\n");
+        // Its first 60 bytes fit the bound; the rest arrive with its end.
+        assert!(overfull_after(&bytes, 100, 60));
+        // Past the bound before its end arrives.
+        assert!(overfull_after(&bytes, 100, 120));
+        // A line within the bound, read in two parts, is read.
+        assert!(!overfull_after(&bytes, 200, 60));
+    }
 }
