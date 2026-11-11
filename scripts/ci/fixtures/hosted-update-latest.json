@@ -1,10 +1,10 @@
 {
-  "version": "0.2.1",
-  "notes": "XTrace 0.2.1 makes the Dashboard's Sessions card clearer.\n\n- The Sessions card's title now says which sessions it lists: Sessions (last 48 hours).\n- \"All sessions & filters\" opens the full Sessions list with its filters.\n- Data coverage moved from the Sessions card to its own card in Settings.",
+  "version": "0.2.2",
+  "notes": "XTrace 0.2.2 shows which Claude session started another.\n\n- When a Claude Code session starts another Claude session with claude -p, the started session now appears under the session that started it on the Dashboard, as Claude sessions started by Codex already do.\n- A link is made only when the started session clearly matches one launch, and it appears up to an hour after that launch. Otherwise the session stays on its own.",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://github.com/XTraceAI/xtrace/releases/download/v0.2.1/XTrace-0.2.1-macos-arm64.app.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRY000TkV4UllHTzVVN3p0V0xBZVhTQ0VISkpjVjlSUG9PdkpYOTlyL2UzZWkxZWU2Q2dSZDZjdk9kVlNDWDFFVmZiWlpEcGswWlZLTjl5NmFmUHd1blVuSGZNcWRiV1EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjU4Mjg5CWZpbGU6WFRyYWNlLTAuMi4xLW1hY29zLWFybTY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjIuMQpEQldLREFId0YyZFZSWG5keGZPLzVpWkduenozYytHakdoNXc2SUZPLzJYL1NOY0dXZzIza0Rrc1ZyKzRKOFpZRllUTmZMOC9SUWhXVUJic1VzVVJEQT09Cg=="
+      "url": "https://github.com/XTraceAI/xtrace/releases/download/v0.2.2/XTrace-0.2.2-macos-arm64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRY000TkV4UllHTzVjYjAzZ0JNc3JHZmU4emlNdWFvQzdrUUcraGV1bElPRHNvN1NVUmJ5dzlyQmU1V3VtSDFHQ09vUFcyUlhXU0RpMGRPaUVoTU9SY1JEVUNYRG5vVUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzY1MzcwCWZpbGU6WFRyYWNlLTAuMi4yLW1hY29zLWFybTY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjIuMgpOUytKVXBtQU0xcmFIRlh2TU9YckJiVE5PcU9ndWFHSGJvL0VQQ2ZzTVp5V2JRZVRleHg0ajVtTUM4Ykd4MmNoSGZlOE42SFFSMlRwUDhTOGdqZmFBdz09Cg=="
     }
   }
 }
