@@ -331,10 +331,11 @@ with no later launch of that prompt between them, links neither. A launch
 that cannot make a link itself (given other input, or in a file that could
 not be read) still counts as a launch inside the same hour. It keeps the
 exact parent, the child's first input, the call ID and the launch's position
-in the call. A link is written only once the launch's hour is over, so no
-other session of that hour can still appear, and it is then never withdrawn
-or moved: what a later read misses, such as a transcript Claude has since
-deleted, never changes it.
+in the call. A link is written only if the launch's hour was already over
+when the match listed its possible children, so no other session of that
+hour can still appear (a session imported after the list was taken is in the
+next match's list), and it is then never withdrawn or moved: what a later
+read misses, such as a transcript Claude has since deleted, never changes it.
 
 A launch makes a link only when it reads no other input: one with a `<`
 redirection or a here-document, or after a `|`, may have sent its child more
@@ -348,9 +349,12 @@ to a child saved after it:
 
 - a caller's transcript or helper-agent folder that could not be read whole:
   from its first indexed record on;
-- a caller the index records with `Bash` calls whose transcript, helper file
-  or helper folder no longer exists, or is not the one file in a real
-  project folder: from its first to its last indexed record;
+- a caller the index records with `Bash` calls whose transcript no longer
+  exists, or is not the one file in a real project folder; or, when the
+  index records `Bash` calls of its helper agents, whose helper folder or
+  any helper file the index read (`subagents/agent-*.jsonl`) is no longer
+  listed: from its first to its last indexed record. The index does not
+  record which helper file held which call, so any lost helper file counts;
 - a `Bash` command naming `claude` that the reader cannot read as what it
   runs — a wrapper such as `sudo` or `xargs`, a program given by a variable
   with a print option, a function, a shell given a script or input not read
@@ -371,9 +375,11 @@ until every Codex history the census finds has been read since the match
 began, and no published or unfinished Codex launch naming the child is open
 (the same checks a display check waits for); the Codex link is then written
 and the prompt match abstains. A Codex history found only after a prompt
-link was written still conflicts both: a known limit. A link waiting for its
-hour or for a Codex launch holds no display check, and is looked at again
-once due.
+link was written still conflicts both (see Known limits). A link waiting for
+its hour or for a Codex launch holds no display check. It is looked at again
+once due (every 60 seconds while a Codex launch is open) by a new match, and
+that match holds the Claude display checks only if a session was imported or
+a transcript read since the last match.
 
 A child that other evidence already relates or names (another kind of
 relation or child fact, a parent origin, or a recorded Codex launch naming
@@ -384,6 +390,28 @@ its parent, so no session shown before is hidden again to wait for it.
 
 Like every accepted creation relation, a link makes the Human input view
 count the child's user messages as the agent's, not a person's.
+
+### Known limits
+
+The prompt match links only from what it can read. These cases can make a
+child look like the only session of a launch when it is not, or link a child
+another launch made:
+
+- A rival launch the reader cannot see. A `claude` call hidden inside a
+  quoted script, `sh -c '…'` run under `find -exec`, `sudo` or `xargs`,
+  `tmux`, `python -c`, `env -v`, a script fed on standard input, or a helper
+  file in a nested folder such as `subagents/workflows/…` (only
+  `subagents/agent-*.jsonl` is read) is not seen as a launch. Where the
+  command names `claude` in a form the reader recognizes as unreadable, it
+  holds links at that call's time; otherwise it is invisible.
+- Callers or children never indexed. A launch in a session the index does
+  not hold, or a second child the index does not hold, is not known.
+- A Codex history found only after a prompt link was written: if it names the
+  same child, the two links conflict and both are withheld.
+- No margin for import delay at the end of the hour. A session saved just
+  before the launch's hour ends but imported after a match listed the
+  possible children (after the hour was over) is missed by that match, and
+  the link it decides stays.
 
 ## Checks
 

@@ -32,8 +32,11 @@
 //!    and not after a `|`. A launch given other input may have sent its child
 //!    more than the prompt, so it never makes a link; it still counts as a
 //!    launch that could have made a child, so it can stop a link.
-//! 7. The launch's hour is over, so no other session of that hour can still
-//!    appear. A link is decided once: it is never withdrawn or moved, so
+//! 7. The launch's hour was over when the match listed its possible
+//!    children, so no other session of that hour can still appear (one
+//!    imported after the list was taken is in the next match's list). A
+//!    session saved in the hour but imported after its end is a known limit.
+//!    A link is decided once: it is never withdrawn or moved, so
 //!    what a later read misses (a transcript Claude has since deleted, say)
 //!    never changes it. What a match does not write it decides again later.
 //! 8. No gap in the evidence could change it. A launch gap is a span of
@@ -42,10 +45,11 @@
 //!    - a caller's transcript or helper folder that could not be read whole,
 //!      or held more than this version keeps: from its first indexed record
 //!      on;
-//!    - a caller the index records with `Bash` calls whose transcript,
-//!      helper file or helper folder no longer exists, or is not the one
-//!      file in a real project folder the index records: from its first to
-//!      its last indexed record;
+//!    - a caller the index records with `Bash` calls whose transcript no
+//!      longer exists, or is not the one file in a real project folder the
+//!      index records; or, when the index records `Bash` calls of its helper
+//!      agents, whose helper folder or any helper file the index read is no
+//!      longer listed: from its first to its last indexed record;
 //!    - a `Bash` command naming `claude` that this reader cannot read as
 //!      what it runs (a wrapper such as `sudo` or `xargs`, an expansion as
 //!      the program, a function, a shell script or input not read, an
@@ -76,9 +80,10 @@
 //! are the sessions whose first input came within two hours after a launch
 //! (the child's hour, and a margin for an input saved after its first
 //! record). A link waiting for its hour or for the Codex launch work is
-//! looked at again once due. A transcript is read once and then only what
-//! is appended to it. Only digests of prompts are kept in memory;
-//! identifiers and positions are stored.
+//! looked at again once due, by a match that holds no display check unless
+//! something was read or imported since the last one. A transcript is read
+//! once and then only what is appended to it. Only digests of prompts are
+//! kept in memory; identifiers and positions are stored.
 
 mod words;
 
@@ -95,7 +100,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use xt_store::{
-    Host, Store,
+    Host, SessionSource, Store,
+    batch::escape_like,
     child_fact::ChildFactDisposition,
     creation::{CLAUDE_PROMPT_LAUNCH_VERSION, ClaudePromptLaunchProof, CreationDisposition},
 };
@@ -295,6 +301,17 @@ pub(in crate::native::claude_launch) struct PromptBacklog {
     /// Something was read or imported since the match in progress listed
     /// its possible children.
     dirty: bool,
+    /// A held link is due to be looked at again: a match runs, though
+    /// nothing new was read.
+    again: bool,
+    /// The match in progress began after something was read or imported, so
+    /// it holds display checks; one that only looks at held links again
+    /// does not.
+    holding: bool,
+    /// When the match in progress listed its possible children: a launch's
+    /// hour counts as over only if it was over by then, as a session saved
+    /// in the hour but imported later is not in the list.
+    listed_at: i64,
     /// A display check waited for this work; once it is done, the checks
     /// still waiting are looked at again ([`Self::take_wake`]).
     waited: bool,
@@ -464,20 +481,21 @@ impl PromptBacklog {
             || !self.due.is_empty()
             || self.reading.is_some()
             || self.dirty
-            || self.children.is_some()
+            || (self.holding && self.children.is_some())
     }
 
     /// Whether a later pass has anything to do: reading or matching, or a
-    /// held link to look at again once due.
+    /// held link to look at again, now or once due.
     pub fn pending(&self) -> bool {
-        self.busy() || self.recheck_at.is_some()
+        self.busy() || self.again || self.children.is_some() || self.recheck_at.is_some()
     }
 
     /// Whether a display check must wait for this work now; one that must
     /// is remembered, so that the checks wake once the work is done. A link
-    /// held for its hour or a Codex launch holds no check: the child's own
-    /// check waits for that launch, and a link folds an already-checked
-    /// child under its parent.
+    /// held for its hour or a Codex launch holds no check, and neither does
+    /// the match that looks at it again while nothing new was read: the
+    /// child's own check waits for that launch, and a link folds an
+    /// already-checked child under its parent.
     pub fn holds_checks(&mut self) -> bool {
         let busy = self.busy();
         self.waited |= busy;
@@ -524,7 +542,7 @@ pub(in crate::native::claude_launch) fn pass(
     // A held link is looked at again once due, by a new match.
     if backlog.recheck_at.is_some_and(|at| at <= recorded_at) {
         backlog.recheck_at = None;
-        backlog.dirty = true;
+        backlog.again = true;
     }
     let programs = command::installed_programs(home);
     while !budget.exhausted() && budget.entries < limits.max_pass_entries {
@@ -623,6 +641,7 @@ pub(in crate::native::claude_launch) fn pass(
             let helpers = path.with_extension("").join("subagents");
             let mut found = Vec::new();
             let mut whole = true;
+            let mut no_folder = false;
             match std::fs::read_dir(&helpers) {
                 Ok(entries) => {
                     for entry in entries {
@@ -636,9 +655,7 @@ pub(in crate::native::claude_launch) fn pass(
                             whole = false;
                             break;
                         };
-                        let name = entry.file_name();
-                        let name = name.to_string_lossy();
-                        if !(name.starts_with("agent-") && name.ends_with(".jsonl")) {
+                        if !helper_name(&entry.path()) {
                             continue;
                         }
                         if found.len() >= MAX_HELPERS {
@@ -650,14 +667,19 @@ pub(in crate::native::claude_launch) fn pass(
                 }
                 // No helper folder: none ever, or one deleted, as the index
                 // tells.
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    if store.claude_bash_calls(&native)?.1 {
-                        backlog.gone.insert(native.clone());
-                        backlog.dirty = true;
-                        progress.callers_gone += 1;
-                    }
-                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => no_folder = true,
                 Err(_) => whole = false,
+            }
+            // The index records `Bash` calls of its helper agents: its helper
+            // folder, and every helper file the index read, must still be
+            // there, or a launch it held is gone.
+            if whole
+                && store.claude_bash_calls(&native)?.1
+                && (no_folder || helper_lost(store, &helpers, &found)?)
+            {
+                backlog.gone.insert(native.clone());
+                backlog.dirty = true;
+                progress.callers_gone += 1;
             }
             if !whole {
                 progress.files_unreadable += 1;
@@ -684,13 +706,22 @@ pub(in crate::native::claude_launch) fn pass(
             continue;
         }
         // 5. One match over every launch found, once everything is read.
-        if backlog.dirty || backlog.children.is_some() {
+        if backlog.dirty || backlog.again || backlog.children.is_some() {
             if backlog.children.is_none() && backlog.codex_epoch.is_none() {
                 // The Codex launch work reads every history after this.
                 backlog.codex_epoch = Some(launches.census_epoch());
                 launches.renew_census();
             }
-            if !read_children(store, home, backlog, limits, budget, &memory, progress)? {
+            if !read_children(
+                store,
+                home,
+                backlog,
+                limits,
+                budget,
+                &memory,
+                recorded_at,
+                progress,
+            )? {
                 return Ok(());
             }
             match decide(store, launches, backlog, recorded_at, progress)? {
@@ -707,6 +738,32 @@ pub(in crate::native::claude_launch) fn pass(
         break;
     }
     Ok(())
+}
+
+/// Whether a helper-agent file the index read in the folder `helpers`, of a
+/// name this reader lists, is not among the files `listed` now: deleted, so
+/// what it held is not known. A folder whose path is not text cannot be
+/// looked up, so it is taken as lost.
+fn helper_lost(store: &Store, helpers: &Path, listed: &[PathBuf]) -> xt_store::Result<bool> {
+    let Some(folder) = helpers.to_str() else {
+        return Ok(true);
+    };
+    let pattern = format!("claude:{}/agent-%.jsonl", escape_like(folder));
+    let listed: HashSet<&Path> = listed.iter().map(PathBuf::as_path).collect();
+    Ok(store
+        .source_cursors_like(SessionSource::Transcript, &[&pattern])?
+        .iter()
+        .filter_map(|cursor| cursor.cursor_key.strip_prefix("claude:").map(Path::new))
+        .filter(|path| path.parent() == Some(helpers) && helper_name(path))
+        .any(|path| !listed.contains(path)))
+}
+
+/// Whether a file in a helper folder is a helper agent's transcript this
+/// reader reads.
+fn helper_name(path: &Path) -> bool {
+    path.file_name()
+        .map(|name| name.to_string_lossy())
+        .is_some_and(|name| name.starts_with("agent-") && name.ends_with(".jsonl"))
 }
 
 /// How a file's read begins.
@@ -1096,6 +1153,7 @@ fn hides_claude(program: &words::Word, args: &[words::Word], all: &[words::Word]
 /// [`LISTED_AFTER_MS`] after a launch. `false` when the budget ended first;
 /// the reads resume next pass. An opening that cannot be read now is a gap
 /// of this match, never kept: the next match reads it again.
+#[allow(clippy::too_many_arguments)]
 fn read_children(
     store: &Store,
     home: &Path,
@@ -1103,11 +1161,15 @@ fn read_children(
     limits: &LaunchLimits,
     budget: &mut Budget<'_>,
     memory: &Allowance,
+    recorded_at: i64,
     progress: &mut PromptProgress,
 ) -> xt_store::Result<bool> {
     if backlog.children.is_none() {
         // What is read or imported from now on needs another match.
+        backlog.holding = backlog.dirty;
         backlog.dirty = false;
+        backlog.again = false;
+        backlog.listed_at = recorded_at;
         backlog.child_gaps.clear();
         backlog.children_unknown = false;
         let mut times: Vec<i64> = backlog
@@ -1526,9 +1588,10 @@ fn decide(
         let born = backlog.openings[child].first_record_ms;
         let launched = launch.found.launch_ms;
         let mut by: Vec<HeldBy> = Vec::new();
-        // Another session of its hour may still appear.
+        // Another session of its hour may still appear, or may have been
+        // imported after this match listed its possible children.
         let hour_over = launched.saturating_add(BIRTH_WINDOW_MS);
-        if recorded_at <= hour_over {
+        if backlog.listed_at <= hour_over {
             hold(&mut by, HeldBy::Hour);
             recheck = Some(recheck.map_or(hour_over + 1, |known| known.min(hour_over + 1)));
         }

@@ -1253,3 +1253,124 @@ fn a_link_waits_until_its_launch_hour_is_over() {
     );
     assert!(!backlog.pending());
 }
+
+#[test]
+fn a_session_imported_while_a_match_waits_is_not_missed() {
+    // A launch almost an hour ago and its child. The first match lists its
+    // possible children, then waits for the Codex launch work; meanwhile a
+    // second session of the prompt, saved inside the launch's hour, is
+    // imported. The match must not decide from the list it took before.
+    let home = Home::new();
+    let launched = T - AT - 59 * MINUTE - MINUTE / 2;
+    write_parent(&home, PARENT, MAIN_CALL, launched, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, launched + 4_800, PROMPT);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    let mut backlog = BashBacklog::starting();
+    let mut launches = LaunchBacklog::starting();
+    let first = pass_at(&home, &mut store, &mut backlog, &mut launches, T);
+    assert!(first.prompt.codex_waits >= 1, "{:?}", first.prompt);
+    assert_eq!(first.prompt.linked, 0, "{:?}", first.prompt);
+    write_child(&home, EXTRA, launched + 59 * MINUTE, PROMPT);
+    scan(&home, &mut store);
+    backlog.add_sessions([EXTRA]);
+    // Later passes, once the launch's hour is over.
+    let mut total = PromptProgress::default();
+    for _ in 0..50 {
+        let pass = pass_at(
+            &home,
+            &mut store,
+            &mut backlog,
+            &mut launches,
+            AT + launched + 61 * MINUTE,
+        );
+        add(&mut total, &pass.prompt);
+        if !backlog.pending() && !launches.pending() {
+            break;
+        }
+    }
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    unlinked(&home, &store, EXTRA);
+}
+
+#[test]
+fn a_deleted_helper_file_in_a_folder_still_there_blocks_a_child_not_linked_yet() {
+    // The child's own launch is in a rival's helper file, deleted before any
+    // match while its helper folder stays: the earlier launch must not take
+    // its child.
+    let home = Home::new();
+    rival_in_helper(&home);
+    let helper = helper_path(&home, OTHER_PARENT);
+    let (store, _, total) = run_after(&home, || fs::remove_file(&helper).unwrap());
+    assert!(helper.parent().unwrap().is_dir());
+    assert_eq!(total.linked, 0, "{total:?}");
+    assert!(total.held_caller_gone >= 1, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+
+    // The same with another helper file of the rival still listed.
+    let home = Home::new();
+    rival_in_helper(&home);
+    let helper = helper_path(&home, OTHER_PARENT);
+    write_rows(
+        &helper
+            .parent()
+            .unwrap()
+            .join("agent-a0d00000000000002.jsonl"),
+        &caller_rows(
+            OTHER_PARENT,
+            Some("a0d00000000000002"),
+            "toolu_01SyntheticOtherHelper",
+            -1_500,
+            "echo ready",
+        ),
+    );
+    let (store, _, total) = run_after(&home, || fs::remove_file(&helper).unwrap());
+    assert_eq!(total.linked, 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+}
+
+#[test]
+fn looking_at_a_waiting_link_again_holds_no_display_check() {
+    // A launch ten minutes ago waits for its hour. When it is looked at
+    // again, nothing new was read: its match holds no display check, and
+    // the link is still written.
+    let home = Home::new();
+    let launched = T - AT - 10 * MINUTE;
+    write_parent(&home, PARENT, MAIN_CALL, launched, &main_command(PROMPT));
+    write_child(&home, MAIN_CHILD, launched + 4_800, PROMPT);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    let mut backlog = BashBacklog::starting();
+    let mut launches = LaunchBacklog::starting();
+    for _ in 0..50 {
+        let pass = pass_at(&home, &mut store, &mut backlog, &mut launches, T);
+        if !pass.advanced {
+            break;
+        }
+    }
+    assert!(!backlog.prompt_holds_checks());
+    assert_eq!(
+        backlog
+            .prompt_held()
+            .iter()
+            .map(|held| held.by.clone())
+            .collect::<Vec<_>>(),
+        [vec![xt_ingest::native::claude_launch::bash::HeldBy::Hour]]
+    );
+    let after = AT + launched + 61 * MINUTE;
+    let mut total = PromptProgress::default();
+    for _ in 0..50 {
+        let pass = pass_at(&home, &mut store, &mut backlog, &mut launches, after);
+        add(&mut total, &pass.prompt);
+        assert!(!backlog.prompt_holds_checks(), "{total:?}");
+        if !backlog.pending() && !launches.pending() {
+            break;
+        }
+    }
+    assert_eq!(total.linked, 1, "{total:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+}
