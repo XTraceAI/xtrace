@@ -19,7 +19,7 @@ let env = ProcessInfo.processInfo.environment
 guard args.count == 5, env["GITHUB_ACTIONS"] == "true",
       env["RUNNER_ENVIRONMENT"] == "github-hosted",
       env["GITHUB_EVENT_NAME"] == "workflow_dispatch",
-      ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14,
+      ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15,
       getuid() != 0, AXIsProcessTrusted() else { finish("Hosted non-root AX prerequisite unavailable") }
 #if !arch(arm64)
 finish("Requires arm64")

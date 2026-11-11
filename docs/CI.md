@@ -1,7 +1,7 @@
 # Continuous integration
 
 Routine CI runs on Ubuntu 24.04 for PRs, merge groups and pushes to `main`.
-Native validation runs locally before merging and on a hosted macOS 14 runner
+Native validation runs locally before merging and on a hosted macOS 15 runner
 only when explicitly preparing a downloadable release. Public disclosure review
 remains manual. These workflows do not publish releases or change repository rules.
 
@@ -169,7 +169,7 @@ and mismatched identities fail. A tagged beta can be prepared and published from
 that exact reviewed source without first merging its app source into `main`;
 the workflow must already exist on the default branch to enable manual dispatch.
 The workflow checks out the exact candidate without persistent credentials and
-verifies actual macOS 14 arm64 on both paths.
+verifies actual macOS 15 arm64 on both paths.
 
 The workflow resolves the candidate's first parent as its reviewed baseline and
 runs `pnpm check:native --base REVIEWED_BASE_SHA --release`. Comparing against that
@@ -249,10 +249,12 @@ Final signed launch from `/Applications` on a Mac that has never run the app
 requires separate acceptance for each release. Its release notes must identify
 the checks actually completed; a source version bump does not establish that check.
 
-`macos-14` is scheduled for retirement on November 2, 2026. Before retirement,
-replace it with a runner that preserves actual macOS 14 floor testing. Building
-with a deployment target of 14 on a newer OS does not test that floor.
-See the [runner image](https://github.com/actions/runner-images/blob/main/images/macos/macos-14-arm64-Readme.md).
+`macos-14` was retired on November 2, 2026; GitHub now refuses it ("The
+configuration 'macos-14-arm64-us-default' is not supported"). At the
+maintainer's request the hosted release checks run on `macos-15` from 0.2.2 on.
+No hosted check covers the macOS 14 floor any more: building with a deployment
+target of 14 on a newer OS does not test that floor, and the app's minimum stays
+macOS 14. See the [runner image](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md).
 
 ## Pinned plugin conformance
 
@@ -464,7 +466,7 @@ checkout must all match. This permits reviewing and testing a tagged harness
 before merging it. A probe tag is harness source; it is not a downloadable app
 release and does not validate the candidate's native product code.
 
-On a fresh GitHub-hosted macOS 14 arm64 image, the harness records OS/image
+On a fresh GitHub-hosted macOS 15 arm64 image, the harness records OS/image
 identity and the console user, rejects existing XTrace installations, data or
 processes, and rejects provider tools in the app's discovery paths. It compiles
 a harmless AppKit fixture with a unique `ai.xtrace.app.test.<UUID>` identity and
@@ -595,7 +597,7 @@ credential fallback; a 403 alone does not establish its cause.
 
 ## Signed 0.2.1 to 0.2.2 update on a hosted Mac
 
-`delivery_mode=update` uses the same fresh GitHub-hosted macOS 14 arm64 guard,
+`delivery_mode=update` uses the same fresh GitHub-hosted macOS 15 arm64 guard,
 exact harness SHA and `allow_release_identity=true` requirement. Review the
 harness and first-launch evidence before dispatch. The fixed production endpoint
 must already serve the exact pinned 0.2.2 `latest.json`. Promotion is a separate
@@ -665,7 +667,7 @@ database repair is performed.
 ### Default telemetry validation of signed 0.2.2
 
 The explicit `delivery_mode=telemetry` option reuses the signed first-launch job
-and its exact source/ref, hosted macOS 14 arm64, fresh-machine, signature,
+and its exact source/ref, hosted macOS 15 arm64, fresh-machine, signature,
 notarization, app-byte and ownership checks. It requires
 `allow_release_identity=true` and the exact reviewed candidate SHA. The ordinary
 first-launch and update modes remain telemetry-disabled. Adding this mode does

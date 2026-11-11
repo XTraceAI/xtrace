@@ -15,7 +15,7 @@ const valid = () => ({
   mode: 'probe',
   platform: 'darwin',
   arch: 'arm64',
-  osVersion: '14.7.2',
+  osVersion: '15.7.2',
   head: sha,
   env: {
     GITHUB_ACTIONS: 'true',
@@ -37,7 +37,7 @@ test('probe requires the exact hosted OS, architecture, event and workflow/sourc
   for (const change of [
     { platform: 'linux' },
     { arch: 'x64' },
-    { osVersion: '15.1' },
+    { osVersion: '14.1' },
     { head: 'b'.repeat(40) },
     { head: '' },
   ]) {
@@ -240,7 +240,7 @@ test('actual probe shell guard rejects tag/source mismatches and self-hosted run
         '-o',
         'pipefail',
         '-c',
-        'uname() { echo arm64; }; sw_vers() { echo 14.7; };\n' + script,
+        'uname() { echo arm64; }; sw_vers() { echo 15.7; };\n' + script,
       ],
       { env: { ...defaults, ...change }, encoding: 'utf8' },
     );

@@ -9,7 +9,7 @@ guard authorization["ALLOW_RELEASE_IDENTITY"] == "true",
       authorization["GITHUB_ACTIONS"] == "true",
       authorization["RUNNER_ENVIRONMENT"] == "github-hosted",
       authorization["GITHUB_EVENT_NAME"] == "workflow_dispatch",
-      ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14 else {
+      ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15 else {
     fail("Hosted real-identity authorization is missing")
 }
 #if !arch(arm64)
