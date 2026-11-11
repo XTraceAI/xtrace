@@ -28,8 +28,8 @@ fn require_host() -> Result<(), String> {
         .arg("-productVersion")
         .output()
         .map_err(|e| e.to_string())?;
-    if !os.status.success() || !os.stdout.starts_with(b"14.") {
-        return Err("Requires macOS 14".into());
+    if !os.status.success() || !os.stdout.starts_with(b"15.") {
+        return Err("Requires macOS 15".into());
     }
     Ok(())
 }
