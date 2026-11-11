@@ -483,6 +483,10 @@ another launch made:
   loads before the command, setting `IFS`.
 - Text the reader does not read as commands can still give later launches
   other input, such as `eval 'exec < file'`.
+- Over-caution, never a wrong link: an `exec < file` counts as other input
+  for every launch in its script, also one run before it
+  (`claude -p x; exec < /dev/null`) or outside the subshell it ran in
+  (`(exec < f); claude -p x`), so such a launch makes no link.
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and
