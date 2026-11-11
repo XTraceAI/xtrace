@@ -341,10 +341,33 @@ A launch makes a link only when it reads no other input: one with a `<`
 redirection or a here-document, or after a `|`, may have sent its child more
 than the prompt, so it only counts as a launch that could have made a child.
 Text a command does not run as it stands — a here-document body, also
-inside `$(…)`, an array's words, a function's body — holds no launch. The
-shell does run the `$(…)` and `` `…` `` substitutions of a here-document
-whose delimiter is not quoted (`<<EOF`, not `<<'EOF'`); one naming `claude`
-there makes the command one the reader cannot read (below).
+inside `$(…)`, an array's words, a function's body — holds no launch.
+
+One rule decides when skipped text is a launch the reader cannot see. Text
+names the Claude program when it holds the word `claude`, or a path ending
+in `/claude`, standing alone between spaces, shell operators, quotes,
+braces, `$`, `=` or `\` (`~/.claude`, `claude-code` and `Claude` do not).
+Comments are never read. The command is one the reader cannot read (below)
+when such text is:
+
+- text the shell runs that the reader does not read as commands: a
+  parameter expansion's body (`${OUTPUT:-$(claude -p …)}`), an arithmetic
+  expansion's (`$(( $(claude -p … | wc -c) ))`, `$[…]`), a `$(…)` or
+  `` `…` `` in a here-document whose delimiter is not quoted (`<<EOF`, not
+  `<<'EOF'`), or a substitution or `sh -c` script nested deeper than three
+  levels;
+- data given to any program except a short list that never runs what it is
+  given (`echo`, `printf`, `grep`, `cat`, `ls`, `git`, `cd`, `command -v`
+  and similar): its words, quoted or not, the literal parts of a word that
+  holds an expansion (`"cd $S && claude -p …"`), `$'…'`, a here-string, a
+  here-document body (`python3 - <<'EOF'` … `["claude", "-p", …]` … `EOF`), an array's
+  words, a value assigned to a variable, and what a shell is given besides
+  the script it was read from.
+
+A recognised launch's own words, its prompt among them
+(`claude -p "ask claude to review"`), and an `sh -c` script read as
+commands are not skipped text. A gap does not hide the launches the reader
+did read in the same command.
 
 No new link is written where the evidence could hide what would change it.
 A launch this match cannot see stops every link from a launch made before it
@@ -362,11 +385,13 @@ to a child saved after it:
 - a `Bash` command naming `claude` that the reader cannot read as what it
   runs — a wrapper such as `sudo` or `xargs`, a program given by a variable
   with a print option, a function, a shell given a script or input not read
-  (`bash -euc '…'`), a substitution naming `claude` in an unquoted
-  here-document body, an unknown option, or a prompt that is not literal or
-  not given: at that call's time; a launch record naming `claude` with no
-  time: its caller's indexed span. Commands that only name the folder or the
-  word (`ls ~/.claude`, `echo`, `grep`) are not such commands.
+  (`bash -euc '…'`), skipped text naming the Claude program by the rule
+  above (`tmux new-session -d 'claude -p …'`, `${V:-$(claude -p …)}`), an
+  unknown option, or a prompt that is not literal or not given: at that
+  call's time; a launch record naming `claude` with no time: its caller's
+  indexed span. Commands that only name the folder or the word
+  (`ls ~/.claude`, `echo "claude -p …"`, `grep 'claude -p' f`) are not such
+  commands.
 
 A possible child that cannot be read for any reason — its project folder
 gone, several recorded locations, outside the projects folder, a read error,
@@ -404,11 +429,19 @@ another launch made:
 
 - A rival launch the reader cannot see. A `claude` call hidden inside a
   quoted script, `sh -c '…'` run under `find -exec`, `sudo` or `xargs`,
-  `tmux`, `python -c`, `env -v`, a script fed on standard input, or a helper
-  file in a nested folder such as `subagents/workflows/…` (only
-  `subagents/agent-*.jsonl` is read) is not seen as a launch. Where the
-  command names `claude` in a form the reader recognizes as unreadable, it
-  holds links at that call's time; otherwise it is invisible.
+  `tmux`, `python -c`, a script fed on standard input or an expansion is not
+  seen as a launch; when the recorded command names the Claude program by
+  the rule above, it holds links at that call's time. It is invisible when
+  the command itself never names it that way: a script file run by path, a
+  name built from pieces (`cl""aude`, `$C$D`), a program on the never-runs
+  list that runs it after all (`git -c alias…`), `env -v claude …` (read
+  like `command -v claude`), a launcher by another name
+  (`npx @anthropic-ai/claude-code`), or a helper file in a nested folder
+  such as `subagents/workflows/…` (only `subagents/agent-*.jsonl` is read).
+- Skipped text holds links widely. Prose naming `claude` in a quoted
+  argument of a program not on the never-runs list (a `gh` pull-request
+  body, for example) holds links at that call's time, as if it were a
+  launch.
 - Callers or children never indexed. A launch in a session the index does
   not hold, or a second child the index does not hold, is not known.
 - A Codex history found only after a prompt link was written: if it names the

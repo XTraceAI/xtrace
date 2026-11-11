@@ -112,14 +112,16 @@ fn write_rows(path: &Path, rows: &[Value]) {
 }
 
 /// The parent's launch: a variable, background output files and every
-/// neutral option of a real agent's test run.
+/// neutral option of a real agent's test run, its output shown by a script,
+/// and a note naming `claude` given to a program that never runs it.
 fn main_command(prompt: &str) -> String {
     format!(
         "S=/w/run && cd \"$S\" && claude -p \"{prompt}\" --name \"synthetic check\" \
          --mcp-config \"$S/mcp.json\" --strict-mcp-config --allowedTools \"mcp__synthetic__*\" \
          --setting-sources project --output-format stream-json --verbose \
-         > \"$S/run1.jsonl\" 2> \"$S/run1.err\"; echo \"exit $?\"; python3 - \"$S/run1.jsonl\" <<'EOF'\n\
-         import json,sys\nprint('claude -p \"not a launch\"')\nEOF"
+         > \"$S/run1.jsonl\" 2> \"$S/run1.err\"; echo \"exit $?\"; \
+         python3 \"$S/show.py\" \"$S/run1.jsonl\" 260 | cut -c1-320; cat <<'EOF'\n\
+         claude -p \"not a launch\"\nEOF"
     )
 }
 
@@ -319,6 +321,7 @@ fn add(total: &mut PromptProgress, p: &PromptProgress) {
     total.held_untimed += p.held_untimed;
     total.held_child_unread += p.held_child_unread;
     total.held_codex += p.held_codex;
+    total.commands_refused += p.commands_refused;
     total.changed += p.changed;
 }
 
@@ -1136,6 +1139,16 @@ fn a_command_naming_claude_that_cannot_be_read_stops_the_links_it_could_change()
         "P=$(cat /w/prompt.txt); claude -p \"$P\"".to_owned(),
         "cat /w/prompt.txt | claude -p > /w/out.txt".to_owned(),
         format!("claude -p --no-such-option \"{PROMPT}\""),
+        // Text the shell runs that the reader skips, and text given to a
+        // program that may run it.
+        format!("OUTPUT=${{OUTPUT:-$(claude -p '{PROMPT}')}}"),
+        format!("n=$(( $(claude -p '{PROMPT}' | wc -c) ))"),
+        format!("bash -euc \"claude -p '{PROMPT}'\""),
+        format!("tmux new-session -d 'claude -p \"{PROMPT}\"'"),
+        format!("S=/w; tmux new-session -d \"cd $S && claude -p '{PROMPT}'\""),
+        format!(
+            "python3 - <<'EOF'\nimport subprocess\nsubprocess.run([\"claude\", \"-p\", \"{PROMPT}\"])\nEOF"
+        ),
     ] {
         // Made after the launch and before the child: it could be the
         // child's closest launch.
@@ -1162,7 +1175,11 @@ fn a_command_naming_claude_that_cannot_be_read_stops_the_links_it_could_change()
     for harmless in [
         "ls ~/.claude/projects && cat ~/.claude/settings.json".to_owned(),
         format!("echo claude -p \"{PROMPT}\""),
+        format!("echo \"claude -p {PROMPT}\""),
         "grep -rn claude /w/notes.md".to_owned(),
+        "grep 'claude -p' /w/notes.md".to_owned(),
+        format!("# claude -p \"{PROMPT}\"\ntrue"),
+        format!("cat > /w/note.md <<'EOF'\nclaude -p \"{PROMPT}\"\nEOF"),
     ] {
         let home = Home::new();
         write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
@@ -1171,6 +1188,24 @@ fn a_command_naming_claude_that_cannot_be_read_stops_the_links_it_could_change()
         let (_, total) = run(&home);
         assert_eq!(total.linked, 1, "{harmless}: {total:?}");
     }
+}
+
+#[test]
+fn a_launch_whose_prompt_names_claude_links() {
+    let prompt = "Synthetic check: ask claude to review the diff.";
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(prompt));
+    write_child(&home, MAIN_CHILD, 4_800, prompt);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.commands_refused),
+        (1, 1, 0),
+        "{total:?}"
+    );
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
 }
 
 #[test]

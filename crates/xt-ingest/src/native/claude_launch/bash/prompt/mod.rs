@@ -1044,12 +1044,14 @@ fn read_command(command: &str, programs: &[PathBuf], home: &Path) -> CommandRead
             .iter()
             .all(|word| matches!(word, words::Word::Assign(_)))
         {
-            // Assignments alone run nothing.
+            // Assignments alone run nothing, but a value naming the Claude
+            // program may be run later.
+            refused |= names && carries_claude(&simple.words, &simple.data);
             continue;
         }
         let Some((program, args)) = words::program(&simple.words) else {
             // A wrapper this reader cannot see through.
-            refused |= names && mentions(&simple.words);
+            refused |= names && (mentions(&simple.words) || carries_claude(&[], &simple.data));
             continue;
         };
         let claude = match program {
@@ -1063,7 +1065,7 @@ fn read_command(command: &str, programs: &[PathBuf], home: &Path) -> CommandRead
             words::Word::Opaque | words::Word::Assign(_) => false,
         };
         if !claude {
-            refused |= names && hides_claude(program, args, &simple.words);
+            refused |= names && hides_claude(program, args, simple);
             continue;
         }
         let args: Vec<Option<String>> = args
@@ -1109,19 +1111,33 @@ fn mentions(words: &[words::Word]) -> bool {
     })
 }
 
+/// Whether words or data text name the Claude program as a command would
+/// ([`words::names_claude`]).
+fn carries_claude(all: &[words::Word], data: &[String]) -> bool {
+    all.iter().any(|word| match word {
+        words::Word::Lit(text) | words::Word::Home(text) | words::Word::Assign(Some(text)) => {
+            words::names_claude(text)
+        }
+        words::Word::Opaque | words::Word::Assign(None) => false,
+    }) || data.iter().any(|text| words::names_claude(text))
+}
+
 /// Whether a simple command whose program is not a known Claude launcher
-/// may still run Claude, in a command naming `claude`: a program the shell
-/// supplies with a print option, a program named `claude` this reader does
-/// not know, a shell given a script or input this reader did not read, or
-/// any other program but a few that run nothing given a word naming the
-/// Claude program (`sudo claude`, `xargs claude`).
-fn hides_claude(program: &words::Word, args: &[words::Word], all: &[words::Word]) -> bool {
+/// may still run Claude, in a command naming `claude`: the one rule for text
+/// this reader takes as data. A program the shell supplies, given a print
+/// option or text naming the Claude program; a program named `claude` this
+/// reader does not know; a shell given a script or input this reader did
+/// not read; or any other program but a few that never run what they are
+/// given ([`NON_RUNNERS`]), given a word, a here-document or other data text
+/// naming the Claude program (`sudo claude`, `xargs claude`,
+/// `tmux new-session 'claude -p x'`, `python3 - <<EOF … claude … EOF`).
+fn hides_claude(program: &words::Word, args: &[words::Word], simple: &words::Command) -> bool {
     let name = match program {
         words::Word::Opaque => {
             return args.iter().any(|word| {
                 matches!(word, words::Word::Lit(text)
                     if text == "-p" || text == "--print" || text.starts_with("--print="))
-            });
+            }) || carries_claude(args, &simple.data);
         }
         words::Word::Lit(text) | words::Word::Home(text) => text.as_str(),
         words::Word::Assign(_) => return false,
@@ -1131,12 +1147,13 @@ fn hides_claude(program: &words::Word, args: &[words::Word], all: &[words::Word]
         return true;
     }
     if SHELLS.contains(&base) {
-        if words::shell_script(all).is_some() {
-            // Its script was read as commands.
-            return false;
+        if words::shell_script(&simple.words).is_some() {
+            // Its script was read as commands; what else it is given was not.
+            return carries_claude(simple.words.get(3..).unwrap_or_default(), &simple.data);
         }
         // A script naming Claude, or input it reads.
         return mentions(args)
+            || carries_claude(&[], &simple.data)
             || args
                 .iter()
                 .all(|word| matches!(word, words::Word::Lit(text) if text.starts_with('-')));
@@ -1144,12 +1161,8 @@ fn hides_claude(program: &words::Word, args: &[words::Word], all: &[words::Word]
     if NON_RUNNERS.contains(&base) {
         return false;
     }
-    args.iter().any(|word| match word {
-        words::Word::Lit(text) | words::Word::Home(text) => {
-            text == "claude" || text.ends_with("/claude")
-        }
-        _ => false,
-    })
+    // What it is given, and the assignments before it, which it may run.
+    carries_claude(&simple.words, &simple.data)
 }
 
 /// Read the opening of every indexed Claude session that may be a child of
@@ -1707,6 +1720,85 @@ mod tests {
             Ok(true)
         );
         reading.overfull
+    }
+
+    /// How many literal launches one recorded command holds, and whether it
+    /// is a command the reader cannot read.
+    fn read(command: &str) -> (usize, bool) {
+        let read = read_command(command, &[], Path::new("/home/synthetic"));
+        (read.launches.len(), read.refused)
+    }
+
+    #[test]
+    fn text_skipped_or_taken_as_data_naming_claude_is_a_gap() {
+        for command in [
+            // Expansions the shell runs, which this reader does not read.
+            "OUTPUT=${OUTPUT:-$(claude -p 'same prompt')}",
+            "${V:-$(claude -p x)}",
+            "echo \"${V:-$(claude -p x)}\"",
+            "n=$(( $(claude -p x | wc -c) ))",
+            "n=$[ $(claude -p x | wc -c) ]",
+            // Scripts and data given to a program that may run them.
+            "bash -euc \"claude -p x\"",
+            "bash -euc 'claude -p x'",
+            "tmux new-session -d 'claude -p x'",
+            "tmux new-session -d \"cd $S && claude -p x\"",
+            "tmux new-session -d $'claude -p x'",
+            "python3 - <<'EOF'\nimport subprocess\nsubprocess.run([\"claude\", \"-p\", \"x\"])\nEOF",
+            "node -e 'spawn(\"/opt/homebrew/bin/claude\", [\"-p\", \"x\"])'",
+            "bash -c 'cat' <<EOF\nclaude -p x\nEOF",
+            "bash -c '\"$@\"' _ claude -p x",
+            "RUN=\"claude -p x\"; $RUN",
+            "$RUNNER \"claude -p x\"",
+            "x=( claude -p arr )",
+            "C=${C:-claude}",
+            "python3 <<< 'import os; os.system(\"claude -p x\")'",
+            "find /w -name '*.md' -exec sh -c 'claude -p x' \\;",
+            // A script deeper than the reader reads.
+            "sh -c \"sh -c 'sh -c \\\"sh -c claude\\\"'\"",
+        ] {
+            assert_eq!(read(command), (0, true), "{command:?}");
+        }
+        // A gap does not hide the launches the reader did read.
+        assert_eq!(
+            read("claude -p a; tmux new-session -d 'claude -p b'"),
+            (1, true)
+        );
+    }
+
+    #[test]
+    fn text_that_only_names_claude_or_is_read_is_no_gap() {
+        for command in [
+            "echo \"claude -p x\"",
+            "grep 'claude -p' f",
+            "# claude -p x",
+            "ls ~/.claude",
+            "ls ~/.claude/projects && cat ~/.claude/settings.json",
+            "command -v claude",
+            "cat > /w/a.py <<'EOF'\nclaude -p \"inside\"\nEOF",
+            "git commit -m \"$(cat <<'EOF'\nRun claude -p in a test\nEOF\n)\"",
+            "echo \"$S claude -p x\"",
+            "python3 /w/show.py /w/run1.jsonl 260 | cut -c1-320",
+            "tmux new-session -d 'claude-code --help'",
+            "echo ${HOME}/.claude",
+            "n=$(( 1 << 2 ))",
+            "grep -c x <<< 'claude -p x'",
+        ] {
+            assert_eq!(read(command), (0, false), "{command:?}");
+        }
+        // A launch's own words, its prompt among them, are what it reads.
+        for command in [
+            "claude -p \"ask claude to review\"",
+            "sh -c 'claude -p x'",
+            "bash -lc 'cd /w && claude -p \"ask claude\"'",
+            "out=$(claude -p x 2>&1); echo \"$out\"",
+            "cd \"$S\" && claude -p \"literal prompt\" --name \"x\" --mcp-config \"$S/mcp.json\" \
+             --strict-mcp-config --allowedTools \"mcp__x__*\" --setting-sources project \
+             --output-format stream-json --verbose > \"$S/run1.jsonl\" 2> \"$S/run1.err\"; \
+             echo \"exit $?\"; python3 \"$S/show.py\" \"$S/run1.jsonl\" 260 | cut -c1-320",
+        ] {
+            assert_eq!(read(command), (1, false), "{command:?}");
+        }
     }
 
     #[test]

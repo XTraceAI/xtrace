@@ -21,9 +21,17 @@
 //! or process substitution's body is read as commands too, up to a small
 //! depth. Comments and array literals (`x=( … )`) are skipped. An
 //! unterminated quote, substitution or here-document, a function definition,
-//! an array literal holding a substitution, or a here-document whose
-//! delimiter is not quoted and whose body holds a substitution naming
-//! `claude` (the shell runs it) refuses the whole command.
+//! or an array literal holding a substitution refuses the whole command.
+//!
+//! Text the shell runs but this reader does not read as commands refuses the
+//! whole command when it names the Claude program ([`names_claude`]): a
+//! parameter expansion's body (`${V:-$(…)}`), an arithmetic expansion's
+//! (`$((…))`, `$[…]`), the substitutions of a here-document whose delimiter
+//! is not quoted, and a substitution or `sh -c` script deeper than the depth
+//! read. Text a command is given as data — a here-document body or
+//! here-string, the literal parts of a word holding an expansion, `$'…'`,
+//! an array's words — is kept with that command ([`Command::data`]), for the
+//! launch reader to judge by the program that is given it.
 //!
 //! Each simple command says whether it reads only the input the whole
 //! command was given ([`Command::own_input`]): not when it, or a group or
@@ -64,6 +72,25 @@ pub(super) struct Command {
     /// it, not after a `|`, and not inside a substitution or `sh -c` script of
     /// a command that does read other input.
     pub(super) own_input: bool,
+    /// Text the command is given that is in none of its literal words and
+    /// was not read as commands: its here-document bodies and here-strings,
+    /// the literal parts of its words holding an expansion, `$'…'` and array
+    /// words.
+    pub(super) data: Vec<String>,
+}
+
+/// Whether `text` names the Claude program as a command would: a word
+/// `claude`, or a path ending in `/claude`, between spaces, shell operators,
+/// quotes, braces, `$`, `=`, `:` or `\`, also after a parameter expansion's
+/// `-`, `+` or `?` (`${C:-claude}`). `~/.claude`, `claude-code` and `Claude`
+/// do not. This is the one test of whether text a reader skips or takes as
+/// data could hold a Claude launch.
+pub(super) fn names_claude(text: &str) -> bool {
+    /// What a word naming the program may stand between, besides spaces.
+    const AROUND: &str = ";&|()<>'\"`{}$=:\\";
+    text.split(|c: char| c.is_whitespace() || AROUND.contains(c))
+        .map(|token| token.trim_start_matches(['-', '+', '?']))
+        .any(|token| token == "claude" || token.ends_with("/claude"))
 }
 
 /// Shell words that open a compound command; one after a `|` reads the pipe.
@@ -114,6 +141,7 @@ fn split(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) ->
         heredocs: Vec::new(),
         subs: Vec::new(),
         current_subs: Vec::new(),
+        current_data: Vec::new(),
         redirected: false,
         piped: false,
         closer: false,
@@ -140,18 +168,27 @@ fn split(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) ->
         let own = command.own_input;
         let nested = shell_script(&command.words).map(str::to_owned);
         out.push(command);
-        if let Some(nested) = nested
-            && depth < MAX_DEPTH
-        {
-            split(&nested, depth + 1, own, out)?;
+        if let Some(nested) = nested {
+            nest(&nested, depth, own, out)?;
         }
     }
-    if depth < MAX_DEPTH {
-        for (body, own) in subs {
-            split(&body, depth + 1, inherited && own, out)?;
-        }
+    for (body, own) in subs {
+        nest(&body, depth, inherited && own, out)?;
     }
     Some(())
+}
+
+/// Read a substitution's body or an `sh -c` script found at `depth` as
+/// commands, while it is not too deep; one too deep that names `claude`
+/// refuses the command.
+fn nest(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) -> Option<()> {
+    if depth < MAX_DEPTH {
+        split(script, depth + 1, inherited, out)
+    } else if names_claude(script) {
+        None
+    } else {
+        Some(())
+    }
 }
 
 /// A word being read.
@@ -242,6 +279,8 @@ fn array_start(word: &Building) -> bool {
 enum Target {
     /// A redirection's file: set aside.
     Redirect,
+    /// A here-string's word: input the command is given, kept as data.
+    HereString,
     /// A here-document's delimiter; `true` strips leading tabs.
     Heredoc(bool),
 }
@@ -254,6 +293,9 @@ struct Heredoc {
     strip: bool,
     /// The delimiter was quoted, so the body is not expanded.
     quoted: bool,
+    /// The index the command it was opened by has among the commands read,
+    /// or `None` when that command turned out empty.
+    owner: Option<usize>,
 }
 
 struct Reader<'a> {
@@ -269,6 +311,8 @@ struct Reader<'a> {
     subs: Vec<(String, bool)>,
     /// The substitutions of the command being read.
     current_subs: Vec<String>,
+    /// The data text of the command being read ([`Command::data`]).
+    current_data: Vec<String>,
     /// The command being read has a `<` redirection or a here-document.
     redirected: bool,
     /// A `|` came before the command being read.
@@ -280,7 +324,8 @@ struct Reader<'a> {
     /// command in it is known to read only its own input.
     group_input: bool,
     /// Text that is not run as it stands was found: a function definition,
-    /// or an unquoted here-document body whose substitutions name `claude`.
+    /// or text the shell runs that this reader does not read, naming
+    /// `claude`.
     refused: bool,
 }
 
@@ -302,9 +347,27 @@ impl Reader<'_> {
                 delimiter: building.text,
                 strip,
                 quoted: building.quoted,
+                owner: Some(self.commands.len()),
             }),
             Some(Target::Redirect) => {}
-            None => self.current.push(building.finish()),
+            Some(Target::HereString) => self.current_data.push(building.text),
+            None => {
+                let text = building.text.clone();
+                let word = building.finish();
+                // What a word holding an expansion says literally is data.
+                if matches!(word, Word::Opaque | Word::Assign(None)) {
+                    self.current_data.push(text);
+                }
+                self.current.push(word);
+            }
+        }
+    }
+
+    /// Refuse the command when text the shell runs, which this reader does
+    /// not read, names `claude`.
+    fn unread(&mut self, start: usize, end: usize) {
+        if names_claude(&self.chars[start..end].iter().collect::<String>()) {
+            self.refused = true;
         }
     }
 
@@ -332,10 +395,22 @@ impl Reader<'_> {
         for body in self.current_subs.drain(..) {
             self.subs.push((body, own));
         }
-        if !self.current.is_empty() {
+        if self.current.is_empty() {
+            // A here-document opened by no command is given to none.
+            let index = self.commands.len();
+            for heredoc in &mut self.heredocs {
+                if heredoc.owner == Some(index) {
+                    heredoc.owner = None;
+                }
+            }
+            if self.current_data.drain(..).any(|text| names_claude(&text)) {
+                self.refused = true;
+            }
+        } else {
             self.commands.push(Command {
                 words: std::mem::take(&mut self.current),
                 own_input: own,
+                data: std::mem::take(&mut self.current_data),
             });
             self.piped = false;
         }
@@ -375,6 +450,7 @@ impl Reader<'_> {
                     if body.iter().any(|&c| matches!(c, '$' | '`' | '<' | '>')) {
                         return None;
                     }
+                    self.current_data.push(body.iter().collect());
                     self.word().opaque();
                     self.i = end + 1;
                 }
@@ -466,14 +542,25 @@ impl Reader<'_> {
                 },
                 '$' => match self.peek(1) {
                     Some('\'') => {
-                        // `$'…'`: escapes this reader does not decode.
+                        // `$'…'`: escapes this reader does not decode; its
+                        // text is kept as data.
                         self.word().opaque();
                         self.i += 2;
                         loop {
-                            match self.peek(0)? {
-                                '\\' => self.i += 2,
+                            let c = self.peek(0)?;
+                            match c {
+                                '\\' => {
+                                    let next = self.peek(1)?;
+                                    let word = self.word();
+                                    word.push(c, true);
+                                    word.push(next, true);
+                                    self.i += 2;
+                                }
                                 '\'' => break,
-                                _ => self.i += 1,
+                                _ => {
+                                    self.word().push(c, true);
+                                    self.i += 1;
+                                }
                             }
                         }
                         self.i += 1;
@@ -535,7 +622,7 @@ impl Reader<'_> {
         if c == '<' && self.peek(1) == Some('<') {
             if self.peek(2) == Some('<') {
                 self.i += 3;
-                self.target = Some(Target::Redirect);
+                self.target = Some(Target::HereString);
             } else {
                 self.i += 2;
                 let strip = self.peek(0) == Some('-');
@@ -607,7 +694,11 @@ impl Reader<'_> {
                 let arithmetic = self.peek(2) == Some('(');
                 let start = self.i + 2;
                 let end = close(self.chars, start, '(', ')', !arithmetic)?;
-                if !arithmetic {
+                if arithmetic {
+                    // The shell runs the substitutions an arithmetic
+                    // expansion holds; this reader does not read them.
+                    self.unread(start, end);
+                } else {
                     self.current_subs
                         .push(self.chars[start..end].iter().collect());
                 }
@@ -615,7 +706,17 @@ impl Reader<'_> {
                 self.i = end + 1;
             }
             Some('{') => {
+                // `${V:-$(…)}`: the shell may run what a parameter
+                // expansion holds; this reader does not read it.
                 let end = close(self.chars, self.i + 2, '{', '}', false)?;
+                self.unread(self.i + 2, end);
+                self.word().opaque();
+                self.i = end + 1;
+            }
+            Some('[') => {
+                // `$[…]`, the old arithmetic form.
+                let end = close(self.chars, self.i + 2, '[', ']', false)?;
+                self.unread(self.i + 2, end);
                 self.word().opaque();
                 self.i = end + 1;
             }
@@ -670,10 +771,11 @@ impl Reader<'_> {
         Some(())
     }
 
-    /// Skip the bodies of the here-documents the line just ended opened.
-    /// The shell runs the substitutions of a body whose delimiter is not
-    /// quoted; one naming `claude` refuses the command, since this reader
-    /// does not read them as commands.
+    /// Skip the bodies of the here-documents the line just ended opened,
+    /// keeping each as data of the command that opened it. The shell runs
+    /// the substitutions of a body whose delimiter is not quoted; one naming
+    /// `claude` refuses the command, since this reader does not read them as
+    /// commands.
     fn skip_heredocs(&mut self) {
         for heredoc in std::mem::take(&mut self.heredocs) {
             let body_start = self.i;
@@ -696,18 +798,25 @@ impl Reader<'_> {
                     break;
                 }
             }
-            if !heredoc.quoted && substitutes_claude(&self.chars[body_start..body_end]) {
+            let body = &self.chars[body_start..body_end];
+            if !heredoc.quoted && substitutes_claude(body) {
                 self.refused = true;
+            }
+            let text: String = body.iter().collect();
+            match heredoc.owner.and_then(|owner| self.commands.get_mut(owner)) {
+                Some(command) => command.data.push(text),
+                None if names_claude(&text) => self.refused = true,
+                None => {}
             }
         }
     }
 }
 
 /// Whether an unquoted here-document body holds a command substitution
-/// (`$(…)` or `` `…` ``) naming `claude`. One that never ends counts when
-/// the rest of the body names `claude`.
+/// (`$(…)` or `` `…` ``) naming `claude` ([`names_claude`]). One that never
+/// ends counts when the rest of the body names `claude`.
 fn substitutes_claude(body: &[char]) -> bool {
-    let names = |text: &[char]| text.iter().collect::<String>().contains("claude");
+    let names = |text: &[char]| names_claude(&text.iter().collect::<String>());
     let mut i = 0;
     while i < body.len() {
         match body[i] {
