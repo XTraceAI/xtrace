@@ -15,11 +15,18 @@
 //! `'…'`, `"…"` (where `\` escapes only `$`, `` ` ``, `"`, `\` and a newline)
 //! and `\`-escaped characters; it is literal unless it holds an expansion
 //! (`$NAME`, `${…}`, `$(…)`, `` `…` ``, `$((…))`, `$'…'`, `$"…"`), a glob
-//! character, a brace expansion or a leading `~` (kept apart, for a program
-//! path). A redirection and its target are set aside; a here-document's body
-//! is skipped, never read as commands, also inside a substitution. A command
-//! or process substitution's body is read as commands too, up to a small
-//! depth. Comments and array literals (`x=( … )`) are skipped. An
+//! character, a brace expansion, a process substitution or a leading `~`
+//! (kept apart, for a program path). A word that is not literal is one word
+//! ([`Word::Opaque`]) only when the shell cannot split it: its expansions are
+//! quoted (but `"$@"` and a `"${…}"` holding `@`), `$'…'`, `$"…"`, a tilde,
+//! a process substitution, or a `$NAME` or `${NAME}` of a variable the
+//! command set to a plain value at its start and never touches again
+//! ([`one_word_names`]); any other may become no word or several
+//! ([`Word::Fields`]). A redirection and its target are set aside; a
+//! here-document's body is skipped, never read as commands, also inside a
+//! substitution. A command or process substitution's (`<(…)`, `>(…)`) body
+//! is read as commands too, up to a small depth. Comments and array literals
+//! (`x=( … )`) are skipped. An
 //! unterminated quote, substitution or here-document, a function definition,
 //! or an array literal holding a substitution refuses the whole command.
 //!
@@ -36,8 +43,11 @@
 //! Each simple command says whether it reads only the input the whole
 //! command was given ([`Command::own_input`]): not when it, or a group or
 //! loop around it, has a `<` redirection or a here-document, or follows a `|`
-//! in a pipeline, or is inside a substitution or `sh -c` script of a command
-//! that does not.
+//! in a pipeline, or is inside a process substitution (whose input is what
+//! the command writes to it, or what the command reads), or inside a
+//! substitution or `sh -c` script of a command that does not.
+
+use std::collections::HashSet;
 
 /// Longest command read; a longer one is refused.
 pub(super) const MAX_COMMAND: usize = 256 * 1024;
@@ -53,8 +63,12 @@ pub(super) enum Word {
     Lit(String),
     /// A literal path after an unexpanded leading `~/`.
     Home(String),
-    /// A word the shell supplies only when it runs.
+    /// A word the shell supplies only when it runs, always as exactly one
+    /// word.
     Opaque,
+    /// A word the shell supplies when it runs that may become no word or
+    /// several: an unquoted expansion, glob or brace expansion, or `"$@"`.
+    Fields,
     /// A word that starts `NAME=`: an assignment before the program, and
     /// its text when it is literal.
     Assign(Option<String>),
@@ -69,8 +83,9 @@ pub(super) struct Command {
     pub(super) words: Simple,
     /// It reads only the input the whole recorded command was given: no `<`
     /// redirection or here-document of its own or of a group or loop around
-    /// it, not after a `|`, and not inside a substitution or `sh -c` script of
-    /// a command that does read other input.
+    /// it, not after a `|`, not inside a process substitution (`<(…)`,
+    /// `>(…)`), and not inside a substitution or `sh -c` script of a command
+    /// that does read other input.
     pub(super) own_input: bool,
     /// Text the command is given that is in none of its literal words and
     /// was not read as commands: its here-document bodies and here-strings,
@@ -105,9 +120,165 @@ pub(super) fn simple_commands(command: &str) -> Option<Vec<Command>> {
     if command.len() > MAX_COMMAND {
         return None;
     }
+    let known = one_word_names(command);
     let mut out = Vec::new();
-    split(command, 0, true, &mut out)?;
+    split(command, 0, true, &known, &mut out)?;
     Some(out)
+}
+
+/// Variables that cannot be read here with a name the shell may still
+/// change or that are not plain values.
+const UNSAFE_NAMES: &[&str] = &[
+    "IFS",
+    "_",
+    "PWD",
+    "OLDPWD",
+    "REPLY",
+    "OPTARG",
+    "OPTIND",
+    "RANDOM",
+    "SRANDOM",
+    "SECONDS",
+    "LINENO",
+    "HISTCMD",
+    "EPOCHSECONDS",
+    "EPOCHREALTIME",
+    "BASHPID",
+    "PPID",
+    "UID",
+    "EUID",
+    "PATH",
+    "HOME",
+];
+
+/// The variables whose unquoted `$NAME` or `${NAME}` the shell supplies as
+/// exactly one word in `command`'s own script: those the command sets, in a
+/// first simple command of nothing but assignments (`S=/w/run; …`), to a
+/// plain value of characters the shell never splits or expands, and never
+/// names again except as `$NAME` or `${NAME}`. None when the command holds
+/// the text `IFS` or the word `eval`, `source` or `.`, which may change a
+/// variable without naming it.
+fn one_word_names(command: &str) -> HashSet<String> {
+    let mut known = HashSet::new();
+    if command.contains("IFS")
+        || command
+            .split(|c: char| c.is_whitespace() || ";&|()<>{}`'\"".contains(c))
+            .any(|word| matches!(word, "eval" | "source" | "."))
+    {
+        return known;
+    }
+    let Some((assigned, rest)) = leading_assignments(command) else {
+        return known;
+    };
+    let mut seen = HashSet::new();
+    // The last assignment of a name is the value it keeps.
+    for (name, value) in assigned.into_iter().rev() {
+        if !seen.insert(name) {
+            continue;
+        }
+        if !value.is_empty()
+            && value.chars().all(one_word_char)
+            && !UNSAFE_NAMES.contains(&name)
+            && !name.starts_with("BASH")
+            && only_expanded(rest, name)
+        {
+            known.insert(name.to_owned());
+        }
+    }
+    known
+}
+
+/// A character a variable's value may hold for its unquoted expansion to be
+/// one word: never one the shell splits at or expands.
+fn one_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "/._-:+,=@%".contains(c)
+}
+
+/// The `NAME=VALUE` assignments of the simple command `command` starts with,
+/// after optional spaces or tabs, when it holds nothing else and ends at `;`,
+/// `&&`, a newline or the end; and the text after it. A value is plain
+/// [`one_word_char`]s, or one `'…'`, or one `"…"` holding no `$`, `` ` `` or
+/// `\`; anything else reads no assignment at all.
+fn leading_assignments(command: &str) -> Option<(Vec<(&str, &str)>, &str)> {
+    let mut rest = command;
+    let mut assigned = Vec::new();
+    loop {
+        rest = rest.trim_start_matches([' ', '\t']);
+        if rest.is_empty() {
+            break;
+        }
+        if let Some(after) = rest
+            .strip_prefix(';')
+            .or_else(|| rest.strip_prefix('\n'))
+            .or_else(|| rest.strip_prefix("&&"))
+        {
+            rest = after;
+            break;
+        }
+        let name_end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let name = &rest[..name_end];
+        if name.is_empty()
+            || name.starts_with(|c: char| c.is_ascii_digit())
+            || !rest[name_end..].starts_with('=')
+        {
+            return None;
+        }
+        let after = &rest[name_end + 1..];
+        let (value, end) = match after.chars().next() {
+            Some(quote @ ('\'' | '"')) => {
+                let close = after[1..].find(quote)? + 1;
+                let value = &after[1..close];
+                if quote == '"' && value.contains(['$', '`', '\\']) {
+                    return None;
+                }
+                (value, close + 1)
+            }
+            _ => {
+                let end = after
+                    .find(|c: char| !one_word_char(c))
+                    .unwrap_or(after.len());
+                (&after[..end], end)
+            }
+        };
+        // A value ends at a space, a tab or what ends the command.
+        let tail = &after[end..];
+        if !(tail.is_empty() || tail.starts_with([' ', '\t', '\n', ';', '&'])) {
+            return None;
+        }
+        assigned.push((name, value));
+        rest = tail;
+    }
+    (!assigned.is_empty()).then_some((assigned, rest))
+}
+
+/// Whether every identifier `name` in `text` (a whole run of letters,
+/// digits and `_`) is `$name` or `${name}`.
+fn only_expanded(text: &str, name: &str) -> bool {
+    let bytes = text.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = 0;
+    while i < bytes.len() {
+        if !ident(bytes[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && ident(bytes[i]) {
+            i += 1;
+        }
+        if &bytes[start..i] != name.as_bytes() {
+            continue;
+        }
+        let before = &bytes[..start];
+        let plain = before.ends_with(b"$");
+        let braced = before.ends_with(b"${") && bytes.get(i) == Some(&b'}');
+        if !(plain || braced) {
+            return false;
+        }
+    }
+    true
 }
 
 /// The script an `sh -c`, `bash -c` or `zsh -c` simple command runs, when it
@@ -128,11 +299,19 @@ pub(super) fn shell_script(words: &[Word]) -> Option<&str> {
 
 /// Read `script` as commands into `out`, then the substitutions it holds.
 /// `inherited` says whether the script itself reads only the input the whole
-/// recorded command was given.
-fn split(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) -> Option<()> {
+/// recorded command was given; `known` holds the variables whose unquoted
+/// expansion is one word in it ([`one_word_names`]).
+fn split(
+    script: &str,
+    depth: usize,
+    inherited: bool,
+    known: &HashSet<String>,
+    out: &mut Vec<Command>,
+) -> Option<()> {
     let chars: Vec<char> = script.chars().collect();
     let mut reader = Reader {
         chars: &chars,
+        known,
         i: 0,
         commands: Vec::new(),
         current: Vec::new(),
@@ -169,11 +348,13 @@ fn split(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) ->
         let nested = shell_script(&command.words).map(str::to_owned);
         out.push(command);
         if let Some(nested) = nested {
-            nest(&nested, depth, own, out)?;
+            // A new shell, which a variable this one set is not exported to.
+            nest(&nested, depth, own, &HashSet::new(), out)?;
         }
     }
+    // A substitution runs in a copy of this shell, with its variables.
     for (body, own) in subs {
-        nest(&body, depth, inherited && own, out)?;
+        nest(&body, depth, inherited && own, known, out)?;
     }
     Some(())
 }
@@ -181,9 +362,15 @@ fn split(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) ->
 /// Read a substitution's body or an `sh -c` script found at `depth` as
 /// commands, while it is not too deep; one too deep that names `claude`
 /// refuses the command.
-fn nest(script: &str, depth: usize, inherited: bool, out: &mut Vec<Command>) -> Option<()> {
+fn nest(
+    script: &str,
+    depth: usize,
+    inherited: bool,
+    known: &HashSet<String>,
+    out: &mut Vec<Command>,
+) -> Option<()> {
     if depth < MAX_DEPTH {
-        split(script, depth + 1, inherited, out)
+        split(script, depth + 1, inherited, known, out)
     } else if names_claude(script) {
         None
     } else {
@@ -207,6 +394,8 @@ struct Building {
     /// Part of it was quoted: as a here-document's delimiter, the body is
     /// then text the shell does not expand.
     quoted: bool,
+    /// The shell may turn it into no word or several ([`Word::Fields`]).
+    splits: bool,
 }
 
 impl Building {
@@ -233,12 +422,21 @@ impl Building {
         self.plain = false;
     }
 
+    /// Part of it the shell supplies, which may split it.
+    fn fields(&mut self) {
+        self.opaque();
+        self.splits = true;
+    }
+
     fn finish(self) -> Word {
         let braced = self.brace && self.text != "{" && self.text != "}";
         if is_assignment(&self.bare) {
             return Word::Assign((self.literal && !braced && !self.tilde).then_some(self.text));
         }
-        if !self.literal || braced {
+        if self.splits || braced {
+            return Word::Fields;
+        }
+        if !self.literal {
             return Word::Opaque;
         }
         if self.tilde {
@@ -300,6 +498,8 @@ struct Heredoc {
 
 struct Reader<'a> {
     chars: &'a [char],
+    /// The variables whose unquoted expansion is one word here.
+    known: &'a HashSet<String>,
     i: usize,
     commands: Vec<Command>,
     current: Simple,
@@ -309,8 +509,9 @@ struct Reader<'a> {
     /// Substitution bodies, and whether the command holding each reads only
     /// its own input.
     subs: Vec<(String, bool)>,
-    /// The substitutions of the command being read.
-    current_subs: Vec<String>,
+    /// The substitutions of the command being read, and whether each body
+    /// reads the input the command does: not a process substitution's.
+    current_subs: Vec<(String, bool)>,
     /// The data text of the command being read ([`Command::data`]).
     current_data: Vec<String>,
     /// The command being read has a `<` redirection or a here-document.
@@ -355,7 +556,7 @@ impl Reader<'_> {
                 let text = building.text.clone();
                 let word = building.finish();
                 // What a word holding an expansion says literally is data.
-                if matches!(word, Word::Opaque | Word::Assign(None)) {
+                if matches!(word, Word::Opaque | Word::Fields | Word::Assign(None)) {
                     self.current_data.push(text);
                 }
                 self.current.push(word);
@@ -392,8 +593,8 @@ impl Reader<'_> {
             self.refused = true;
         }
         let own = !self.redirected && !piped;
-        for body in self.current_subs.drain(..) {
-            self.subs.push((body, own));
+        for (body, reads) in self.current_subs.drain(..) {
+            self.subs.push((body, own && reads));
         }
         if self.current.is_empty() {
             // A here-document opened by no command is given to none.
@@ -508,6 +709,17 @@ impl Reader<'_> {
                         1
                     };
                 }
+                '<' | '>' if self.peek(1) == Some('(') => {
+                    // `<(…)` or `>(…)`: one word, a path the body reads from
+                    // or writes to; the body never reads only the whole
+                    // command's input.
+                    let start = self.i + 2;
+                    let end = close(self.chars, start, '(', ')', true)?;
+                    self.current_subs
+                        .push((self.chars[start..end].iter().collect(), false));
+                    self.word().opaque();
+                    self.i = end + 1;
+                }
                 '<' | '>' => self.redirection(c),
                 '\'' => {
                     self.i += 1;
@@ -572,11 +784,11 @@ impl Reader<'_> {
                     }
                     _ => self.expansion(false)?,
                 },
-                '`' => self.backquote()?,
+                '`' => self.backquote(false)?,
                 '*' | '?' | '[' => {
                     let word = self.word();
                     word.push(c, false);
-                    word.opaque();
+                    word.fields();
                     self.i += 1;
                 }
                 '~' if self.word.is_none() => {
@@ -678,7 +890,7 @@ impl Reader<'_> {
                     }
                 },
                 '$' => self.expansion(true)?,
-                '`' => self.backquote()?,
+                '`' => self.backquote(true)?,
                 c => {
                     self.word().push(c, true);
                     self.i += 1;
@@ -687,9 +899,12 @@ impl Reader<'_> {
         }
     }
 
-    /// One `$` expansion, at `$`. A `$` that starts none is literal.
+    /// One `$` expansion, at `$`. A `$` that starts none is literal. Unquoted,
+    /// every expansion may split its word, but a `$NAME` or `${NAME}` of a
+    /// [`Self::known`] variable; quoted, only `"$@"` and a `${…}` holding
+    /// `@` (`"${a[@]}"`, `"${@:2}"`) may.
     fn expansion(&mut self, quoted: bool) -> Option<()> {
-        match self.peek(1) {
+        let splits = match self.peek(1) {
             Some('(') => {
                 let arithmetic = self.peek(2) == Some('(');
                 let start = self.i + 2;
@@ -700,28 +915,33 @@ impl Reader<'_> {
                     self.unread(start, end);
                 } else {
                     self.current_subs
-                        .push(self.chars[start..end].iter().collect());
+                        .push((self.chars[start..end].iter().collect(), true));
                 }
-                self.word().opaque();
                 self.i = end + 1;
+                !quoted
             }
             Some('{') => {
                 // `${V:-$(…)}`: the shell may run what a parameter
                 // expansion holds; this reader does not read it.
                 let end = close(self.chars, self.i + 2, '{', '}', false)?;
                 self.unread(self.i + 2, end);
-                self.word().opaque();
+                let body: String = self.chars[self.i + 2..end].iter().collect();
                 self.i = end + 1;
+                if quoted {
+                    body.contains('@')
+                } else {
+                    !self.known.contains(&body)
+                }
             }
             Some('[') => {
                 // `$[…]`, the old arithmetic form.
                 let end = close(self.chars, self.i + 2, '[', ']', false)?;
                 self.unread(self.i + 2, end);
-                self.word().opaque();
                 self.i = end + 1;
+                !quoted
             }
             Some(c) if c.is_ascii_alphabetic() || c == '_' => {
-                self.word().opaque();
+                let start = self.i + 1;
                 self.i += 1;
                 while self
                     .peek(0)
@@ -729,23 +949,32 @@ impl Reader<'_> {
                 {
                     self.i += 1;
                 }
+                let name: String = self.chars[start..self.i].iter().collect();
+                !quoted && !self.known.contains(&name)
             }
             Some(c)
                 if c.is_ascii_digit() || matches!(c, '@' | '*' | '#' | '?' | '$' | '!' | '-') =>
             {
-                self.word().opaque();
                 self.i += 2;
+                !quoted || c == '@'
             }
             _ => {
                 self.word().push('$', quoted);
                 self.i += 1;
+                return Some(());
             }
+        };
+        if splits {
+            self.word().fields();
+        } else {
+            self.word().opaque();
         }
         Some(())
     }
 
-    /// One `` `…` `` substitution, at its opening backquote.
-    fn backquote(&mut self) -> Option<()> {
+    /// One `` `…` `` substitution, at its opening backquote; unquoted, it may
+    /// split its word.
+    fn backquote(&mut self, quoted: bool) -> Option<()> {
         self.i += 1;
         let mut body = String::new();
         loop {
@@ -766,8 +995,12 @@ impl Reader<'_> {
             }
         }
         self.i += 1;
-        self.current_subs.push(body);
-        self.word().opaque();
+        self.current_subs.push((body, true));
+        if quoted {
+            self.word().opaque();
+        } else {
+            self.word().fields();
+        }
         Some(())
     }
 
@@ -1005,7 +1238,7 @@ pub(super) fn program(words: &[Word]) -> Option<(&Word, &[Word])> {
                 }
                 _ => break,
             },
-            Word::Home(_) | Word::Opaque => break,
+            Word::Home(_) | Word::Opaque | Word::Fields => break,
         }
     }
     let (first, rest) = words[k..].split_first()?;
@@ -1107,13 +1340,13 @@ mod tests {
             vec![
                 lit("claude"),
                 lit("-p"),
+                Word::Fields,
                 Word::Opaque,
-                Word::Opaque,
-                Word::Opaque,
-                Word::Opaque,
-                Word::Opaque,
+                Word::Fields,
+                Word::Fields,
+                Word::Fields,
                 lit("$f"),
-                Word::Opaque,
+                Word::Fields,
                 Word::Home("bin/claude".to_owned()),
                 Word::Opaque,
                 lit("$g"),
@@ -1122,6 +1355,92 @@ mod tests {
         // The substitutions' bodies are read as commands too.
         assert_eq!(commands[1], vec![lit("d")]);
         assert_eq!(commands[2], vec![lit("e")]);
+    }
+
+    #[test]
+    fn words_the_shell_may_split_are_told_from_one_word() {
+        let commands = simple_commands(
+            "S=/w; echo $S ${S} $S/x \"$@\" \"${a[@]}\" \"${@:2}\" \"$*\" \"$1\" $1 $# \
+             $((1+1)) \"$((1+1))\" $[1] {a,b} a=$B $'x' $\"y\" ~u <(true) \"`d`\"",
+        )
+        .unwrap();
+        assert_eq!(
+            commands[1],
+            vec![
+                lit("echo"),
+                Word::Opaque,
+                Word::Opaque,
+                Word::Opaque,
+                Word::Fields,
+                Word::Fields,
+                Word::Fields,
+                Word::Opaque,
+                Word::Opaque,
+                Word::Fields,
+                Word::Fields,
+                Word::Fields,
+                Word::Opaque,
+                Word::Fields,
+                Word::Fields,
+                Word::Assign(None),
+                Word::Opaque,
+                Word::Opaque,
+                Word::Opaque,
+                Word::Opaque,
+                Word::Opaque,
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_plain_value_set_first_and_never_touched_is_one_word() {
+        let known = |command: &str| {
+            let mut names: Vec<String> = one_word_names(command).into_iter().collect();
+            names.sort();
+            names
+        };
+        assert_eq!(known("S=/w/run; cd $S && x ${S}/y"), ["S"]);
+        assert_eq!(
+            known(" \tA=1 B='/b' C=\"c\" && echo $A $B $C"),
+            ["A", "B", "C"]
+        );
+        assert_eq!(known("S=/w\necho $S"), ["S"]);
+        assert_eq!(known("S=/w"), ["S"]);
+        // The last assignment is the value kept.
+        assert_eq!(known("S=/w S='a b'; echo $S"), Vec::<String>::new());
+        assert_eq!(known("S='a b' S=/w; echo $S"), ["S"]);
+        for command in [
+            "S='a b'; echo $S",
+            "S=; echo $S",
+            "S=*; echo $S",
+            "S=/w/$X; echo $S",
+            "A=x\\ B=/w; echo $B",
+            "S=/w & echo $S",
+            "S=/w || echo $S",
+            "S=/w | echo $S",
+            "S=/w echo $S",
+            "(S=/w); echo $S",
+            "{ S=/w; }; echo $S",
+            "# c\nS=/w; echo $S",
+            "true; S=/w; echo $S",
+            "S=/w; S=/v; echo $S",
+            "S=/w; echo ${S:-x}",
+            "S=/w; echo ${#S}",
+            "S=/w; for S in a; do :; done; echo $S",
+            "S=/w; unset S; echo $S",
+            "S=/w; echo 'S'; echo $S",
+            "S=/w; echo $S; IFS=:",
+            "S=/w; eval x; echo $S",
+            "S=/w; source f; echo $S",
+            "S=/w; . f; echo $S",
+            "PATH=/w; echo $PATH",
+            "BASH_ENV=/w; echo $BASH_ENV",
+            "_=/w; echo $_",
+        ] {
+            assert_eq!(known(command), Vec::<String>::new(), "{command:?}");
+        }
+        // Another name set first is still known.
+        assert_eq!(known("S=/w T=/t; read T; echo $S $T"), ["S"]);
     }
 
     #[test]
@@ -1278,5 +1597,35 @@ mod tests {
         ] {
             assert_eq!(claude_runs(command), Some((1, 1)), "{command:?}");
         }
+    }
+
+    #[test]
+    fn a_launch_in_a_process_substitution_does_not_read_only_its_own() {
+        // `>(…)` reads what the command writes to it; `<(…)` reads what the
+        // command holding it reads, a pipe among it.
+        for command in [
+            "printf extra > >(claude -p 'x')",
+            "tee >(claude -p x) < f",
+            "printf x | tee >(claude -p x)",
+            "cat f | cat <(claude -p 'x')",
+            "diff <(claude -p a) b",
+            "while read l; do :; done < <(claude -p x)",
+            "echo 2>(claude -p x)",
+            "x=$(cat <(claude -p x))",
+            "cat <(echo \"$(claude -p x)\")",
+        ] {
+            assert_eq!(claude_runs(command), Some((1, 0)), "{command:?}");
+        }
+        // It is one word of the command holding it, and its body is read.
+        assert_eq!(
+            simple_commands("cat <(echo a) f >(tee b) c").unwrap(),
+            vec![
+                vec![lit("cat"), Word::Opaque, lit("f"), Word::Opaque, lit("c")],
+                vec![lit("echo"), lit("a")],
+                vec![lit("tee"), lit("b")],
+            ]
+        );
+        // Quoted, it is text.
+        assert_eq!(claude_runs("echo '>(claude -p x)'"), Some((0, 0)));
     }
 }

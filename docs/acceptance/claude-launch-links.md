@@ -338,8 +338,21 @@ next match's list), and it is then never withdrawn or moved: what a later
 read misses, such as a transcript Claude has since deleted, never changes it.
 
 A launch makes a link only when it reads no other input: one with a `<`
-redirection or a here-document, or after a `|`, may have sent its child more
-than the prompt, so it only counts as a launch that could have made a child.
+redirection or a here-document, after a `|`, or inside a process
+substitution (`printf extra > >(claude -p …)`, `cat <(claude -p …)`), may
+have sent its child more than the prompt, so it only counts as a launch
+that could have made a child.
+
+A launch word the shell may turn into no word or several makes the command
+one the reader cannot read (below), because the extra words could be any
+option, such as `--continue`: an unquoted expansion (`--model $MODEL`,
+`$(…)`, `` `…` ``, `$1`), a glob (`*`), a brace expansion (`{a,b}`),
+`"$@"` or `"${a[@]}"`. A quoted expansion (`"$MODEL"`) is one word. So is
+`$NAME` or `${NAME}` when the command starts by setting `NAME` to a plain
+value with no spaces or special characters (`S=/w/run; cd $S && claude -p …
+--mcp-config $S/mcp.json`) and never names it again any other way; the
+command must not hold `IFS`, `eval`, `source` or a lone `.`, and this does
+not reach into an `sh -c` script, which does not see the variable.
 Text a command does not run as it stands — a here-document body, also
 inside `$(…)`, an array's words, a function's body — holds no launch.
 
@@ -387,7 +400,8 @@ to a child saved after it:
   with a print option, a function, a shell given a script or input not read
   (`bash -euc '…'`), skipped text naming the Claude program by the rule
   above (`tmux new-session -d 'claude -p …'`, `${V:-$(claude -p …)}`), an
-  unknown option, or a prompt that is not literal or not given: at that
+  unknown option, a launch word the shell may split (above), or a prompt
+  that is not literal or not given: at that
   call's time; a launch record naming `claude` with no time: its caller's
   indexed span. Commands that only name the folder or the word
   (`ls ~/.claude`, `echo "claude -p …"`, `grep 'claude -p' f`) are not such
@@ -449,6 +463,10 @@ another launch made:
   not hold, or a second child the index does not hold, is not known.
 - A Codex history found only after a prompt link was written: if it names the
   same child, the two links conflict and both are withheld.
+- Draft: a variable set at the command's start counts as one word even if
+  something the reader does not see changes it later: a profile or file
+  read by a program, an exported function, or a builtin given the name
+  through another expansion (`printf -v "$N" …`, `declare "$N=…"`).
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and

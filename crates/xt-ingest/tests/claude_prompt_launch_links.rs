@@ -1191,6 +1191,73 @@ fn a_command_naming_claude_that_cannot_be_read_stops_the_links_it_could_change()
 }
 
 #[test]
+fn a_launch_fed_through_a_process_substitution_links_nothing_but_still_stops_a_link() {
+    // What `printf` writes reaches the launch's standard input: its child's
+    // first input may be more than the prompt.
+    let fed = format!("printf extra > >(claude -p \"{PROMPT}\")");
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &fed);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.other_input),
+        (1, 0, 1),
+        "{total:?}"
+    );
+    unlinked(&home, &store, MAIN_CHILD);
+    // Made after a launch that reads only its own input, it is the child's
+    // closest launch: neither links.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_parent(&home, OTHER_PARENT, OTHER_CALL, 1_000, &fed);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.other_input),
+        (2, 0, 1),
+        "{total:?}"
+    );
+    unlinked(&home, &store, MAIN_CHILD);
+}
+
+#[test]
+fn a_launch_word_the_shell_may_split_links_nothing_and_stops_the_links_it_could_change() {
+    // With `MODEL='sonnet --continue'` it resumes a session: it is read as
+    // a command the reader cannot read.
+    let split = format!("claude --model $MODEL -p \"{PROMPT}\"");
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &split);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.commands_refused),
+        (0, 0, 1),
+        "{total:?}"
+    );
+    unlinked(&home, &store, MAIN_CHILD);
+    // Made after the launch and before the child, it stops the link.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_parent(&home, OTHER_PARENT, OTHER_CALL, 1_000, &split);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!((total.launches, total.linked), (1, 0), "{total:?}");
+    assert!(total.held_command_unread > 0, "{total:?}");
+    unlinked(&home, &store, MAIN_CHILD);
+    // Made before the launch, it does not.
+    let home = Home::new();
+    write_parent(&home, PARENT, MAIN_CALL, 0, &main_command(PROMPT));
+    write_parent(&home, OTHER_PARENT, OTHER_CALL, -2_000, &split);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let (store, total) = run(&home);
+    assert_eq!(total.linked, 1, "{total:?}");
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+}
+
+#[test]
 fn a_launch_whose_prompt_names_claude_links() {
     let prompt = "Synthetic check: ask claude to review the diff.";
     let home = Home::new();
