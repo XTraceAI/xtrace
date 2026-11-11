@@ -473,11 +473,12 @@ another launch made:
   not hold, or a second child the index does not hold, is not known.
 - A Codex history found only after a prompt link was written: if it names the
   same child, the two links conflict and both are withheld.
-- A transcript rewritten in place in its middle and grown at once, keeping
-  its inode, its first 4 KiB and the 4 KiB before where it was read up to,
-  is read only from that point, within a run as after a restart: a launch
-  the rewrite added before it is not seen. Claude only appends to its
-  transcripts.
+- A transcript rewritten in place before where it was read up to, keeping
+  its inode, is read only from that point when it also grew and still
+  matches what was checked: within a run, the 64 bytes before that point;
+  after a restart, its first 4 KiB and the 4 KiB before that point. A launch
+  or an unreadable command naming `claude` the rewrite added before it is
+  not seen. Claude only appends to its transcripts.
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and

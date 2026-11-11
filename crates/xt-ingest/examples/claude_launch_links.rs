@@ -401,6 +401,8 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             add("prompt_files_read", bash.prompt.files_read);
             add("prompt_files_skipped", bash.prompt.files_skipped);
             add("bash_callers_skipped", bash.callers_skipped);
+            add("prompt_saves_failed", bash.prompt.saves_failed);
+            add("bash_saves_failed", bash.saves_failed);
             add("prompt_files_unreadable", bash.prompt.files_unreadable);
             add("prompt_matches", bash.prompt.matches);
             add("prompt_linked", bash.prompt.linked);
