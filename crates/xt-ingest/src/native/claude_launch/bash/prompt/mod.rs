@@ -173,6 +173,9 @@ struct FileFacts {
     /// It held more launches, or a longer line, than this version reads:
     /// launches it holds may be missing.
     overfull: bool,
+    /// The rules and launchers it was read with ([`saved::rules_digest`]):
+    /// a later read goes on from `complete` only with the same.
+    rules: [u8; 32],
 }
 
 /// One transcript being read, from `next`.
@@ -681,6 +684,7 @@ fn pass_within(
                         refused,
                         untimed: reading.untimed,
                         overfull,
+                        rules: reading.rules,
                     };
                     note_read(backlog, &reading, &facts, limits.max_line);
                     keep(backlog, reading.path.clone(), facts);
@@ -928,7 +932,9 @@ fn start(
     let mut untimed = false;
     let mut overfull = false;
     if let Some(known) = backlog.files.get(path) {
+        // What was read with other rules or launchers is read again whole.
         if known.owner == owner
+            && known.rules == rules
             && known.device == generation.device
             && known.inode == generation.inode
             && known.complete <= length
@@ -967,6 +973,7 @@ fn start(
                 refused: saved.refused_ms,
                 untimed: saved.untimed,
                 overfull: false,
+                rules,
             })));
         }
         // The same length at another time: rewritten in place, read whole.

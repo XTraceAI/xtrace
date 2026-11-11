@@ -1724,3 +1724,51 @@ fn a_transcript_rewritten_in_place_in_its_middle_is_read_again_after_a_restart()
     );
     unlinked(&home, &store, MAIN_CHILD);
 }
+
+#[test]
+fn a_launcher_installed_between_two_reads_of_a_run_reads_the_whole_transcript_again() {
+    // A transcript read in full while the launcher it names is absent, then
+    // appended to after the launcher is installed, in the same run: the part
+    // read before must be read again with the launcher, not kept and saved
+    // as if it had been.
+    let home = Home::new();
+    let launcher = home.home.join(".local/bin/claude");
+    fs::remove_file(&launcher).unwrap();
+    let path = parent_path(&home, PARENT);
+    let mut rows = caller_rows(PARENT, None, MAIN_CALL, 0, &helper_command(&home, PROMPT));
+    write_rows(&path, &rows);
+    write_child(&home, MAIN_CHILD, 4_800, PROMPT);
+    let mut store = home.store();
+    scan(&home, &mut store);
+    let mut backlog = BashBacklog::starting();
+    let (first, _) = settle_counting(&home, &mut store, &mut backlog);
+    assert_eq!(
+        first.linked, 0,
+        "without the launcher it is no launch: {first:?}"
+    );
+    fs::write(&launcher, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+    rows.push(record(
+        PARENT,
+        "user",
+        &format!("{PARENT}-later"),
+        9_000,
+        None,
+        json!({"role": "user", "content": "synthetic later line"}),
+    ));
+    write_rows(&path, &rows);
+    backlog.add_sessions([PARENT]);
+    let (again, _) = settle_counting(&home, &mut store, &mut backlog);
+    assert_eq!(again.linked, 1, "read whole with the launcher: {again:?}");
+    // A restart keeps it, and reads nothing it should not trust.
+    let (restarted, _) = restart(&home, &mut store);
+    assert_eq!(
+        (restarted.linked, restarted.already),
+        (0, 1),
+        "{restarted:?}"
+    );
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+}
