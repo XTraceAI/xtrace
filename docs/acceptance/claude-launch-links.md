@@ -433,8 +433,11 @@ another launch made:
   seen as a launch; when the recorded command names the Claude program by
   the rule above, it holds links at that call's time. It is invisible when
   the command itself never names it that way: a script file run by path, a
-  name built from pieces (`cl""aude`, `$C$D`), a program on the never-runs
-  list that runs it after all (`git -c alias…`), `env -v claude …` (read
+  name built from pieces or quoted inside the word (`cl""aude`,
+  `clau'de'`, `$C$D`; a recorded line that never spells `claude` is not
+  read at all), a program on the never-runs list that runs it after all
+  through an option or its own language (`git -c alias…`,
+  `tar --to-command=…`, `awk '… system(…)'`), `env -v claude …` (read
   like `command -v claude`), a launcher by another name
   (`npx @anthropic-ai/claude-code`), or a helper file in a nested folder
   such as `subagents/workflows/…` (only `subagents/agent-*.jsonl` is read).
