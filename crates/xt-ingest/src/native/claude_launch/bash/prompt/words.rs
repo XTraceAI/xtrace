@@ -20,8 +20,9 @@
 //! ([`Word::Opaque`]) only when the shell cannot split it: its expansions are
 //! quoted (but `"$@"` and a `"${…}"` holding `@`), `$'…'`, `$"…"`, a tilde,
 //! a process substitution, or a `$NAME` or `${NAME}` of a variable the
-//! command set to a plain value at its start and never touches again
-//! ([`one_word_names`]); any other may become no word or several
+//! command set to a plain value at its start and never touches again, and
+//! that no command of it may set without naming it ([`one_word_names`],
+//! [`sets_unnamed`]); any other may become no word or several
 //! ([`Word::Fields`]). A redirection and its target are set aside; a
 //! here-document's body is skipped, never read as commands, also inside a
 //! substitution. A command or process substitution's (`<(…)`, `>(…)`) body
@@ -123,7 +124,74 @@ pub(super) fn simple_commands(command: &str) -> Option<Vec<Command>> {
     let known = one_word_names(command);
     let mut out = Vec::new();
     split(command, 0, true, &known, &mut out)?;
+    // A command that may set a variable without naming it in its text is
+    // read again with no variable known to be one word.
+    if !known.is_empty() && out.iter().any(|command| sets_unnamed(&command.words)) {
+        out.clear();
+        split(command, 0, true, &HashSet::new(), &mut out)?;
+    }
     Some(out)
+}
+
+/// Builtins that may set or unset a variable whose name the text does not
+/// spell: one given by an expansion (`read "$N"`, `declare "$N=a b"`), or
+/// in text they run (`eval`, `source`, `.`, `trap`).
+const SETS_NAMES: &[&str] = &[
+    "eval",
+    "source",
+    ".",
+    "read",
+    "declare",
+    "typeset",
+    "local",
+    "export",
+    "readonly",
+    "unset",
+    "mapfile",
+    "readarray",
+    "getopts",
+    "let",
+    "builtin",
+    "trap",
+    // zsh.
+    "integer",
+    "float",
+    "vared",
+    "zparseopts",
+];
+
+/// Whether a simple command may set a variable without naming it in the
+/// text ([`one_word_names`]): its program is one of [`SETS_NAMES`],
+/// `printf` or `print` given `-v` (or a word that may be it), a program the
+/// shell supplies (`$CMD …`), or one this reader cannot find (`timeout`
+/// with no literal duration).
+fn sets_unnamed(words: &[Word]) -> bool {
+    let Some((program, args)) = program(words) else {
+        return words
+            .iter()
+            .any(|word| matches!(word, Word::Lit(text) if text == "timeout"));
+    };
+    let name = match program {
+        Word::Lit(name) => name.as_str(),
+        Word::Opaque | Word::Fields => return true,
+        Word::Home(_) | Word::Assign(_) => return false,
+    };
+    if SETS_NAMES.contains(&name) {
+        return true;
+    }
+    if !matches!(name, "printf" | "print") {
+        return false;
+    }
+    // Its options come before its first other word.
+    for word in args {
+        match word {
+            Word::Lit(text) if text == "--" || !text.starts_with('-') => return false,
+            Word::Lit(text) if text.contains('v') => return true,
+            Word::Lit(_) => {}
+            _ => return true,
+        }
+    }
+    false
 }
 
 /// Variables that cannot be read here with a name the shell may still
@@ -156,15 +224,12 @@ const UNSAFE_NAMES: &[&str] = &[
 /// first simple command of nothing but assignments (`S=/w/run; …`), to a
 /// plain value of characters the shell never splits or expands, and never
 /// names again except as `$NAME` or `${NAME}`. None when the command holds
-/// the text `IFS` or the word `eval`, `source` or `.`, which may change a
-/// variable without naming it.
+/// the text `IFS`; and [`simple_commands`] reads the command again with
+/// none when one of its commands may set a variable without naming it
+/// ([`sets_unnamed`]).
 fn one_word_names(command: &str) -> HashSet<String> {
     let mut known = HashSet::new();
-    if command.contains("IFS")
-        || command
-            .split(|c: char| c.is_whitespace() || ";&|()<>{}`'\"".contains(c))
-            .any(|word| matches!(word, "eval" | "source" | "."))
-    {
+    if command.contains("IFS") {
         return known;
     }
     let Some((assigned, rest)) = leading_assignments(command) else {
@@ -1430,9 +1495,6 @@ mod tests {
             "S=/w; unset S; echo $S",
             "S=/w; echo 'S'; echo $S",
             "S=/w; echo $S; IFS=:",
-            "S=/w; eval x; echo $S",
-            "S=/w; source f; echo $S",
-            "S=/w; . f; echo $S",
             "PATH=/w; echo $PATH",
             "BASH_ENV=/w; echo $BASH_ENV",
             "_=/w; echo $_",
@@ -1440,7 +1502,54 @@ mod tests {
             assert_eq!(known(command), Vec::<String>::new(), "{command:?}");
         }
         // Another name set first is still known.
-        assert_eq!(known("S=/w T=/t; read T; echo $S $T"), ["S"]);
+        assert_eq!(known("S=/w T=/t; unset T; echo $S $T"), ["S"]);
+    }
+
+    #[test]
+    fn a_command_that_may_set_a_variable_unnamed_knows_none() {
+        // The word `echo $S` ends up as, with `pre` run before it.
+        let word = |pre: &str| {
+            let commands = super::simple_commands(&format!("S=/w; {pre}; echo $S/c.json")).unwrap();
+            commands
+                .iter()
+                .rfind(|command| command.words.first() == Some(&lit("echo")))
+                .unwrap()
+                .words[1]
+                .clone()
+        };
+        for pre in [
+            "eval \"$X\"",
+            "source /w/env",
+            ". ./env",
+            "\\. ./env",
+            "read \"$N\"",
+            "declare \"$N=a b\"",
+            "export \"$N\"",
+            "unset \"$N\"",
+            "builtin read \"$N\"",
+            "command eval x",
+            "printf -v \"$N\" x",
+            "printf -vN x",
+            "printf $O \"$N\" x",
+            "$CMD",
+            "\"$CMD\" a",
+            "timeout $T read \"$N\"",
+            "(eval \"$X\")",
+            "x=$(trap \"$X\" EXIT)",
+        ] {
+            assert_eq!(word(pre), Word::Fields, "{pre:?}");
+        }
+        // Text or other programs that only name these words do not.
+        for pre in [
+            "echo source eval . read",
+            "cd .",
+            "ls . && cat ./f",
+            "printf '%s' -v",
+            "printf -- x",
+            "git commit -m \"read the source\"",
+        ] {
+            assert_eq!(word(pre), Word::Opaque, "{pre:?}");
+        }
     }
 
     #[test]

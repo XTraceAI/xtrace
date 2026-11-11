@@ -1858,6 +1858,11 @@ mod tests {
             "S=/w; IFS=/; claude -p x --mcp-config $S/c.json",
             "S=/w; eval \"$X\"; claude -p x --mcp-config $S/c.json",
             "S=/w; . /w/env; claude -p x --mcp-config $S/c.json",
+            "S=/w; . ./env; claude -p x --mcp-config $S/c.json",
+            "S=/w; read \"$N\"; claude -p x --mcp-config $S/c.json",
+            "S=/w; printf -v \"$N\" x; claude -p x --mcp-config $S/c.json",
+            "S=/w; $CMD; claude -p x --mcp-config $S/c.json",
+            "S=/w; (eval \"$X\"; claude -p x --mcp-config $S/c.json)",
             "false && S=/w; claude -p x --mcp-config $S/c.json",
             "(S=/w); claude -p x --mcp-config $S/c.json",
             "S=/w || true; claude -p x --mcp-config $S/c.json",
@@ -1877,6 +1882,9 @@ mod tests {
             "S=/w && cd \"$S\" && claude -p 'x' --mcp-config \"$S/mcp.json\"",
             "  S=/w T='/w/t' ; claude -p x --mcp-config ${S}/c.json --add-dir $T",
             "S=/w; claude -p x --mcp-config $S/c.json; echo \"$(ls $S)\"",
+            // Prompt words are never programs.
+            "S=/w; claude -p 'Fix it . Then read the source, eval it.' --mcp-config $S/c.json",
+            "S=/w; cd . && claude -p \"source . eval read\" --mcp-config $S/c.json",
         ] {
             assert_eq!(read(command), (1, false), "{command:?}");
         }

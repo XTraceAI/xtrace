@@ -350,9 +350,15 @@ option, such as `--continue`: an unquoted expansion (`--model $MODEL`,
 `"$@"` or `"${a[@]}"`. A quoted expansion (`"$MODEL"`) is one word. So is
 `$NAME` or `${NAME}` when the command starts by setting `NAME` to a plain
 value with no spaces or special characters (`S=/w/run; cd $S && claude -p …
---mcp-config $S/mcp.json`) and never names it again any other way; the
-command must not hold `IFS`, `eval`, `source` or a lone `.`, and this does
-not reach into an `sh -c` script, which does not see the variable.
+--mcp-config $S/mcp.json`) and never names it again any other way. The
+command must not hold the text `IFS`, nor run a command that may set a
+variable without spelling its name: `eval`, `source`, `.`, `read`,
+`declare`, `typeset`, `local`, `export`, `readonly`, `unset`, `mapfile`,
+`readarray`, `getopts`, `let`, `builtin`, `trap`, `printf -v` (and zsh's
+`print -v`, `integer`, `float`, `vared`, `zparseopts`), or a program given
+by a variable (`$CMD`). Those words in a prompt or other argument do not
+count. This does not reach into an `sh -c` script, which does not see the
+variable.
 Text a command does not run as it stands — a here-document body, also
 inside `$(…)`, an array's words, a function's body — holds no launch.
 
@@ -464,9 +470,9 @@ another launch made:
 - A Codex history found only after a prompt link was written: if it names the
   same child, the two links conflict and both are withheld.
 - Draft: a variable set at the command's start counts as one word even if
-  something the reader does not see changes it later: a profile or file
-  read by a program, an exported function, or a builtin given the name
-  through another expansion (`printf -v "$N" …`, `declare "$N=…"`).
+  a shell function or alias the command did not define changes it, such as
+  one from the user's shell setup that Claude's `Bash` tool loads before the
+  command (a `cd` function that sets the variable, say).
 - No margin for import delay at the end of the hour. A session saved just
   before the launch's hour ends but imported after a match listed the
   possible children (after the hour was over) is missed by that match, and

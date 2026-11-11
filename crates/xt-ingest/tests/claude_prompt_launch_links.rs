@@ -1258,6 +1258,35 @@ fn a_launch_word_the_shell_may_split_links_nothing_and_stops_the_links_it_could_
 }
 
 #[test]
+fn a_launch_whose_prompt_holds_shell_words_still_reads_its_variable_as_one_word() {
+    // Words of the prompt are never programs: `.`, `source`, `eval` and
+    // `read` in it do not make the unquoted `$S` unreadable.
+    let prompt = "Synthetic check: read the source . Then eval the result.";
+    let home = Home::new();
+    write_parent(
+        &home,
+        PARENT,
+        MAIN_CALL,
+        0,
+        &format!(
+            "S=/w; cd $S/run && claude -p \"{prompt}\" --mcp-config $S/run/c.json \
+             --strict-mcp-config > run1.jsonl 2> run1.err"
+        ),
+    );
+    write_child(&home, MAIN_CHILD, 4_800, prompt);
+    let (store, total) = run(&home);
+    assert_eq!(
+        (total.launches, total.linked, total.commands_refused),
+        (1, 1, 0),
+        "{total:?}"
+    );
+    assert_eq!(
+        shown(&home, &store, MAIN_CHILD),
+        (true, Some(session(&store, PARENT)))
+    );
+}
+
+#[test]
 fn a_launch_whose_prompt_names_claude_links() {
     let prompt = "Synthetic check: ask claude to review the diff.";
     let home = Home::new();
