@@ -347,6 +347,11 @@ fn token(value: &str) -> bool {
 }
 
 impl ParentScan {
+    /// The file being read: the generation [`Self::generation`] names.
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+
     /// Open `path` as the history of session `native` (its file name).
     pub fn new(
         path: &Path,

@@ -299,6 +299,7 @@ fn migration_30_keeps_dismissals_and_clears_claude_checkpoints() {
          DROP TRIGGER session_warnings_reply_admissions_update;
          DROP TRIGGER session_warnings_reply_admissions_delete;
          DROP TABLE reply_admissions;
+         DROP TABLE IF EXISTS claude_transcript_reads;
          DELETE FROM schema_version WHERE version>=30;
          DELETE FROM migration_fingerprints WHERE version>=30;
          INSERT INTO dismissed_warnings(session_id,warning_id,size,dismissed_at)
@@ -422,7 +423,8 @@ fn migration_31_clears_claude_checkpoints_and_a_reread_drops_quoted_phrases() {
     // Back to 30, with the row an older build wrote for the quoted phrase.
     let sql = Connection::open(&path).unwrap();
     sql.execute_batch(
-        "DELETE FROM schema_version WHERE version>=31;
+        "DROP TABLE IF EXISTS claude_transcript_reads;
+         DELETE FROM schema_version WHERE version>=31;
          DELETE FROM migration_fingerprints WHERE version>=31;
          UPDATE reply_admissions SET phrases='you_are_right', fact_version=1;",
     )

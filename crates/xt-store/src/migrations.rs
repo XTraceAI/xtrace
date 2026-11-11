@@ -190,6 +190,11 @@ const MIGRATIONS: &[Migration] = &[
         "0032_claude_prompt_launch_children",
         "f9a21f1f6750a8955eaefcfb9ac562a0b2d04d050ac3fd6ed4b75e9700bc46a4"
     ),
+    migration!(
+        33,
+        "0033_claude_transcript_reads",
+        "13efaa551ae07b4647663f3f97d2817d2ea43aaba7a23e4138a5bb29a079f91b"
+    ),
 ];
 
 /// Newest schema supported by the embedded migration chain.

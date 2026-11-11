@@ -339,6 +339,7 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let checking_at_start = checking(&store)?;
     let mut prompt_released: Option<u64> = None;
+    let mut timeline: Vec<serde_json::Value> = Vec::new();
     let mut settled: [Option<(u64, u64)>; 2] = [None, None];
     let mut last_change: [(u64, u64, u64); 2] =
         [(0, 0, checking_at_start.0), (0, 0, checking_at_start.1)];
@@ -353,6 +354,20 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         )?;
         passes += 1;
         bytes += pass.bytes_read;
+        // When each pass ended and what each part of it read.
+        timeline.push(serde_json::json!({
+            "ms": started.elapsed().as_millis() as u64,
+            "bytes": pass.bytes_read,
+            "launch_bytes": pass.launches.as_ref().map_or(0, |launches| launches.bytes_read),
+            "bash_bytes": pass.bash.as_ref().map_or(0, |bash| bash.bytes_read),
+            "prompt_bytes": pass.bash.as_ref().map_or(0, |bash| bash.prompt.bytes_read),
+            "prompt_files_read": pass.bash.as_ref().map_or(0, |bash| bash.prompt.files_read),
+            "prompt_files_skipped": pass.bash.as_ref().map_or(0, |bash| bash.prompt.files_skipped),
+            "bash_callers_read": pass.bash.as_ref().map_or(0, |bash| bash.callers_read),
+            "bash_callers_skipped": pass.bash.as_ref().map_or(0, |bash| bash.callers_skipped),
+            "check_bytes": pass.checks.as_ref().map_or(0, |checks| checks.bytes_read),
+            "pr_bytes": pass.prs.as_ref().map_or(0, |prs| prs.bytes_read),
+        }));
         add("changed", pass.changed);
         add("codex_spawned", pass.spawned);
         add("codex_bootstrapped", pass.bootstrapped);
@@ -384,6 +399,8 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             add("bash_rejected", bash.rejected);
             add("bash_waiting", bash.waiting);
             add("prompt_files_read", bash.prompt.files_read);
+            add("prompt_files_skipped", bash.prompt.files_skipped);
+            add("bash_callers_skipped", bash.callers_skipped);
             add("prompt_files_unreadable", bash.prompt.files_unreadable);
             add("prompt_matches", bash.prompt.matches);
             add("prompt_linked", bash.prompt.linked);
@@ -565,6 +582,11 @@ fn children(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "prompt_launches": prompt_launches,
             "prompt_held": prompt_held,
             "prompt_released_ms": prompt_released,
+            "timeline": timeline,
+            "prompt_file_digests": spawns.bash.prompt_file_digests().iter().map(|(path, complete, facts)| {
+                let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                serde_json::json!([hex(path), complete, hex(facts)])
+            }).collect::<Vec<_>>(),
             "codex_pr_links": {"links": codex_links, "pull_requests": codex_prs},
         })
     );

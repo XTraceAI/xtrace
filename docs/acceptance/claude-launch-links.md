@@ -421,6 +421,28 @@ its parent, so no session shown before is hidden again to wait for it.
 Like every accepted creation relation, a link makes the Human input view
 count the child's user messages as the agent's, not a person's.
 
+### After a restart
+
+Both Claude `Bash` readers (this match and the one that compares printed
+answers) save what a read of a caller transcript found when it held no
+launch, so a restart does not read an unchanged transcript again (schema 33,
+below). A saved read is used only when everything it was read with is the
+same now: the reader's rules (the source of both readers, and a version
+raised whenever a read of the same bytes may find something else), its
+longest line, the Claude launchers
+installed, the session owning the file, its device and inode, and a
+fingerprint of where it was read up to and the first and last 4 KiB before
+that point. For this match the file may also have grown: only what was
+appended is read, as within a run. For the other reader the file must be
+exactly the generation it was read at. Anything else reads the file whole,
+as if nothing was saved. What the read found that is not a launch is saved
+with it and counts after the restart as before: the times of commands naming
+`claude` it could not read, and whether a launch record had no time. A
+transcript that holds a launch, held more than this version reads, or could
+not be read is never saved: it is read whole on every start. On a copy of a
+real index, a restart read 9 of 664 transcript files for this match and 3 of
+148 for the other reader, and every link it found and held was the same.
+
 ### Known limits
 
 The prompt match links only from what it can read. These cases can make a
@@ -454,6 +476,17 @@ another launch made:
   possible children (after the hour was over) is missed by that match, and
   the link it decides stays.
 
+Schema 33 adds `claude_transcript_reads`: one row per reader (`prompt` or
+`bash`) and transcript file that held no launch, with the session owning it,
+the reader version, line bound and a digest of the readers' rules and the
+installed launchers, the
+file's device, inode and where it was read up to (and, for `bash`, its exact
+modification and change times), a SHA-256 fingerprint of those bytes'
+first and last 4 KiB, and for `prompt` the times of commands naming `claude`
+it could not read and whether a launch record had no time. The path is the
+one the index's source cursors already hold. No prompt, command, record text
+or output is stored. A row is only a shortcut; no other table changes.
+
 ## Checks
 
 - `cargo test -p xt-store --test claude_launch_creation`
@@ -465,6 +498,7 @@ another launch made:
 - `cargo test -p xt-store --test codex_cli_launch_creation`
 - `cargo test -p xt-ingest --test codex_cli_launch_links`
 - `cargo test -p xt-ingest --test claude_prompt_launch_links`
+- `cargo test -p xt-store --test transcript_reads`
 
 All sources are synthetic. Acceptance on a copied index uses
 `cargo run -p xt-ingest --example claude_launch_links` (see its header); with

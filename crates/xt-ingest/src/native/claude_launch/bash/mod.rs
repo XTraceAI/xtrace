@@ -37,7 +37,9 @@
 //! the hour before a newly imported session's first input; callers whose
 //! launches had no result yet when read; and the launches waiting for their
 //! child, looked at again when anything is imported. A caller is read again
-//! only once its transcript changed. A restart sweeps again; every write is
+//! only once its transcript changed. A restart sweeps again, but a caller
+//! whose saved read ([`saved`]) found no launch at exactly its current
+//! generation is not read again; every write is
 //! an idempotent child fact. Only identifiers, positions and closed labels
 //! are stored; prompts and answers are compared in memory, as digests.
 //!
@@ -51,6 +53,7 @@
 
 mod parent;
 mod prompt;
+mod saved;
 mod script;
 
 pub use prompt::{HeldBy, HeldLink, PromptProgress};
@@ -72,6 +75,7 @@ use xt_store::{
     Host, Store,
     child_fact::{CLAUDE_BASH_CHILD_VERSION, ChildEvidence, ChildFact, ChildFactDisposition},
     claude_launch::SegmentGeneration,
+    transcript_read::{SavedTranscriptRead, TranscriptReader},
 };
 
 /// Callers one sweep page reads from the index.
@@ -190,6 +194,10 @@ pub struct BashBacklog {
     attempted: HashMap<PathBuf, SegmentGeneration>,
     /// Parent links for launches matched by their literal prompt.
     prompt: prompt::PromptBacklog,
+    /// Whole reads of caller transcripts that held no launch, to save at the
+    /// end of the pass, and saved reads to forget.
+    unsaved: Vec<SavedTranscriptRead>,
+    forget: Vec<(TranscriptReader, String)>,
     #[cfg(test)]
     test_waiting_limit: Option<usize>,
     #[cfg(test)]
@@ -307,6 +315,12 @@ impl BashBacklog {
         self.prompt.busy_now()
     }
 
+    /// For acceptance reports: what the literal-prompt match took from each
+    /// transcript file, as digests ([`prompt::PromptBacklog::file_digests`]).
+    pub fn prompt_file_digests(&self) -> Vec<([u8; 32], u64, [u8; 32])> {
+        self.prompt.file_digests()
+    }
+
     /// The links the last literal-prompt match held, by identifiers only.
     pub fn prompt_held(&self) -> &[HeldLink] {
         self.prompt.held()
@@ -395,6 +409,99 @@ impl BashBacklog {
             }
         }
         Ok(true)
+    }
+
+    /// Take the read an earlier run saved of `native`'s transcript at
+    /// `path` as this run's read, if it still describes the file exactly:
+    /// read whole by these rules, with this line bound and these launchers
+    /// installed, at the generation the file has now, and no launch found.
+    fn restore(
+        &mut self,
+        store: &Store,
+        path: &Path,
+        native: &str,
+        run: &Pass<'_>,
+    ) -> xt_store::Result<bool> {
+        let Some(text) = path.to_str() else {
+            return Ok(false);
+        };
+        let Some(saved) = store.saved_transcript_read(TranscriptReader::Bash, text)? else {
+            return Ok(false);
+        };
+        let Ok((file, now)) = source::open(path) else {
+            return Ok(false);
+        };
+        let same = saved.owner_native_session_id == native
+            && saved.reader_version == saved::BASH_READ_VERSION
+            && saved.max_line == run.limits.max_line as u64
+            && saved.rules_digest == saved::rules_digest(&run.programs)
+            && saved.device == now.device
+            && saved.inode == now.inode
+            && i64::try_from(saved.read_to).ok() == Some(now.length)
+            && saved.mtime_ns == Some(now.mtime_ns)
+            && saved.ctime_ns == Some(now.ctime_ns)
+            && saved.refused_ms.is_empty()
+            && !saved.untimed
+            && saved::fingerprint(&file, saved.read_to) == Some(saved.fingerprint);
+        if !same {
+            return Ok(false);
+        }
+        self.note_scanned(path, native, now, &[]);
+        if self.read.len() < MAX_READ {
+            self.read.insert(path.to_path_buf(), now);
+        }
+        Ok(true)
+    }
+
+    /// Save a whole read that found no launch, so a restart need not read
+    /// the file again; forget the saved read of one that found launches.
+    fn note_read(
+        &mut self,
+        path: &Path,
+        native: &str,
+        file: &std::fs::File,
+        generation: SegmentGeneration,
+        empty: bool,
+        run: &Pass<'_>,
+    ) {
+        let Some(text) = path.to_str() else {
+            return;
+        };
+        let read_to = u64::try_from(generation.length).ok();
+        let fingerprint = read_to.and_then(|read_to| saved::fingerprint(file, read_to));
+        let (true, Some(read_to), Some(fingerprint)) = (empty, read_to, fingerprint) else {
+            self.forget_read(path);
+            return;
+        };
+        // The latest read of a file is the one saved.
+        self.forget.retain(|(_, known)| known != text);
+        self.unsaved.retain(|saved| saved.path != text);
+        self.unsaved.push(SavedTranscriptRead {
+            reader: TranscriptReader::Bash,
+            path: text.to_owned(),
+            owner_native_session_id: native.to_owned(),
+            reader_version: saved::BASH_READ_VERSION,
+            max_line: run.limits.max_line as u64,
+            rules_digest: saved::rules_digest(&run.programs),
+            device: generation.device,
+            inode: generation.inode,
+            read_to,
+            mtime_ns: Some(generation.mtime_ns),
+            ctime_ns: Some(generation.ctime_ns),
+            fingerprint,
+            untimed: false,
+            refused_ms: Vec::new(),
+        });
+    }
+
+    /// Forget the saved read of the file at `path`.
+    fn forget_read(&mut self, path: &Path) {
+        if let Some(text) = path.to_str() {
+            self.unsaved.retain(|saved| saved.path != text);
+            if !self.forget.iter().any(|(_, known)| known == text) {
+                self.forget.push((TranscriptReader::Bash, text.to_owned()));
+            }
+        }
     }
 
     fn enqueue(&mut self, native: String) {
@@ -608,6 +715,9 @@ impl OwnRead {
 pub struct BashProgress {
     /// Caller transcripts read whole.
     pub callers_read: usize,
+    /// Caller transcripts not read again because a saved read showed them
+    /// unchanged.
+    pub callers_skipped: usize,
     /// Caller transcripts that could not be read now, or are beyond bounds.
     pub callers_unreadable: usize,
     /// Supported launches whose child was looked for.
@@ -654,6 +764,14 @@ pub fn continue_claude_bash_into(
         recorded_at,
         progress,
     );
+    // What this pass read whole, saved in one transaction; kept for the next
+    // pass if the store fails.
+    let saved = store.save_transcript_reads(&backlog.unsaved, &backlog.forget, recorded_at);
+    if saved.is_ok() {
+        backlog.unsaved.clear();
+        backlog.forget.clear();
+    }
+    result = result.and(saved);
     // The literal-prompt match after the rest, within what is left.
     if result.is_ok() {
         let changed = progress.prompt.changed;
@@ -739,6 +857,14 @@ fn pass(
                     let path = reading.scan.path.clone();
                     let invocations = facts.invocations.unwrap_or_default();
                     backlog.note_scanned(&path, &reading.native, facts.generation, &invocations);
+                    backlog.note_read(
+                        &path,
+                        &reading.native,
+                        reading.scan.file(),
+                        facts.generation,
+                        invocations.is_empty(),
+                        &run,
+                    );
                     if invocations
                         .iter()
                         .any(|invocation| invocation.result_record.is_none())
@@ -790,6 +916,7 @@ fn pass(
                 }
                 Err(ScanError::Refused) => {
                     let reading = backlog.current.take().expect("reading");
+                    backlog.forget_read(&reading.scan.path);
                     if backlog.scanned.len() >= MAX_READ {
                         backlog.scanned.clear();
                     }
@@ -897,6 +1024,11 @@ fn pass(
             if let Some(path) = transcript(store, home, &native)? {
                 let unchanged =
                     source::stat(&path).is_ok_and(|now| backlog.read.get(&path) == Some(&now));
+                if !unchanged && backlog.restore(store, &path, &native, &run)? {
+                    // Read whole by an earlier run, which found no launch.
+                    progress.callers_skipped += 1;
+                    continue;
+                }
                 if !unchanged {
                     match ParentScan::new(
                         &path,

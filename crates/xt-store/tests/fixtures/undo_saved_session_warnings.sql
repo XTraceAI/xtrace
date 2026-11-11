@@ -1,6 +1,8 @@
--- Test-only rewind of migrations 30 and 29. Migration 30's table and its
+-- Test-only rewind of migrations 33, 30 and 29. Migration 33's table, which
+-- nothing else refers to, goes first. Migration 30's table and its
 -- triggers go first; its rebuilt dismissed_warnings is left, since it accepts
 -- every identity the old one did.
+DROP TABLE IF EXISTS claude_transcript_reads;
 DROP TRIGGER IF EXISTS session_warnings_reply_admissions_insert;
 DROP TRIGGER IF EXISTS session_warnings_reply_admissions_update;
 DROP TRIGGER IF EXISTS session_warnings_reply_admissions_delete;
